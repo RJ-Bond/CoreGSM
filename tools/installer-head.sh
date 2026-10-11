@@ -152,12 +152,25 @@ preflight() {
 
   local mem_mb disk_mb busy
   mem_mb="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
-  [ "$mem_mb" -ge 900 ] || die "Недостаточно памяти: ${mem_mb} МБ (нужно от 1 ГБ, лучше 2 ГБ)"
-  if [ "$mem_mb" -ge 1800 ]; then ok "Память: ${mem_mb} МБ"
-  else warn "Памяти ${mem_mb} МБ: сборка образов может идти долго. Рекомендуется 2 ГБ"; fi
+  # On a system that already runs CoreGSM (update/reinstall) low resources only produce warnings:
+  # the images exist, and a real shortage will show up as a clear build error with the cause in the log.
+  local reinstall=0
+  [ -f "$APP_DIR/docker-compose.yml" ] && reinstall=1
+  if [ "$mem_mb" -lt 900 ] && [ "$reinstall" = 0 ]; then
+    die "Недостаточно памяти: ${mem_mb} МБ (нужно от 1 ГБ, лучше 2 ГБ)"
+  elif [ "$mem_mb" -lt 1800 ]; then
+    warn "Памяти ${mem_mb} МБ: сборка образов может идти долго. Рекомендуется 2 ГБ"
+  else
+    ok "Память: ${mem_mb} МБ"
+  fi
   disk_mb="$(df -Pm / | awk 'NR==2{print $4}')"
-  [ "$disk_mb" -ge 4000 ] || die "Мало места на диске: свободно ${disk_mb} МБ (нужно от 4 ГБ)"
-  ok "Диск: свободно ${disk_mb} МБ"
+  if [ "$disk_mb" -lt 3000 ] && [ "$reinstall" = 0 ]; then
+    die "Мало места на диске: свободно ${disk_mb} МБ (нужно от 3 ГБ)"
+  elif [ "$disk_mb" -lt 1500 ]; then
+    warn "Свободно только ${disk_mb} МБ: сборка образов может не поместиться. Очистить место: docker system prune -f"
+  else
+    ok "Диск: свободно ${disk_mb} МБ"
+  fi
   # ports 80/443: skipped on a reinstall, where our own containers hold them
   if [ ! -f "$APP_DIR/docker-compose.yml" ]; then
     busy="$(ss -ltnH 'sport = :80 or sport = :443' 2>/dev/null | awk '{print $4}' | tr '\n' ' ' || true)"
