@@ -64,6 +64,21 @@ PROXY_ARGS=()
 _p="$(envget PROXY_URL)"; [ -n "$_p" ] && PROXY_ARGS=(--proxy "${_p/#socks5:/socks5h:}")
 fetch() { curl -fsSL --max-time "${FETCH_TIMEOUT:-60}" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "$1"; }
 
+# raw.githubusercontent.com is cached for minutes after a push, so a fresh version.txt/install.sh can look
+# "old" for a while. The GitHub API serves the file as it is now; the plain URL stays as the fallback.
+api_url() { # api_url FILE -> https://api.github.com/repos/OWNER/REPO/contents/FILE?ref=BRANCH
+  local m
+  m="$(printf '%s' "$BASE" | sed -nE 's#^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(refs/heads/)?([^/]+)/?$#\1/\2 \4#p')"
+  [ -n "$m" ] || return 1
+  printf 'https://api.github.com/repos/%s/contents/%s?ref=%s' "${m% *}" "$1" "${m#* }"
+}
+fetch_repo() { # fetch_repo FILE -> the file's content
+  local u
+  if u="$(api_url "$1")" && curl -fsSL --max-time "${FETCH_TIMEOUT:-60}" -H 'Accept: application/vnd.github.raw+json' -H 'User-Agent: coregsm' \
+       ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "$u" 2>/dev/null; then return 0; fi
+  fetch "$BASE/$1"
+}
+
 # ---------- state ----------
 panel_url() { printf 'https://%s' "$(envget DOMAIN)"; }
 cur_build() { envget APP_VERSION; }
@@ -71,7 +86,7 @@ cur_build() { envget APP_VERSION; }
 remote_build() { # cached for 10 minutes so the menu opens instantly
   local f="$UPD/.remote" b=""
   if [ -f "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 600 ]; then cat "$f"; return; fi
-  b="$(FETCH_TIMEOUT=4 fetch "$BASE/version.txt" 2>/dev/null | sed -n 's/^build=//p' | head -n1)"
+  b="$(FETCH_TIMEOUT=4 fetch_repo version.txt 2>/dev/null | sed -n 's/^build=//p' | head -n1)"
   if [ -n "$b" ]; then mkdir -p "$UPD"; printf '%s' "$b" > "$f"; fi
   printf '%s' "$b"
 }
@@ -224,7 +239,7 @@ screen_power() {
 download_installer() { # download_installer EXPECTED_SHA -> prints path
   local tmp i; tmp="$(mktemp)"
   for i in 1 2 3 4; do
-    if fetch "$BASE/install.sh" > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ] && bash -n "$tmp"; then
+    if fetch_repo install.sh > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ] && bash -n "$tmp"; then
       printf '%s' "$tmp"; return 0
     fi
     sleep "${RETRY_SLEEP:-8}"
@@ -237,7 +252,7 @@ run_installer() { # run_installer FILE  (DOMAIN / LE_EMAIL / PROXY_URL may be se
 }
 
 remote_meta() { # sets R_BUILD R_SHA
-  local meta; meta="$(fetch "$BASE/version.txt")" || return 1
+  local meta; meta="$(fetch_repo version.txt)" || return 1
   R_BUILD="$(printf '%s\n' "$meta" | sed -n 's/^build=//p' | head -n1)"
   R_SHA="$(printf '%s\n' "$meta" | sed -n 's/^sha256=//p' | head -n1)"
   [ -n "$R_BUILD" ] && [ -n "$R_SHA" ]

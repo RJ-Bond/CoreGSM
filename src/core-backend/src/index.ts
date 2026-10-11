@@ -278,12 +278,31 @@ const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubuserconten
 
 let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
 
+/** raw.githubusercontent.com is cached for minutes after a push; the GitHub API returns the file as it is now. */
+function repoApiUrl(file: string): string | null {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
+  return m ? `https://api.github.com/repos/${m[1]}/${m[2]}/contents/${file}?ref=${m[3]}` : null;
+}
+
+async function fetchRepoText(file: string): Promise<string> {
+  const api = repoApiUrl(file);
+  if (api) {
+    try {
+      const r = await fetch(api, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github.raw+json', 'User-Agent': 'CoreGSM' } });
+      if (r.ok) return await r.text();
+    } catch {
+      /* rate limit or no route: fall back to the plain file below */
+    }
+  }
+  const res = await fetch(`${UPDATE_BASE}/${file}?t=${Date.now()}`, { signal: AbortSignal.timeout(8000), headers: { 'cache-control': 'no-cache' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
 async function checkRemote(force = false): Promise<void> {
   if (!force && Date.now() - remote.at < 5 * 60_000) return;
   try {
-    const res = await fetch(`${UPDATE_BASE}/version.txt`, { signal: AbortSignal.timeout(8000), headers: { 'cache-control': 'no-cache' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const m = /^build=([a-f0-9]{6,64})$/m.exec(await res.text());
+    const m = /^build=([a-f0-9]{6,64})$/m.exec(await fetchRepoText('version.txt'));
     if (!m) throw new Error('некорректный version.txt');
     remote = { build: m[1], error: null, at: Date.now() };
   } catch (e) {
