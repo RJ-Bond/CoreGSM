@@ -3185,7 +3185,7 @@ install_update_command() {
 # Updates CoreGSM to the latest version from GitHub. Secrets, database and certificates are kept.
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "Запустите от root: sudo coregsm-update" >&2; exit 1; }
-URL="${COREGSM_URL:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/main/install.sh}"
+URL="${COREGSM_URL:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh}"
 proxy="$(grep -E '^PROXY_URL=' /app/.env 2>/dev/null | cut -d= -f2- || true)"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT

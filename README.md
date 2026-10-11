@@ -56,7 +56,7 @@ ssh root@192.168.88.152
 
 ```bash
 apt-get update && apt-get install -y curl
-curl -fsSL https://raw.githubusercontent.com/RJ-Bond/CoreGSM/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh -o install.sh
 bash install.sh
 ```
 
@@ -130,7 +130,7 @@ DOMAIN=gsm.my-domain.com LE_EMAIL=me@example.com bash install.sh
 **Способ A (рекомендуется): скачать с GitHub прямо на сервере.**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RJ-Bond/CoreGSM/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh -o install.sh
 bash install.sh
 ```
 
