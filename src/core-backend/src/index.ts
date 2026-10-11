@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
-import { refreshServer, startPoller } from './gsm.js';
+import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -80,6 +80,7 @@ function normalizeProxy(raw: string, type: ProxyType): string {
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 
 const wrap =
@@ -262,7 +263,7 @@ function invitePayload() {
 app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
-  const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus;
+  const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
   res.json({ ...base, ...invitePayload() });
 });
 
@@ -460,6 +461,78 @@ app.delete('/api/servers/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// try a server without saving it: used by the "Проверить" button in the add/edit form
+app.post(
+  '/api/servers/test',
+  auth,
+  wrap(async (req, res) => {
+    const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
+    const r = await queryServer({
+      id: 0,
+      name: '',
+      display_address: '',
+      game: b.data.game,
+      host: b.data.host,
+      port: b.data.port,
+      query_port: b.data.queryPort ?? null,
+      created_at: 0,
+    });
+    res.json(r);
+  }),
+);
+
+// everything the server page needs: chart points, uptime, peak, outage log
+app.get('/api/servers/:id/details', auth, (req, res) => {
+  const id = Number(req.params.id);
+  const server = getServer(id);
+  if (!server) return res.status(404).json({ error: 'Сервер не найден' });
+  const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
+  const since = Date.now() - hours * 3600 * 1000;
+  const bucketMs = Math.max(30_000, Math.ceil((hours * 3600 * 1000) / 180));
+
+  const points = db
+    .prepare(
+      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online
+       FROM history WHERE server_id = ? AND ts > ?
+       GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
+    )
+    .all(id, since, bucketMs);
+  const agg = db
+    .prepare(
+      `SELECT COUNT(*) AS samples, AVG(online) * 100 AS uptime,
+              AVG(CASE WHEN online = 1 THEN players END) AS avg_players
+       FROM history WHERE server_id = ? AND ts > ?`,
+    )
+    .get(id, since) as { samples: number; uptime: number | null; avg_players: number | null };
+  const peak = db
+    .prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1')
+    .get(id, since) as { players: number; ts: number } | undefined;
+  const events = (
+    db
+      .prepare(
+        `SELECT ts, online FROM (
+           SELECT ts, online, LAG(online) OVER (ORDER BY ts) AS prev FROM history WHERE server_id = ? AND ts > ?
+         ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
+      )
+      .all(id, since) as { ts: number; online: number }[]
+  ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
+
+  res.json({
+    server,
+    hours,
+    points,
+    stats: {
+      samples: agg.samples,
+      uptimePct: agg.uptime == null ? null : Math.round(agg.uptime * 10) / 10,
+      avgPlayers: agg.avg_players == null ? null : Math.round(agg.avg_players * 10) / 10,
+      peakPlayers: peak?.players ?? null,
+      peakAt: peak?.ts ?? null,
+    },
+    events,
+  });
+});
+
 app.post(
   '/api/servers/:id/refresh',
   auth,
@@ -497,7 +570,28 @@ const bindingSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
+// guilds and text channels the bot can post in (reported by the bot, used for the channel picker)
+interface BotGuild {
+  id: string;
+  name: string;
+  channels: { id: string; name: string }[];
+}
+let botGuilds: BotGuild[] = [];
+
+function channelInfo(channelId: string): { channelName: string | null; guildName: string | null } {
+  for (const g of botGuilds) {
+    const c = g.channels.find((x) => x.id === channelId);
+    if (c) return { channelName: c.name, guildName: g.name };
+  }
+  return { channelName: null, guildName: null };
+}
+
+app.get('/api/discord/channels', auth, (_req, res) => {
+  res.json(botGuilds);
+});
+
 const serializeBinding = (b: BindingRow) => ({
+  ...channelInfo(b.channel_id),
   id: b.id,
   serverId: b.server_id,
   channelId: b.channel_id,
@@ -552,6 +646,22 @@ function internal(req: Request, res: Response, next: NextFunction) {
 
 app.get('/internal/config', internal, (_req, res) => {
   res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
+});
+
+app.post('/internal/bot-guilds', internal, (req, res) => {
+  const b = z
+    .array(
+      z.object({
+        id: z.string().max(30),
+        name: z.string().max(120),
+        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(300),
+      }),
+    )
+    .max(60)
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'bad body' });
+  botGuilds = b.data;
+  res.json({ ok: true });
 });
 
 app.post('/internal/bot-status', internal, (req, res) => {

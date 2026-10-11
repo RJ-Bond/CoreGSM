@@ -13,6 +13,19 @@ export interface QueryResult {
   error: string | null;
 }
 
+/** Turns GameDig/network errors into a message a person can act on. */
+export function humanizeQueryError(raw: string): string {
+  const m = raw.toLowerCase();
+  if (/invalid game|unknown game|game type/.test(m)) return 'Неизвестный тип игры. Выберите игру из списка или проверьте GameDig ID.';
+  if (/enotfound|eai_again|getaddrinfo/.test(m)) return 'Адрес не найден. Проверьте имя или IP сервера.';
+  if (/econnrefused/.test(m)) return 'Соединение отклонено: порт закрыт или сервер выключен.';
+  if (/ehostunreach|enetunreach|network is unreachable/.test(m)) return 'Нет маршрута до сервера. Проверьте сеть и адрес.';
+  if (/timed out|timeout|failed all|no response|etimedout/.test(m)) {
+    return 'Сервер не ответил. Проверьте адрес и порт, включён ли сервер и разрешён ли query (некоторым играм нужен отдельный query-порт).';
+  }
+  return raw.slice(0, 160);
+}
+
 const clean = (s: unknown): string | null => {
   if (typeof s !== 'string') return null;
   // strip Minecraft colour codes and control characters
@@ -57,7 +70,7 @@ export async function queryServer(s: ServerRow): Promise<QueryResult> {
       version: null,
       ping: null,
       playerNames: [],
-      error: (e instanceof Error ? e.message : String(e)).slice(0, 200),
+      error: humanizeQueryError(e instanceof Error ? e.message : String(e)),
     };
   }
 }

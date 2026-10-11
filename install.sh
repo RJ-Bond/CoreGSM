@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0a47ab75ae27"
+COREGSM_BUILD="eccf87b75058"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -809,6 +809,19 @@ export interface QueryResult {
   error: string | null;
 }
 
+/** Turns GameDig/network errors into a message a person can act on. */
+export function humanizeQueryError(raw: string): string {
+  const m = raw.toLowerCase();
+  if (/invalid game|unknown game|game type/.test(m)) return 'Неизвестный тип игры. Выберите игру из списка или проверьте GameDig ID.';
+  if (/enotfound|eai_again|getaddrinfo/.test(m)) return 'Адрес не найден. Проверьте имя или IP сервера.';
+  if (/econnrefused/.test(m)) return 'Соединение отклонено: порт закрыт или сервер выключен.';
+  if (/ehostunreach|enetunreach|network is unreachable/.test(m)) return 'Нет маршрута до сервера. Проверьте сеть и адрес.';
+  if (/timed out|timeout|failed all|no response|etimedout/.test(m)) {
+    return 'Сервер не ответил. Проверьте адрес и порт, включён ли сервер и разрешён ли query (некоторым играм нужен отдельный query-порт).';
+  }
+  return raw.slice(0, 160);
+}
+
 const clean = (s: unknown): string | null => {
   if (typeof s !== 'string') return null;
   // strip Minecraft colour codes and control characters
@@ -853,7 +866,7 @@ export async function queryServer(s: ServerRow): Promise<QueryResult> {
       version: null,
       ping: null,
       playerNames: [],
-      error: (e instanceof Error ? e.message : String(e)).slice(0, 200),
+      error: humanizeQueryError(e instanceof Error ? e.message : String(e)),
     };
   }
 }
@@ -919,7 +932,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
-import { refreshServer, startPoller } from './gsm.js';
+import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -993,6 +1006,7 @@ function normalizeProxy(raw: string, type: ProxyType): string {
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 
 const wrap =
@@ -1175,7 +1189,7 @@ function invitePayload() {
 app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
-  const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus;
+  const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
   res.json({ ...base, ...invitePayload() });
 });
 
@@ -1373,6 +1387,78 @@ app.delete('/api/servers/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// try a server without saving it: used by the "Проверить" button in the add/edit form
+app.post(
+  '/api/servers/test',
+  auth,
+  wrap(async (req, res) => {
+    const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
+    const r = await queryServer({
+      id: 0,
+      name: '',
+      display_address: '',
+      game: b.data.game,
+      host: b.data.host,
+      port: b.data.port,
+      query_port: b.data.queryPort ?? null,
+      created_at: 0,
+    });
+    res.json(r);
+  }),
+);
+
+// everything the server page needs: chart points, uptime, peak, outage log
+app.get('/api/servers/:id/details', auth, (req, res) => {
+  const id = Number(req.params.id);
+  const server = getServer(id);
+  if (!server) return res.status(404).json({ error: 'Сервер не найден' });
+  const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
+  const since = Date.now() - hours * 3600 * 1000;
+  const bucketMs = Math.max(30_000, Math.ceil((hours * 3600 * 1000) / 180));
+
+  const points = db
+    .prepare(
+      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online
+       FROM history WHERE server_id = ? AND ts > ?
+       GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
+    )
+    .all(id, since, bucketMs);
+  const agg = db
+    .prepare(
+      `SELECT COUNT(*) AS samples, AVG(online) * 100 AS uptime,
+              AVG(CASE WHEN online = 1 THEN players END) AS avg_players
+       FROM history WHERE server_id = ? AND ts > ?`,
+    )
+    .get(id, since) as { samples: number; uptime: number | null; avg_players: number | null };
+  const peak = db
+    .prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1')
+    .get(id, since) as { players: number; ts: number } | undefined;
+  const events = (
+    db
+      .prepare(
+        `SELECT ts, online FROM (
+           SELECT ts, online, LAG(online) OVER (ORDER BY ts) AS prev FROM history WHERE server_id = ? AND ts > ?
+         ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
+      )
+      .all(id, since) as { ts: number; online: number }[]
+  ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
+
+  res.json({
+    server,
+    hours,
+    points,
+    stats: {
+      samples: agg.samples,
+      uptimePct: agg.uptime == null ? null : Math.round(agg.uptime * 10) / 10,
+      avgPlayers: agg.avg_players == null ? null : Math.round(agg.avg_players * 10) / 10,
+      peakPlayers: peak?.players ?? null,
+      peakAt: peak?.ts ?? null,
+    },
+    events,
+  });
+});
+
 app.post(
   '/api/servers/:id/refresh',
   auth,
@@ -1410,7 +1496,28 @@ const bindingSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
+// guilds and text channels the bot can post in (reported by the bot, used for the channel picker)
+interface BotGuild {
+  id: string;
+  name: string;
+  channels: { id: string; name: string }[];
+}
+let botGuilds: BotGuild[] = [];
+
+function channelInfo(channelId: string): { channelName: string | null; guildName: string | null } {
+  for (const g of botGuilds) {
+    const c = g.channels.find((x) => x.id === channelId);
+    if (c) return { channelName: c.name, guildName: g.name };
+  }
+  return { channelName: null, guildName: null };
+}
+
+app.get('/api/discord/channels', auth, (_req, res) => {
+  res.json(botGuilds);
+});
+
 const serializeBinding = (b: BindingRow) => ({
+  ...channelInfo(b.channel_id),
   id: b.id,
   serverId: b.server_id,
   channelId: b.channel_id,
@@ -1465,6 +1572,22 @@ function internal(req: Request, res: Response, next: NextFunction) {
 
 app.get('/internal/config', internal, (_req, res) => {
   res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
+});
+
+app.post('/internal/bot-guilds', internal, (req, res) => {
+  const b = z
+    .array(
+      z.object({
+        id: z.string().max(30),
+        name: z.string().max(120),
+        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(300),
+      }),
+    )
+    .max(60)
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'bad body' });
+  botGuilds = b.data;
+  res.json({ ok: true });
 });
 
 app.post('/internal/bot-status', internal, (req, res) => {
@@ -1591,7 +1714,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
 patchGatewayAgent(() => gatewayAgent);
-const { AttachmentBuilder, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
+const { AttachmentBuilder, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
 
 interface Binding {
@@ -1611,6 +1734,24 @@ interface BotConfig {
 type BotState = 'idle' | 'connecting' | 'online' | 'error';
 
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
+
+/** Turns Discord/network errors into a message a person can act on (shown in the panel). */
+function humanDiscordError(e: unknown): string {
+  const err = e as { code?: number | string; message?: string };
+  const m = String(err?.message ?? e);
+  switch (err?.code) {
+    case 50001: return 'У бота нет доступа к каналу. Пригласите бота на этот сервер и выдайте права на канал.';
+    case 10003: return 'Канал не найден. Проверьте ID и что бот приглашён на сервер, где находится канал.';
+    case 50013: return 'Не хватает прав: боту нужны «Отправка сообщений», «Прикрепление файлов» и «Встраивание ссылок» в этом канале.';
+    case 50035: return 'Неверный ID канала.';
+    case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
+  }
+  if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|timeout|socks|proxy/i.test(m)) {
+    return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
+  }
+  return m.slice(0, 200);
+}
 
 // Calls to the backend inside the Docker network never use the proxy.
 async function backend(path: string, init: RequestInit = {}): Promise<Response> {
@@ -1655,6 +1796,41 @@ function setState(s: BotState, opts: { tag?: string | null; clientId?: string | 
   lastError = opts.error ?? null;
 }
 
+let lastGuildsJson = '';
+let lastGuildsAt = 0;
+
+/** Text channels the bot can post in, grouped by server. */
+function collectGuilds(c: DiscordClient) {
+  const out: { id: string; name: string; channels: { id: string; name: string; pos: number }[] }[] = [];
+  for (const g of c.guilds.cache.values()) {
+    const me = g.members.me;
+    const channels: { id: string; name: string; pos: number }[] = [];
+    for (const ch of g.channels.cache.values()) {
+      if (ch.type !== ChannelType.GuildText && ch.type !== ChannelType.GuildAnnouncement) continue;
+      const perms = me ? ch.permissionsFor(me) : null;
+      if (perms && !perms.has(['ViewChannel', 'SendMessages', 'AttachFiles'])) continue;
+      channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition });
+    }
+    channels.sort((a, b) => a.pos - b.pos);
+    out.push({ id: g.id, name: g.name, channels: channels.slice(0, 250) });
+  }
+  return out.slice(0, 50);
+}
+
+async function publishGuilds(): Promise<void> {
+  if (!client || state !== 'online') return;
+  const list = collectGuilds(client).map((g) => ({ id: g.id, name: g.name, channels: g.channels.map(({ id, name }) => ({ id, name })) }));
+  const json = JSON.stringify(list);
+  // send on change, and every 5 minutes so a restarted backend learns the list again
+  if (json === lastGuildsJson && Date.now() - lastGuildsAt < 5 * 60_000) return;
+  try {
+    const r = await backend('/internal/bot-guilds', { method: 'POST', body: json });
+    if (r.ok) { lastGuildsJson = json; lastGuildsAt = Date.now(); }
+  } catch {
+    /* retry on the next tick */
+  }
+}
+
 async function stopClient(): Promise<void> {
   if (!client) return;
   const c = client;
@@ -1681,9 +1857,12 @@ async function applyConfig(): Promise<void> {
   await stopClient();
   gatewayAgent = undefined;
   lastRun.clear();
+  lastGuildsJson = '';
 
   if (!cfg.discordToken) {
     setState('idle');
+    // forget the channel list of a bot that is no longer configured
+    backend('/internal/bot-guilds', { method: 'POST', body: '[]' }).catch(() => undefined);
     log('No Discord token configured. Add it in the panel: Settings.');
     return;
   }
@@ -1714,9 +1893,8 @@ async function applyConfig(): Promise<void> {
     log(`Logged in as ${c.user?.tag}`);
     setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
   } catch (e) {
-    const msg = (e as Error).message.slice(0, 250);
-    log('Discord login failed:', msg);
-    setState('error', { error: msg });
+    log('Discord login failed:', (e as Error).message);
+    setState('error', { error: humanDiscordError(e) });
     await stopClient();
     // do not hammer Discord: retry later with the same config
     appliedKey = null;
@@ -1766,9 +1944,8 @@ async function updateBindings(): Promise<void> {
       await update(c, b);
       log(`binding ${b.id} (${b.serverName}) updated`);
     } catch (e) {
-      const msg = (e as Error).message.slice(0, 250);
-      log(`binding ${b.id} failed:`, msg);
-      await report(b.id, { error: msg });
+      log(`binding ${b.id} failed:`, (e as Error).message);
+      await report(b.id, { error: humanDiscordError(e) });
     }
   }
 }
@@ -1779,6 +1956,7 @@ async function tick(): Promise<void> {
   busy = true;
   try {
     await applyConfig();
+    await publishGuilds();
     await updateBindings();
   } catch (e) {
     log('tick failed:', (e as Error).message);
@@ -1919,6 +2097,13 @@ __COREGSM_EOF__
     <meta name="theme-color" content="#f1effe" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>CoreGSM</title>
+    <script>
+      // apply the saved theme before first paint to avoid a flash
+      try {
+        var t = localStorage.getItem('coregsm_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
@@ -1989,7 +2174,7 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, getToken, setToken, type UpdateInfo } from './api';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
@@ -1997,26 +2182,22 @@ import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
 import SettingsPage from './pages/Settings';
-import { Logo } from './ui';
+import { IconCards, IconDiscord, IconServers, IconSettings, Logo, ThemeToggle, useHash } from './ui';
 
-const PAGES = [
-  { id: 'servers', label: 'Серверы' },
-  { id: 'cards', label: 'Карточки' },
-  { id: 'discord', label: 'Discord' },
-  { id: 'settings', label: 'Настройки' },
-] as const;
-type PageId = (typeof PAGES)[number]['id'];
-
-const readHash = (): PageId => {
-  const h = window.location.hash.replace('#/', '');
-  return (PAGES.find((p) => p.id === h)?.id ?? 'servers') as PageId;
-};
+const PAGES: { id: string; label: string; icon: () => ReactNode }[] = [
+  { id: 'servers', label: 'Серверы', icon: IconServers },
+  { id: 'cards', label: 'Карточки', icon: IconCards },
+  { id: 'discord', label: 'Discord', icon: IconDiscord },
+  { id: 'settings', label: 'Настройки', icon: IconSettings },
+];
 
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken());
-  const [page, setPage] = useState<PageId>(readHash());
+  const { page: rawPage, sub } = useHash();
+  const page = PAGES.some((p) => p.id === rawPage) ? rawPage : 'servers';
   // null = still checking whether the first-run wizard is needed
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(getToken() ? false : null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
 
   useEffect(() => {
     if (authed) return;
@@ -2025,9 +2206,7 @@ export default function App() {
       .catch(() => setNeedsSetup(false));
   }, [authed]);
 
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-
-  // small dot on "Настройки" when a newer version is published in the repository
+  // a dot on "Настройки" when a newer version is published in the repository
   useEffect(() => {
     if (!authed) return;
     const check = () => api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
@@ -2037,14 +2216,9 @@ export default function App() {
   }, [authed]);
 
   useEffect(() => {
-    const h = () => setPage(readHash());
     const out = () => setAuthed(false);
-    window.addEventListener('hashchange', h);
     window.addEventListener('coregsm:logout', out);
-    return () => {
-      window.removeEventListener('hashchange', h);
-      window.removeEventListener('coregsm:logout', out);
-    };
+    return () => window.removeEventListener('coregsm:logout', out);
   }, []);
 
   const logout = useCallback(() => {
@@ -2053,45 +2227,75 @@ export default function App() {
   }, []);
 
   if (!authed) {
-    if (needsSetup === null) return <div className="grid min-h-full place-items-center font-black text-brand">coregsm</div>;
+    if (needsSetup === null) return <div className="grid min-h-full place-items-center font-black text-link">coregsm</div>;
     if (needsSetup) return <Setup onDone={() => { setNeedsSetup(false); setAuthed(true); }} />;
     return <Login onDone={() => setAuthed(true)} />;
   }
 
+  const dot = <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />;
+
   return (
-    <div className="mx-auto min-h-full max-w-6xl px-4 pb-16 pt-5 sm:px-6">
-      <header className="mb-8 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight text-brand">
+    <div className="mx-auto min-h-full max-w-6xl px-4 pb-28 pt-5 sm:px-6 md:pb-16">
+      <header className="mb-6 flex items-center gap-x-4 md:mb-8">
+        <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight text-link">
           <Logo size={34} />
           coregsm
         </a>
-        <nav className="flex max-w-full gap-1.5 overflow-x-auto" aria-label="Разделы">
+        {/* desktop navigation; on phones the same sections live in the bottom bar */}
+        <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
           {PAGES.map((p) => (
             <a
               key={p.id}
               href={`#/${p.id}`}
               aria-current={page === p.id ? 'page' : undefined}
               className={`whitespace-nowrap rounded-full px-4 py-1.5 font-extrabold transition ${
-                page === p.id ? 'bg-brand text-white shadow-pop' : 'bg-white text-ink shadow-pop hover:text-brand'
+                page === p.id ? 'bg-brand text-white shadow-pop' : 'bg-card text-ink shadow-pop hover:text-link'
               }`}
             >
               {p.label}
-              {p.id === 'settings' && updateAvailable && (
-                <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />
-              )}
+              {p.id === 'settings' && updateAvailable && dot}
             </a>
           ))}
         </nav>
-        <button onClick={logout} className="ml-auto rounded-full bg-white px-4 py-1.5 font-extrabold text-mute shadow-pop hover:text-bad">
-          Выйти
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
+          <button onClick={logout} className="rounded-full bg-card px-4 py-2 font-extrabold text-mute shadow-pop hover:text-bad">
+            Выйти
+          </button>
+        </div>
       </header>
+
       <main key={page} className="pop min-w-0">
-        {page === 'servers' && <ServersPage />}
+        {page === 'servers' && <ServersPage sub={sub} />}
         {page === 'cards' && <CardsPage />}
         {page === 'discord' && <DiscordPage />}
-        {page === 'settings' && <SettingsPage />}
+        {page === 'settings' && <SettingsPage sub={sub} updateAvailable={updateAvailable} />}
       </main>
+
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card/95 backdrop-blur md:hidden"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+        aria-label="Разделы"
+      >
+        <ul className="mx-auto flex max-w-md">
+          {PAGES.map((p) => {
+            const active = page === p.id;
+            return (
+              <li key={p.id} className="flex-1">
+                <a
+                  href={`#/${p.id}`}
+                  aria-current={active ? 'page' : undefined}
+                  className={`relative flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                >
+                  <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
+                  {p.label}
+                  {p.id === 'settings' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
     </div>
   );
 }
@@ -2138,6 +2342,9 @@ export interface Binding {
   id: number;
   serverId: number;
   channelId: string;
+  /** resolved by the bot when it can see the channel */
+  channelName: string | null;
+  guildName: string | null;
   messageId: string | null;
   intervalSec: number;
   enabled: boolean;
@@ -2199,6 +2406,32 @@ export interface UpdateInfo {
   pending: boolean;
   job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
 }
+
+export interface TestResult {
+  online: boolean;
+  name: string | null;
+  players: number;
+  maxPlayers: number;
+  map: string | null;
+  version: string | null;
+  ping: number | null;
+  playerNames: string[];
+  error: string | null;
+}
+
+export interface ServerDetails {
+  server: Server;
+  hours: number;
+  points: { ts: number; players: number; online: number }[];
+  stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
+  events: { ts: number; type: 'up' | 'down' }[];
+}
+
+export interface DiscordGuild {
+  id: string;
+  name: string;
+  channels: { id: string; name: string }[];
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
@@ -2245,22 +2478,87 @@ __COREGSM_EOF__
 @tailwind components;
 @tailwind utilities;
 
+/* Palette as space-separated RGB so Tailwind can apply opacity (bg-brand/20).
+   Light is the default; dark applies with the system setting unless a theme is chosen explicitly. */
+:root {
+  --page: 241 239 254;
+  --card: 255 255 255;
+  --ink: 43 38 80;
+  --mute: 104 98 148;
+  --line: 226 222 250;
+  --soft: 236 233 255;
+  --brand: 90 75 209;
+  --brand-hover: 74 60 184;
+  --link: 90 75 209;
+  --ok: 22 122 70;
+  --okbg: 217 247 230;
+  --warn: 143 91 0;
+  --warnbg: 255 240 204;
+  --bad: 188 40 40;
+  --badbg: 255 222 222;
+  --shadow-soft: 0 8px 28px rgba(90, 75, 209, 0.09);
+  --shadow-pop: 0 2px 10px rgba(90, 75, 209, 0.12);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --page: 17 16 28;
+    --card: 28 26 45;
+    --ink: 236 235 255;
+    --mute: 166 163 204;
+    --line: 48 44 74;
+    --soft: 39 36 63;
+    --brand: 108 92 231;
+    --brand-hover: 128 113 245;
+    --link: 163 151 255;
+    --ok: 74 222 128;
+    --okbg: 20 56 38;
+    --warn: 251 191 36;
+    --warnbg: 58 46 16;
+    --bad: 248 113 113;
+    --badbg: 62 26 31;
+    --shadow-soft: 0 8px 28px rgba(0, 0, 0, 0.35);
+    --shadow-pop: 0 2px 10px rgba(0, 0, 0, 0.3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --page: 17 16 28;
+  --card: 28 26 45;
+  --ink: 236 235 255;
+  --mute: 166 163 204;
+  --line: 48 44 74;
+  --soft: 39 36 63;
+  --brand: 108 92 231;
+  --brand-hover: 128 113 245;
+  --link: 163 151 255;
+  --ok: 74 222 128;
+  --okbg: 20 56 38;
+  --warn: 251 191 36;
+  --warnbg: 58 46 16;
+  --bad: 248 113 113;
+  --badbg: 62 26 31;
+  --shadow-soft: 0 8px 28px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 2px 10px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+}
+
 @layer base {
   html, body, #root { min-height: 100%; }
   body { @apply bg-page text-ink font-sans text-[15px] antialiased; }
-  ::selection { @apply bg-brand/25; }
-  :focus-visible { @apply outline-none ring-2 ring-brand/60; }
+  ::selection { @apply bg-brand/30; }
+  :focus-visible { @apply outline-none ring-2 ring-brand/70; }
 }
 
 @layer components {
   .btn { @apply inline-flex items-center justify-center gap-2 rounded-full bg-brand px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-brand-hover active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none; }
-  .btn-soft { @apply bg-soft text-brand shadow-none hover:bg-line; }
+  .btn-soft { @apply bg-soft text-link shadow-none hover:bg-line; }
   .btn-danger { @apply bg-badbg text-bad shadow-none hover:bg-bad/20; }
-  .btn-sm { @apply px-3 py-1 text-[13px]; }
-  .input { @apply w-full rounded-2xl border-2 border-line bg-white px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute/70 focus:border-brand focus:outline-none; }
-  .label { @apply mb-1.5 block text-[13px] font-extrabold text-mute; }
+  .btn-sm { @apply px-3 py-1 text-sm; }
+  .input { @apply w-full rounded-2xl border-2 border-line bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:border-brand focus:outline-none disabled:opacity-60; }
+  .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
   .panel { @apply rounded-3xl bg-card shadow-soft; }
-  .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-extrabold; }
+  .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
   .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
   .pill-ok { @apply bg-okbg text-ok; }
   .pill-warn { @apply bg-warnbg text-warn; }
@@ -2345,8 +2643,8 @@ export default function CardsPage() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Discord.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
-import { api, type Binding, type BotStatus, type Server, type SettingsInfo } from '../api';
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
 
@@ -2360,13 +2658,14 @@ export default function DiscordPage() {
   const [error, setError] = useState('');
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
+  const [tick, setTick] = useState(0);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
-      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); })
+      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); setTick((t) => t + 1); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
-  usePoll(load, 10_000);
+  usePoll(load, 15_000);
 
   const server = (id: number) => servers.find((s) => s.id === id);
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
@@ -2384,9 +2683,10 @@ export default function DiscordPage() {
 
   const steps = [
     { done: servers.length > 0, title: 'Добавьте сервер', text: 'На вкладке «Серверы».' },
-    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» выше откроет Discord: выберите сервер и подтвердите права.' },
+    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» откроет Discord: выберите сервер и подтвердите права. Затем выберите канал здесь.' },
     { done: working, title: 'Бот отправит карточку', text: 'Одно сообщение, которое потом обновляется по таймеру.' },
   ];
+  const allDone = steps.every((s) => s.done);
 
   return (
     <div className="space-y-6">
@@ -2395,28 +2695,29 @@ export default function DiscordPage() {
       </PageHead>
       <ErrorLine text={error} />
 
-      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-3">
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
-        {!settings?.discordTokenSet && <a href="#/settings" className="font-extrabold text-brand hover:underline">Указать токен в настройках</a>}
+        {!settings?.discordTokenSet && <a href="#/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
         {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
-        {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <span className="text-[13px] font-bold text-bad">{bot.error}</span>}
+        {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </div>
 
-      <ol className="grid gap-3 md:grid-cols-3">
-        {steps.map((s, i) => (
-          <li key={s.title} className="panel flex gap-3 p-4">
-            <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
-            <div>
-              <div className="font-black">{s.title}</div>
-              <div className="text-[13px] font-semibold text-mute">{s.text}</div>
-            </div>
-          </li>
-        ))}
-      </ol>
-      <p className="text-[13px] font-semibold text-mute">ID канала: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».</p>
+      {!allDone && (
+        <ol className="grid gap-3 md:grid-cols-3">
+          {steps.map((s, i) => (
+            <li key={s.title} className="panel flex gap-3 p-4">
+              <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
+              <div>
+                <div className="font-black">{s.title}</div>
+                <div className="text-sm font-semibold text-mute">{s.text}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
 
       {loaded && bindings.length === 0 && <Empty title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
 
@@ -2425,18 +2726,28 @@ export default function DiscordPage() {
           const s = server(b.serverId);
           return (
             <div key={b.id} className="panel space-y-3 p-5">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
                     <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
-                    <div className="font-mono text-[12px] font-bold text-mute">#{b.channelId}</div>
+                    <div className="truncate text-sm font-bold text-mute" title={`ID канала ${b.channelId}`}>
+                      {b.channelName ? `# ${b.channelName}${b.guildName ? ` · ${b.guildName}` : ''}` : `Канал ${b.channelId}`}
+                    </div>
                   </div>
                 </div>
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
-              {b.lastError && b.enabled && <p className="rounded-xl bg-badbg px-3 py-1.5 text-[12px] font-bold text-bad">{b.lastError}</p>}
-              <div className="flex justify-between text-[13px] font-bold text-mute">
+
+              <img
+                src={`/api/card/${b.serverId}.png?t=${tick}`}
+                alt={`Так карточка выглядит в Discord: ${s?.name ?? ''}`}
+                loading="lazy"
+                className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
+              />
+
+              {b.lastError && b.enabled && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{b.lastError}</p>}
+              <div className="flex justify-between text-sm font-bold text-mute">
                 <span>Каждые {b.intervalSec} с</span>
                 <span>Обновлено: {ago(b.lastUpdate)}</span>
               </div>
@@ -2459,9 +2770,30 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
   const [f, setF] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [guilds, setGuilds] = useState<DiscordGuild[] | null>(null);
+  const [guildId, setGuildId] = useState('');
+  const [manual, setManual] = useState(false);
+
+  // the bot reports the servers and channels it can post in: pick from the list instead of copying an ID
+  useEffect(() => {
+    api<DiscordGuild[]>('/discord/channels')
+      .then((g) => {
+        const withChannels = g.filter((x) => x.channels.length > 0);
+        setGuilds(withChannels);
+        const known = withChannels.find((x) => x.channels.some((c) => c.id === initial.channelId));
+        if (known) setGuildId(known.id);
+        else if (initial.channelId) setManual(true);
+        else if (withChannels[0]) setGuildId(withChannels[0].id);
+      })
+      .catch(() => setGuilds([]));
+  }, [initial.channelId]);
+
+  const hasList = !!guilds && guilds.length > 0;
+  const guild = guilds?.find((g) => g.id === guildId);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!/^\d{15,25}$/.test(f.channelId)) return setError('Выберите канал из списка или введите его ID');
     setBusy(true);
     setError('');
     const { id, ...body } = f;
@@ -2482,9 +2814,38 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
-        <Field label="ID канала Discord">
-          <input id="bind-channel" className="input" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value.trim() })} placeholder="123456789012345678" required pattern="\d{15,25}" inputMode="numeric" autoFocus />
-        </Field>
+
+        {hasList && !manual ? (
+          <>
+            {guilds!.length > 1 && (
+              <Field label="Сервер Discord">
+                <select id="bind-guild" className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); setF({ ...f, channelId: '' }); }}>
+                  {guilds!.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              </Field>
+            )}
+            <Field label={guilds!.length === 1 ? `Канал на сервере «${guild?.name ?? ''}»` : 'Канал'}>
+              <select id="bind-channel-pick" className="input" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} required>
+                <option value="" disabled>Выберите канал…</option>
+                {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}`}</option>)}
+              </select>
+            </Field>
+            <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+          </>
+        ) : (
+          <>
+            <Field label="ID канала Discord">
+              <input id="bind-channel" className="input font-mono" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value.trim() })} placeholder="123456789012345678" required pattern="\d{15,25}" inputMode="numeric" autoFocus />
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">
+              {guilds && guilds.length === 0
+                ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер», и каналы появятся списком. Пока можно ввести ID: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
+                : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
+            </p>
+            {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
+          </>
+        )}
+
         <Field label="Обновлять каждые, секунд (30–3600)">
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>
@@ -2492,7 +2853,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
           <input id="bind-enabled" type="checkbox" className="h-4 w-4 accent-brand" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Включена
         </label>
         <ErrorLine text={error} />
-        <div className="flex justify-end gap-2 pt-2">
+        <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
           <button className="btn" disabled={busy}>Сохранить</button>
         </div>
@@ -2533,7 +2894,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
       <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
         <div>
           <div className="mb-1"><Logo size={48} /></div>
-          <div className="text-3xl font-black tracking-tight text-brand">coregsm</div>
+          <div className="text-3xl font-black tracking-tight text-link">coregsm</div>
           <div className="font-semibold text-mute">Войдите в панель управления</div>
         </div>
         <Field label="Логин">
@@ -2550,15 +2911,440 @@ export default function Login({ onDone }: { onDone: () => void }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
-  cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
+  cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
+import { api, type ServerDetails } from '../api';
+import { gameColor, gameLabel } from '../games';
+import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, usePoll } from '../ui';
+import ServerForm from './ServerForm';
+
+type Point = ServerDetails['points'][number];
+
+const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2', 'rust', 'ase', 'dayz']);
+
+/** steam://connect link for Source-like games; other games have no universal "join" link. */
+function connectUrl(game: string, address: string, port: number): string | null {
+  if (!SOURCE_GAMES.has(game)) return null;
+  return `steam://connect/${address.includes(':') ? address : `${address}:${port}`}`;
+}
+
+function niceMax(v: number): number {
+  const p = 10 ** Math.floor(Math.log10(v));
+  const n = v / p;
+  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
+  return Math.max(4, Math.ceil(nice * p));
+}
+
+const tickLabel = (ts: number, hours: number) =>
+  hours <= 24
+    ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : new Date(ts).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+
+/** Player count over time with red bands where the server was unreachable. */
+function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: number; max: number; color: string }) {
+  const L = 40, R = 10, T = 12, B = 28;
+  const [hover, setHover] = useState<number | null>(null);
+  const ref = useRef<SVGSVGElement>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  // the drawing is 1:1 with the screen, so labels keep a readable size on phones
+  const [W, setW] = useState(720);
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setW(Math.max(300, Math.round(el.clientWidth))));
+    ro.observe(el);
+    setW(Math.max(300, Math.round(el.clientWidth)));
+    return () => ro.disconnect();
+  }, []);
+  const H = W < 520 ? 200 : 240;
+
+  const now = Date.now();
+  const t0 = now - hours * 3600_000;
+  const x = (ts: number) => L + ((ts - t0) / (now - t0)) * (W - L - R);
+  const yMax = niceMax(Math.max(max, ...points.map((p) => p.players), 1));
+  const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
+  const bucket = (now - t0) / 180;
+
+  // continuous online runs become separate line segments; a gap is much wider than the usual spacing of the samples
+  const spacing = points.length > 1 ? [...points.slice(1).map((p, i) => p.ts - points[i].ts)].sort((a, b) => a - b)[Math.floor((points.length - 1) / 2)] : bucket;
+  const gap = Math.max(bucket * 2.5, spacing * 2.5);
+  const segments: Point[][] = [];
+  let cur: Point[] = [];
+  for (const p of points) {
+    if (p.online) {
+      if (cur.length && p.ts - cur[cur.length - 1].ts > gap) { segments.push(cur); cur = []; }
+      cur.push(p);
+    } else if (cur.length) { segments.push(cur); cur = []; }
+  }
+  if (cur.length) segments.push(cur);
+  const path = (seg: Point[]) => seg.map((p, i) => `${i ? 'L' : 'M'}${x(p.ts).toFixed(1)} ${y(p.players).toFixed(1)}`).join(' ');
+
+  const onMove = (e: React.PointerEvent) => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r || points.length === 0) return;
+    const vx = ((e.clientX - r.left) / r.width) * W;
+    let best = 0;
+    points.forEach((p, i) => { if (Math.abs(x(p.ts) - vx) < Math.abs(x(points[best].ts) - vx)) best = i; });
+    setHover(best);
+  };
+
+  const hp = hover != null ? points[hover] : null;
+  const gridVals = [0, 1, 2, 3, 4].map((i) => (yMax / 4) * i);
+
+  return (
+    <div className="relative" ref={wrap}>
+      <svg
+        ref={ref}
+        viewBox={`0 0 ${W} ${H}`}
+        className="h-auto w-full touch-pan-y"
+        role="img"
+        aria-label={`Игроки за ${hours <= 24 ? 'сутки' : 'неделю'}`}
+        onPointerMove={onMove}
+        onPointerLeave={() => setHover(null)}
+      >
+        {gridVals.map((v) => (
+          <g key={v}>
+            <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" />
+            <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12">{Math.round(v * 10) / 10}</text>
+          </g>
+        ))}
+        {[0, 1, 2, 3, 4].map((i) => {
+          const ts = t0 + ((now - t0) * i) / 4;
+          return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12">{tickLabel(ts, hours)}</text>;
+        })}
+        {max > 0 && max < yMax && <line x1={L} x2={W - R} y1={y(max)} y2={y(max)} className="stroke-mute" strokeDasharray="4 4" strokeWidth="1" opacity="0.5" />}
+        {points.filter((p) => !p.online).map((p) => (
+          <rect key={p.ts} x={x(p.ts) - (W - L - R) / 360} y={T} width={(W - L - R) / 180} height={H - T - B} className="fill-bad" opacity="0.18" />
+        ))}
+        {segments.map((seg, i) => (
+          <g key={i}>
+            {seg.length === 1 && <circle cx={x(seg[0].ts)} cy={y(seg[0].players)} r="3.5" fill={color} />}
+            {seg.length > 1 && <path d={`${path(seg)} L${x(seg[seg.length - 1].ts)} ${y(0)} L${x(seg[0].ts)} ${y(0)} Z`} fill={color} opacity="0.14" />}
+            <path d={path(seg)} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+          </g>
+        ))}
+        {hp && <line x1={x(hp.ts)} x2={x(hp.ts)} y1={T} y2={H - B} className="stroke-mute" strokeWidth="1" opacity="0.6" />}
+        {hp && hp.online ? <circle cx={x(hp.ts)} cy={y(hp.players)} r="4.5" fill={color} className="stroke-card" strokeWidth="2" /> : null}
+      </svg>
+      {hp && (
+        <div
+          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-xl bg-ink px-2.5 py-1 text-sm font-bold text-page shadow-pop"
+          style={{ left: `${Math.min(88, Math.max(12, (x(hp.ts) / W) * 100))}%` }}
+        >
+          {fmtDateTime(hp.ts)} · {hp.online ? `${hp.players} игроков` : 'недоступен'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function ServerDetail({ id }: { id: number }) {
+  const [hours, setHours] = useState(24);
+  const [data, setData] = useState<ServerDetails | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = () =>
+    api<ServerDetails>(`/servers/${id}/details?hours=${hours}`)
+      .then((d) => { setData(d); setError(''); setMissing(false); })
+      .catch((e: Error) => (e.message.includes('не найден') ? setMissing(true) : setError(e.message)));
+  usePoll(load, 15_000);
+  useEffect(() => { void load(); }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (missing) {
+    return (
+      <Empty title="Сервер не найден" text="Возможно, его удалили.">
+        <a className="btn mt-3" href="#/servers">К списку серверов</a>
+      </Empty>
+    );
+  }
+  if (!data) return <div className="skeleton panel h-64" />;
+
+  const { server: s, stats, events, points } = data;
+  const color = gameColor(s.game);
+  const lag = s.ping != null && s.ping > 100;
+  const link = connectUrl(s.game, s.displayAddress || s.host, s.port);
+  const tiles: [string, string, string?][] = [
+    ['Сейчас', s.online ? `${s.players}/${s.maxPlayers}` : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
+    ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
+    ['Пик игроков', stats.peakPlayers == null ? '–' : String(stats.peakPlayers), stats.peakAt ? fmtDateTime(stats.peakAt) : undefined],
+    ['В среднем', stats.avgPlayers == null ? '–' : String(stats.avgPlayers), 'пока сервер онлайн'],
+  ];
+
+  const refresh = async () => {
+    setBusy(true);
+    await api(`/servers/${id}/refresh`, 'POST').catch((e: Error) => setError(e.message));
+    await load();
+    setBusy(false);
+  };
+  const remove = async () => {
+    if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
+    await api(`/servers/${id}`, 'DELETE').catch((e: Error) => setError(e.message));
+    window.location.hash = '#/servers';
+  };
+
+  return (
+    <div className="space-y-5">
+      <a href="#/servers" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все серверы</a>
+
+      <div className="panel flex flex-wrap items-start justify-between gap-4 p-5">
+        <div className="flex min-w-0 items-center gap-4">
+          <GameAvatar game={s.game} size={56} />
+          <div className="min-w-0">
+            <h1 className="break-words text-2xl font-black leading-tight">{s.name}</h1>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-bold text-mute">
+              <span>{gameLabel(s.game)}{s.version ? ` · ${s.version}` : ''}</span>
+              <span className="font-mono text-sm">{s.address}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+          <CopyButton text={s.address} label="Адрес" />
+          {link && <a className="btn btn-soft btn-sm" href={link}>Подключиться</a>}
+        </div>
+        {!s.online && s.error && (
+          <p className="w-full rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{s.error}</p>
+        )}
+        <div className="flex w-full flex-wrap gap-2">
+          <button className="btn btn-soft btn-sm" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
+          <button className="btn btn-soft btn-sm" onClick={() => setEditing(true)}>Изменить</button>
+          <button className="btn btn-danger btn-sm" onClick={remove}>Удалить</button>
+          <span className="ml-auto self-center text-sm font-semibold text-mute">обновлено {ago(s.updatedAt)}</span>
+        </div>
+      </div>
+      <ErrorLine text={error} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {tiles.map(([k, v, hint]) => (
+          <div key={k} className="panel px-5 py-4">
+            <div className="text-sm font-extrabold text-mute">{k}</div>
+            <div className="text-3xl font-black tabular-nums text-link">{v}</div>
+            {hint && <div className="text-sm font-semibold text-mute">{hint}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div className="panel p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-black">Игроки</h2>
+          <div className="flex rounded-full bg-soft p-1" role="group" aria-label="Период">
+            {[[24, '24 часа'], [168, '7 дней']].map(([h, label]) => (
+              <button key={h} onClick={() => setHours(h as number)} aria-pressed={hours === h} className={`rounded-full px-3.5 py-1 text-sm font-extrabold transition ${hours === h ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {stats.samples < 2 ? (
+          <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
+        ) : (
+          <PlayersChart points={points} hours={hours} max={s.maxPlayers} color={color} />
+        )}
+        {points.some((p) => !p.online) && stats.samples >= 2 && (
+          <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+        )}
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <div className="panel p-5">
+          <h2 className="mb-3 text-lg font-black">Сейчас в игре{s.online ? `: ${s.players}` : ''}</h2>
+          {!s.online ? (
+            <p className="font-semibold text-mute">Сервер недоступен.</p>
+          ) : s.playerNames.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {s.playerNames.map((n, i) => <span key={`${n}-${i}`} className="rounded-full bg-soft px-3 py-1 text-sm font-bold">{n}</span>)}
+              {s.players > s.playerNames.length && <span className="px-1 py-1 text-sm font-bold text-mute">и ещё {s.players - s.playerNames.length}</span>}
+            </div>
+          ) : (
+            <p className="font-semibold text-mute">{s.players > 0 ? 'Сервер не сообщает список игроков.' : 'Сейчас на сервере никого нет.'}</p>
+          )}
+        </div>
+
+        <div className="panel p-5">
+          <h2 className="mb-3 text-lg font-black">Журнал событий</h2>
+          {events.length === 0 ? (
+            <p className="font-semibold text-mute">За выбранный период сбоев не было.</p>
+          ) : (
+            <ul className="space-y-2">
+              {events.map((e) => (
+                <li key={e.ts} className="flex items-center gap-3">
+                  <span className={`pill ${e.type === 'down' ? 'pill-bad' : 'pill-ok'}`}>{e.type === 'down' ? 'ПАДЕНИЕ' : 'ВЕРНУЛСЯ'}</span>
+                  <span className="font-bold">{fmtDateTime(e.ts)}</span>
+                  <span className="ml-auto text-sm font-semibold text-mute">{ago(e.ts)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {events.length > 0 && <p className="mt-3 text-sm font-semibold text-mute">{events.length} {plural(events.length, ['событие', 'события', 'событий'])} за период</p>}
+        </div>
+      </div>
+
+      {editing && (
+        <ServerForm
+          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress }}
+          id={s.id}
+          onClose={() => setEditing(false)}
+          onSaved={() => { setEditing(false); void load(); }}
+        />
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/ServerForm.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
+import { api, type ServerInput, type TestResult } from '../api';
+import { GAMES } from '../games';
+import { ErrorLine, Field, Modal } from '../ui';
+
+export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '' };
+
+/** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
+export default function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; id?: number; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState(initial);
+  const [custom, setCustom] = useState(!GAMES.some((g) => g.id === initial.game));
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<TestResult | null>(null);
+
+  // "advanced" is open when it already holds something (editing)
+  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress);
+
+  const pickGame = (v: string) => {
+    setTest(null);
+    if (v === '__custom') { setCustom(true); return; }
+    setCustom(false);
+    const g = GAMES.find((x) => x.id === v);
+    setF((p) => ({ ...p, game: v, port: g && (!p.host || p.port === GAMES.find((x) => x.id === p.game)?.port) ? g.port : p.port }));
+  };
+
+  const change = (patch: Partial<ServerInput>) => {
+    setTest(null);
+    setF((p) => ({ ...p, ...patch }));
+  };
+
+  const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0;
+
+  const runTest = async () => {
+    setTesting(true);
+    setError('');
+    setTest(null);
+    try {
+      setTest(await api<TestResult>('/servers/test', 'POST', { game: f.game, host: f.host, port: f.port, queryPort: f.queryPort }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api(id ? `/servers/${id}` : '/servers', id ? 'PUT' : 'POST', f);
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3.5">
+        <Field label="Игра">
+          <select id="srv-game" className="input" value={custom ? '__custom' : f.game} onChange={(e) => pickGame(e.target.value)} autoFocus>
+            {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
+            <option value="__custom">Другая (ввести GameDig ID)…</option>
+          </select>
+        </Field>
+        {custom && (
+          <Field label="GameDig ID">
+            <input id="srv-gameid" className="input" value={f.game} onChange={(e) => change({ game: e.target.value.trim() })} placeholder="например, arma3" required pattern="[A-Za-z0-9_]+" />
+          </Field>
+        )}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="col-span-2">
+            <Field label="Адрес для опроса (IP или домен)">
+              <input id="srv-host" className="input" value={f.host} onChange={(e) => change({ host: e.target.value.trim() })} required placeholder="192.168.1.10" />
+            </Field>
+          </div>
+          <Field label="Порт">
+            <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => change({ port: Number(e.target.value) })} required />
+          </Field>
+        </div>
+
+        <div className="space-y-2">
+          <button type="button" className="btn btn-soft" onClick={runTest} disabled={!canTest || testing}>
+            {testing ? 'Опрашиваю…' : 'Проверить сервер'}
+          </button>
+          {test && test.online && (
+            <div className="rounded-2xl bg-okbg px-4 py-3 text-sm font-bold text-ok" role="status">
+              ✔ Сервер ответил{test.name ? `: «${test.name}»` : ''}
+              <div className="mt-0.5 font-semibold">
+                Игроков {test.players}/{test.maxPlayers}
+                {test.map ? ` · карта ${test.map}` : ''}
+                {test.ping != null ? ` · пинг ${test.ping} мс` : ''}
+              </div>
+            </div>
+          )}
+          {test && !test.online && (
+            <div className="rounded-2xl bg-badbg px-4 py-3 text-sm font-bold text-bad" role="alert">
+              ✖ {test.error ?? 'Сервер не ответил'}
+            </div>
+          )}
+        </div>
+
+        <details className="group rounded-2xl border-2 border-line px-4 py-2.5" open={advancedUsed}>
+          <summary className="cursor-pointer select-none font-extrabold text-link">Дополнительно</summary>
+          <div className="mt-3 space-y-3.5">
+            <Field label="Название">
+              <input id="srv-name" className="input" value={f.name} onChange={(e) => change({ name: e.target.value })} maxLength={64} placeholder="возьмётся из ответа сервера" />
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">Оставьте пустым: панель использует название, которое сервер сообщает сам. Своё название переопределяет его.</p>
+            <Field label="Query-порт (если отличается от порта игры)">
+              <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => change({ queryPort: e.target.value ? Number(e.target.value) : null })} placeholder="не указан" />
+            </Field>
+            <Field label="Адрес для отображения">
+              <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.</p>
+          </div>
+        </details>
+
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button className="btn" disabled={busy || !canTest}>{busy ? 'Сохраняю…' : 'Сохранить'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
 import { api, type Server, type ServerInput } from '../api';
-import { GAMES, gameColor, gameLabel } from '../games';
-import { Empty, ErrorLine, Field, FillBar, GameAvatar, Modal, PageHead, Spark, StatusPill, ago, usePoll } from '../ui';
+import { gameColor, gameLabel } from '../games';
+import { Empty, ErrorLine, FillBar, GameAvatar, PageHead, Spark, StatusPill, ago, plural, usePoll } from '../ui';
+import ServerDetail from './ServerDetail';
+import ServerForm, { emptyServer } from './ServerForm';
 
-const empty: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '' };
+export default function ServersPage({ sub }: { sub: string }) {
+  const id = Number(sub);
+  if (sub && Number.isInteger(id) && id > 0) return <ServerDetail id={id} />;
+  return <ServerList />;
+}
 
-export default function ServersPage() {
+function ServerList() {
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput } | null>(null);
@@ -2582,7 +3368,8 @@ export default function ServersPage() {
     load();
   };
 
-  const add = () => setEditing({ data: empty });
+  const add = () => setEditing({ data: emptyServer });
+  const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
   return (
     <div className="space-y-6">
@@ -2594,14 +3381,14 @@ export default function ServersPage() {
       {servers.length > 0 && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
-            ['Серверов', servers.length],
+            [plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), servers.length],
             ['Онлайн', `${online.length} из ${servers.length}`],
-            ['Игроков', players],
+            [plural(players, ['Игрок', 'Игрока', 'Игроков']), players],
             ['Средний пинг', avg == null ? '–' : `${avg} мс`],
           ].map(([k, v]) => (
             <div key={k} className="panel px-5 py-4">
-              <div className="text-[13px] font-extrabold text-mute">{k}</div>
-              <div className="text-3xl font-black tabular-nums text-brand">{v}</div>
+              <div className="text-sm font-extrabold text-mute">{k}</div>
+              <div className="text-3xl font-black tabular-nums text-link">{v}</div>
             </div>
           ))}
         </div>
@@ -2624,33 +3411,49 @@ export default function ServersPage() {
           const color = gameColor(s.game);
           const lag = s.ping != null && s.ping > 100;
           return (
-            <article key={s.id} className="pop panel flex flex-col gap-3 p-5">
+            <article
+              key={s.id}
+              className="pop panel flex cursor-pointer flex-col gap-3 p-5 transition hover:-translate-y-0.5 hover:ring-2 hover:ring-brand/30"
+              onClick={() => open(s)}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   <GameAvatar game={s.game} />
                   <div className="min-w-0">
-                    <h3 className="line-clamp-3 break-words font-black leading-tight" title={s.name}>{s.name}</h3>
-                    <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
+                    <h3 className="line-clamp-3 break-words font-black leading-tight" title={s.name}>
+                      <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-link">{s.name}</a>
+                    </h3>
+                    <div className="truncate text-sm font-bold text-mute">{gameLabel(s.game)}</div>
                   </div>
                 </div>
                 <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
               </div>
 
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-4xl font-black tabular-nums">{s.online ? s.players : '–'}</span>
-                {s.online && <span className="font-extrabold text-mute">/ {s.maxPlayers}</span>}
-                <span className="ml-auto text-[13px] font-bold text-mute">{s.online && s.ping != null ? `${s.ping} мс` : ''}</span>
-              </div>
-              <FillBar value={s.online ? s.players : 0} max={s.maxPlayers} color={color} />
-              <Spark serverId={s.id} color={color} />
+              {s.online ? (
+                <>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-4xl font-black tabular-nums">{s.players}</span>
+                    <span className="font-extrabold text-mute">/ {s.maxPlayers}</span>
+                    <span className="ml-auto text-sm font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
+                  </div>
+                  <FillBar value={s.players} max={s.maxPlayers} color={color} />
+                  <Spark serverId={s.id} color={color} />
+                </>
+              ) : (
+                s.hasStatus && (
+                  <div className="rounded-2xl bg-badbg px-3.5 py-2.5" title={s.error ?? undefined}>
+                    <p className="line-clamp-2 text-sm font-bold leading-snug text-bad">{s.error ?? 'Сервер не отвечает'}</p>
+                  </div>
+                )
+              )}
 
-              <div className="flex items-center justify-between gap-2 text-[13px] font-bold text-mute">
-                <span className="truncate font-mono text-[12px]" title={s.address}>{s.address}</span>
+              <div className="flex items-center justify-between gap-2 text-sm font-bold text-mute">
+                <span className="truncate font-mono text-sm" title={s.address}>{s.address}</span>
                 <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
               </div>
-              {!s.online && s.error && <p className="truncate rounded-xl bg-badbg px-3 py-1.5 text-[12px] font-bold text-bad" title={s.error}>{s.error}</p>}
 
-              <div className="mt-auto flex gap-2 pt-1">
+              <div className="mt-auto flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
+                <a className="btn btn-soft btn-sm" href={`#/servers/${s.id}`}>Подробнее</a>
                 <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>
               </div>
@@ -2661,77 +3464,6 @@ export default function ServersPage() {
 
       {editing && <ServerForm initial={editing.data} id={editing.id} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
     </div>
-  );
-}
-
-function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; id?: number; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState(initial);
-  const [custom, setCustom] = useState(!GAMES.some((g) => g.id === initial.game));
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const pickGame = (v: string) => {
-    if (v === '__custom') { setCustom(true); return; }
-    setCustom(false);
-    const g = GAMES.find((x) => x.id === v);
-    setF((p) => ({ ...p, game: v, port: g && (!p.host || p.port === GAMES.find((x) => x.id === p.game)?.port) ? g.port : p.port }));
-  };
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      await api(id ? `/servers/${id}` : '/servers', id ? 'PUT' : 'POST', f);
-      onSaved();
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3.5">
-        <Field label="Название (необязательно)">
-          <input id="srv-name" className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={64} autoFocus placeholder="определится само по ответу сервера" />
-        </Field>
-        <p className="-mt-1.5 text-[13px] font-semibold text-mute">Оставьте пустым: панель возьмёт название, которое сервер сообщает сам (например, из настроек Minecraft или CS2). Своё название задайте, только если хотите его переопределить.</p>
-        <Field label="Игра">
-          <select id="srv-game" className="input" value={custom ? '__custom' : f.game} onChange={(e) => pickGame(e.target.value)}>
-            {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
-            <option value="__custom">Другая (ввести GameDig ID)…</option>
-          </select>
-        </Field>
-        {custom && (
-          <Field label="GameDig ID">
-            <input id="srv-gameid" className="input" value={f.game} onChange={(e) => setF({ ...f, game: e.target.value.trim() })} placeholder="например, arma3" required pattern="[A-Za-z0-9_]+" />
-          </Field>
-        )}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="col-span-2">
-            <Field label="Адрес для опроса (IP или домен)">
-              <input id="srv-host" className="input" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value.trim() })} required placeholder="play.example.com" />
-            </Field>
-          </div>
-          <Field label="Порт">
-            <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => setF({ ...f, port: Number(e.target.value) })} required />
-          </Field>
-        </div>
-        <Field label="Query-порт (если отличается)">
-          <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => setF({ ...f, queryPort: e.target.value ? Number(e.target.value) : null })} placeholder="не указан" />
-        </Field>
-        <Field label="Адрес для отображения (необязательно)">
-          <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => setF({ ...f, displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
-        </Field>
-        <p className="-mt-1.5 text-[13px] font-semibold text-mute">Панель опрашивает сервер по адресу выше, а людям на странице и в карточке Discord показывает этот адрес. Подойдёт, если сервер стоит в локальной сети и снаружи доступен по другому IP или домену.</p>
-        <ErrorLine text={error} />
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
-          <button className="btn" disabled={busy}>{busy ? 'Опрашиваю сервер…' : 'Сохранить'}</button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 __COREGSM_EOF__
@@ -2752,18 +3484,42 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
-export default function SettingsPage() {
+const TABS = [
+  { id: 'bot', label: 'Discord-бот' },
+  { id: 'security', label: 'Безопасность' },
+  { id: 'updates', label: 'Обновления' },
+] as const;
+
+export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+  const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
     <div className="space-y-6">
-      <PageHead title="Настройки" subtitle="Discord-бот, прокси и доступ к панели" />
-      <div className="grid items-start gap-5 md:grid-cols-2">
-        <BotCard />
-        <PasswordCard />
-        <UpdateCard />
+      <PageHead title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
+      <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
+        {TABS.map((t) => (
+          <a
+            key={t.id}
+            href={`#/settings/${t.id}`}
+            aria-current={tab === t.id ? 'page' : undefined}
+            className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+          >
+            {t.label}
+            {t.id === 'updates' && updateAvailable && <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />}
+          </a>
+        ))}
+      </nav>
+      <div className="max-w-2xl space-y-5">
+        {tab === 'bot' && <BotCard />}
+        {tab === 'security' && (
+          <>
+            <PasswordCard />
+            <p className="font-semibold text-mute">
+              Домен и порты задаются при установке и хранятся в <span className="font-mono text-sm text-ink">/app/.env</span>. Изменить их можно командой <span className="font-mono text-sm text-ink">sudo coregsm</span> на сервере (пункт «Домен и прокси»).
+            </p>
+          </>
+        )}
+        {tab === 'updates' && <UpdateCard />}
       </div>
-      <p className="max-w-2xl font-semibold text-mute">
-        Домен и порты задаются при установке и хранятся в <span className="font-mono text-[13px] text-ink">/app/.env</span>.
-      </p>
     </div>
   );
 }
@@ -2825,7 +3581,7 @@ function BotCard() {
         <BotPill status={status} tokenSet={tokenSet} />
       </div>
       {tokenSet && status?.state === 'error' && status.error && (
-        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">{status.error}</p>
+        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
       )}
 
       <Field label="Токен бота">
@@ -2840,7 +3596,7 @@ function BotCard() {
         />
       </Field>
       {tokenSet && (
-        <button type="button" className="text-[13px] font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
+        <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
       )}
 
       <Field label="Прокси (необязательно)">
@@ -2855,18 +3611,18 @@ function BotCard() {
         />
       </Field>
       {info?.proxyUrl && (
-        <label className="flex items-center gap-2 text-[13px] font-bold text-mute">
+        <label className="flex items-center gap-2 text-sm font-bold text-mute">
           <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearProxy} onChange={(e) => setClearProxy(e.target.checked)} />
           Отключить прокси
         </label>
       )}
-      <p className="text-[13px] font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
+      <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
 
       <ErrorLine text={error} />
       {tokenSet && status?.inviteUrl && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
           <InviteButton url={status.inviteUrl} />
-          <span className="text-[13px] font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
+          <span className="text-sm font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
         </div>
       )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
@@ -2973,7 +3729,7 @@ function UpdateCard() {
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
   return (
-    <div className="panel space-y-3.5 p-6 md:col-span-2">
+    <div className="panel space-y-3.5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-black">Обновления</h2>
         {running ? <span className="pill pill-warn">ОБНОВЛЕНИЕ</span>
@@ -2982,7 +3738,7 @@ function UpdateCard() {
           : <span className="pill pill-mute">ПРОВЕРКА</span>}
       </div>
 
-      <dl className="grid grid-cols-2 gap-3 text-[13px] font-bold sm:max-w-sm">
+      <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
         <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
         <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
       </dl>
@@ -2993,19 +3749,19 @@ function UpdateCard() {
         </p>
       )}
       {stuck && (
-        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">
+        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
           Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm update</span>.
         </p>
       )}
-      {info?.error && !running && <p className="text-[13px] font-semibold text-mute">{info.error}</p>}
-      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
+      {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
+      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
       <ErrorLine text={error} />
 
       <div className="flex flex-wrap gap-2">
         <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
         {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
       </div>
-      {info && !info.canApply && <p className="text-[13px] font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
+      {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
     </div>
   );
 }
@@ -3067,16 +3823,16 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     <div className="flex min-h-full items-center justify-center p-4">
       <div className="pop panel w-full max-w-md p-7">
         <div className="mb-2"><Logo size={48} /></div>
-        <div className="mb-1 text-3xl font-black tracking-tight text-brand">coregsm</div>
+        <div className="mb-1 text-3xl font-black tracking-tight text-link">coregsm</div>
         <p className="mb-5 font-semibold text-mute">Первоначальная настройка панели</p>
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
           {STEPS.map((s, i) => (
             <li key={s} className="flex flex-1 items-center gap-2" aria-current={i === step ? 'step' : undefined}>
-              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[13px] font-black ${i < step ? 'bg-okbg text-ok' : i === step ? 'bg-brand text-white' : 'bg-soft text-mute'}`}>
+              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-sm font-black ${i < step ? 'bg-okbg text-ok' : i === step ? 'bg-brand text-white' : 'bg-soft text-mute'}`}>
                 {i < step ? '✓' : i + 1}
               </span>
-              <span className={`text-[13px] font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{s}</span>
+              <span className={`text-sm font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{s}</span>
               {i < STEPS.length - 1 && <span className="h-0.5 flex-1 rounded bg-soft" />}
             </li>
           ))}
@@ -3087,7 +3843,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             <Field label="Код установки">
               <input id="setup-code" className="input font-mono" value={code} onChange={(e) => setCode(e.target.value)} required autoFocus autoComplete="off" placeholder="из вывода install.sh" />
             </Field>
-            <p className="-mt-1 text-[13px] font-semibold text-mute">
+            <p className="-mt-1 text-sm font-semibold text-mute">
               Код показан в конце установки. Если потерялся: <span className="font-mono">grep SETUP_TOKEN /app/.env</span>
             </p>
             <Field label="Логин администратора">
@@ -3153,6 +3909,122 @@ export function usePoll(fn: () => void, ms: number) {
   }, [ms]);
 }
 
+/** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
+export function parseHash(): { page: string; sub: string } {
+  const [page = '', sub = ''] = window.location.hash.replace(/^#\/?/, '').split('/');
+  return { page, sub };
+}
+
+export function useHash() {
+  const [h, setH] = useState(parseHash);
+  useEffect(() => {
+    const f = () => setH(parseHash());
+    window.addEventListener('hashchange', f);
+    return () => window.removeEventListener('hashchange', f);
+  }, []);
+  return h;
+}
+
+// ---------- formatting ----------
+export const ago = (ts: number | null) => {
+  if (!ts) return '–';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return `${s} с назад`;
+  if (s < 3600) return `${Math.floor(s / 60)} мин назад`;
+  if (s < 86400) return `${Math.floor(s / 3600)} ч назад`;
+  return `${Math.floor(s / 86400)} дн назад`;
+};
+
+export const fmtDateTime = (ts: number) =>
+  new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/** plural(5, ['сервер', 'сервера', 'серверов']) -> "серверов" */
+export function plural(n: number, forms: [string, string, string]): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return forms[0];
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return forms[1];
+  return forms[2];
+}
+
+// ---------- icons (24x24, stroke follows the text colour) ----------
+function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {children}
+    </svg>
+  );
+}
+export const IconServers = () => (
+  <Icon><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01" /></Icon>
+);
+export const IconCards = () => (
+  <Icon><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.5" /><path d="M21 16l-5-5-8 8" /></Icon>
+);
+export const IconDiscord = () => (
+  <Icon><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></Icon>
+);
+export const IconSettings = () => (
+  <Icon><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></Icon>
+);
+const IconSun = () => (
+  <Icon><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Icon>
+);
+const IconMoon = () => (
+  <Icon><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></Icon>
+);
+const IconAuto = () => (
+  <Icon><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></Icon>
+);
+export const IconCopy = () => (
+  <Icon size={16}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></Icon>
+);
+
+// ---------- theme ----------
+type Theme = 'auto' | 'light' | 'dark';
+const THEME_KEY = 'coregsm_theme';
+const readTheme = (): Theme => {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    return t === 'light' || t === 'dark' ? t : 'auto';
+  } catch {
+    return 'auto';
+  }
+};
+function applyTheme(t: Theme) {
+  const root = document.documentElement;
+  if (t === 'auto') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', t);
+  try {
+    if (t === 'auto') localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, t);
+  } catch {
+    /* private mode: the theme just is not remembered */
+  }
+}
+
+export function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
+  const label: Record<Theme, string> = { auto: 'как в системе', light: 'светлая', dark: 'тёмная' };
+  return (
+    <button
+      type="button"
+      className="grid h-10 w-10 place-items-center rounded-full bg-card text-mute shadow-pop transition hover:text-link"
+      title={`Тема: ${label[theme]}. Нажмите, чтобы переключить`}
+      aria-label={`Тема: ${label[theme]}. Переключить`}
+      onClick={() => {
+        const t = next[theme];
+        applyTheme(t);
+        setTheme(t);
+      }}
+    >
+      {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconAuto />}
+    </button>
+  );
+}
+
+// ---------- building blocks ----------
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -3160,11 +4032,11 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-label={title}
-        className="pop panel max-h-full w-full max-w-lg overflow-auto p-6"
+        className="pop panel max-h-[92vh] w-full max-w-lg overflow-auto rounded-b-none p-6 sm:rounded-b-3xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
@@ -3213,7 +4085,7 @@ export function FillBar({ value, max, color }: { value: number; max: number; col
   );
 }
 
-/** 24h player-count sparkline. Loads its own history; renders nothing until there are two points. */
+/** 24h player-count sparkline. Loads its own history; shows a quiet placeholder until there are two points. */
 export function Spark({ serverId, color }: { serverId: number; color: string }) {
   const [pts, setPts] = useState<number[]>([]);
   usePoll(() => {
@@ -3260,7 +4132,7 @@ export function ErrorLine({ text }: { text: string }) {
 export function Empty({ title, text, children }: { title: string; text: string; children?: ReactNode }) {
   return (
     <div className="panel flex flex-col items-center gap-2 px-6 py-14 text-center">
-      <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-brand">+</div>
+      <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>
       <h3 className="text-lg font-black">{title}</h3>
       <p className="max-w-sm font-semibold text-mute">{text}</p>
       {children}
@@ -3268,13 +4140,25 @@ export function Empty({ title, text, children }: { title: string; text: string; 
   );
 }
 
-export const ago = (ts: number | null) => {
-  if (!ts) return '–';
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return `${s} с назад`;
-  if (s < 3600) return `${Math.floor(s / 60)} мин назад`;
-  return `${Math.floor(s / 3600)} ч назад`;
-};
+/** Copies text to the clipboard; falls back to a prompt where the Clipboard API is blocked. */
+export function CopyButton({ text, label = 'Копировать', className = '' }: { text: string; label?: string; className?: string }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      setTimeout(() => setDone(false), 1500);
+    } catch {
+      window.prompt('Скопируйте:', text);
+    }
+  };
+  return (
+    <button type="button" className={`btn btn-soft btn-sm ${className}`} onClick={copy} title={label}>
+      <IconCopy />
+      {done ? 'Скопировано' : label}
+    </button>
+  );
+}
 
 /** The CoreGSM mark: a server rack whose three lights use the same colours as the status pills. */
 export function Logo({ size = 32 }: { size?: number }) {
@@ -3340,7 +4224,7 @@ export function ProxyField({
           placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
         />
       </div>
-      <p className="mt-1.5 text-[13px] font-semibold text-mute">
+      <p className="mt-1.5 text-sm font-semibold text-mute">
         Подойдёт формат <span className="font-mono">адрес:порт:логин:пароль</span> или готовая ссылка с <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>. Если бот не подключается, смените тип.
       </p>
     </div>
@@ -3361,24 +4245,29 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/tailwind.config.js" << '__COREGSM_EOF__'
 /** @type {import('tailwindcss').Config} */
+// Colours come from CSS variables (see index.css), so one set of classes serves both the light and the dark theme.
+const c = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        page: '#f1effe',
-        card: '#ffffff',
-        ink: '#2b2650',
-        mute: '#7a74a8',
-        line: '#e2defa',
-        soft: '#ece9ff',
-        brand: { DEFAULT: '#5a4bd1', hover: '#4a3cb8' },
-        ok: '#168a4f',
-        okbg: '#d9f7e6',
-        warn: '#b27300',
-        warnbg: '#fff0cc',
-        bad: '#c53030',
-        badbg: '#ffdede',
+        page: c('page'),
+        card: c('card'),
+        ink: c('ink'),
+        mute: c('mute'),
+        line: c('line'),
+        soft: c('soft'),
+        // brand: fills and buttons; link: brand-coloured text (lighter in the dark theme for contrast)
+        brand: { DEFAULT: c('brand'), hover: c('brand-hover') },
+        link: c('link'),
+        ok: c('ok'),
+        okbg: c('okbg'),
+        warn: c('warn'),
+        warnbg: c('warnbg'),
+        bad: c('bad'),
+        badbg: c('badbg'),
       },
       fontFamily: {
         sans: ['Nunito', 'ui-sans-serif', 'system-ui', 'sans-serif'],
@@ -3386,8 +4275,8 @@ export default {
       },
       borderRadius: { '4xl': '2rem' },
       boxShadow: {
-        soft: '0 8px 28px rgba(90, 75, 209, 0.09)',
-        pop: '0 2px 10px rgba(90, 75, 209, 0.12)',
+        soft: 'var(--shadow-soft)',
+        pop: 'var(--shadow-pop)',
       },
     },
   },
