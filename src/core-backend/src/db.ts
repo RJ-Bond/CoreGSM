@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS bindings (
 );
 `);
 
+/** Title shown for a server: the custom name if set, otherwise the name the game server reports, otherwise host:port. */
+export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port)";
+
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
   return row ? row.value : null;

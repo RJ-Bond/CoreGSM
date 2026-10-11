@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { db, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
+import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
 
@@ -364,19 +364,23 @@ app.post(
 
 // ---------- servers ----------
 const serverSchema = z.object({
-  name: z.string().trim().min(1).max(64),
+  // optional: when empty the title is taken from the game server's own reply
+  name: z.string().trim().max(64).optional(),
   game: z.string().trim().min(1).max(32).regex(/^[a-z0-9_]+$/i),
   host: z.string().trim().min(1).max(255).regex(/^[a-z0-9.\-:]+$/i),
   port: z.number().int().min(1).max(65535),
   queryPort: z.number().int().min(1).max(65535).nullable().optional(),
 });
 
-type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id'>> & { has_status: number | null };
+type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
 
 function serialize(r: ServerJoin) {
   return {
     id: r.id,
-    name: r.name,
+    // shown title: custom name > name reported by the server > host:port
+    name: r.name || r.query_name || `${r.host}:${r.port}`,
+    customName: r.name,
+    nameAuto: !r.name,
     game: r.game,
     host: r.host,
     port: r.port,
@@ -396,7 +400,7 @@ function serialize(r: ServerJoin) {
 
 const SELECT_SERVERS = `
 SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, st.player_names, st.error,
-       st.updated_at, st.server_id AS has_status
+       st.updated_at, st.server_id AS has_status, st.name AS query_name
 FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
 
 function getServer(id: number) {
@@ -417,7 +421,7 @@ app.post(
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const info = db
       .prepare('INSERT INTO servers (name, game, host, port, query_port, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(b.data.name, b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, Date.now());
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
@@ -433,7 +437,7 @@ app.put(
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const r = db
       .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=? WHERE id=?')
-      .run(b.data.name, b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, id);
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));
@@ -557,7 +561,7 @@ app.post('/internal/bot-status', internal, (req, res) => {
 app.get('/internal/bindings', internal, (_req, res) => {
   const rows = db
     .prepare(
-      `SELECT b.*, s.name AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id WHERE b.enabled = 1`,
+      `SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.enabled = 1`,
     )
     .all() as (BindingRow & { server_name: string })[];
   res.json(rows.map((r) => ({ ...serializeBinding(r), serverName: r.server_name })));

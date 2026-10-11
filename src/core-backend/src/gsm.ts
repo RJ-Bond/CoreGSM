@@ -66,7 +66,7 @@ const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at)
 VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts)
 ON CONFLICT(server_id) DO UPDATE SET
-  online=excluded.online, name=excluded.name, players=excluded.players, max_players=excluded.max_players,
+  online=excluded.online, name=COALESCE(excluded.name, status.name), players=excluded.players, max_players=excluded.max_players,
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
   error=excluded.error, updated_at=excluded.updated_at
 `);

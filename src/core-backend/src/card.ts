@@ -113,7 +113,8 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   const titleX = 172;
   ctx.fillStyle = C.ink;
   ctx.font = `700 44px ${SANS}`;
-  ctx.fillText(fit(ctx, s.name, px - titleX - 24), titleX, 96);
+  const title = s.name || st?.name || `${s.host}:${s.port}`;
+  ctx.fillText(fit(ctx, title, px - titleX - 24), titleX, 96);
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
   ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, 132);
