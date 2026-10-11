@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9ead246289d4"
+COREGSM_BUILD="260edd6b916a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -28,15 +28,67 @@ else
   RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; BOLD=''; DIM=''; NC=''
 fi
 
+LOGFILE="${COREGSM_LOG:-/var/log/coregsm-install.log}"
+mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
+IS_TTY=0; [ -t 1 ] && IS_TTY=1
+# started by "coregsm update": print only the steps and their results
+QUIET_OK="${COREGSM_FROM_MANAGER:-0}"
+# COREGSM_VERBOSE=1: show the full output of apt/docker on the screen as well
+VERBOSE="${COREGSM_VERBOSE:-0}"
+
+# everything that is shown also goes to the log, without colour codes
+logf() { printf '%s\n' "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOGFILE" 2>/dev/null || true; }
+
 STEP=0
 TOTAL_STEPS=11
-step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; }
-info()  { echo -e "  ${CYAN}>${NC} $*"; }
-ok()    { echo -e "  ${GREEN}✔${NC} $*"; }
-warn()  { echo -e "  ${YELLOW}!${NC} $*"; }
-die()   { echo -e "\n${RED}✖ $*${NC}" >&2; exit 1; }
+step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; logf "[${STEP}/${TOTAL_STEPS}] $*"; }
+info()  { [ "$QUIET_OK" = 1 ] || echo -e "  ${CYAN}>${NC} $*"; logf "  > $*"; }
+ok()    { [ "$QUIET_OK" = 1 ] || echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
+done_line() { echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
+warn()  { echo -e "  ${YELLOW}!${NC} $*"; logf "  warn: $*"; }
+die()   { echo -e "\n${RED}✖ $*${NC}" >&2; logf "FATAL: $*"; exit 1; }
 
-trap 'echo -e "\n${RED}✖ Установка прервана на строке ${LINENO}: ${BASH_COMMAND}${NC}" >&2' ERR
+trap 'logf "ERROR line ${LINENO}: ${BASH_COMMAND}"; echo -e "\n${RED}✖ Установка прервана на строке ${LINENO}: ${BASH_COMMAND}${NC}\n  Подробности: ${LOGFILE}" >&2' ERR
+
+# Runs a long command quietly: the full output goes to the log, the screen shows a spinner and one result line.
+# _run "message" command...   returns the exit code of the command
+_run() {
+  local msg="$1"; shift
+  local t0=$SECONDS rc=0 pid i=0
+  local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  printf '\n### %s: %s\n' "$msg" "$*" >> "$LOGFILE" 2>/dev/null || true
+  if [ "$VERBOSE" = 1 ]; then
+    echo -e "  ${CYAN}›${NC} $msg"
+    set +e; "$@" 2>&1 | tee -a "$LOGFILE"; rc=${PIPESTATUS[0]}; set -e
+  elif [ "$IS_TTY" = 1 ]; then
+    "$@" >> "$LOGFILE" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r  %s%s%s %s %s%ds%s\033[K' "$CYAN" "${frames[i % 10]}" "$NC" "$msg" "$DIM" $((SECONDS - t0)) "$NC"
+      i=$((i + 1)); sleep 0.12
+    done
+    wait "$pid" || rc=$?
+    printf '\r\033[K'
+  else
+    echo "  … $msg"
+    "$@" >> "$LOGFILE" 2>&1 || rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    done_line "$msg ${DIM}($((SECONDS - t0)) с)${NC}"
+    return 0
+  fi
+  echo -e "  ${RED}✖${NC} $msg" >&2
+  logf "  FAILED (код $rc): $msg"
+  return "$rc"
+}
+# run: stop the installer on failure and show the tail of the log; run_soft: just report the exit code
+run() {
+  _run "$@" || {
+    echo -e "${DIM}$(tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/    /')${NC}" >&2
+    die "Не удалось: $1. Полный журнал: $LOGFILE"
+  }
+}
+run_soft() { _run "$@"; }
 
 banner() {
   echo -e "${MAGENTA}"
@@ -185,19 +237,19 @@ configure_docker_proxy() {
 system_update() {
   step "Обновление системы"
   if [ "${SKIP_UPDATE:-}" = "1" ]; then
-    apt-get update -y
+    run "Обновление списка пакетов" apt-get update -y
     ok "SKIP_UPDATE=1: полное обновление пропущено (список пакетов обновлён)"
     return 0
   fi
-  apt-get update -y
-  apt-get upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
+  run "Обновление списка пакетов" apt-get update -y
+  run "Установка обновлений системы (несколько минут)" apt-get upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
   ok "Система обновлена"
 }
 
 # ---------- 3. packages ----------
 base_packages() {
   step "Установка curl, git, ufw и вспомогательных пакетов"
-  apt-get install -y --no-install-recommends curl git ufw ca-certificates gnupg openssl
+  run "Установка curl, git, ufw" apt-get install -y --no-install-recommends curl git ufw ca-certificates gnupg openssl
   ok "Базовые пакеты установлены"
 }
 
@@ -214,8 +266,8 @@ install_docker() {
   chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
-  apt-get update -y
-  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  run "Обновление списка пакетов Docker" apt-get update -y
+  run "Установка Docker Engine (1-2 минуты)" apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   systemctl enable --now docker
   docker compose version >/dev/null 2>&1 || die "Docker Compose не установился"
   ok "Установлено: $(docker --version)"
@@ -3500,7 +3552,7 @@ issue_certificate() {
     return 0
   fi
 
-  if docker run --rm -p 80:80 ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
+  if run_soft "Выпуск сертификата Let's Encrypt" docker run --rm -p 80:80 ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
       -v "$conf:/etc/letsencrypt" -v "$APP_DIR/certbot/www:/var/www/certbot" \
       certbot/certbot certonly --standalone --non-interactive --agree-tos --no-eff-email \
       -m "$LE_EMAIL" -d "$DOMAIN"; then
@@ -3521,7 +3573,7 @@ issue_certificate() {
 launch() {
   step "Сборка и запуск контейнеров"
   cd "$APP_DIR"
-  docker compose up --build -d
+  run "Сборка образов и запуск контейнеров (3-8 минут)" docker compose up --build -d
   info "Жду готовности панели…"
   local i
   for i in $(seq 1 60); do
@@ -4010,12 +4062,12 @@ cmd_update() {
     status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
-    status_file error "Установка не удалась (код $rc), прежняя версия продолжает работать. Журнал: $LOG"
-    bad "Установка не удалась, прежняя версия работает. Журнал: $LOG"; return "$rc"
+    status_file error "Установка не удалась (код $rc), прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
+    bad "Установка не удалась, прежняя версия работает. Журнал: /var/log/coregsm-install.log"; return "$rc"
   fi
   warn "Новая версия не запустилась. Возвращаю предыдущую…"
   if rollback_apply; then
-    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}. Журнал: $LOG"
+    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}. Журнал: /var/log/coregsm-install.log"
     ok "Откат выполнен: работает версия ${current:0:7}"
   else
     status_file error "Обновление не удалось и откат не помог. Запустите: coregsm doctor"
@@ -4310,8 +4362,7 @@ HELP
     exec /usr/local/bin/coregsm
   fi
 
-  mkdir -p /var/log
-  exec > >(tee -a /var/log/coregsm-install.log) 2>&1
+  logf "=== CoreGSM install $(date -u '+%F %T') UTC, build $COREGSM_BUILD ==="
 
   banner
   preflight
@@ -4329,7 +4380,6 @@ HELP
   issue_certificate
   launch
   report
-  sleep 0.5   # let the log tee flush before the shell prompt returns
 }
 
 main "$@"
