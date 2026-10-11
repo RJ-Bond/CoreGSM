@@ -1,9 +1,15 @@
-import { AttachmentBuilder, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { parseProxy, patchGatewayAgent } from './proxy.js';
 
 const TOKEN = process.env.DISCORD_TOKEN ?? '';
 const BACKEND = process.env.BACKEND_URL ?? 'http://backend:3000';
 const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN ?? '';
 const TICK_MS = 10_000;
+
+// Optional proxy for everything the bot sends to Discord (REST + gateway).
+// Calls to the backend inside the Docker network always go direct.
+const proxy = parseProxy(process.env.PROXY_URL ?? '');
+if (proxy) patchGatewayAgent(proxy.ws);
+const { AttachmentBuilder, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 
 interface Binding {
   id: number;
@@ -36,7 +42,11 @@ if (!TOKEN) {
   log('DISCORD_TOKEN is empty: bot is idle. Set it in /app/.env and run "docker compose up -d bot".');
   setInterval(() => undefined, 1 << 30);
 } else {
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  if (proxy) console.log('Using proxy for Discord:', proxy.label);
+  const client = new Client({
+    intents: [GatewayIntentBits.Guilds],
+    ...(proxy ? { rest: { agent: proxy.rest } } : {}),
+  });
   const lastRun = new Map<number, number>();
   let busy = false;
 

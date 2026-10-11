@@ -2,7 +2,12 @@ name: coregsm
 
 services:
   backend:
-    build: ./core-backend
+    build:
+      context: ./core-backend
+      args:
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
     env_file: .env
     environment:
@@ -19,19 +24,30 @@ services:
       start_period: 15s
 
   bot:
-    build: ./core-bot
+    build:
+      context: ./core-bot
+      args:
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN:-}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       BACKEND_URL: http://backend:3000
+      PROXY_URL: ${PROXY_URL:-}
     depends_on:
       backend:
         condition: service_healthy
     networks: [internal]
 
   frontend:
-    build: ./core-frontend
+    build:
+      context: ./core-frontend
+      args:
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
     networks: [internal]
 
@@ -54,6 +70,8 @@ services:
   certbot:
     image: certbot/certbot
     restart: unless-stopped
+    environment:
+      HTTPS_PROXY: ${BUILD_PROXY:-}
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
