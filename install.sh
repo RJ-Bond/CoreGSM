@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a850015ba071"
+COREGSM_BUILD="d01f99cfb60b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -1097,6 +1097,7 @@ import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type Serve
 import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
 import { buildEmbed } from './embed.js';
+import { registerNews } from './news.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -1665,7 +1666,9 @@ const bindingSchema = z.object({
 interface BotGuild {
   id: string;
   name: string;
-  channels: { id: string; name: string }[];
+  /** text channels the bot can see but not write to */
+  hidden?: number;
+  channels: { id: string; name: string; missing?: string[] }[];
 }
 // persisted, so a backend restart does not leave the channel picker empty until the bot reports again
 function loadGuilds(): BotGuild[] {
@@ -1678,12 +1681,12 @@ function loadGuilds(): BotGuild[] {
 }
 let botGuilds: BotGuild[] = loadGuilds();
 
-function channelInfo(channelId: string): { channelName: string | null; guildName: string | null } {
+function channelInfo(channelId: string): { channelName: string | null; guildName: string | null; guildId: string | null } {
   for (const g of botGuilds) {
     const c = g.channels.find((x) => x.id === channelId);
-    if (c) return { channelName: c.name, guildName: g.name };
+    if (c) return { channelName: c.name, guildName: g.name, guildId: g.id };
   }
-  return { channelName: null, guildName: null };
+  return { channelName: null, guildName: null, guildId: null };
 }
 
 app.get('/api/discord/channels', auth, (_req, res) => {
@@ -1691,7 +1694,8 @@ app.get('/api/discord/channels', auth, (_req, res) => {
 });
 
 const serializeBinding = (b: BindingRow) => ({
-  ...channelInfo(b.channel_id),
+  channelName: channelInfo(b.channel_id).channelName,
+  guildName: channelInfo(b.channel_id).guildName,
   id: b.id,
   serverId: b.server_id,
   channelId: b.channel_id,
@@ -1779,7 +1783,8 @@ app.post('/internal/bot-guilds', internal, (req, res) => {
       z.object({
         id: z.string().max(30),
         name: z.string().max(120),
-        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(300),
+        hidden: z.number().int().min(0).optional(),
+        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
       }),
     )
     .max(60)
@@ -1823,6 +1828,8 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   db.prepare('UPDATE bindings SET last_update = ?, last_error = ? WHERE id = ?').run(Date.now(), b.data.error ?? null, id);
   res.json({ ok: true });
 });
+
+registerNews({ app, auth, internal, channelInfo });
 
 // ---------- errors ----------
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
@@ -2282,7 +2289,8 @@ function humanDiscordError(e: unknown): string {
     case 50001: return 'У бота нет доступа к каналу. Пригласите бота на этот сервер и выдайте права на канал.';
     case 10003: return 'Канал не найден. Проверьте ID и что бот приглашён на сервер, где находится канал.';
     case 50013: return 'Не хватает прав: боту нужны «Отправка сообщений», «Прикрепление файлов» и «Встраивание ссылок» в этом канале.';
-    case 50035: return 'Неверный ID канала.';
+    case 50035: return 'Discord отклонил сообщение: проверьте ссылки (они должны начинаться с http:// или https://) и длину текстов.';
+    case 10008: return 'Сообщение уже удалено в Discord.';
     case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   }
   if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
@@ -2339,26 +2347,40 @@ let lastGuildsJson = '';
 let lastGuildsAt = 0;
 
 /** Text channels the bot can post in, grouped by server. */
+const PERM_LABELS: Record<string, string> = {
+  EmbedLinks: 'Встраивание ссылок',
+  AttachFiles: 'Прикрепление файлов',
+};
+
+/** Text channels per Discord server. A channel is listed when the bot can see it and write to it;
+ *  missing "soft" permissions are reported as warnings instead of hiding the channel. */
 function collectGuilds(c: DiscordClient) {
-  const out: { id: string; name: string; channels: { id: string; name: string; pos: number }[] }[] = [];
+  const out: { id: string; name: string; hidden: number; channels: { id: string; name: string; pos: number; missing: string[] }[] }[] = [];
   for (const g of c.guilds.cache.values()) {
     const me = g.members.me;
-    const channels: { id: string; name: string; pos: number }[] = [];
+    const channels: { id: string; name: string; pos: number; missing: string[] }[] = [];
+    let hidden = 0;
     for (const ch of g.channels.cache.values()) {
       if (ch.type !== ChannelType.GuildText && ch.type !== ChannelType.GuildAnnouncement) continue;
       const perms = me ? ch.permissionsFor(me) : null;
-      if (perms && !perms.has(['ViewChannel', 'SendMessages', 'AttachFiles'])) continue;
-      channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition });
+      if (perms && !perms.has(['ViewChannel', 'SendMessages'])) { hidden++; continue; }
+      const missing = perms ? (['EmbedLinks', 'AttachFiles'] as const).filter((p) => !perms.has(p)).map((p) => PERM_LABELS[p]) : [];
+      channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition, missing });
     }
-    channels.sort((a, b) => a.pos - b.pos);
-    out.push({ id: g.id, name: g.name, channels: channels.slice(0, 250) });
+    channels.sort((x, y) => x.pos - y.pos);
+    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250) });
   }
   return out.slice(0, 50);
 }
 
 async function publishGuilds(): Promise<void> {
   if (!client || state !== 'online') return;
-  const list = collectGuilds(client).map((g) => ({ id: g.id, name: g.name, channels: g.channels.map(({ id, name }) => ({ id, name })) }));
+  const list = collectGuilds(client).map((g) => ({
+    id: g.id,
+    name: g.name,
+    hidden: g.hidden,
+    channels: g.channels.map(({ id, name, missing }) => ({ id, name, ...(missing.length ? { missing } : {}) })),
+  }));
   const json = JSON.stringify(list);
   // send on change, and every minute so a restarted backend learns the list again
   if (json === lastGuildsJson && Date.now() - lastGuildsAt < 60_000) return;
@@ -2366,7 +2388,9 @@ async function publishGuilds(): Promise<void> {
     const r = await backend('/internal/bot-guilds', { method: 'POST', body: json });
     if (r.ok) {
       if (json !== lastGuildsJson) {
-        log(`Discord servers visible to the bot: ${list.length}, text channels it can post in: ${list.reduce((n, g) => n + g.channels.length, 0)}`);
+        const hiddenTotal = list.reduce((n, g) => n + g.hidden, 0);
+        log(`Discord servers visible to the bot: ${list.length}, text channels it can post in: ${list.reduce((n, g) => n + g.channels.length, 0)}${hiddenTotal ? `, hidden (no access): ${hiddenTotal}` : ''}`);
+        for (const g of list) log(`  ${g.name}: ${g.channels.length} channels${g.hidden ? `, ${g.hidden} without access` : ''}`);
       }
       lastGuildsJson = json;
       lastGuildsAt = Date.now();
@@ -2488,6 +2512,114 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
   await report(b.id, { messageId: sent.id, error: null });
 }
 
+// ---------- news: messages written in the panel ----------
+interface NewsPayload {
+  content: string;
+  mention: 'none' | 'here' | 'everyone';
+  embed?: {
+    title?: string;
+    url?: string;
+    description?: string;
+    color?: number;
+    author?: { name: string; iconUrl?: string };
+    thumbnailUrl?: string;
+    image?: { url?: string; upload?: string };
+    fields?: { name: string; value: string; inline?: boolean }[];
+    footer?: { text: string };
+    timestamp?: boolean;
+  };
+}
+interface NewsItem {
+  id: number;
+  action: 'send' | 'edit' | 'delete';
+  channelId: string;
+  messageId: string | null;
+  payload: NewsPayload;
+}
+
+async function buildNews(p: NewsPayload) {
+  const files: InstanceType<typeof AttachmentBuilder>[] = [];
+  const mention = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
+  const content = [mention, p.content?.trim()].filter(Boolean).join('\n');
+  const embeds: InstanceType<typeof EmbedBuilder>[] = [];
+  const e = p.embed;
+  if (e) {
+    const eb = new EmbedBuilder().setColor(e.color ?? 0x5865f2);
+    if (e.title) eb.setTitle(e.title);
+    if (e.url) eb.setURL(e.url);
+    if (e.description) eb.setDescription(e.description);
+    if (e.author?.name) eb.setAuthor({ name: e.author.name, ...(e.author.iconUrl ? { iconURL: e.author.iconUrl } : {}) });
+    if (e.thumbnailUrl) eb.setThumbnail(e.thumbnailUrl);
+    if (e.image?.upload) {
+      // a picture uploaded in the panel travels as an attachment
+      const r = await backend(`/api/news/images/${e.image.upload}`);
+      if (!r.ok) throw new Error('Не удалось получить загруженную картинку (она могла быть удалена)');
+      files.push(new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: e.image.upload }));
+      eb.setImage(`attachment://${e.image.upload}`);
+    } else if (e.image?.url) {
+      eb.setImage(e.image.url);
+    }
+    if (e.fields?.length) eb.addFields(e.fields.map((x) => ({ name: x.name, value: x.value, inline: !!x.inline })));
+    if (e.footer?.text) eb.setFooter({ text: e.footer.text });
+    if (e.timestamp) eb.setTimestamp();
+    embeds.push(eb);
+  }
+  return {
+    content: content || undefined,
+    embeds,
+    files,
+    allowedMentions: { parse: (p.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
+  };
+}
+
+async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null }) {
+  try {
+    await backend(`/internal/news/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  } catch (e) {
+    log('news report failed', e);
+  }
+}
+
+async function processNews(): Promise<void> {
+  const c = client;
+  if (!c || state !== 'online') return;
+  const res = await backend('/internal/news/pending');
+  if (!res.ok) throw new Error(`news HTTP ${res.status}`);
+  const items = (await res.json()) as NewsItem[];
+  for (const it of items) {
+    try {
+      const channel = await c.channels.fetch(it.channelId);
+      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
+
+      if (it.action === 'delete') {
+        try {
+          if (it.messageId) await (await channel.messages.fetch(it.messageId)).delete();
+        } catch (e) {
+          if ((e as { code?: number }).code !== 10008) throw e; // already gone: that is fine
+        }
+        await reportNews(it.id, { status: 'deleted' });
+        log(`news ${it.id}: message deleted`);
+        continue;
+      }
+
+      const msg = await buildNews(it.payload);
+      if (it.action === 'edit' && it.messageId) {
+        const m = await channel.messages.fetch(it.messageId);
+        await m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, attachments: [], allowedMentions: msg.allowedMentions });
+        await reportNews(it.id, { status: 'sent', messageId: it.messageId });
+        log(`news ${it.id}: message edited`);
+      } else {
+        const sent = await channel.send(msg);
+        await reportNews(it.id, { status: 'sent', messageId: sent.id });
+        log(`news ${it.id}: posted`);
+      }
+    } catch (e) {
+      log(`news ${it.id} failed:`, (e as Error).message);
+      await reportNews(it.id, { status: 'error', error: humanDiscordError(e) });
+    }
+  }
+}
+
 async function updateBindings(): Promise<void> {
   const c = client;
   if (!c || state !== 'online') return;
@@ -2517,6 +2649,7 @@ async function tick(): Promise<void> {
     await applyConfig();
     await publishGuilds();
     await updateBindings();
+    await processNews();
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {
@@ -2950,13 +3083,15 @@ import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
+import NewsPage from './pages/News';
 import SettingsPage from './pages/Settings';
-import { IconCards, IconDiscord, IconServers, IconSettings, Logo, ThemeToggle, Wordmark, useHash } from './ui';
+import { IconCards, IconDiscord, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Wordmark, useHash } from './ui';
 
 const PAGES: { id: string; label: string; icon: () => ReactNode }[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
   { id: 'cards', label: 'Карточки', icon: IconCards },
   { id: 'discord', label: 'Discord', icon: IconDiscord },
+  { id: 'news', label: 'Новости', icon: IconNews },
   { id: 'settings', label: 'Настройки', icon: IconSettings },
 ];
 
@@ -3038,6 +3173,7 @@ export default function App() {
         {page === 'servers' && <ServersPage sub={sub} />}
         {page === 'cards' && <CardsPage />}
         {page === 'discord' && <DiscordPage />}
+        {page === 'news' && <NewsPage sub={sub} />}
         {page === 'settings' && <SettingsPage sub={sub} updateAvailable={updateAvailable} />}
       </main>
 
@@ -3204,7 +3340,223 @@ export interface ServerDetails {
 export interface DiscordGuild {
   id: string;
   name: string;
-  channels: { id: string; name: string }[];
+  /** text channels the bot can see but not write to */
+  hidden?: number;
+  channels: { id: string; name: string; missing?: string[] }[];
+}
+
+// ---------- news ----------
+export interface NewsEmbed {
+  title?: string;
+  url?: string;
+  description?: string;
+  color?: number;
+  author?: { name: string; iconUrl?: string };
+  thumbnailUrl?: string;
+  image?: { url?: string; upload?: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string };
+  timestamp?: boolean;
+}
+
+export interface NewsPayload {
+  content: string;
+  mention: 'none' | 'here' | 'everyone';
+  embed?: NewsEmbed;
+}
+
+export type NewsStatus = 'draft' | 'scheduled' | 'queued' | 'sending' | 'sent' | 'error' | 'edit_queued' | 'delete_queued';
+
+export interface NewsItem {
+  id: number;
+  status: NewsStatus;
+  title: string;
+  channelId: string;
+  channelName: string | null;
+  guildName: string | null;
+  /** opens the posted message in Discord */
+  messageUrl: string | null;
+  payload: NewsPayload;
+  scheduledAt: number | null;
+  sentAt: number | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NewsSettings {
+  channelId: string | null;
+  channelName?: string | null;
+  guildName?: string | null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api, type DiscordGuild } from '../api';
+
+/** A warning under the select when the chosen channel lacks soft permissions (embeds/images). */
+export function MissingNote({ guild, channelId }: { guild?: DiscordGuild; channelId: string }) {
+  const missing = guild?.channels.find((c) => c.id === channelId)?.missing;
+  if (!missing?.length) return null;
+  return (
+    <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">
+      ⚠ У бота в этом канале нет прав: {missing.join(', ')}. Без «Встраивания ссылок» embed-сообщения могут не показываться, без «Прикрепления файлов» не отправятся картинки. Выдайте эти права роли бота в настройках канала.
+    </p>
+  );
+}
+
+/**
+ * Pick a Discord channel by name (the bot reports the servers and channels it can post in),
+ * with a manual ID field as a fallback.
+ */
+export function ChannelPicker({ value, onChange, id = 'channel' }: { value: string; onChange: (channelId: string) => void; id?: string }) {
+  const [guilds, setGuilds] = useState<DiscordGuild[] | null>(null);
+  const [guildId, setGuildId] = useState('');
+  const [manual, setManual] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = () =>
+    api<DiscordGuild[]>('/discord/channels')
+      .then((g) => {
+        const withChannels = g.filter((x) => x.channels.length > 0);
+        setGuilds(withChannels);
+        setGuildId((cur) => {
+          if (cur && withChannels.some((x) => x.id === cur)) return cur;
+          return (withChannels.find((x) => x.channels.some((c) => c.id === value)) ?? withChannels[0])?.id ?? '';
+        });
+        if (value && !withChannels.some((x) => x.channels.some((c) => c.id === value))) setManual(true);
+      })
+      .catch(() => setGuilds([]));
+  useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refresh = async () => { setBusy(true); await load(); setBusy(false); };
+  const hasList = !!guilds && guilds.length > 0;
+  const guild = guilds?.find((g) => g.id === guildId);
+
+  if (hasList && !manual) {
+    return (
+      <div className="space-y-2.5">
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {guilds!.length > 1 && (
+            <select id={`${id}-guild`} aria-label="Сервер Discord" className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); onChange(''); }}>
+              {guilds!.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+          )}
+          <select id={id} aria-label="Канал" className={`input ${guilds!.length > 1 ? '' : 'sm:col-span-2'}`} value={value} onChange={(e) => onChange(e.target.value)}>
+            <option value="" disabled>Выберите канал…</option>
+            {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}${c.missing?.length ? ' ⚠' : ''}`}</option>)}
+          </select>
+        </div>
+        <MissingNote guild={guild} channelId={value} />
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm font-extrabold">
+          <button type="button" className="text-link hover:underline" onClick={() => setManual(true)}>Ввести ID вручную</button>
+          <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <input id={id} className="input font-mono" value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder="ID канала, например 123456789012345678" inputMode="numeric" />
+      <p className="text-sm font-semibold text-mute">
+        {guilds && guilds.length === 0 ? 'Бот пока не видит каналов (его нужно пригласить на сервер Discord). ' : ''}
+        Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».
+      </p>
+      <div className="flex gap-4 text-sm font-extrabold">
+        {hasList && <button type="button" className="text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
+        <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/Markdown.tsx" << '__COREGSM_EOF__'
+import { Fragment, useState, type ReactNode } from 'react';
+import { ago } from '../ui';
+
+/**
+ * The subset of Discord markdown used in embeds, rendered the way Discord shows it:
+ * **bold**, *italic*, __underline__, ~~strike~~, ||spoiler||, `code`, ```blocks```, [text](url),
+ * > quotes, - lists, # headings and <t:unix:R> relative times.
+ */
+
+const D = { text: '#dbdee1', title: '#ffffff', code: '#1e1f22', link: '#00a8fc', quote: '#4e5058' };
+
+function Spoiler({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      onClick={() => setOpen(true)}
+      className="cursor-pointer rounded px-0.5"
+      style={{ background: open ? 'rgba(255,255,255,0.1)' : '#1e1f22', color: open ? 'inherit' : 'transparent' }}
+      title={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
+    >
+      {children}
+    </span>
+  );
+}
+
+// order matters: longer markers first
+const INLINE =
+  /(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|`[^`\n]+`|\*\*[^\n]+?\*\*|__[^\n]+?__|~~[^\n]+?~~|\|\|[^\n]+?\|\||\*[^*\n]+\*|_[^_\n]+_|<t:\d+:R>|https?:\/\/[^\s<>]+)/g;
+
+export function inlineMd(text: string, depth = 0): ReactNode[] {
+  return text.split(INLINE).map((part, i) => {
+    if (!part) return null;
+    const k = `${depth}-${i}`;
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
+      return <code key={k} style={{ background: D.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.92em' }}>{part.slice(1, -1)}</code>;
+    }
+    const link = /^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(part);
+    if (link) return <a key={k} href={link[2]} target="_blank" rel="noreferrer" style={{ color: D.link }} className="hover:underline">{inlineMd(link[1], depth + 1)}</a>;
+    if (depth < 3) {
+      if (/^\*\*.+\*\*$/.test(part)) return <strong key={k} style={{ color: D.title }}>{inlineMd(part.slice(2, -2), depth + 1)}</strong>;
+      if (/^__.+__$/.test(part)) return <u key={k}>{inlineMd(part.slice(2, -2), depth + 1)}</u>;
+      if (/^~~.+~~$/.test(part)) return <s key={k}>{inlineMd(part.slice(2, -2), depth + 1)}</s>;
+      if (/^\|\|.+\|\|$/.test(part)) return <Spoiler key={k}>{inlineMd(part.slice(2, -2), depth + 1)}</Spoiler>;
+      if (/^\*[^*]+\*$/.test(part) || /^_[^_]+_$/.test(part)) return <em key={k}>{inlineMd(part.slice(1, -1), depth + 1)}</em>;
+    }
+    const t = /^<t:(\d+):R>$/.exec(part);
+    if (t) return <span key={k} title={new Date(Number(t[1]) * 1000).toLocaleString('ru-RU')}>{ago(Number(t[1]) * 1000)}</span>;
+    if (/^https?:\/\//.test(part)) return <a key={k} href={part} target="_blank" rel="noreferrer" style={{ color: D.link }} className="break-all hover:underline">{part}</a>;
+    return <Fragment key={k}>{part}</Fragment>;
+  });
+}
+
+/** Block level: code fences, headings, quotes, lists, paragraphs. */
+export function Markdown({ text }: { text: string }) {
+  const out: ReactNode[] = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('```')) {
+      const body: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) body.push(lines[i++]);
+      out.push(<pre key={i} className="my-1 overflow-x-auto rounded-md p-2 text-[13px]" style={{ background: D.code }}>{body.join('\n')}</pre>);
+      continue;
+    }
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (h) {
+      const size = h[1].length === 1 ? 'text-xl' : h[1].length === 2 ? 'text-lg' : 'text-base';
+      out.push(<div key={i} className={`${size} mt-1 font-bold`} style={{ color: D.title }}>{inlineMd(h[2])}</div>);
+      continue;
+    }
+    const q = /^>\s?(.*)$/.exec(line);
+    if (q) {
+      out.push(<div key={i} className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${D.quote}` }}>{inlineMd(q[1])}</div>);
+      continue;
+    }
+    const li = /^\s*[-*•]\s+(.*)$/.exec(line);
+    if (li) {
+      out.push(<div key={i} className="flex gap-2 pl-2"><span aria-hidden>•</span><span className="min-w-0">{inlineMd(li[1])}</span></div>);
+      continue;
+    }
+    out.push(line.trim() === '' ? <div key={i} className="h-2" /> : <div key={i}>{inlineMd(line)}</div>);
+  }
+  return <div className="break-words leading-snug">{out}</div>;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -3421,6 +3773,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
+import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
 
 type Style = 'embed' | 'card' | 'both';
@@ -3619,9 +3972,10 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             <Field label={guilds!.length === 1 ? `Канал на сервере «${guild?.name ?? ''}»` : 'Канал'}>
               <select id="bind-channel-pick" className="input" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} required>
                 <option value="" disabled>Выберите канал…</option>
-                {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}`}</option>)}
+                {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}${c.missing?.length ? ' ⚠' : ''}`}</option>)}
               </select>
             </Field>
+            <MissingNote guild={guild} channelId={f.channelId} />
             <div className="flex flex-wrap gap-x-4 gap-y-1">
               <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
               <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
@@ -3636,7 +3990,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
               {guilds && guilds.length === 0 && allGuilds.length === 0
                 ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер» (на этой странице), затем нажмите «Обновить список». Пока можно ввести ID канала вручную: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
                 : guilds && guilds.length === 0
-                  ? `Бот есть на сервере Discord «${allGuilds.map((g) => g.name).join('», «')}», но там нет канала, куда ему разрешено писать. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».`
+                  ? `Бот есть на сервере Discord «${allGuilds.map((g) => g.name).join('», «')}»${allGuilds.some((g) => g.hidden) ? ` и видит ${allGuilds.reduce((n, g) => n + (g.hidden ?? 0), 0)} текстовых каналов`: ''}, но не может писать ни в один из них. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».`
                   : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -3671,88 +4025,90 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/EmbedPreview.tsx" << '__COREGSM_EOF__'
-import { Fragment, useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { api } from '../api';
+import { Markdown } from '../components/Markdown';
 import { ago, usePoll } from '../ui';
 
-interface DiscordEmbed {
+export interface DiscordEmbed {
   title?: string;
+  url?: string;
   description?: string;
   color?: number;
-  author?: { name: string };
+  author?: { name: string; icon_url?: string };
+  thumbnail?: { url: string };
+  image?: { url: string };
   fields?: { name: string; value: string; inline?: boolean }[];
   footer?: { text: string };
   timestamp?: string;
 }
 
 // Discord's own palette: the preview should look like the real message in either panel theme
-const D = { bg: '#2b2d31', outer: '#313338', text: '#dbdee1', title: '#ffffff', muted: '#949ba4', code: '#1e1f22' };
+const D = { bg: '#2b2d31', outer: '#313338', text: '#dbdee1', title: '#ffffff', muted: '#949ba4' };
 
-/** The small subset of Discord markdown the embed uses: `code`, **bold** and <t:unix:R> relative times. */
-function inline(text: string): ReactNode[] {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|<t:\d+:R>)/g).map((part, i) => {
-    if (part.startsWith('`')) {
-      return <code key={i} style={{ background: D.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.92em' }}>{part.slice(1, -1)}</code>;
-    }
-    if (part.startsWith('**')) return <strong key={i} style={{ color: D.title }}>{part.slice(2, -2)}</strong>;
-    const t = /^<t:(\d+):R>$/.exec(part);
-    if (t) return <span key={i} title={new Date(Number(t[1]) * 1000).toLocaleString('ru-RU')}>{ago(Number(t[1]) * 1000)}</span>;
-    return <Fragment key={i}>{part}</Fragment>;
-  });
-}
-
-function lines(text: string): ReactNode[] {
-  return text.split('\n').map((l, i) => (
-    <Fragment key={i}>
-      {i > 0 && <br />}
-      {inline(l)}
-    </Fragment>
-  ));
-}
-
-export function EmbedView({ embed }: { embed: DiscordEmbed }) {
-  const color = `#${(embed.color ?? 0x5a4bd1).toString(16).padStart(6, '0')}`;
-  const inlineFields = embed.fields?.filter((f) => f.inline) ?? [];
-  const wideFields = embed.fields?.filter((f) => !f.inline) ?? [];
+/** A Discord message as the bot would post it: optional text above and an embed below. */
+export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; content?: string }) {
+  const color = `#${(embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
+  const inlineFields = embed?.fields?.filter((f) => f.inline) ?? [];
+  const wideFields = embed?.fields?.filter((f) => !f.inline) ?? [];
   return (
     <div style={{ background: D.outer, color: D.text }} className="rounded-2xl p-3">
-      <div className="mb-2 flex items-center gap-2 text-sm">
+      <div className="mb-1.5 flex items-center gap-2 text-sm">
         <span className="grid h-8 w-8 place-items-center rounded-full bg-[#5865f2] font-black text-white">C</span>
         <span className="font-bold" style={{ color: D.title }}>CoreGSM</span>
         <span className="rounded px-1 text-[11px] font-bold text-white" style={{ background: '#5865f2' }}>БОТ</span>
       </div>
-      <div className="max-w-full rounded-md py-2.5 pl-3.5 pr-3.5" style={{ background: D.bg, borderLeft: `4px solid ${color}` }}>
-        {embed.author && <div className="mb-1 text-[13px] font-bold" style={{ color: D.title }}>{embed.author.name}</div>}
-        {embed.title && <div className="mb-1 break-words text-base font-bold" style={{ color: D.title }}>{embed.title}</div>}
-        {embed.description && <div className="mb-2 break-words text-sm leading-snug">{lines(embed.description)}</div>}
-        {inlineFields.length > 0 && (
-          <div className="mb-2 grid grid-cols-3 gap-x-3 gap-y-2">
-            {inlineFields.map((f) => (
-              <div key={f.name} className="min-w-0 text-sm">
-                <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
-                <div className="break-words leading-snug">{lines(f.value)}</div>
-              </div>
-            ))}
+      {content && <div className="mb-2 text-sm"><Markdown text={content} /></div>}
+      {embed && (
+        <div className="max-w-full rounded-md py-2.5 pl-3.5 pr-3.5" style={{ background: D.bg, borderLeft: `4px solid ${color}` }}>
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              {embed.author && (
+                <div className="mb-1 flex items-center gap-2 text-[13px] font-bold" style={{ color: D.title }}>
+                  {embed.author.icon_url && <img src={embed.author.icon_url} alt="" className="h-6 w-6 rounded-full object-cover" />}
+                  {embed.author.name}
+                </div>
+              )}
+              {embed.title && (
+                <div className="mb-1 break-words text-base font-bold" style={{ color: embed.url ? '#00a8fc' : D.title }}>
+                  {embed.url ? <a href={embed.url} target="_blank" rel="noreferrer" className="hover:underline">{embed.title}</a> : embed.title}
+                </div>
+              )}
+              {embed.description && <div className="mb-2 text-sm"><Markdown text={embed.description} /></div>}
+            </div>
+            {embed.thumbnail && <img src={embed.thumbnail.url} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />}
           </div>
-        )}
-        {wideFields.map((f) => (
-          <div key={f.name} className="mb-2 text-sm">
-            <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
-            <div className="break-words leading-snug">{lines(f.value)}</div>
-          </div>
-        ))}
-        {embed.footer && (
-          <div className="mt-1 text-xs" style={{ color: D.muted }}>
-            {embed.footer.text}
-            {embed.timestamp ? ` • ${ago(new Date(embed.timestamp).getTime())}` : ''}
-          </div>
-        )}
-      </div>
+          {inlineFields.length > 0 && (
+            <div className="mb-2 grid grid-cols-3 gap-x-3 gap-y-2">
+              {inlineFields.map((f, i) => (
+                <div key={`${f.name}-${i}`} className="min-w-0 text-sm">
+                  <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
+                  <Markdown text={f.value} />
+                </div>
+              ))}
+            </div>
+          )}
+          {wideFields.map((f, i) => (
+            <div key={`${f.name}-${i}`} className="mb-2 text-sm">
+              <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
+              <Markdown text={f.value} />
+            </div>
+          ))}
+          {embed.image && <img src={embed.image.url} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
+          {(embed.footer || embed.timestamp) && (
+            <div className="mt-2 text-xs" style={{ color: D.muted }}>
+              {embed.footer?.text}
+              {embed.footer && embed.timestamp ? ' • ' : ''}
+              {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-/** Live preview of exactly what the bot posts (the same builder runs in the backend). */
+/** Live preview of exactly what the bot posts for a server (the same builder runs in the backend). */
 export default function EmbedPreview({ serverId, intervalSec }: { serverId: number; intervalSec: number }) {
   const [embed, setEmbed] = useState<DiscordEmbed | null>(null);
   usePoll(() => {
@@ -3806,6 +4162,612 @@ export default function Login({ onDone }: { onDone: () => void }) {
         <ErrorLine text={error} />
         <button className="btn w-full" disabled={busy || !password}>{busy ? 'Проверяю…' : 'Войти'}</button>
       </form>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/News.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api, type NewsItem, type NewsSettings } from '../api';
+import { ChannelPicker } from '../components/ChannelPicker';
+import { Empty, ErrorLine, PageHead, fmtDateTime, usePoll } from '../ui';
+import NewsEditor from './NewsEditor';
+
+export default function NewsPage({ sub }: { sub: string }) {
+  if (sub === 'new') return <NewsEditor id={null} />;
+  const id = Number(sub);
+  if (sub && Number.isInteger(id) && id > 0) return <NewsEditor id={id} />;
+  return <NewsList />;
+}
+
+const BUSY = new Set(['queued', 'sending', 'edit_queued', 'delete_queued']);
+
+function StatusPill({ n }: { n: NewsItem }) {
+  switch (n.status) {
+    case 'draft': return <span className="pill pill-mute">ЧЕРНОВИК</span>;
+    case 'scheduled': return <span className="pill pill-warn">ЗАПЛАНИРОВАНО{n.scheduledAt ? ` · ${fmtDateTime(n.scheduledAt)}` : ''}</span>;
+    case 'queued': case 'sending': return <span className="pill pill-warn">ОТПРАВЛЯЕТСЯ</span>;
+    case 'edit_queued': return <span className="pill pill-warn">ОБНОВЛЯЕТСЯ</span>;
+    case 'delete_queued': return <span className="pill pill-warn">УДАЛЯЕТСЯ</span>;
+    case 'sent': return <span className="pill pill-ok">ОПУБЛИКОВАНО{n.sentAt ? ` · ${fmtDateTime(n.sentAt)}` : ''}</span>;
+    default: return <span className="pill pill-bad">ОШИБКА</span>;
+  }
+}
+
+/** a short plain-text teaser: markdown marks removed */
+const excerpt = (n: NewsItem) => {
+  const raw = n.payload.embed?.description || n.payload.content || '';
+  return raw.replace(/^s*[-*•]s+/gm, '• ').replace(/[*_~`|>#]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 170);
+};
+
+function NewsList() {
+  const [items, setItems] = useState<NewsItem[]>([]);
+  const [settings, setSettings] = useState<NewsSettings | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
+  const [changing, setChanging] = useState(false);
+
+  const load = () =>
+    Promise.all([api<NewsItem[]>('/news'), api<NewsSettings>('/news/settings')])
+      .then(([n, s]) => { setItems(n); setSettings(s); setError(''); })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoaded(true));
+  // while something is being sent, look more often
+  usePoll(load, items.some((n) => BUSY.has(n.status)) ? 3_000 : 15_000);
+
+  const setChannel = async (channelId: string) => {
+    if (!/^\d{15,25}$/.test(channelId)) return;
+    await api('/news/settings', 'PUT', { channelId }).catch((e) => setError(e.message));
+    setChanging(false);
+    void load();
+  };
+
+  const publish = async (n: NewsItem) => {
+    await api(`/news/${n.id}/publish`, 'POST').catch((e) => setError(e.message));
+    void load();
+  };
+  const copy = async (n: NewsItem) => {
+    await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).catch((e) => setError(e.message));
+    void load();
+  };
+  const remove = async (n: NewsItem) => {
+    const sent = n.status === 'sent';
+    if (!window.confirm(sent ? 'Удалить новость? Сообщение также будет удалено из Discord.' : 'Удалить новость?')) return;
+    await api(`/news/${n.id}`, 'DELETE').catch((e) => setError(e.message));
+    void load();
+  };
+
+  return (
+    <div className="space-y-6">
+      <PageHead title="Новости" subtitle="Публикации от имени бота в Discord">
+        <a className="btn" href="#/news/new">+ Написать новость</a>
+      </PageHead>
+      <ErrorLine text={error} />
+
+      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+        <div className="min-w-0">
+          <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
+          <div className="font-black">
+            {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}` : `Канал ${settings.channelId}`) : 'не выбран'}
+          </div>
+        </div>
+        <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+        {changing && (
+          <div className="w-full">
+            <ChannelPicker id="news-default-channel" value={settings?.channelId ?? ''} onChange={(v) => void setChannel(v)} />
+          </div>
+        )}
+      </div>
+
+      {loaded && items.length === 0 && (
+        <Empty title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
+          <a className="btn mt-3" href="#/news/new">+ Написать новость</a>
+        </Empty>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2">
+        {items.map((n) => {
+          const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
+          return (
+            <article key={n.id} className="panel flex flex-col gap-3 overflow-hidden p-5" style={{ borderTop: `4px solid ${color}` }}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <StatusPill n={n} />
+                <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
+              </div>
+              <h3 className="line-clamp-2 break-words text-lg font-black leading-tight">{n.title}</h3>
+              {excerpt(n) && <p className="line-clamp-3 break-words text-sm font-semibold text-mute">{excerpt(n)}</p>}
+              {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
+              <div className="mt-auto flex flex-wrap gap-2 pt-1">
+                <a className="btn btn-soft btn-sm" href={`#/news/${n.id}`}>Изменить</a>
+                {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
+                {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
+                <button className="btn btn-soft btn-sm" onClick={() => copy(n)}>Копия</button>
+                <button className="btn btn-danger btn-sm" onClick={() => remove(n)}>Удалить</button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/NewsEditor.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
+import { ChannelPicker } from '../components/ChannelPicker';
+import { ErrorLine, Field } from '../ui';
+import { EmbedView, type DiscordEmbed } from './EmbedPreview';
+
+// ---------- draft <-> payload ----------
+interface FieldRow { name: string; value: string; inline: boolean }
+interface Draft {
+  channelId: string;
+  content: string;
+  mention: 'none' | 'here' | 'everyone';
+  title: string;
+  url: string;
+  description: string;
+  color: number;
+  authorName: string;
+  authorIcon: string;
+  thumbnail: string;
+  imageUrl: string;
+  imageUpload: string;
+  fields: FieldRow[];
+  footer: string;
+  timestamp: boolean;
+}
+
+const blank = (channelId: string): Draft => ({
+  channelId, content: '', mention: 'none', title: '', url: '', description: '', color: 0x5865f2, authorName: '', authorIcon: '',
+  thumbnail: '', imageUrl: '', imageUpload: '', fields: [], footer: '', timestamp: false,
+});
+
+function toPayload(d: Draft): NewsPayload {
+  return {
+    content: d.content,
+    mention: d.mention,
+    embed: {
+      title: d.title,
+      url: d.url,
+      description: d.description,
+      color: d.color,
+      author: { name: d.authorName, iconUrl: d.authorIcon },
+      thumbnailUrl: d.thumbnail,
+      image: { url: d.imageUrl, upload: d.imageUpload || undefined },
+      fields: d.fields.filter((f) => f.name.trim() || f.value.trim()),
+      footer: { text: d.footer },
+      timestamp: d.timestamp,
+    },
+  };
+}
+
+function fromPayload(p: NewsPayload, channelId: string): Draft {
+  const e = p.embed ?? {};
+  return {
+    channelId,
+    content: p.content ?? '',
+    mention: p.mention ?? 'none',
+    title: e.title ?? '',
+    url: e.url ?? '',
+    description: e.description ?? '',
+    color: e.color ?? 0x5865f2,
+    authorName: e.author?.name ?? '',
+    authorIcon: e.author?.iconUrl ?? '',
+    thumbnail: e.thumbnailUrl ?? '',
+    imageUrl: e.image?.url ?? '',
+    imageUpload: e.image?.upload ?? '',
+    fields: (e.fields ?? []).map((f) => ({ name: f.name, value: f.value, inline: !!f.inline })),
+    footer: e.footer?.text ?? '',
+    timestamp: !!e.timestamp,
+  };
+}
+
+const imageSrc = (d: Draft) => (d.imageUpload ? `/api/news/images/${d.imageUpload}` : d.imageUrl);
+
+function previewOf(d: Draft): { content: string; embed: DiscordEmbed | null } {
+  const mention = d.mention === 'everyone' ? '@everyone' : d.mention === 'here' ? '@here' : '';
+  const content = [mention, d.content.trim()].filter(Boolean).join('\n');
+  const fields = d.fields.filter((f) => f.name.trim() && f.value.trim());
+  const img = imageSrc(d);
+  const has = d.title || d.description || d.authorName || d.thumbnail || img || fields.length || d.footer;
+  if (!has) return { content, embed: null };
+  return {
+    content,
+    embed: {
+      title: d.title || undefined,
+      url: d.url || undefined,
+      description: d.description || undefined,
+      color: d.color,
+      author: d.authorName ? { name: d.authorName, icon_url: d.authorIcon || undefined } : undefined,
+      thumbnail: d.thumbnail ? { url: d.thumbnail } : undefined,
+      image: img ? { url: img } : undefined,
+      fields,
+      footer: d.footer ? { text: d.footer } : undefined,
+      timestamp: d.timestamp ? new Date().toISOString() : undefined,
+    },
+  };
+}
+
+const embedLength = (d: Draft) =>
+  d.title.length + d.description.length + d.authorName.length + d.footer.length + d.fields.reduce((n, f) => n + f.name.length + f.value.length, 0);
+
+// ---------- ready-made starting points ----------
+const TEMPLATES: { id: string; label: string; apply: Partial<Draft> }[] = [
+  { id: 'announce', label: '📢 Объявление', apply: { title: '📢 Важное объявление', description: 'Здесь текст объявления.\n\nМожно использовать **жирный**, *курсив* и списки:\n- первый пункт\n- второй пункт', color: 0x5865f2, mention: 'none', fields: [], footer: '', timestamp: true } },
+  { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСервер будет недоступен около часа.', color: 0xf97316, mention: 'here', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
+  { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
+  { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
+  { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
+  { id: 'giveaway', label: '🎁 Розыгрыш', apply: { title: '🎁 Розыгрыш', description: 'Разыгрываем **ПРИЗ**! Условия ниже.', color: 0xf0b232, mention: 'everyone', fields: [{ name: '📝 Как участвовать', value: 'Поставьте реакцию 🎉 под этим сообщением', inline: false }, { name: '⏰ Итоги', value: 'ДАТА, ВРЕМЯ', inline: false }], footer: 'Удачи!', timestamp: false } },
+];
+
+const PALETTE: [string, number][] = [
+  ['Фиолетовый', 0x5865f2], ['Зелёный', 0x23a55a], ['Жёлтый', 0xf0b232], ['Красный', 0xf23f42], ['Оранжевый', 0xf97316],
+  ['Розовый', 0xeb459e], ['Бирюзовый', 0x14b8a6], ['Синий', 0x3b82f6], ['Серый', 0x4e5058], ['Белый', 0xffffff],
+];
+
+const EMOJIS = ['📢', '📣', '🔔', '🎉', '🎊', '🎁', '🏆', '🥇', '⭐', '🌟', '✨', '🔥', '💥', '⚡', '🚀', '🆕', '✅', '❌', '⚠️', '❗', '❓', '🛠️', '🔧', '⚙️', '🧹', '🗑️', '📅', '🗓️', '⏰', '🕒', '⏳', '📍', '🌍', '🗺️', '🎮', '🕹️', '👑', '⚔️', '🛡️', '🏹', '💎', '💰', '🪙', '❤️', '💜', '💙', '💚', '👍', '👏', '🙌', '🤝', '💬', '📝', '📌', '🔗', '🖼️', '🎤', '🎧', '📈', '🟢', '🟡', '🔴', '🔵'];
+
+const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
+const toLocalInput = (ms: number) => {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+};
+
+async function uploadImage(file: File): Promise<string> {
+  if (file.size > 8 * 1024 * 1024) throw new Error('Файл больше 8 МБ');
+  const res = await fetch('/api/news/images', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Ошибка ${res.status}`);
+  return (data as { name: string }).name;
+}
+
+// ---------- small editor widgets ----------
+function Counter({ value, max }: { value: number; max: number }) {
+  return <span className={`text-xs font-bold tabular-nums ${value > max ? 'text-bad' : 'text-mute'}`}>{value}/{max}</span>;
+}
+
+function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return (
+    <section className="panel space-y-3.5 p-5">
+      <div>
+        <h2 className="text-lg font-black">{title}</h2>
+        {hint && <p className="text-sm font-semibold text-mute">{hint}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Text area with a Discord-markdown toolbar and an emoji picker. */
+function MarkdownField({ id, label, value, onChange, max, rows = 6, placeholder }: { id: string; label: string; value: string; onChange: (v: string) => void; max: number; rows?: number; placeholder?: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [emoji, setEmoji] = useState(false);
+
+  const edit = (build: (sel: string, before: string, after: string) => { text: string; selStart: number; selEnd: number }) => {
+    const ta = ref.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const r = build(value.slice(s, e), value.slice(0, s), value.slice(e));
+    onChange(r.text);
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(r.selStart, r.selEnd); });
+  };
+  const wrap = (mark: string, placeholder = 'текст') => edit((sel, before, after) => {
+    const inner = sel || placeholder;
+    return { text: before + mark + inner + mark + after, selStart: before.length + mark.length, selEnd: before.length + mark.length + inner.length };
+  });
+  const prefixLines = (prefix: string) => edit((sel, before, after) => {
+    const inner = (sel || 'текст').split('\n').map((l) => prefix + l).join('\n');
+    return { text: before + inner + after, selStart: before.length, selEnd: before.length + inner.length };
+  });
+  const link = () => edit((sel, before, after) => {
+    const label = sel || 'текст ссылки';
+    const text = `${before}[${label}](https://)${after}`;
+    const start = before.length + label.length + 3;
+    return { text, selStart: start, selEnd: start + 8 };
+  });
+  const insert = (t: string) => edit((_sel, before, after) => ({ text: before + t + after, selStart: before.length + t.length, selEnd: before.length + t.length }));
+
+  const Btn = ({ onClick, title, children }: { onClick: () => void; title: string; children: ReactNode }) => (
+    <button type="button" title={title} aria-label={title} onClick={onClick} className="grid h-8 min-w-8 place-items-center rounded-lg px-1.5 text-sm font-bold text-ink transition hover:bg-soft">
+      {children}
+    </button>
+  );
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <label htmlFor={id} className="label !mb-0">{label}</label>
+        <Counter value={value.length} max={max} />
+      </div>
+      <div className="relative rounded-2xl border-2 border-line focus-within:border-brand">
+        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1">
+          <Btn onClick={() => wrap('**')} title="Жирный"><b>Ж</b></Btn>
+          <Btn onClick={() => wrap('*')} title="Курсив"><i>К</i></Btn>
+          <Btn onClick={() => wrap('__')} title="Подчёркнутый"><u>Ч</u></Btn>
+          <Btn onClick={() => wrap('~~')} title="Зачёркнутый"><s>З</s></Btn>
+          <Btn onClick={() => wrap('||')} title="Спойлер">▒</Btn>
+          <Btn onClick={() => wrap('`', 'код')} title="Код"><span className="font-mono">{'<>'}</span></Btn>
+          <span className="mx-1 h-5 w-px bg-line" />
+          <Btn onClick={() => prefixLines('> ')} title="Цитата">❝</Btn>
+          <Btn onClick={() => prefixLines('- ')} title="Список">•≡</Btn>
+          <Btn onClick={() => prefixLines('## ')} title="Заголовок">H</Btn>
+          <Btn onClick={link} title="Ссылка">🔗</Btn>
+          <Btn onClick={() => setEmoji((v) => !v)} title="Эмодзи">😀</Btn>
+        </div>
+        {emoji && (
+          <div className="absolute right-0 top-11 z-20 grid w-72 max-w-[85vw] grid-cols-8 gap-0.5 rounded-2xl bg-card p-2 shadow-soft ring-2 ring-line">
+            {EMOJIS.map((e) => (
+              <button key={e} type="button" className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setEmoji(false); }}>{e}</button>
+            ))}
+          </div>
+        )}
+        <textarea
+          id={id}
+          ref={ref}
+          rows={rows}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-none"
+        />
+      </div>
+    </div>
+  );
+}
+
+function ColorPicker({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {PALETTE.map(([name, c]) => (
+        <button
+          key={c}
+          type="button"
+          title={name}
+          aria-label={name}
+          aria-pressed={value === c}
+          onClick={() => onChange(c)}
+          className={`h-8 w-8 rounded-full border-2 transition ${value === c ? 'scale-110 border-ink' : 'border-line'}`}
+          style={{ background: hex(c) }}
+        />
+      ))}
+      <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm font-extrabold text-mute">
+        <input type="color" value={hex(value)} onChange={(e) => onChange(parseInt(e.target.value.slice(1), 16))} className="h-8 w-10 cursor-pointer rounded border-2 border-line bg-card" aria-label="Свой цвет" />
+        свой
+      </label>
+    </div>
+  );
+}
+
+function ImageInput({ label, url, upload, onUrl, onUpload, allowUpload }: { label: string; url: string; upload: string; onUrl: (v: string) => void; onUpload: (name: string) => void; allowUpload?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    setErr('');
+    try { onUpload(await uploadImage(file)); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-2">
+      <span className="label !mb-0">{label}</span>
+      {upload ? (
+        <div className="flex items-center gap-3 rounded-2xl bg-soft p-2">
+          <img src={`/api/news/images/${upload}`} alt="" className="h-14 w-14 rounded-xl object-cover" />
+          <span className="min-w-0 flex-1 truncate text-sm font-bold">Загруженная картинка</span>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => onUpload('')}>Убрать</button>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <input className="input" value={url} onChange={(e) => onUrl(e.target.value.trim())} placeholder="https://… ссылка на картинку" />
+          {allowUpload && (
+            <label className={`btn btn-soft shrink-0 cursor-pointer ${busy ? 'pointer-events-none opacity-60' : ''}`}>
+              {busy ? 'Загрузка…' : 'Загрузить'}
+              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(e) => { void pick(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+          )}
+        </div>
+      )}
+      {err && <p className="text-sm font-bold text-bad">{err}</p>}
+    </div>
+  );
+}
+
+// ---------- the editor ----------
+export default function NewsEditor({ id }: { id: number | null }) {
+  const [d, setD] = useState<Draft | null>(null);
+  const [item, setItem] = useState<NewsItem | null>(null);
+  const [makeDefault, setMakeDefault] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [when, setWhen] = useState(() => toLocalInput(Date.now() + 3600_000));
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        if (id) {
+          const n = await api<NewsItem>(`/news/${id}`);
+          setItem(n);
+          setD(fromPayload(n.payload, n.channelId));
+          if (n.scheduledAt) setWhen(toLocalInput(n.scheduledAt));
+        } else {
+          const s = await api<NewsSettings>('/news/settings');
+          setD(blank(s.channelId ?? ''));
+        }
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    })();
+  }, [id]);
+
+  if (!d) return error ? <ErrorLine text={error} /> : <div className="skeleton panel h-64" />;
+
+  const set = (patch: Partial<Draft>) => setD((cur) => (cur ? { ...cur, ...patch } : cur));
+  const isSent = item?.status === 'sent' || item?.status === 'edit_queued';
+  const total = embedLength(d);
+  const preview = previewOf(d);
+
+  const applyTemplate = (t: (typeof TEMPLATES)[number]) => {
+    const dirty = d.title || d.description || d.content || d.fields.length;
+    if (dirty && !window.confirm('Заменить текущий текст шаблоном?')) return;
+    set({ ...blank(d.channelId), ...t.apply, channelId: d.channelId });
+  };
+
+  const save = async (action: 'draft' | 'now' | 'schedule') => {
+    setBusy(true);
+    setError('');
+    try {
+      const body = {
+        channelId: d.channelId,
+        payload: toPayload(d),
+        action,
+        scheduledAt: action === 'schedule' ? new Date(when).getTime() : undefined,
+      };
+      if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
+      await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
+      if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
+      window.location.hash = '#/news';
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  const noChannel = !/^\d{15,25}$/.test(d.channelId);
+
+  return (
+    <div className="space-y-5">
+      <a href="#/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
+      <div>
+        <h1 className="text-3xl font-black tracking-tight">{id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}</h1>
+        {isSent && <p className="mt-0.5 font-semibold text-mute">Сообщение в Discord будет отредактировано, новое отправлено не будет.</p>}
+      </div>
+
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
+        <div className="space-y-5">
+          <Section title="Куда отправить">
+            <Field label="Канал">
+              {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
+            </Field>
+            {!isSent && (
+              <label className="flex items-center gap-2 text-sm font-bold text-mute">
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} /> Сделать каналом новостей по умолчанию
+              </label>
+            )}
+            <Field label="Упоминание">
+              <select id="news-mention" className="input" value={d.mention} onChange={(e) => set({ mention: e.target.value as Draft['mention'] })}>
+                <option value="none">Без упоминания</option>
+                <option value="here">@here: онлайн-участникам</option>
+                <option value="everyone">@everyone: всем</option>
+              </select>
+            </Field>
+            {d.mention !== 'none' && <p className="-mt-2 text-sm font-semibold text-mute">Чтобы упоминание сработало, у бота должно быть право «Упоминать @everyone, @here и все роли» в этом канале.</p>}
+          </Section>
+
+          {!id && (
+            <Section title="Шаблон" hint="Готовая заготовка, которую можно изменить. Слова ДАТА, ВРЕМЯ и т. п. замените на свои.">
+              <div className="flex flex-wrap gap-2">
+                {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => applyTemplate(t)}>{t.label}</button>)}
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => set({ ...blank(d.channelId) })}>Очистить</button>
+              </div>
+            </Section>
+          )}
+
+          <Section title="Текст" hint="Обычный текст над рамкой. Можно оставить пустым.">
+            <MarkdownField id="news-content" label="Сообщение" value={d.content} onChange={(v) => set({ content: v })} max={2000} rows={3} placeholder="Например: Друзья, у нас новости!" />
+          </Section>
+
+          <Section title="Оформление (embed)" hint="Цветная карточка с заголовком, текстом, полями и картинкой.">
+            <Field label="Цвет полосы"><ColorPicker value={d.color} onChange={(c) => set({ color: c })} /></Field>
+            <div>
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label !mb-0">Заголовок</label><Counter value={d.title.length} max={256} /></div>
+              <input id="news-title" className="input" value={d.title} onChange={(e) => set({ title: e.target.value })} maxLength={256} placeholder="📢 Заголовок новости" />
+            </div>
+            <Field label="Ссылка заголовка (необязательно)">
+              <input id="news-url" className="input" value={d.url} onChange={(e) => set({ url: e.target.value.trim() })} placeholder="https://…" />
+            </Field>
+            <MarkdownField id="news-desc" label="Основной текст" value={d.description} onChange={(v) => set({ description: v })} max={4096} rows={8} placeholder="Расскажите, что произошло. Поддерживается оформление Discord." />
+
+            <details className="rounded-2xl border-2 border-line px-4 py-2.5" open={!!(d.authorName || d.thumbnail || d.imageUrl || d.imageUpload)}>
+              <summary className="cursor-pointer select-none font-extrabold text-link">Автор, миниатюра и большая картинка</summary>
+              <div className="mt-3 space-y-3.5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Автор (имя)"><input className="input" value={d.authorName} onChange={(e) => set({ authorName: e.target.value })} maxLength={256} placeholder="Администрация" /></Field>
+                  <Field label="Аватар автора (ссылка)"><input className="input" value={d.authorIcon} onChange={(e) => set({ authorIcon: e.target.value.trim() })} placeholder="https://…" /></Field>
+                </div>
+                <Field label="Миниатюра справа сверху (ссылка)"><input className="input" value={d.thumbnail} onChange={(e) => set({ thumbnail: e.target.value.trim() })} placeholder="https://…" /></Field>
+                <ImageInput label="Большая картинка внизу" url={d.imageUrl} upload={d.imageUpload} onUrl={(v) => set({ imageUrl: v })} onUpload={(n) => set({ imageUpload: n, imageUrl: n ? '' : d.imageUrl })} allowUpload />
+              </div>
+            </details>
+          </Section>
+
+          <Section title="Поля" hint="Блоки «название и значение». Короткие можно ставить в ряд по три.">
+            {d.fields.map((f, i) => (
+              <div key={i} className="space-y-2 rounded-2xl bg-soft p-3">
+                <div className="flex gap-2">
+                  <input aria-label="Название поля" className="input" value={f.name} maxLength={256} placeholder="Название" onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })} />
+                  <button type="button" className="btn btn-danger btn-sm shrink-0" aria-label="Удалить поле" onClick={() => set({ fields: d.fields.filter((_, j) => j !== i) })}>✕</button>
+                </div>
+                <textarea aria-label="Текст поля" className="input min-h-[4.5rem]" rows={2} value={f.value} maxLength={1024} placeholder="Текст" onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })} />
+                <label className="flex items-center gap-2 text-sm font-bold text-mute">
+                  <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.inline} onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, inline: e.target.checked } : x)) })} /> В ряд с соседними
+                </label>
+              </div>
+            ))}
+            <button type="button" className="btn btn-soft btn-sm" disabled={d.fields.length >= 25} onClick={() => set({ fields: [...d.fields, { name: '', value: '', inline: d.fields.length > 0 && d.fields.length < 3 }] })}>+ Добавить поле</button>
+          </Section>
+
+          <Section title="Подпись">
+            <div>
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label !mb-0">Текст внизу</label><Counter value={d.footer.length} max={2048} /></div>
+              <input id="news-footer" className="input" value={d.footer} onChange={(e) => set({ footer: e.target.value })} maxLength={2048} placeholder="Например: Администрация сервера" />
+            </div>
+            <label className="flex items-center gap-2 text-sm font-bold text-mute">
+              <input type="checkbox" className="h-4 w-4 accent-brand" checked={d.timestamp} onChange={(e) => set({ timestamp: e.target.checked })} /> Показывать время публикации
+            </label>
+          </Section>
+        </div>
+
+        <aside className="space-y-4 lg:sticky lg:top-4">
+          <div className="panel p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-lg font-black">Предпросмотр</h2>
+              <span className={`text-xs font-bold tabular-nums ${total > 6000 ? 'text-bad' : 'text-mute'}`} title="Лимит Discord на весь embed">{total}/6000</span>
+            </div>
+            {preview.content || preview.embed ? <EmbedView content={preview.content} embed={preview.embed} /> : <p className="py-10 text-center font-semibold text-mute">Начните писать: здесь появится сообщение, как оно будет выглядеть в Discord.</p>}
+          </div>
+
+          <div className="panel space-y-3 p-4">
+            <ErrorLine text={error} />
+            {noChannel && !isSent && <p className="text-sm font-bold text-mute">Выберите канал, чтобы опубликовать или запланировать.</p>}
+            {isSent ? (
+              <button className="btn w-full" disabled={busy} onClick={() => save('draft')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</button>
+            ) : (
+              <>
+                <button className="btn w-full" disabled={busy || noChannel} onClick={() => save('now')}>{busy ? 'Отправляю…' : 'Опубликовать сейчас'}</button>
+                {scheduling ? (
+                  <div className="space-y-2 rounded-2xl bg-soft p-3">
+                    <label htmlFor="news-when" className="label">Когда опубликовать</label>
+                    <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
+                    <div className="flex gap-2">
+                      <button className="btn flex-1" disabled={busy || noChannel} onClick={() => save('schedule')}>Запланировать</button>
+                      <button className="btn btn-soft" onClick={() => setScheduling(false)}>Отмена</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn btn-soft w-full" disabled={busy || noChannel} onClick={() => setScheduling(true)}>Запланировать на время…</button>
+                )}
+                <button className="btn btn-soft w-full" disabled={busy || noChannel} onClick={() => save('draft')}>Сохранить как черновик</button>
+              </>
+            )}
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
@@ -4883,6 +5845,9 @@ export const IconDiscord = () => (
 export const IconSettings = () => (
   <Icon><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></Icon>
 );
+export const IconNews = () => (
+  <Icon><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8 8 0 0 1 0 12" /></Icon>
+);
 const IconSun = () => (
   <Icon><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Icon>
 );
@@ -5384,7 +6349,7 @@ server {
     add_header Referrer-Policy same-origin always;
 
     resolver 127.0.0.11 valid=10s ipv6=off;
-    client_max_body_size 1m;
+    client_max_body_size 9m;   # news image uploads (up to 8 MB)
 
     # brute-force protection for login and first-run setup
     location ~ ^/api/(auth/login|setup)$ {

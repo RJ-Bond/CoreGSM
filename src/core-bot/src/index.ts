@@ -41,7 +41,8 @@ function humanDiscordError(e: unknown): string {
     case 50001: return 'У бота нет доступа к каналу. Пригласите бота на этот сервер и выдайте права на канал.';
     case 10003: return 'Канал не найден. Проверьте ID и что бот приглашён на сервер, где находится канал.';
     case 50013: return 'Не хватает прав: боту нужны «Отправка сообщений», «Прикрепление файлов» и «Встраивание ссылок» в этом канале.';
-    case 50035: return 'Неверный ID канала.';
+    case 50035: return 'Discord отклонил сообщение: проверьте ссылки (они должны начинаться с http:// или https://) и длину текстов.';
+    case 10008: return 'Сообщение уже удалено в Discord.';
     case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   }
   if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
@@ -98,26 +99,40 @@ let lastGuildsJson = '';
 let lastGuildsAt = 0;
 
 /** Text channels the bot can post in, grouped by server. */
+const PERM_LABELS: Record<string, string> = {
+  EmbedLinks: 'Встраивание ссылок',
+  AttachFiles: 'Прикрепление файлов',
+};
+
+/** Text channels per Discord server. A channel is listed when the bot can see it and write to it;
+ *  missing "soft" permissions are reported as warnings instead of hiding the channel. */
 function collectGuilds(c: DiscordClient) {
-  const out: { id: string; name: string; channels: { id: string; name: string; pos: number }[] }[] = [];
+  const out: { id: string; name: string; hidden: number; channels: { id: string; name: string; pos: number; missing: string[] }[] }[] = [];
   for (const g of c.guilds.cache.values()) {
     const me = g.members.me;
-    const channels: { id: string; name: string; pos: number }[] = [];
+    const channels: { id: string; name: string; pos: number; missing: string[] }[] = [];
+    let hidden = 0;
     for (const ch of g.channels.cache.values()) {
       if (ch.type !== ChannelType.GuildText && ch.type !== ChannelType.GuildAnnouncement) continue;
       const perms = me ? ch.permissionsFor(me) : null;
-      if (perms && !perms.has(['ViewChannel', 'SendMessages', 'AttachFiles'])) continue;
-      channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition });
+      if (perms && !perms.has(['ViewChannel', 'SendMessages'])) { hidden++; continue; }
+      const missing = perms ? (['EmbedLinks', 'AttachFiles'] as const).filter((p) => !perms.has(p)).map((p) => PERM_LABELS[p]) : [];
+      channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition, missing });
     }
-    channels.sort((a, b) => a.pos - b.pos);
-    out.push({ id: g.id, name: g.name, channels: channels.slice(0, 250) });
+    channels.sort((x, y) => x.pos - y.pos);
+    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250) });
   }
   return out.slice(0, 50);
 }
 
 async function publishGuilds(): Promise<void> {
   if (!client || state !== 'online') return;
-  const list = collectGuilds(client).map((g) => ({ id: g.id, name: g.name, channels: g.channels.map(({ id, name }) => ({ id, name })) }));
+  const list = collectGuilds(client).map((g) => ({
+    id: g.id,
+    name: g.name,
+    hidden: g.hidden,
+    channels: g.channels.map(({ id, name, missing }) => ({ id, name, ...(missing.length ? { missing } : {}) })),
+  }));
   const json = JSON.stringify(list);
   // send on change, and every minute so a restarted backend learns the list again
   if (json === lastGuildsJson && Date.now() - lastGuildsAt < 60_000) return;
@@ -125,7 +140,9 @@ async function publishGuilds(): Promise<void> {
     const r = await backend('/internal/bot-guilds', { method: 'POST', body: json });
     if (r.ok) {
       if (json !== lastGuildsJson) {
-        log(`Discord servers visible to the bot: ${list.length}, text channels it can post in: ${list.reduce((n, g) => n + g.channels.length, 0)}`);
+        const hiddenTotal = list.reduce((n, g) => n + g.hidden, 0);
+        log(`Discord servers visible to the bot: ${list.length}, text channels it can post in: ${list.reduce((n, g) => n + g.channels.length, 0)}${hiddenTotal ? `, hidden (no access): ${hiddenTotal}` : ''}`);
+        for (const g of list) log(`  ${g.name}: ${g.channels.length} channels${g.hidden ? `, ${g.hidden} without access` : ''}`);
       }
       lastGuildsJson = json;
       lastGuildsAt = Date.now();
@@ -247,6 +264,114 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
   await report(b.id, { messageId: sent.id, error: null });
 }
 
+// ---------- news: messages written in the panel ----------
+interface NewsPayload {
+  content: string;
+  mention: 'none' | 'here' | 'everyone';
+  embed?: {
+    title?: string;
+    url?: string;
+    description?: string;
+    color?: number;
+    author?: { name: string; iconUrl?: string };
+    thumbnailUrl?: string;
+    image?: { url?: string; upload?: string };
+    fields?: { name: string; value: string; inline?: boolean }[];
+    footer?: { text: string };
+    timestamp?: boolean;
+  };
+}
+interface NewsItem {
+  id: number;
+  action: 'send' | 'edit' | 'delete';
+  channelId: string;
+  messageId: string | null;
+  payload: NewsPayload;
+}
+
+async function buildNews(p: NewsPayload) {
+  const files: InstanceType<typeof AttachmentBuilder>[] = [];
+  const mention = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
+  const content = [mention, p.content?.trim()].filter(Boolean).join('\n');
+  const embeds: InstanceType<typeof EmbedBuilder>[] = [];
+  const e = p.embed;
+  if (e) {
+    const eb = new EmbedBuilder().setColor(e.color ?? 0x5865f2);
+    if (e.title) eb.setTitle(e.title);
+    if (e.url) eb.setURL(e.url);
+    if (e.description) eb.setDescription(e.description);
+    if (e.author?.name) eb.setAuthor({ name: e.author.name, ...(e.author.iconUrl ? { iconURL: e.author.iconUrl } : {}) });
+    if (e.thumbnailUrl) eb.setThumbnail(e.thumbnailUrl);
+    if (e.image?.upload) {
+      // a picture uploaded in the panel travels as an attachment
+      const r = await backend(`/api/news/images/${e.image.upload}`);
+      if (!r.ok) throw new Error('Не удалось получить загруженную картинку (она могла быть удалена)');
+      files.push(new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: e.image.upload }));
+      eb.setImage(`attachment://${e.image.upload}`);
+    } else if (e.image?.url) {
+      eb.setImage(e.image.url);
+    }
+    if (e.fields?.length) eb.addFields(e.fields.map((x) => ({ name: x.name, value: x.value, inline: !!x.inline })));
+    if (e.footer?.text) eb.setFooter({ text: e.footer.text });
+    if (e.timestamp) eb.setTimestamp();
+    embeds.push(eb);
+  }
+  return {
+    content: content || undefined,
+    embeds,
+    files,
+    allowedMentions: { parse: (p.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
+  };
+}
+
+async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null }) {
+  try {
+    await backend(`/internal/news/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  } catch (e) {
+    log('news report failed', e);
+  }
+}
+
+async function processNews(): Promise<void> {
+  const c = client;
+  if (!c || state !== 'online') return;
+  const res = await backend('/internal/news/pending');
+  if (!res.ok) throw new Error(`news HTTP ${res.status}`);
+  const items = (await res.json()) as NewsItem[];
+  for (const it of items) {
+    try {
+      const channel = await c.channels.fetch(it.channelId);
+      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
+
+      if (it.action === 'delete') {
+        try {
+          if (it.messageId) await (await channel.messages.fetch(it.messageId)).delete();
+        } catch (e) {
+          if ((e as { code?: number }).code !== 10008) throw e; // already gone: that is fine
+        }
+        await reportNews(it.id, { status: 'deleted' });
+        log(`news ${it.id}: message deleted`);
+        continue;
+      }
+
+      const msg = await buildNews(it.payload);
+      if (it.action === 'edit' && it.messageId) {
+        const m = await channel.messages.fetch(it.messageId);
+        await m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, attachments: [], allowedMentions: msg.allowedMentions });
+        await reportNews(it.id, { status: 'sent', messageId: it.messageId });
+        log(`news ${it.id}: message edited`);
+      } else {
+        const sent = await channel.send(msg);
+        await reportNews(it.id, { status: 'sent', messageId: sent.id });
+        log(`news ${it.id}: posted`);
+      }
+    } catch (e) {
+      log(`news ${it.id} failed:`, (e as Error).message);
+      await reportNews(it.id, { status: 'error', error: humanDiscordError(e) });
+    }
+  }
+}
+
 async function updateBindings(): Promise<void> {
   const c = client;
   if (!c || state !== 'online') return;
@@ -276,6 +401,7 @@ async function tick(): Promise<void> {
     await applyConfig();
     await publishGuilds();
     await updateBindings();
+    await processNews();
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {
