@@ -441,12 +441,12 @@ cmd_update() {
     status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
-    status_file error "Установка не удалась (код $rc), прежняя версия продолжает работать. Журнал: $LOG"
-    bad "Установка не удалась, прежняя версия работает. Журнал: $LOG"; return "$rc"
+    status_file error "Установка не удалась (код $rc), прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
+    bad "Установка не удалась, прежняя версия работает. Журнал: /var/log/coregsm-install.log"; return "$rc"
   fi
   warn "Новая версия не запустилась. Возвращаю предыдущую…"
   if rollback_apply; then
-    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}. Журнал: $LOG"
+    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}. Журнал: /var/log/coregsm-install.log"
     ok "Откат выполнен: работает версия ${current:0:7}"
   else
     status_file error "Обновление не удалось и откат не помог. Запустите: coregsm doctor"
