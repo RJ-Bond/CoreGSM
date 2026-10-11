@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
-import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
+import { DiscordArt } from '../components/Illustrations';
+import { Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -30,7 +31,7 @@ export default function DiscordPage() {
 
   const remove = async (b: Binding) => {
     if (!window.confirm('Удалить привязку? Сообщение в Discord останется, но обновляться перестанет.')) return;
-    await api(`/bindings/${b.id}`, 'DELETE').catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
     load();
   };
 
@@ -48,7 +49,7 @@ export default function DiscordPage() {
 
   return (
     <div className="space-y-6">
-      <PageHead title="Discord" subtitle="Куда бот публикует карточки серверов">
+      <PageHead icon={<IconDiscord />} title="Discord" subtitle="Куда бот публикует состояние серверов">
         <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
@@ -83,7 +84,7 @@ export default function DiscordPage() {
         </ol>
       )}
 
-      {loaded && bindings.length === 0 && <Empty title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
+      {loaded && bindings.length === 0 && <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
 
       <div className="grid gap-4 md:grid-cols-2">
         {bindings.map((b) => {
@@ -128,7 +129,7 @@ export default function DiscordPage() {
         })}
       </div>
 
-      {draft && <BindingForm servers={servers} initial={draft} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); load(); }} />}
+      {draft && <BindingForm servers={servers} initial={draft} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); toast('Привязка сохранена'); load(); }} />}
     </div>
   );
 }

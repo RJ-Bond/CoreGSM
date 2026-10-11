@@ -35,7 +35,7 @@ server {
     client_max_body_size 9m;   # news image uploads (up to 8 MB)
 
     # brute-force protection for login and first-run setup
-    location ~ ^/api/(auth/login|setup)$ {
+    location ~ ^/api/(auth/login|auth/register|setup)$ {
         limit_req zone=login burst=5 nodelay;
         set $backend http://backend:3000;
         proxy_pass $backend;

@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="205d2d6f2af5"
+COREGSM_BUILD="ec4e696b7252"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -421,8 +421,9 @@ __COREGSM_EOF__
 import skia from 'skia-canvas';
 import { db, type ServerRow, type StatusRow } from './db.js';
 import { gameLabel } from './games.js';
+import { gameIconPath } from './gameIcons.js';
 
-const { Canvas } = skia;
+const { Canvas, Path2D } = skia;
 
 // Pastel Soft palette (matches the web panel)
 const C = {
@@ -508,10 +509,24 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   ctx.beginPath();
   ctx.roundRect(64, 56, 84, 84, 26);
   ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `700 ${abbr.length > 2 ? 28 : 34}px ${SANS}`;
-  ctx.textAlign = 'center';
-  ctx.fillText(abbr, 106, 109);
+  const iconPath = gameIconPath(s.game);
+  if (iconPath) {
+    // the same pictogram as in the panel: 24x24 grid scaled to ~46px, centred in the 84px square
+    ctx.save();
+    ctx.translate(106 - 12 * 1.95, 98 - 12 * 1.95);
+    ctx.scale(1.95, 1.95);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(new Path2D(iconPath));
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${abbr.length > 2 ? 28 : 34}px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(abbr, 106, 109);
+  }
   ctx.textAlign = 'left';
 
   // status pill (top right)
@@ -675,6 +690,11 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS favorites (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, server_id)
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -720,6 +740,18 @@ CREATE TABLE IF NOT EXISTS bindings (
   last_error TEXT
 );
 `);
+
+// older databases: users get a role (every existing account was created by the setup wizard, so it is an admin)
+try {
+  db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER');
+} catch {
+  /* column already exists */
+}
 
 // older databases: new columns are added once
 try {
@@ -903,6 +935,42 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     timestamp: stamp,
   };
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/gameIcons.ts" << '__COREGSM_EOF__'
+// Pictograms for the games, drawn on the PNG card. Same data as core-frontend/src/gameIcons.ts: keep both in sync.
+export const ICON_PATHS: Record<string, string> = {
+  cube: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.5l8-4.5 M12 12v9',
+  crosshair: 'M4 12a8 8 0 1 0 16 0a8 8 0 1 0 -16 0 M12 2v4 M12 18v4 M2 12h4 M18 12h4 M12 12h.01',
+  axe: 'M14.5 4l5.5 5.5-3 3-5.5-5.5z M11.5 8.5L4 20 M9 13l2 2',
+  shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M12 8v8',
+  sword: 'M20 4l-9.5 9.5 M20 4h-5 M20 4v5 M8 12l4 4 M5 19l3-3 M4 20l1-1',
+  headset: 'M4 14v-2a8 8 0 0 1 16 0v2 M4 14h3v5H5a1 1 0 0 1-1-1z M20 14h-3v5h2a1 1 0 0 0 1-1z',
+  skull: 'M12 3a7 7 0 0 0-7 7c0 2.5 1.2 4.2 3 5.3V19h8v-3.7c1.8-1.1 3-2.8 3-5.3a7 7 0 0 0-7-7z M9.5 11h.01 M14.5 11h.01 M10 19v2 M14 19v2',
+  drop: 'M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5',
+  paw: 'M5.8 10.5a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0 -3.4 0 M10.3 7a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0 -3.4 0 M14.8 10.5a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0 -3.4 0 M12 12c-3 0-5 2.5-5 4.5 0 1.5 1.5 2 3 1.5l2-.5 2 .5c1.5.5 3 0 3-1.5 0-2-2-4.5-5-4.5z',
+  car: 'M5 17v-5l2-5h10l2 5v5 M3 17h18 M7.5 20h.01 M16.5 20h.01 M7 12h10',
+  gear: 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z M12 2v3 M12 19v3 M2 12h3 M19 12h3 M4.9 4.9l2.1 2.1 M17 17l2.1 2.1 M19.1 4.9L17 7 M7 17l-2.1 2.1',
+  warning: 'M12 3l10 18H2z M12 10v5 M12 18h.01',
+  leaf: 'M5 19C5 10 10 5 20 4c0 9-5 15-14 15 M5 19c3-5 6-8 10-10',
+  calendar: 'M4 6h16v14H4z M4 10h16 M9 3v4 M15 3v4',
+  wrench: 'M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.7 2.7-2.3-.7-.7-2.3z',
+};
+
+/** GameDig id -> pictogram. Games without an entry fall back to their letters. */
+export const GAME_ICON: Record<string, keyof typeof ICON_PATHS> = {
+  minecraft: 'cube', mbe: 'cube', unturned: 'cube',
+  counterstrike2: 'crosshair', csgo: 'crosshair', counterstrike16: 'crosshair', css: 'crosshair', teamfortress2: 'crosshair',
+  rust: 'axe', valheim: 'shield', garrysmod: 'wrench', l4d2: 'warning', dayz: 'warning',
+  terraria: 'sword', conanexiles: 'sword', sdtd: 'calendar', ase: 'leaf', asa: 'leaf',
+  palworld: 'paw', factorio: 'gear', vrising: 'drop', projectzomboid: 'skull',
+  gta5f: 'car', gtasam: 'car', teamspeak3: 'headset',
+};
+
+export const gameIconPath = (game: string): string | null => {
+  const key = GAME_ICON[game];
+  return key ? ICON_PATHS[key] : null;
+};
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gamedig.d.ts" << '__COREGSM_EOF__'
@@ -1180,20 +1248,54 @@ const wrap =
   };
 
 // ---------- auth ----------
+type Role = 'admin' | 'player';
 interface AuthedRequest extends Request {
-  user?: { id: number; username: string };
+  user?: { id: number; username: string; role: Role };
 }
 
-function auth(req: AuthedRequest, res: Response, next: NextFunction) {
+/** The signed-in user (checked against the database, so a deleted or demoted account loses access at once). */
+function loadUser(req: Request): { id: number; username: string; role: Role } | null {
   const h = req.headers.authorization ?? '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
+  if (!token) return null;
   try {
-    const p = jwt.verify(token, JWT_SECRET) as { sub: string; username: string };
-    req.user = { id: Number(p.sub), username: p.username };
-    next();
+    const p = jwt.verify(token, JWT_SECRET) as { sub: string };
+    const u = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
+    return u ?? null;
   } catch {
-    res.status(401).json({ error: 'Требуется вход' });
+    return null;
   }
+}
+
+const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
+const flag = (key: string, fallback: boolean) => {
+  const v = getSetting(key);
+  return v === null ? fallback : v === '1';
+};
+const publicPanel = () => flag('public_panel', true);
+const registrationOpen = () => flag('registration_open', true);
+
+/** any signed-in user */
+function auth(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  req.user = u;
+  next();
+}
+/** administrators only */
+function admin(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  if (u.role !== 'admin') return void res.status(403).json({ error: 'Это действие доступно только администратору' });
+  req.user = u;
+  next();
+}
+/** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
+function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (u) req.user = u;
+  if (!u && !publicPanel()) return void res.status(401).json({ error: 'Требуется вход' });
+  next();
 }
 
 const attempts = new Map<string, { n: number; reset: number }>();
@@ -1221,13 +1323,13 @@ app.post(
     const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
     const u = db.prepare('SELECT * FROM users WHERE username = ?').get(body.data.username) as
-      | { id: number; username: string; password_hash: string }
+      | { id: number; username: string; password_hash: string; role: Role }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi');
     if (!u || !ok) return res.status(401).json({ error: 'Неверный логин или пароль' });
     attempts.delete(req.ip ?? 'x');
     const token = jwt.sign({ username: u.username }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
-    res.json({ token, username: u.username });
+    res.json({ token, username: u.username, role: u.role });
   }),
 );
 
@@ -1268,7 +1370,7 @@ app.post(
       db.transaction(() => {
         // re-check inside the transaction so two concurrent requests cannot both create an admin
         if (!needsSetup()) throw new Error('already-setup');
-        userId = Number(db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(b.data.username, hash).lastInsertRowid);
+        userId = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
         if (b.data.discordToken) setSetting('discord_token', b.data.discordToken);
         if (proxyUrl) setSetting('proxy_url', proxyUrl);
       })();
@@ -1278,7 +1380,7 @@ app.post(
     attempts.delete(req.ip ?? 'x');
     console.log(`setup completed, admin "${b.data.username}" created`);
     const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(userId), expiresIn: '7d' });
-    res.status(201).json({ token, username: b.data.username });
+    res.status(201).json({ token, username: b.data.username, role: 'admin' });
   }),
 );
 
@@ -1293,7 +1395,7 @@ function settingsPayload() {
   };
 }
 
-app.get('/api/settings', auth, (_req, res) => {
+app.get('/api/settings', admin, (_req, res) => {
   res.json(settingsPayload());
 });
 
@@ -1304,7 +1406,7 @@ const settingsSchema = z.object({
   proxyType: z.enum(['socks5', 'http']).optional(),
 });
 
-app.put('/api/settings', auth, (req, res) => {
+app.put('/api/settings', admin, (req, res) => {
   const b = settingsSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
   const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
@@ -1350,7 +1452,7 @@ function invitePayload() {
   };
 }
 
-app.get('/api/bot/status', auth, (_req, res) => {
+app.get('/api/bot/status', admin, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
@@ -1424,7 +1526,7 @@ function updatePayload() {
 
 app.get(
   '/api/update/status',
-  auth,
+  admin,
   wrap(async (_req, res) => {
     await checkRemote();
     res.json(updatePayload());
@@ -1433,14 +1535,14 @@ app.get(
 
 app.post(
   '/api/update/check',
-  auth,
+  admin,
   wrap(async (_req, res) => {
     await checkRemote(true);
     res.json(updatePayload());
   }),
 );
 
-app.post('/api/update/apply', auth, (_req, res) => {
+app.post('/api/update/apply', admin, (_req, res) => {
   const state = updatePayload();
   if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm update' });
   if (state.job?.state === 'running') return res.status(409).json({ error: 'Обновление уже выполняется' });
@@ -1453,16 +1555,114 @@ app.post('/api/update/apply', auth, (_req, res) => {
   res.status(202).json(updatePayload());
 });
 
+// ---------- access: who may look at the panel, who may register ----------
+app.get('/api/access', (_req, res) => {
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+});
+app.put('/api/access', admin, (req, res) => {
+  const b = z.object({ publicPanel: z.boolean().optional(), registration: z.boolean().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
+  if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+});
+
+// ---------- registration of players ----------
+const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
+app.post(
+  '/api/auth/register',
+  loginLimiter,
+  wrap(async (req, res) => {
+    if (needsSetup()) return res.status(409).json({ error: 'Панель ещё не настроена: сначала создайте администратора' });
+    if (!registrationOpen()) return res.status(403).json({ error: 'Регистрация закрыта администратором' });
+    const b = z
+      .object({
+        username: z.string().trim().regex(USERNAME_RE, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
+        password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
+    if (db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE').get(b.data.username)) {
+      return res.status(409).json({ error: 'Этот логин уже занят' });
+    }
+    const hash = await bcrypt.hash(b.data.password, 12);
+    try {
+      const id = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'player', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
+      const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(id), expiresIn: '7d' });
+      res.status(201).json({ token, username: b.data.username, role: 'player' });
+    } catch {
+      res.status(409).json({ error: 'Этот логин уже занят' });
+    }
+  }),
+);
+
+// ---------- user management (administrators) ----------
+const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get() as { n: number }).n;
+
+app.get('/api/users', admin, (_req, res) => {
+  const rows = db.prepare('SELECT id, username, role, created_at FROM users ORDER BY id').all() as { id: number; username: string; role: Role; created_at: number | null }[];
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at })));
+});
+
+app.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
+  const b = z.object({ role: z.enum(['admin', 'player']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
+  const id = Number(req.params.id);
+  const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
+  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
+  res.json({ ok: true });
+});
+
+app.put(
+  '/api/users/:id/password',
+  admin,
+  wrap(async (req, res) => {
+    const b = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Пароль должен быть не короче 8 символов' });
+    const r = db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), Number(req.params.id));
+    if (!r.changes) return res.status(404).json({ error: 'Пользователь не найден' });
+    res.json({ ok: true });
+  }),
+);
+
+app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
+  const u = db.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: Role } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+// ---------- favourites (any signed-in user) ----------
+app.get('/api/favorites', auth, (req: AuthedRequest, res) => {
+  const rows = db.prepare('SELECT server_id FROM favorites WHERE user_id = ?').all(req.user!.id) as { server_id: number }[];
+  res.json(rows.map((r) => r.server_id));
+});
+app.put('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
+  const sid = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(sid)) return res.status(404).json({ error: 'Сервер не найден' });
+  db.prepare('INSERT OR IGNORE INTO favorites (user_id, server_id) VALUES (?, ?)').run(req.user!.id, sid);
+  res.json({ ok: true });
+});
+app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM favorites WHERE user_id = ? AND server_id = ?').run(req.user!.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
-  res.json({ username: req.user!.username });
+  res.json({ username: req.user!.username, role: req.user!.role });
 });
 
 app.post(
   '/api/auth/password',
   auth,
   wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ current: z.string(), next: z.string().min(10).max(256) }).safeParse(req.body);
-    if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 10 символов' });
+    const body = z.object({ current: z.string(), next: z.string().min(8).max(256) }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as { password_hash: string };
     if (!(await bcrypt.compare(body.data.current, u.password_hash))) {
       return res.status(403).json({ error: 'Текущий пароль неверен' });
@@ -1488,6 +1688,11 @@ const serverSchema = z.object({
     .regex(/^[^\s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
     .optional(),
 });
+
+/** What a non-admin may see: the display address, never the internal host/port used for querying. */
+function publicServer<T extends { host: string; port: number; queryPort: number | null; customName: string }>(s: T): T {
+  return { ...s, host: '', port: 0, queryPort: null, customName: '' };
+}
 
 type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
 
@@ -1528,14 +1733,15 @@ function getServer(id: number) {
   return row ? serialize(row) : null;
 }
 
-app.get('/api/servers', auth, (_req, res) => {
+app.get('/api/servers', viewer, (req, res) => {
   const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
-  res.json(rows.map(serialize));
+  const list = rows.map(serialize);
+  res.json(isAdmin(req) ? list : list.map(publicServer));
 });
 
 app.post(
   '/api/servers',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
@@ -1550,7 +1756,7 @@ app.post(
 
 app.put(
   '/api/servers/:id',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     const b = serverSchema.safeParse(req.body);
@@ -1564,7 +1770,7 @@ app.put(
   }),
 );
 
-app.delete('/api/servers/:id', auth, (req, res) => {
+app.delete('/api/servers/:id', admin, (req, res) => {
   const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
   res.json({ ok: true });
@@ -1573,7 +1779,7 @@ app.delete('/api/servers/:id', auth, (req, res) => {
 // try a server without saving it: used by the "Проверить" button in the add/edit form
 app.post(
   '/api/servers/test',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
@@ -1592,7 +1798,7 @@ app.post(
 );
 
 // everything the server page needs: chart points, uptime, peak, outage log
-app.get('/api/servers/:id/details', auth, (req, res) => {
+app.get('/api/servers/:id/details', viewer, (req, res) => {
   const id = Number(req.params.id);
   const server = getServer(id);
   if (!server) return res.status(404).json({ error: 'Сервер не найден' });
@@ -1628,7 +1834,7 @@ app.get('/api/servers/:id/details', auth, (req, res) => {
   ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
 
   res.json({
-    server,
+    server: isAdmin(req) ? server : publicServer(server),
     hours,
     points,
     stats: {
@@ -1644,7 +1850,7 @@ app.get('/api/servers/:id/details', auth, (req, res) => {
 
 app.post(
   '/api/servers/:id/refresh',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
     if (!row) return res.status(404).json({ error: 'Сервер не найден' });
@@ -1653,7 +1859,7 @@ app.post(
   }),
 );
 
-app.get('/api/servers/:id/history', auth, (req, res) => {
+app.get('/api/servers/:id/history', viewer, (req, res) => {
   const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
   const rows = db
     .prepare('SELECT ts, online, players FROM history WHERE server_id = ? AND ts > ? ORDER BY ts')
@@ -1708,7 +1914,7 @@ function channelInfo(channelId: string): { channelName: string | null; guildName
   return { channelName: null, guildName: null, guildId: null };
 }
 
-app.get('/api/discord/channels', auth, (_req, res) => {
+app.get('/api/discord/channels', admin, (_req, res) => {
   res.json(botGuilds);
 });
 
@@ -1738,17 +1944,17 @@ function embedFor(serverId: number, intervalSec: number) {
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
 
-app.get('/api/servers/:id/embed', auth, (req, res) => {
+app.get('/api/servers/:id/embed', admin, (req, res) => {
   const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
   if (!e) return res.status(404).json({ error: 'Сервер не найден' });
   res.json(e);
 });
 
-app.get('/api/bindings', auth, (_req, res) => {
+app.get('/api/bindings', admin, (_req, res) => {
   res.json((db.prepare('SELECT * FROM bindings ORDER BY id').all() as BindingRow[]).map(serializeBinding));
 });
 
-app.post('/api/bindings', auth, (req, res) => {
+app.post('/api/bindings', admin, (req, res) => {
   const b = bindingSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
   if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(b.data.serverId)) {
@@ -1760,7 +1966,7 @@ app.post('/api/bindings', auth, (req, res) => {
   res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
 });
 
-app.put('/api/bindings/:id', auth, (req, res) => {
+app.put('/api/bindings/:id', admin, (req, res) => {
   const b = bindingSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
   const id = Number(req.params.id);
@@ -1774,7 +1980,7 @@ app.put('/api/bindings/:id', auth, (req, res) => {
   res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
 });
 
-app.delete('/api/bindings/:id', auth, (req, res) => {
+app.delete('/api/bindings/:id', admin, (req, res) => {
   const r = db.prepare('DELETE FROM bindings WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
   res.json({ ok: true });
@@ -1848,7 +2054,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   res.json({ ok: true });
 });
 
-registerNews({ app, auth, internal, channelInfo });
+registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
 
 // ---------- errors ----------
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
@@ -1994,8 +2200,15 @@ const titleOf = (p: NewsPayload) => p.embed?.title?.trim() || p.content.trim().s
 
 type ChannelInfo = (id: string) => { channelName: string | null; guildName: string | null; guildId: string | null };
 
-export function registerNews(deps: { app: express.Express; auth: RequestHandler; internal: RequestHandler; channelInfo: ChannelInfo }) {
-  const { app, auth, internal, channelInfo } = deps;
+export function registerNews(deps: {
+  app: express.Express;
+  admin: RequestHandler;
+  viewer: RequestHandler;
+  internal: RequestHandler;
+  channelInfo: ChannelInfo;
+  isAdmin: (req: Request) => boolean;
+}) {
+  const { app, admin, viewer, internal, channelInfo, isAdmin } = deps;
   const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res)).catch(next);
   };
@@ -2022,11 +2235,11 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   };
 
   // ---------- default news channel ----------
-  app.get('/api/news/settings', auth, (_req, res) => {
+  app.get('/api/news/settings', admin, (_req, res) => {
     const channelId = getSetting('news_channel_id');
     res.json({ channelId, ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }) });
   });
-  app.put('/api/news/settings', auth, (req, res) => {
+  app.put('/api/news/settings', admin, (req, res) => {
     const b = z.object({ channelId: z.string().regex(/^\d{15,25}$/).nullable() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
     setSetting('news_channel_id', b.data.channelId);
@@ -2037,7 +2250,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
   app.post(
     '/api/news/images',
-    auth,
+    admin,
     express.raw({ type: Object.keys(EXT), limit: '8mb' }),
     (req, res) => {
       const ext = EXT[String(req.headers['content-type'] ?? '').split(';')[0]];
@@ -2059,15 +2272,22 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   });
 
   // ---------- CRUD ----------
-  app.get('/api/news', auth, (_req, res) => {
+  /** the public view of a posted news item: no channel ids, errors or schedule */
+  const publicNews = (r: NewsRow) => {
+    const full = serialize(r);
+    return { id: full.id, status: full.status, title: full.title, payload: full.payload, sentAt: full.sentAt };
+  };
+
+  app.get('/api/news', viewer, (req, res) => {
     const rows = db.prepare('SELECT * FROM news ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
-    res.json(rows.map(serialize));
+    if (isAdmin(req)) return res.json(rows.map(serialize));
+    res.json(rows.filter((r) => r.status === 'sent' || r.status === 'edit_queued').map(publicNews));
   });
 
-  app.get('/api/news/:id', auth, (req, res) => {
+  app.get('/api/news/:id', viewer, (req, res) => {
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(Number(req.params.id)) as NewsRow | undefined;
-    if (!r) return res.status(404).json({ error: 'Новость не найдена' });
-    res.json(serialize(r));
+    if (!r || (!isAdmin(req) && r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
+    res.json(isAdmin(req) ? serialize(r) : publicNews(r));
   });
 
   function statusFor(action: 'draft' | 'now' | 'schedule', at: number | undefined): { status: string; at: number | null; error?: string } {
@@ -2079,7 +2299,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
 
   app.post(
     '/api/news',
-    auth,
+    admin,
     wrap(async (req, res) => {
       const b = bodySchema.safeParse(req.body);
       if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
@@ -2096,7 +2316,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
     }),
   );
 
-  app.put('/api/news/:id', auth, (req, res) => {
+  app.put('/api/news/:id', admin, (req, res) => {
     const id = Number(req.params.id);
     const old = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!old) return res.status(404).json({ error: 'Новость не найдена' });
@@ -2129,7 +2349,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   });
 
   // publish a draft / scheduled / failed item right now
-  app.post('/api/news/:id/publish', auth, (req, res) => {
+  app.post('/api/news/:id/publish', admin, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });
@@ -2140,7 +2360,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
     res.json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow));
   });
 
-  app.delete('/api/news/:id', auth, (req, res) => {
+  app.delete('/api/news/:id', admin, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });
@@ -3095,132 +3315,201 @@ lpZdO+rqtpoW7v8BFI4qdDVfylwAAAAASUVORK5CYII=
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, getToken, setToken, type UpdateInfo } from './api';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { api, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
+import { AuthContext } from './auth';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
 import NewsPage from './pages/News';
+import ProfilePage from './pages/Profile';
 import SettingsPage from './pages/Settings';
-import { IconCards, IconDiscord, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Wordmark, useHash } from './ui';
+import { IconCards, IconDiscord, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, useHash } from './ui';
 
-const PAGES: { id: string; label: string; icon: () => ReactNode }[] = [
+interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
+
+// everybody can open the server list and the news; the rest is for administrators
+const PAGES: PageDef[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
-  { id: 'cards', label: 'Карточки', icon: IconCards },
-  { id: 'discord', label: 'Discord', icon: IconDiscord },
+  { id: 'cards', label: 'Карточки', icon: IconCards, admin: true },
+  { id: 'discord', label: 'Discord', icon: IconDiscord, admin: true },
   { id: 'news', label: 'Новости', icon: IconNews },
-  { id: 'settings', label: 'Настройки', icon: IconSettings },
+  { id: 'settings', label: 'Настройки', icon: IconSettings, admin: true },
 ];
 
+const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true };
+
+interface Boot { ready: boolean; needsSetup: boolean; me: Me | null; access: Access }
+
 export default function App() {
-  const [authed, setAuthed] = useState(!!getToken());
   const { page: rawPage, sub } = useHash();
-  const page = PAGES.some((p) => p.id === rawPage) ? rawPage : 'servers';
-  // null = still checking whether the first-run wizard is needed
-  const [needsSetup, setNeedsSetup] = useState<boolean | null>(getToken() ? false : null);
+  const [boot, setBoot] = useState<Boot>({ ready: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
 
-  useEffect(() => {
-    if (authed) return;
-    api<{ needed: boolean }>('/setup/status')
-      .then((r) => setNeedsSetup(r.needed))
-      .catch(() => setNeedsSetup(false));
-  }, [authed]);
+  // who is signed in, what is open to guests, and whether the first-run wizard is still pending
+  const load = useCallback(async () => {
+    const [access, setup] = await Promise.all([
+      api<Access>('/access').catch(() => DEFAULT_ACCESS),
+      api<{ needed: boolean }>('/setup/status').catch(() => ({ needed: false })),
+    ]);
+    let me: Me | null = null;
+    if (getToken()) {
+      me = await api<Me>('/me').catch(() => null);
+      if (!me) setToken('');
+    }
+    setBoot({ ready: true, needsSetup: setup.needed, me, access });
+  }, []);
 
-  // a dot on "Настройки" when a newer version is published in the repository
+  useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    if (!authed) return;
+    // a rejected token (expired, account removed) comes back as this event
+    const out = () => void load();
+    window.addEventListener('coregsm:logout', out);
+    return () => window.removeEventListener('coregsm:logout', out);
+  }, [load]);
+
+  const { me, access } = boot;
+  const isAdmin = me?.role === 'admin';
+
+  useEffect(() => {
+    if (!isAdmin) return;
     const check = () => api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
     void check();
     const t = setInterval(check, 30 * 60_000);
     return () => clearInterval(t);
-  }, [authed]);
-
-  useEffect(() => {
-    const out = () => setAuthed(false);
-    window.addEventListener('coregsm:logout', out);
-    return () => window.removeEventListener('coregsm:logout', out);
-  }, []);
+  }, [isAdmin]);
 
   const logout = useCallback(() => {
     setToken('');
-    setAuthed(false);
-  }, []);
+    window.location.hash = '#/servers';
+    void load();
+  }, [load]);
 
-  if (!authed) {
-    if (needsSetup === null) return <div className="grid min-h-full place-items-center text-2xl"><Wordmark /></div>;
-    if (needsSetup) return <Setup onDone={() => { setNeedsSetup(false); setAuthed(true); }} />;
-    return <Login onDone={() => setAuthed(true)} />;
+  const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, access, reload: load, logout }), [me, isAdmin, access, load, logout]);
+
+  if (!boot.ready) return <div className="grid min-h-full place-items-center text-2xl"><Wordmark /></div>;
+
+  if (boot.needsSetup) {
+    return (
+      <AuthContext.Provider value={ctx}>
+        <Setup onDone={() => void load()} />
+        <Toaster />
+      </AuthContext.Provider>
+    );
   }
 
+  // sign-in / registration screens: for a closed panel they are the only thing a guest sees
+  const wantsRegister = rawPage === 'register';
+  if (!me && (!access.publicPanel || rawPage === 'login' || wantsRegister)) {
+    const done = () => { window.location.hash = '#/servers'; void load(); };
+    return (
+      <AuthContext.Provider value={ctx}>
+        {wantsRegister && access.registration ? <Register onDone={done} /> : <Login onDone={done} />}
+        <Toaster />
+      </AuthContext.Provider>
+    );
+  }
+
+  const visible = PAGES.filter((p) => !p.admin || isAdmin);
+  const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const dot = <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />;
 
   return (
-    <div className="mx-auto min-h-full max-w-6xl px-4 pb-28 pt-5 sm:px-6 md:pb-16">
-      <header className="mb-6 flex items-center gap-x-4 md:mb-8">
-        <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight text-link">
-          <Logo size={34} />
-          <Wordmark />
-        </a>
-        {/* desktop navigation; on phones the same sections live in the bottom bar */}
-        <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
-          {PAGES.map((p) => (
-            <a
-              key={p.id}
-              href={`#/${p.id}`}
-              aria-current={page === p.id ? 'page' : undefined}
-              className={`whitespace-nowrap rounded-full px-4 py-1.5 font-extrabold transition ${
-                page === p.id ? 'bg-brand text-white shadow-pop' : 'bg-card text-ink shadow-pop hover:text-link'
-              }`}
-            >
-              {p.label}
-              {p.id === 'settings' && updateAvailable && dot}
-            </a>
-          ))}
-        </nav>
-        <div className="ml-auto flex items-center gap-2">
-          <ThemeToggle />
-          <button onClick={logout} className="rounded-full bg-card px-4 py-2 font-extrabold text-mute shadow-pop hover:text-bad">
-            Выйти
-          </button>
-        </div>
-      </header>
-
-      <main key={page} className="pop min-w-0">
-        {page === 'servers' && <ServersPage sub={sub} />}
-        {page === 'cards' && <CardsPage />}
-        {page === 'discord' && <DiscordPage />}
-        {page === 'news' && <NewsPage sub={sub} />}
-        {page === 'settings' && <SettingsPage sub={sub} updateAvailable={updateAvailable} />}
-      </main>
-
-      <nav
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card/95 backdrop-blur md:hidden"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
-        aria-label="Разделы"
-      >
-        <ul className="mx-auto flex max-w-md">
-          {PAGES.map((p) => {
-            const active = page === p.id;
-            return (
-              <li key={p.id} className="flex-1">
+    <AuthContext.Provider value={ctx}>
+      <div className="mx-auto min-h-full max-w-6xl px-4 pb-28 pt-5 sm:px-6 md:pb-16">
+        <header className="mb-6 flex items-center gap-x-4 md:mb-8">
+          <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight">
+            <Logo size={34} />
+            <Wordmark />
+          </a>
+          {/* desktop navigation; on phones the same sections live in the bottom bar */}
+          <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
+            {visible.map((p) => (
+              <a
+                key={p.id}
+                href={`#/${p.id}`}
+                aria-current={page === p.id ? 'page' : undefined}
+                className={`whitespace-nowrap rounded-full px-4 py-1.5 font-extrabold transition ${
+                  page === p.id ? 'bg-brand text-white shadow-pop' : 'bg-card text-ink shadow-pop hover:text-link'
+                }`}
+              >
+                {p.label}
+                {p.id === 'settings' && updateAvailable && dot}
+              </a>
+            ))}
+          </nav>
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+            {me ? (
+              <>
                 <a
-                  href={`#/${p.id}`}
-                  aria-current={active ? 'page' : undefined}
-                  className={`relative flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                  href="#/profile"
+                  aria-current={page === 'profile' ? 'page' : undefined}
+                  className={`flex max-w-[11rem] items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3.5 font-extrabold shadow-pop transition ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
+                  title="Профиль"
                 >
-                  <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
-                  {p.label}
-                  {p.id === 'settings' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-soft text-sm font-black text-link">{me.username.slice(0, 1).toUpperCase()}</span>
+                  <span className="hidden truncate sm:inline">{me.username}</span>
+                </a>
+                <button onClick={logout} className="rounded-full bg-card px-4 py-2 font-extrabold text-mute shadow-pop hover:text-bad">Выйти</button>
+              </>
+            ) : (
+              <>
+                <a href="#/login" className="rounded-full bg-card px-4 py-2 font-extrabold text-ink shadow-pop hover:text-link">Войти</a>
+                {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">Регистрация</a>}
+              </>
+            )}
+          </div>
+        </header>
+
+        <main key={page} className="pop min-w-0">
+          {page === 'servers' && <ServersPage sub={sub} />}
+          {page === 'cards' && <CardsPage />}
+          {page === 'discord' && <DiscordPage />}
+          {page === 'news' && <NewsPage sub={sub} />}
+          {page === 'profile' && <ProfilePage />}
+          {page === 'settings' && <SettingsPage sub={sub} updateAvailable={updateAvailable} />}
+        </main>
+
+        <Toaster />
+
+        <nav
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card/95 backdrop-blur md:hidden"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+          aria-label="Разделы"
+        >
+          <ul className="mx-auto flex max-w-md">
+            {visible.map((p) => {
+              const active = page === p.id;
+              return (
+                <li key={p.id} className="flex-1">
+                  <a
+                    href={`#/${p.id}`}
+                    aria-current={active ? 'page' : undefined}
+                    className={`relative flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                  >
+                    <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
+                    {p.label}
+                    {p.id === 'settings' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
+                  </a>
+                </li>
+              );
+            })}
+            {!me && (
+              <li className="flex-1">
+                <a href={access.registration ? '#/register' : '#/login'} className="flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold text-link">
+                  <span className="grid h-8 w-14 place-items-center rounded-full bg-soft text-lg">→</span>
+                  Войти
                 </a>
               </li>
-            );
-          })}
-        </ul>
-      </nav>
-    </div>
+            )}
+          </ul>
+        </nav>
+      </div>
+    </AuthContext.Provider>
   );
 }
 __COREGSM_EOF__
@@ -3408,6 +3697,60 @@ export interface NewsSettings {
   channelName?: string | null;
   guildName?: string | null;
 }
+
+// ---------- accounts and access ----------
+export interface Me {
+  username: string;
+  role: 'admin' | 'player';
+}
+
+export interface Access {
+  /** the server list and news are visible without signing in */
+  publicPanel: boolean;
+  /** players may create accounts */
+  registration: boolean;
+}
+
+export interface UserRow {
+  id: number;
+  username: string;
+  role: 'admin' | 'player';
+  createdAt: number | null;
+}
+
+/** what guests and players get for a posted news item */
+export interface PublicNews {
+  id: number;
+  status: NewsStatus;
+  title: string;
+  payload: NewsPayload;
+  sentAt: number | null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/auth.tsx" << '__COREGSM_EOF__'
+import { createContext, useContext } from 'react';
+import type { Access, Me } from './api';
+
+export interface AuthState {
+  /** null = a guest */
+  me: Me | null;
+  isAdmin: boolean;
+  access: Access;
+  /** re-read who is signed in and the access settings */
+  reload: () => Promise<void>;
+  logout: () => void;
+}
+
+export const AuthContext = createContext<AuthState>({
+  me: null,
+  isAdmin: false,
+  access: { publicPanel: true, registration: true },
+  reload: async () => undefined,
+  logout: () => undefined,
+});
+
+export const useAuth = () => useContext(AuthContext);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
@@ -3487,6 +3830,130 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
         <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
       </div>
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/Illustrations.tsx" << '__COREGSM_EOF__'
+// Flat SVG illustrations for empty states and the sign-in screen.
+// They use the theme tokens (Tailwind classes), so they look right in the light and the dark theme.
+
+const OK = '#23a55a';
+const WARN = '#f0b232';
+const BAD = '#f23f42';
+
+function Frame({ children, w = 220, h = 150, label }: { children: React.ReactNode; w?: number; h?: number; label: string }) {
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} role="img" aria-label={label} className="max-w-full">
+      {children}
+    </svg>
+  );
+}
+
+function Sparkle({ x, y, s = 1 }: { x: number; y: number; s?: number }) {
+  return <path d={`M${x} ${y - 6 * s} L${x + 1.6 * s} ${y - 1.6 * s} L${x + 6 * s} ${y} L${x + 1.6 * s} ${y + 1.6 * s} L${x} ${y + 6 * s} L${x - 1.6 * s} ${y + 1.6 * s} L${x - 6 * s} ${y} L${x - 1.6 * s} ${y - 1.6 * s}Z`} className="fill-brand" opacity="0.55" />;
+}
+
+/** A small rack of three servers with the three status lights. */
+export function ServersArt() {
+  const rows = [34, 66, 98];
+  const lights = [OK, WARN, BAD];
+  return (
+    <Frame label="Игровые серверы">
+      <ellipse cx="110" cy="132" rx="78" ry="9" className="fill-soft" />
+      <circle cx="110" cy="72" r="62" className="fill-soft" />
+      {rows.map((y, i) => (
+        <g key={y} transform={`translate(${i === 1 ? 6 : 0} 0)`}>
+          <rect x="52" y={y} width="116" height="25" rx="9" className="fill-card stroke-line" strokeWidth="2" />
+          <rect x="62" y={y + 10} width="46" height="5" rx="2.5" className="fill-line" />
+          <circle cx="146" cy={y + 12.5} r="4.2" fill={lights[i]} />
+        </g>
+      ))}
+      <circle cx="170" cy="40" r="15" className="fill-brand" />
+      <path d="M170 33v14M163 40h14" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+      <Sparkle x={44} y={32} /> <Sparkle x={184} y={104} s={0.8} />
+    </Frame>
+  );
+}
+
+/** A megaphone and a sheet of paper. */
+export function NewsArt() {
+  return (
+    <Frame label="Новости">
+      <ellipse cx="110" cy="134" rx="76" ry="9" className="fill-soft" />
+      <circle cx="108" cy="72" r="60" className="fill-soft" />
+      <rect x="112" y="34" width="62" height="78" rx="10" className="fill-card stroke-line" strokeWidth="2" transform="rotate(6 143 73)" />
+      <g transform="rotate(6 143 73)">
+        <rect x="124" y="48" width="38" height="6" rx="3" className="fill-brand" opacity="0.8" />
+        <rect x="124" y="62" width="38" height="4" rx="2" className="fill-line" />
+        <rect x="124" y="72" width="30" height="4" rx="2" className="fill-line" />
+        <rect x="124" y="82" width="34" height="4" rx="2" className="fill-line" />
+        <rect x="124" y="94" width="20" height="9" rx="4.5" fill={OK} opacity="0.85" />
+      </g>
+      <path d="M44 66h16l34-20v52L60 78H44a6 6 0 0 1-6-6v0a6 6 0 0 1 6-6z" className="fill-brand" />
+      <rect x="52" y="78" width="10" height="22" rx="4" className="fill-brand" opacity="0.7" />
+      <path d="M102 62c8 4 8 20 0 24" fill="none" className="stroke-brand" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+      <Sparkle x={34} y={40} s={0.9} /> <Sparkle x={186} y={30} s={0.7} />
+    </Frame>
+  );
+}
+
+/** Chat bubbles and a small bot. */
+export function DiscordArt() {
+  return (
+    <Frame label="Discord">
+      <ellipse cx="110" cy="134" rx="76" ry="9" className="fill-soft" />
+      <circle cx="110" cy="72" r="60" className="fill-soft" />
+      <rect x="40" y="36" width="104" height="44" rx="14" className="fill-card stroke-line" strokeWidth="2" />
+      <path d="M62 80l-6 14 20-14z" className="fill-card stroke-line" strokeWidth="2" strokeLinejoin="round" />
+      <rect x="54" y="48" width="48" height="6" rx="3" className="fill-brand" opacity="0.8" />
+      <rect x="54" y="60" width="76" height="5" rx="2.5" className="fill-line" />
+      <rect x="108" y="72" width="76" height="38" rx="13" className="fill-brand" />
+      <circle cx="132" cy="91" r="3.6" fill="#fff" /><circle cx="160" cy="91" r="3.6" fill="#fff" />
+      <path d="M140 99q4 3 8 0" stroke="#fff" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+      <rect x="140" y="62" width="4" height="8" rx="2" className="fill-brand" /><circle cx="142" cy="60" r="3.5" fill={WARN} />
+      <Sparkle x={34} y={110} s={0.8} /> <Sparkle x={190} y={44} />
+    </Frame>
+  );
+}
+
+/** A picture frame with a mountain, for the cards page. */
+export function CardsArt() {
+  return (
+    <Frame label="Карточки">
+      <ellipse cx="110" cy="134" rx="76" ry="9" className="fill-soft" />
+      <circle cx="110" cy="72" r="60" className="fill-soft" />
+      <rect x="42" y="38" width="136" height="80" rx="14" className="fill-card stroke-line" strokeWidth="2" />
+      <rect x="54" y="50" width="52" height="8" rx="4" className="fill-brand" opacity="0.8" />
+      <rect x="54" y="64" width="34" height="5" rx="2.5" className="fill-line" />
+      <text x="56" y="100" fontSize="26" fontWeight="900" className="fill-ink">26</text>
+      <text x="84" y="100" fontSize="13" fontWeight="800" className="fill-mute">/ 40</text>
+      <rect x="116" y="50" width="50" height="20" rx="7" className="fill-soft" />
+      <rect x="116" y="76" width="50" height="20" rx="7" className="fill-soft" />
+      <circle cx="166" cy="104" r="9" fill={OK} /><path d="M162 104l3 3 5-6" stroke="#fff" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <Sparkle x={186} y={42} s={0.8} />
+    </Frame>
+  );
+}
+
+/** The big composition on the sign-in panel: servers sending a signal. */
+export function AuthArt() {
+  return (
+    <svg viewBox="0 0 320 220" width="320" height="220" role="img" aria-label="" className="max-w-full">
+      <circle cx="160" cy="112" r="96" fill="#fff" opacity="0.07" />
+      <circle cx="160" cy="112" r="64" fill="#fff" opacity="0.08" />
+      {[44, 84, 124].map((y, i) => (
+        <g key={y} transform={`translate(${i === 1 ? 14 : 0} 0)`}>
+          <rect x="74" y={y} width="150" height="32" rx="12" fill="#fff" opacity={i === 0 ? 1 : i === 1 ? 0.88 : 0.74} />
+          <rect x="88" y={y + 13} width="62" height="6" rx="3" fill="#5a4bd1" opacity="0.35" />
+          <circle cx="198" cy={y + 16} r="5" fill={[OK, WARN, BAD][i]} />
+        </g>
+      ))}
+      <path d="M250 70q16 14 0 34M260 60q26 24 0 54" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+      <circle cx="248" cy="87" r="5" fill="#fff" />
+      <path d="M62 52l3 7 7 3-7 3-3 7-3-7-7-3 7-3z" fill="#fff" opacity="0.6" />
+      <path d="M268 156l2.4 5.6 5.6 2.4-5.6 2.4-2.4 5.6-2.4-5.6-5.6-2.4 5.6-2.4z" fill="#fff" opacity="0.5" />
+    </svg>
   );
 }
 __COREGSM_EOF__
@@ -3577,6 +4044,43 @@ export function Markdown({ text }: { text: string }) {
   }
   return <div className="break-words leading-snug">{out}</div>;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/gameIcons.ts" << '__COREGSM_EOF__'
+// Pictograms for the games (24x24 grid, drawn with a 2px round stroke). The same data is used by the PNG card
+// in the backend (core-backend/src/gameIcons.ts): keep both files in sync.
+export const ICON_PATHS: Record<string, string> = {
+  cube: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.5l8-4.5 M12 12v9',
+  crosshair: 'M4 12a8 8 0 1 0 16 0a8 8 0 1 0 -16 0 M12 2v4 M12 18v4 M2 12h4 M18 12h4 M12 12h.01',
+  axe: 'M14.5 4l5.5 5.5-3 3-5.5-5.5z M11.5 8.5L4 20 M9 13l2 2',
+  shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z M12 8v8',
+  sword: 'M20 4l-9.5 9.5 M20 4h-5 M20 4v5 M8 12l4 4 M5 19l3-3 M4 20l1-1',
+  headset: 'M4 14v-2a8 8 0 0 1 16 0v2 M4 14h3v5H5a1 1 0 0 1-1-1z M20 14h-3v5h2a1 1 0 0 0 1-1z',
+  skull: 'M12 3a7 7 0 0 0-7 7c0 2.5 1.2 4.2 3 5.3V19h8v-3.7c1.8-1.1 3-2.8 3-5.3a7 7 0 0 0-7-7z M9.5 11h.01 M14.5 11h.01 M10 19v2 M14 19v2',
+  drop: 'M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5',
+  paw: 'M5.8 10.5a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0 -3.4 0 M10.3 7a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0 -3.4 0 M14.8 10.5a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0 -3.4 0 M12 12c-3 0-5 2.5-5 4.5 0 1.5 1.5 2 3 1.5l2-.5 2 .5c1.5.5 3 0 3-1.5 0-2-2-4.5-5-4.5z',
+  car: 'M5 17v-5l2-5h10l2 5v5 M3 17h18 M7.5 20h.01 M16.5 20h.01 M7 12h10',
+  gear: 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z M12 2v3 M12 19v3 M2 12h3 M19 12h3 M4.9 4.9l2.1 2.1 M17 17l2.1 2.1 M19.1 4.9L17 7 M7 17l-2.1 2.1',
+  warning: 'M12 3l10 18H2z M12 10v5 M12 18h.01',
+  leaf: 'M5 19C5 10 10 5 20 4c0 9-5 15-14 15 M5 19c3-5 6-8 10-10',
+  calendar: 'M4 6h16v14H4z M4 10h16 M9 3v4 M15 3v4',
+  wrench: 'M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.7 2.7-2.3-.7-.7-2.3z',
+};
+
+/** GameDig id -> pictogram. Games without an entry fall back to their letters. */
+export const GAME_ICON: Record<string, keyof typeof ICON_PATHS> = {
+  minecraft: 'cube', mbe: 'cube', unturned: 'cube',
+  counterstrike2: 'crosshair', csgo: 'crosshair', counterstrike16: 'crosshair', css: 'crosshair', teamfortress2: 'crosshair',
+  rust: 'axe', valheim: 'shield', garrysmod: 'wrench', l4d2: 'warning', dayz: 'warning',
+  terraria: 'sword', conanexiles: 'sword', sdtd: 'calendar', ase: 'leaf', asa: 'leaf',
+  palworld: 'paw', factorio: 'gear', vrising: 'drop', projectzomboid: 'skull',
+  gta5f: 'car', gtasam: 'car', teamspeak3: 'headset',
+};
+
+export const gameIconPath = (game: string): string | null => {
+  const key = GAME_ICON[game];
+  return key ? ICON_PATHS[key] : null;
+};
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
@@ -3716,6 +4220,28 @@ __COREGSM_EOF__
 @keyframes shimmer { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .skeleton { animation: shimmer 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .pop, .skeleton { animation: none; } }
+
+/* soft colour glow behind the pages, so the background is not a flat sheet */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(640px 420px at 88% -6%, rgb(var(--brand) / 0.13), transparent 70%),
+    radial-gradient(520px 400px at -6% 22%, rgb(var(--ok) / 0.07), transparent 70%),
+    radial-gradient(520px 380px at 60% 108%, rgb(var(--brand) / 0.08), transparent 70%);
+}
+
+/* a gently pulsing ring on the ONLINE pill */
+@keyframes live-ring {
+  0% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0.45); }
+  70% { box-shadow: 0 0 0 7px rgb(var(--ok) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
+}
+.pill.live::before { animation: live-ring 2.2s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -3738,7 +4264,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Cards.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api, type Server } from '../api';
-import { Empty, ErrorLine, PageHead, usePoll } from '../ui';
+import { CardsArt } from '../components/Illustrations';
+import { Empty, ErrorLine, IconCards, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -3757,6 +4284,7 @@ export default function CardsPage() {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(s.id);
+      toast('Ссылка скопирована');
       setTimeout(() => setCopied(null), 1800);
     } catch {
       window.prompt('Ссылка на картинку', url);
@@ -3765,9 +4293,9 @@ export default function CardsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHead title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно." />
+      <PageHead icon={<IconCards />} title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно." />
       <ErrorLine text={error} />
-      {loaded && servers.length === 0 && <Empty title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»." />}
+      {loaded && servers.length === 0 && <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»." />}
       <div className="grid gap-5 xl:grid-cols-2">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-4">
@@ -3790,7 +4318,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Discord.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
-import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
+import { DiscordArt } from '../components/Illustrations';
+import { Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -3820,7 +4349,7 @@ export default function DiscordPage() {
 
   const remove = async (b: Binding) => {
     if (!window.confirm('Удалить привязку? Сообщение в Discord останется, но обновляться перестанет.')) return;
-    await api(`/bindings/${b.id}`, 'DELETE').catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
     load();
   };
 
@@ -3838,7 +4367,7 @@ export default function DiscordPage() {
 
   return (
     <div className="space-y-6">
-      <PageHead title="Discord" subtitle="Куда бот публикует карточки серверов">
+      <PageHead icon={<IconDiscord />} title="Discord" subtitle="Куда бот публикует состояние серверов">
         <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
@@ -3873,7 +4402,7 @@ export default function DiscordPage() {
         </ol>
       )}
 
-      {loaded && bindings.length === 0 && <Empty title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
+      {loaded && bindings.length === 0 && <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
 
       <div className="grid gap-4 md:grid-cols-2">
         {bindings.map((b) => {
@@ -3918,7 +4447,7 @@ export default function DiscordPage() {
         })}
       </div>
 
-      {draft && <BindingForm servers={servers} initial={draft} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); load(); }} />}
+      {draft && <BindingForm servers={servers} initial={draft} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); toast('Привязка сохранена'); load(); }} />}
     </div>
   );
 }
@@ -4141,10 +4670,12 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Login.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { ErrorLine, Field, Logo, Wordmark } from '../ui';
+import { useAuth } from '../auth';
+import { AuthShell, ErrorLine, Field, Logo, Wordmark } from '../ui';
 
 export default function Login({ onDone }: { onDone: () => void }) {
-  const [username, setUsername] = useState('admin');
+  const { access } = useAuth();
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -4165,35 +4696,44 @@ export default function Login({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="flex min-h-full items-center justify-center p-4">
+    <AuthShell>
       <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
         <div>
           <div className="mb-1"><Logo size={48} /></div>
           <Wordmark className="text-3xl" />
-          <div className="font-semibold text-mute">Войдите в панель управления</div>
+          <div className="font-semibold text-mute">Вход в аккаунт</div>
         </div>
         <Field label="Логин">
-          <input id="login-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+          <input id="login-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus />
         </Field>
         <Field label="Пароль">
-          <input id="login-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus />
+          <input id="login-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
         </Field>
         <ErrorLine text={error} />
-        <button className="btn w-full" disabled={busy || !password}>{busy ? 'Проверяю…' : 'Войти'}</button>
+        <button className="btn w-full" disabled={busy || !username || !password}>{busy ? 'Проверяю…' : 'Войти'}</button>
+        <div className="space-y-1.5 text-center text-sm font-bold text-mute">
+          {access.registration && <p>Нет аккаунта? <a href="#/register" className="text-link hover:underline">Зарегистрироваться</a></p>}
+          {access.publicPanel && <p><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>}
+        </div>
       </form>
-    </div>
+    </AuthShell>
   );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/News.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
-import { api, type NewsItem, type NewsSettings } from '../api';
+import { api, type NewsItem, type NewsSettings, type PublicNews } from '../api';
+import { useAuth } from '../auth';
+import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { Empty, ErrorLine, PageHead, fmtDateTime, usePoll } from '../ui';
+import { NewsArt } from '../components/Illustrations';
+import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
 import NewsEditor from './NewsEditor';
 
 export default function NewsPage({ sub }: { sub: string }) {
+  const { isAdmin } = useAuth();
+  if (!isAdmin) return <NewsFeed />;
   if (sub === 'new') return <NewsEditor id={null} />;
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <NewsEditor id={id} />;
@@ -4243,23 +4783,23 @@ function NewsList() {
   };
 
   const publish = async (n: NewsItem) => {
-    await api(`/news/${n.id}/publish`, 'POST').catch((e) => setError(e.message));
+    await api(`/news/${n.id}/publish`, 'POST').then(() => toast('Новость отправляется в Discord')).catch((e) => setError(e.message));
     void load();
   };
   const copy = async (n: NewsItem) => {
-    await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).catch((e) => setError(e.message));
+    await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast('Копия сохранена как черновик')).catch((e) => setError(e.message));
     void load();
   };
   const remove = async (n: NewsItem) => {
     const sent = n.status === 'sent';
     if (!window.confirm(sent ? 'Удалить новость? Сообщение также будет удалено из Discord.' : 'Удалить новость?')) return;
-    await api(`/news/${n.id}`, 'DELETE').catch((e) => setError(e.message));
+    await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
     void load();
   };
 
   return (
     <div className="space-y-6">
-      <PageHead title="Новости" subtitle="Публикации от имени бота в Discord">
+      <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
         <a className="btn" href="#/news/new">+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
@@ -4280,7 +4820,7 @@ function NewsList() {
       </div>
 
       {loaded && items.length === 0 && (
-        <Empty title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
+        <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/news/new">+ Написать новость</a>
         </Empty>
       )}
@@ -4311,13 +4851,44 @@ function NewsList() {
     </div>
   );
 }
+
+/** stored embed -> what EmbedView draws (an uploaded picture is served by the panel) */
+function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
+  if (!e) return null;
+  const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
+  return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
+}
+
+/** read-only feed for players and guests: only what has been posted */
+function NewsFeed() {
+  const [items, setItems] = useState<PublicNews[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
+  usePoll(() => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true)), 30_000);
+
+  return (
+    <div className="space-y-6">
+      <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
+      <ErrorLine text={error} />
+      {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
+      <div className="mx-auto max-w-2xl space-y-4">
+        {items.map((n) => (
+          <article key={n.id} className="panel space-y-2 p-4">
+            {n.sentAt && <div className="text-sm font-bold text-mute">{fmtDateTime(n.sentAt)}</div>}
+            <EmbedView embed={toView(n.payload.embed)} content={n.payload.content} />
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/NewsEditor.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { ErrorLine, Field } from '../ui';
+import { ErrorLine, Field, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 
 // ---------- draft <-> payload ----------
@@ -4650,6 +5221,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
       if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
       if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
+      toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
       window.location.hash = '#/news';
     } catch (e) {
       setError((e as Error).message);
@@ -4792,9 +5364,153 @@ export default function NewsEditor({ id }: { id: number | null }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Profile.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Server } from '../api';
+import { useAuth } from '../auth';
+import { ErrorLine, Field, GameAvatar, IconServers, PageHead, StatusPill, toast } from '../ui';
+
+/** The signed-in user's own page: account, password and favourite servers. */
+export default function ProfilePage() {
+  const { me, isAdmin, logout } = useAuth();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [error, setError] = useState('');
+  const [favs, setFavs] = useState<Server[] | null>(null);
+
+  useEffect(() => {
+    Promise.all([api<number[]>('/favorites'), api<Server[]>('/servers')])
+      .then(([ids, servers]) => setFavs(servers.filter((s) => ids.includes(s.id))))
+      .catch(() => setFavs([]));
+  }, []);
+
+  if (!me) return null;
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    try {
+      await api('/auth/password', 'POST', { current, next });
+      toast('Пароль изменён');
+      setCurrent('');
+      setNext('');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <PageHead title="Профиль" subtitle="Ваш аккаунт и избранные серверы" icon={<IconServers />} />
+
+      <div className="grid items-start gap-5 md:grid-cols-2">
+        <div className="panel flex items-center gap-4 p-5 md:col-span-2">
+          <span className="grid h-16 w-16 shrink-0 place-items-center rounded-3xl bg-brand text-3xl font-black text-white">{me.username.slice(0, 1).toUpperCase()}</span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-2xl font-black">{me.username}</div>
+            <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{isAdmin ? 'АДМИНИСТРАТОР' : 'ИГРОК'}</span>
+          </div>
+          <button className="btn btn-soft" onClick={logout}>Выйти</button>
+        </div>
+
+        <form onSubmit={submit} className="panel space-y-3.5 p-6">
+          <h2 className="text-lg font-black">Смена пароля</h2>
+          <Field label="Текущий пароль">
+            <input id="pf-current" className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required />
+          </Field>
+          <Field label="Новый пароль (от 8 символов)">
+            <input id="pf-next" className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" minLength={8} required />
+          </Field>
+          <ErrorLine text={error} />
+          <button className="btn">Сохранить пароль</button>
+        </form>
+
+        <div className="panel space-y-3 p-6">
+          <h2 className="text-lg font-black">Избранные серверы</h2>
+          {favs === null && <div className="skeleton h-20 rounded-2xl bg-soft" />}
+          {favs && favs.length === 0 && <p className="font-semibold text-mute">Пока ничего нет. Отмечайте серверы звёздочкой на странице «Серверы»: они будут показаны первыми.</p>}
+          {favs?.map((s) => (
+            <a key={s.id} href={`#/servers/${s.id}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5 transition hover:ring-2 hover:ring-brand/30">
+              <GameAvatar game={s.game} size={36} />
+              <span className="min-w-0 flex-1 truncate font-bold">{s.name}</span>
+              <StatusPill online={s.online} known={s.hasStatus} />
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Register.tsx" << '__COREGSM_EOF__'
+import { useState, type FormEvent } from 'react';
+import { api, setToken } from '../api';
+import { useAuth } from '../auth';
+import { AuthShell, ErrorLine, Field, Logo, Wordmark, toast } from '../ui';
+
+// same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
+const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
+
+export default function Register({ onDone }: { onDone: () => void }) {
+  const { access } = useAuth();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!LOGIN_RE.test(username.trim())) return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -');
+    if (password.length < 8) return setError('Пароль должен быть не короче 8 символов');
+    if (password !== repeat) return setError('Пароли не совпадают');
+    setBusy(true);
+    try {
+      const r = await api<{ token: string }>('/auth/register', 'POST', { username: username.trim(), password });
+      setToken(r.token);
+      toast('Аккаунт создан. Добро пожаловать!');
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AuthShell>
+      <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
+        <div>
+          <div className="mb-1"><Logo size={48} /></div>
+          <Wordmark className="text-3xl" />
+          <div className="font-semibold text-mute">Регистрация игрока</div>
+        </div>
+        <Field label="Логин">
+          <input id="reg-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus placeholder="например, Иван Петров" />
+        </Field>
+        <Field label="Пароль (от 8 символов)">
+          <input id="reg-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" minLength={8} />
+        </Field>
+        <Field label="Повторите пароль">
+          <input id="reg-pass2" className="input" type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} autoComplete="new-password" />
+        </Field>
+        <ErrorLine text={error} />
+        <button className="btn w-full" disabled={busy || !username || !password}>{busy ? 'Создаю…' : 'Создать аккаунт'}</button>
+        <div className="space-y-1.5 text-center text-sm font-bold text-mute">
+          <p>Уже есть аккаунт? <a href="#/login" className="text-link hover:underline">Войти</a></p>
+          {access.publicPanel && <p><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>}
+        </div>
+      </form>
+    </AuthShell>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
 import { api, type ServerDetails } from '../api';
+import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
 import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, usePoll } from '../ui';
 import ServerForm from './ServerForm';
@@ -4806,7 +5522,7 @@ const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css'
 /** steam://connect link for Source-like games; other games have no universal "join" link. */
 function connectUrl(game: string, address: string, port: number): string | null {
   if (!SOURCE_GAMES.has(game)) return null;
-  return `steam://connect/${address.includes(':') ? address : `${address}:${port}`}`;
+  return `steam://connect/${address.includes(':') || !port ? address : `${address}:${port}`}`;
 }
 
 function niceMax(v: number): number {
@@ -4920,6 +5636,7 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
 }
 
 export default function ServerDetail({ id }: { id: number }) {
+  const { isAdmin } = useAuth();
   const [hours, setHours] = useState(24);
   const [data, setData] = useState<ServerDetails | null>(null);
   const [missing, setMissing] = useState(false);
@@ -4946,7 +5663,7 @@ export default function ServerDetail({ id }: { id: number }) {
   const { server: s, stats, events, points } = data;
   const color = gameColor(s.game);
   const lag = s.ping != null && s.ping > 100;
-  const link = connectUrl(s.game, s.displayAddress || s.host, s.port);
+  const link = connectUrl(s.game, s.address, s.port);
   const tiles: [string, string, string?][] = [
     ['Сейчас', s.online ? `${s.players}/${s.maxPlayers}` : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
     ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
@@ -4990,9 +5707,13 @@ export default function ServerDetail({ id }: { id: number }) {
           <p className="w-full rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{s.error}</p>
         )}
         <div className="flex w-full flex-wrap gap-2">
-          <button className="btn btn-soft btn-sm" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
-          <button className="btn btn-soft btn-sm" onClick={() => setEditing(true)}>Изменить</button>
-          <button className="btn btn-danger btn-sm" onClick={remove}>Удалить</button>
+          {isAdmin && (
+            <>
+              <button className="btn btn-soft btn-sm" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setEditing(true)}>Изменить</button>
+              <button className="btn btn-danger btn-sm" onClick={remove}>Удалить</button>
+            </>
+          )}
           <span className="ml-auto self-center text-sm font-semibold text-mute">обновлено {ago(s.updatedAt)}</span>
         </div>
       </div>
@@ -5212,10 +5933,12 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type Server, type ServerInput } from '../api';
+import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
-import { Empty, ErrorLine, FillBar, GameAvatar, PageHead, Spark, StatusPill, ago, plural, usePoll } from '../ui';
+import { ServersArt } from '../components/Illustrations';
+import { Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import ServerDetail from './ServerDetail';
 import ServerForm, { emptyServer } from './ServerForm';
 
@@ -5226,6 +5949,17 @@ export default function ServersPage({ sub }: { sub: string }) {
 }
 
 function ServerList() {
+  const { me, isAdmin } = useAuth();
+  const [favs, setFavs] = useState<number[]>([]);
+  useEffect(() => {
+    if (me) api<number[]>('/favorites').then(setFavs).catch(() => undefined);
+    else setFavs([]);
+  }, [me]);
+  const toggleFav = async (id: number) => {
+    const on = favs.includes(id);
+    setFavs(on ? favs.filter((x) => x !== id) : [...favs, id]);
+    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
+  };
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput } | null>(null);
@@ -5238,6 +5972,7 @@ function ServerList() {
       .finally(() => setLoaded(true));
   usePoll(load, 10_000);
 
+  const sorted = [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)));
   const online = servers.filter((s) => s.online);
   const players = online.reduce((n, s) => n + s.players, 0);
   const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
@@ -5245,7 +5980,7 @@ function ServerList() {
 
   const remove = async (s: Server) => {
     if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
-    await api(`/servers/${s.id}`, 'DELETE').catch((e) => setError(e.message));
+    await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e) => setError(e.message));
     load();
   };
 
@@ -5254,8 +5989,8 @@ function ServerList() {
 
   return (
     <div className="space-y-6">
-      <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени">
-        <button className="btn" onClick={add}>+ Добавить сервер</button>
+      <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени" icon={<IconServers />}>
+        {isAdmin && <button className="btn" onClick={add}>+ Добавить сервер</button>}
       </PageHead>
       <ErrorLine text={error} />
 
@@ -5275,6 +6010,14 @@ function ServerList() {
         </div>
       )}
 
+      {servers.length > 0 && (
+        <FleetBar
+          online={servers.filter((x) => x.online && !(x.ping != null && x.ping > 100)).length}
+          lag={servers.filter((x) => x.online && x.ping != null && x.ping > 100).length}
+          offline={servers.filter((x) => x.hasStatus && !x.online).length}
+        />
+      )}
+
       {!loaded && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((i) => <div key={i} className="skeleton panel h-56" />)}
@@ -5282,13 +6025,13 @@ function ServerList() {
       )}
 
       {loaded && servers.length === 0 && (
-        <Empty title="Добавьте первый сервер" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.">
-          <button className="btn mt-3" onClick={add}>+ Добавить сервер</button>
+        <Empty art={<ServersArt />} title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'} text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже.'}>
+          {isAdmin && <button className="btn mt-3" onClick={add}>+ Добавить сервер</button>}
         </Empty>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {servers.map((s) => {
+        {sorted.map((s) => {
           const color = gameColor(s.game);
           const lag = s.ping != null && s.ping > 100;
           return (
@@ -5307,7 +6050,17 @@ function ServerList() {
                     <div className="truncate text-sm font-bold text-mute">{gameLabel(s.game)}</div>
                   </div>
                 </div>
-                <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+                  {me && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void toggleFav(s.id); }}
+                      className={`text-xl leading-none transition hover:scale-110 ${favs.includes(s.id) ? 'text-warn' : 'text-mute'}`}
+                      title={favs.includes(s.id) ? 'Убрать из избранного' : 'В избранное'}
+                      aria-pressed={favs.includes(s.id)}
+                    >{favs.includes(s.id) ? '★' : '☆'}</button>
+                  )}
+                </div>
               </div>
 
               {s.online ? (
@@ -5335,24 +6088,25 @@ function ServerList() {
 
               <div className="mt-auto flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
                 <a className="btn btn-soft btn-sm" href={`#/servers/${s.id}`}>Подробнее</a>
-                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
-                <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>
+                {isAdmin && <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>}
+                {isAdmin && <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>}
               </div>
             </article>
           );
         })}
       </div>
 
-      {editing && <ServerForm initial={editing.data} id={editing.id} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {editing && <ServerForm initial={editing.data} id={editing.id} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast('Сервер сохранён'); load(); }} />}
     </div>
   );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
-import { api, type BotStatus, type SettingsInfo, type UpdateInfo } from '../api';
-import { ErrorLine, Field, InviteButton, PageHead, ProxyField, usePoll, type ProxyType } from '../ui';
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { useAuth } from '../auth';
+import { ErrorLine, Field, IconSettings, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -5367,6 +6121,7 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
 
 const TABS = [
   { id: 'bot', label: 'Discord-бот' },
+  { id: 'access', label: 'Доступ' },
   { id: 'security', label: 'Безопасность' },
   { id: 'updates', label: 'Обновления' },
 ] as const;
@@ -5375,7 +6130,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
   const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
     <div className="space-y-6">
-      <PageHead title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
+      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
       <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
@@ -5391,6 +6146,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       </nav>
       <div className="max-w-2xl space-y-5">
         {tab === 'bot' && <BotCard />}
+        {tab === 'access' && <AccessTab />}
         {tab === 'security' && (
           <>
             <PasswordCard />
@@ -5437,6 +6193,7 @@ function BotCard() {
       setProxy('');
       setClearProxy(false);
       setSaved(true);
+      toast('Настройки сохранены');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -5525,6 +6282,7 @@ function PasswordCard() {
     try {
       await api('/auth/password', 'POST', { current, next });
       setDone(true);
+      toast('Пароль изменён');
       setCurrent('');
       setNext('');
     } catch (err) {
@@ -5662,12 +6420,88 @@ function UpdateCard() {
     </div>
   );
 }
+
+function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3">
+      <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[var(--brand,#5865f2)]" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        <span className="block font-extrabold">{label}</span>
+        <span className="block text-sm font-semibold text-mute">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
+function AccessTab() {
+  const { me, reload } = useAuth();
+  const [access, setAccess] = useState<Access | null>(null);
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [error, setError] = useState('');
+
+  const load = () => {
+    api<Access>('/access').then(setAccess).catch((e) => setError(e.message));
+    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
+  };
+  useEffect(load, []);
+
+  const save = async (patch: Partial<Access>) => {
+    await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast('Сохранено'); }).catch((e) => setError(e.message));
+  };
+  const setRole = async (u: UserRow, role: UserRow['role']) => {
+    await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
+    load();
+  };
+  const resetPassword = async (u: UserRow) => {
+    const pw = window.prompt(`Новый пароль для «${u.username}» (от 8 символов):`);
+    if (!pw) return;
+    await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
+  };
+  const remove = async (u: UserRow) => {
+    if (!window.confirm(`Удалить пользователя «${u.username}»?`)) return;
+    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
+    load();
+  };
+
+  return (
+    <>
+      <div className="panel space-y-4 p-6">
+        <h2 className="text-lg font-black">Кто видит панель</h2>
+        {access && (
+          <>
+            <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
+            <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
+          </>
+        )}
+        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы, писать новости и менять настройки могут администраторы.</p>
+      </div>
+
+      <div className="panel space-y-3 p-6">
+        <h2 className="text-lg font-black">Пользователи</h2>
+        <ErrorLine text={error} />
+        <ul className="divide-y divide-line">
+          {users.map((u) => (
+            <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+              <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.username === me?.username ? ' (вы)' : ''}</span>
+              <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
+                <option value="player">Игрок</option>
+                <option value="admin">Администратор</option>
+              </select>
+              <button className="btn btn-soft btn-sm" onClick={() => void resetPassword(u)}>Пароль</button>
+              <button className="btn btn-danger btn-sm" onClick={() => void remove(u)} disabled={u.username === me?.username}>Удалить</button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Setup.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { ErrorLine, Field, Logo, ProxyField, Wordmark, type ProxyType } from '../ui';
+import { AuthShell, ErrorLine, Field, Logo, ProxyField, Wordmark, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -5717,7 +6551,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="flex min-h-full items-center justify-center p-4">
+    <AuthShell>
       <div className="pop panel w-full max-w-md p-7">
         <div className="mb-2"><Logo size={48} /></div>
         <Wordmark className="mb-1 block text-3xl" />
@@ -5786,7 +6620,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           </div>
         )}
       </div>
-    </div>
+    </AuthShell>
   );
 }
 __COREGSM_EOF__
@@ -5795,6 +6629,8 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from './api';
 import { gameAbbr, gameColor } from './games';
+import { gameIconPath } from './gameIcons';
+import { AuthArt } from './components/Illustrations';
 
 export function usePoll(fn: () => void, ms: number) {
   const ref = useRef(fn);
@@ -5961,17 +6797,25 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function StatusPill({ online, known, lag }: { online: boolean; known: boolean; lag?: boolean }) {
   if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
   if (!online) return <span className="pill pill-bad">OFFLINE</span>;
-  return lag ? <span className="pill pill-warn">LAG</span> : <span className="pill pill-ok">ONLINE</span>;
+  return lag ? <span className="pill pill-warn">LAG</span> : <span className="pill pill-ok live">ONLINE</span>;
 }
 
 export function GameAvatar({ game, size = 44 }: { game: string; size?: number }) {
+  const icon = gameIconPath(game);
+  const color = gameColor(game);
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-2xl font-black text-white"
-      style={{ width: size, height: size, background: gameColor(game), fontSize: size * 0.34 }}
+      className="grid shrink-0 place-items-center rounded-2xl font-black text-white shadow-pop"
+      style={{ width: size, height: size, background: `linear-gradient(145deg, ${color}, ${color}cc)`, fontSize: size * 0.34 }}
       aria-hidden
     >
-      {gameAbbr(game)}
+      {icon ? (
+        <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d={icon} />
+        </svg>
+      ) : (
+        gameAbbr(game)
+      )}
     </div>
   );
 }
@@ -6013,12 +6857,15 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
   );
 }
 
-export function PageHead({ title, subtitle, children }: { title: string; subtitle?: string; children?: ReactNode }) {
+export function PageHead({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon?: ReactNode; children?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-3xl font-black tracking-tight">{title}</h1>
-        {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+      <div className="flex items-center gap-3.5">
+        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-soft text-link">{icon}</span>}
+        <div>
+          <h1 className="text-3xl font-black tracking-tight">{title}</h1>
+          {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+        </div>
       </div>
       <div className="flex flex-wrap gap-2">{children}</div>
     </div>
@@ -6029,10 +6876,10 @@ export function ErrorLine({ text }: { text: string }) {
   return text ? <p className="rounded-2xl bg-badbg px-4 py-2.5 font-bold text-bad" role="alert">{text}</p> : null;
 }
 
-export function Empty({ title, text, children }: { title: string; text: string; children?: ReactNode }) {
+export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="panel flex flex-col items-center gap-2 px-6 py-14 text-center">
-      <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>
+    <div className="panel flex flex-col items-center gap-2 px-6 py-10 text-center">
+      {art ?? <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>}
       <h3 className="text-lg font-black">{title}</h3>
       <p className="max-w-sm font-semibold text-mute">{text}</p>
       {children}
@@ -6132,6 +6979,93 @@ export function Wordmark({ className = '' }: { className?: string }) {
     <span className={`font-black tracking-tight text-link ${className}`}>
       Core<span className="text-ink">GSM</span>
     </span>
+  );
+}
+
+// ---------- toasts: short confirmations that do not interrupt ----------
+type ToastKind = 'ok' | 'err' | 'info';
+interface ToastItem { id: number; text: string; kind: ToastKind }
+let toasts: ToastItem[] = [];
+let toastSeq = 0;
+const toastListeners = new Set<(t: ToastItem[]) => void>();
+const emitToasts = () => toastListeners.forEach((l) => l(toasts));
+
+export function toast(text: string, kind: ToastKind = 'ok', ms = 3500) {
+  const t = { id: ++toastSeq, text, kind };
+  toasts = [...toasts, t].slice(-4);
+  emitToasts();
+  setTimeout(() => {
+    toasts = toasts.filter((x) => x.id !== t.id);
+    emitToasts();
+  }, ms);
+}
+
+export function Toaster() {
+  const [list, setList] = useState<ToastItem[]>(toasts);
+  useEffect(() => {
+    toastListeners.add(setList);
+    return () => { toastListeners.delete(setList); };
+  }, []);
+  const tone = { ok: 'bg-okbg text-ok', err: 'bg-badbg text-bad', info: 'bg-soft text-ink' } as const;
+  return (
+    <div aria-live="polite" className="pointer-events-none fixed inset-x-4 bottom-24 z-[70] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+      {list.map((t) => (
+        <div key={t.id} role="status" className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl px-4 py-3 text-sm font-bold shadow-soft ring-1 ring-black/5 ${tone[t.kind]}`}>
+          <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- sign-in / first-run shell: a brand panel next to the form ----------
+export function AuthShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="grid min-h-full md:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+      <aside className="relative hidden flex-col justify-between overflow-hidden p-10 text-white md:flex" style={{ background: 'linear-gradient(150deg, #6a5cf0 0%, #4a3cb8 55%, #2a2070 100%)' }}>
+        <div className="flex items-center gap-3 text-2xl font-black tracking-tight">
+          <Logo size={40} />
+          CoreGSM
+        </div>
+        <div className="space-y-6">
+          <div className="flex justify-center"><AuthArt /></div>
+          <div className="space-y-3">
+            <h2 className="text-3xl font-black leading-tight">Игровые серверы под присмотром</h2>
+            <ul className="space-y-2 text-[15px] font-semibold text-white/85">
+              <li className="flex gap-2.5"><span aria-hidden>✓</span>Онлайн, пинг и история игроков в одном месте</li>
+              <li className="flex gap-2.5"><span aria-hidden>✓</span>Красивые сообщения в Discord, которые обновляются сами</li>
+              <li className="flex gap-2.5"><span aria-hidden>✓</span>Новости и объявления от имени бота</li>
+            </ul>
+          </div>
+        </div>
+        <div className="text-sm font-bold text-white/60">Self-hosted · открытый исходный код</div>
+      </aside>
+      <div className="flex items-center justify-center p-4 sm:p-8">{children}</div>
+    </div>
+  );
+}
+
+// ---------- fleet status: one segmented bar for online / lag / offline ----------
+export function FleetBar({ online, lag, offline }: { online: number; lag: number; offline: number }) {
+  const total = online + lag + offline;
+  if (total === 0) return null;
+  const seg = [
+    { n: online, cls: 'bg-ok', label: 'онлайн' },
+    { n: lag, cls: 'bg-warn', label: 'лагают' },
+    { n: offline, cls: 'bg-bad', label: 'недоступны' },
+  ].filter((x) => x.n > 0);
+  return (
+    <div className="panel px-5 py-4">
+      <div className="flex h-2.5 gap-1 overflow-hidden rounded-full" role="img" aria-label={seg.map((x) => `${x.n} ${x.label}`).join(', ')}>
+        {seg.map((x) => <div key={x.label} className={`${x.cls} rounded-full transition-all duration-500`} style={{ flex: x.n }} />)}
+      </div>
+      <div className="mt-2.5 flex flex-wrap gap-x-5 gap-y-1 text-sm font-bold text-mute">
+        {seg.map((x) => (
+          <span key={x.label} className="inline-flex items-center gap-1.5"><span className={`h-2.5 w-2.5 rounded-full ${x.cls}`} />{x.n} {x.label}</span>
+        ))}
+      </div>
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -6371,7 +7305,7 @@ server {
     client_max_body_size 9m;   # news image uploads (up to 8 MB)
 
     # brute-force protection for login and first-run setup
-    location ~ ^/api/(auth/login|setup)$ {
+    location ~ ^/api/(auth/login|auth/register|setup)$ {
         limit_req zone=login burst=5 nodelay;
         set $backend http://backend:3000;
         proxy_pass $backend;

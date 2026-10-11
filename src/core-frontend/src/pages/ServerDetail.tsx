@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type ServerDetails } from '../api';
+import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
 import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, usePoll } from '../ui';
 import ServerForm from './ServerForm';
@@ -11,7 +12,7 @@ const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css'
 /** steam://connect link for Source-like games; other games have no universal "join" link. */
 function connectUrl(game: string, address: string, port: number): string | null {
   if (!SOURCE_GAMES.has(game)) return null;
-  return `steam://connect/${address.includes(':') ? address : `${address}:${port}`}`;
+  return `steam://connect/${address.includes(':') || !port ? address : `${address}:${port}`}`;
 }
 
 function niceMax(v: number): number {
@@ -125,6 +126,7 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
 }
 
 export default function ServerDetail({ id }: { id: number }) {
+  const { isAdmin } = useAuth();
   const [hours, setHours] = useState(24);
   const [data, setData] = useState<ServerDetails | null>(null);
   const [missing, setMissing] = useState(false);
@@ -151,7 +153,7 @@ export default function ServerDetail({ id }: { id: number }) {
   const { server: s, stats, events, points } = data;
   const color = gameColor(s.game);
   const lag = s.ping != null && s.ping > 100;
-  const link = connectUrl(s.game, s.displayAddress || s.host, s.port);
+  const link = connectUrl(s.game, s.address, s.port);
   const tiles: [string, string, string?][] = [
     ['Сейчас', s.online ? `${s.players}/${s.maxPlayers}` : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
     ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
@@ -195,9 +197,13 @@ export default function ServerDetail({ id }: { id: number }) {
           <p className="w-full rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{s.error}</p>
         )}
         <div className="flex w-full flex-wrap gap-2">
-          <button className="btn btn-soft btn-sm" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
-          <button className="btn btn-soft btn-sm" onClick={() => setEditing(true)}>Изменить</button>
-          <button className="btn btn-danger btn-sm" onClick={remove}>Удалить</button>
+          {isAdmin && (
+            <>
+              <button className="btn btn-soft btn-sm" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setEditing(true)}>Изменить</button>
+              <button className="btn btn-danger btn-sm" onClick={remove}>Удалить</button>
+            </>
+          )}
           <span className="ml-auto self-center text-sm font-semibold text-mute">обновлено {ago(s.updatedAt)}</span>
         </div>
       </div>

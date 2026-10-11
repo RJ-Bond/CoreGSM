@@ -124,8 +124,15 @@ const titleOf = (p: NewsPayload) => p.embed?.title?.trim() || p.content.trim().s
 
 type ChannelInfo = (id: string) => { channelName: string | null; guildName: string | null; guildId: string | null };
 
-export function registerNews(deps: { app: express.Express; auth: RequestHandler; internal: RequestHandler; channelInfo: ChannelInfo }) {
-  const { app, auth, internal, channelInfo } = deps;
+export function registerNews(deps: {
+  app: express.Express;
+  admin: RequestHandler;
+  viewer: RequestHandler;
+  internal: RequestHandler;
+  channelInfo: ChannelInfo;
+  isAdmin: (req: Request) => boolean;
+}) {
+  const { app, admin, viewer, internal, channelInfo, isAdmin } = deps;
   const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res)).catch(next);
   };
@@ -152,11 +159,11 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   };
 
   // ---------- default news channel ----------
-  app.get('/api/news/settings', auth, (_req, res) => {
+  app.get('/api/news/settings', admin, (_req, res) => {
     const channelId = getSetting('news_channel_id');
     res.json({ channelId, ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }) });
   });
-  app.put('/api/news/settings', auth, (req, res) => {
+  app.put('/api/news/settings', admin, (req, res) => {
     const b = z.object({ channelId: z.string().regex(/^\d{15,25}$/).nullable() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
     setSetting('news_channel_id', b.data.channelId);
@@ -167,7 +174,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
   app.post(
     '/api/news/images',
-    auth,
+    admin,
     express.raw({ type: Object.keys(EXT), limit: '8mb' }),
     (req, res) => {
       const ext = EXT[String(req.headers['content-type'] ?? '').split(';')[0]];
@@ -189,15 +196,22 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   });
 
   // ---------- CRUD ----------
-  app.get('/api/news', auth, (_req, res) => {
+  /** the public view of a posted news item: no channel ids, errors or schedule */
+  const publicNews = (r: NewsRow) => {
+    const full = serialize(r);
+    return { id: full.id, status: full.status, title: full.title, payload: full.payload, sentAt: full.sentAt };
+  };
+
+  app.get('/api/news', viewer, (req, res) => {
     const rows = db.prepare('SELECT * FROM news ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
-    res.json(rows.map(serialize));
+    if (isAdmin(req)) return res.json(rows.map(serialize));
+    res.json(rows.filter((r) => r.status === 'sent' || r.status === 'edit_queued').map(publicNews));
   });
 
-  app.get('/api/news/:id', auth, (req, res) => {
+  app.get('/api/news/:id', viewer, (req, res) => {
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(Number(req.params.id)) as NewsRow | undefined;
-    if (!r) return res.status(404).json({ error: 'Новость не найдена' });
-    res.json(serialize(r));
+    if (!r || (!isAdmin(req) && r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
+    res.json(isAdmin(req) ? serialize(r) : publicNews(r));
   });
 
   function statusFor(action: 'draft' | 'now' | 'schedule', at: number | undefined): { status: string; at: number | null; error?: string } {
@@ -209,7 +223,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
 
   app.post(
     '/api/news',
-    auth,
+    admin,
     wrap(async (req, res) => {
       const b = bodySchema.safeParse(req.body);
       if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
@@ -226,7 +240,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
     }),
   );
 
-  app.put('/api/news/:id', auth, (req, res) => {
+  app.put('/api/news/:id', admin, (req, res) => {
     const id = Number(req.params.id);
     const old = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!old) return res.status(404).json({ error: 'Новость не найдена' });
@@ -259,7 +273,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
   });
 
   // publish a draft / scheduled / failed item right now
-  app.post('/api/news/:id/publish', auth, (req, res) => {
+  app.post('/api/news/:id/publish', admin, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });
@@ -270,7 +284,7 @@ export function registerNews(deps: { app: express.Express; auth: RequestHandler;
     res.json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow));
   });
 
-  app.delete('/api/news/:id', auth, (req, res) => {
+  app.delete('/api/news/:id', admin, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });

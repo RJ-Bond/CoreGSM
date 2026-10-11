@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { ErrorLine, Field } from '../ui';
+import { ErrorLine, Field, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 
 // ---------- draft <-> payload ----------
@@ -334,6 +334,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
       if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
       if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
+      toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
       window.location.hash = '#/news';
     } catch (e) {
       setError((e as Error).message);

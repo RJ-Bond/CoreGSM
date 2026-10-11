@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type Server, type ServerInput } from '../api';
+import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
-import { Empty, ErrorLine, FillBar, GameAvatar, PageHead, Spark, StatusPill, ago, plural, usePoll } from '../ui';
+import { ServersArt } from '../components/Illustrations';
+import { Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import ServerDetail from './ServerDetail';
 import ServerForm, { emptyServer } from './ServerForm';
 
@@ -12,6 +14,17 @@ export default function ServersPage({ sub }: { sub: string }) {
 }
 
 function ServerList() {
+  const { me, isAdmin } = useAuth();
+  const [favs, setFavs] = useState<number[]>([]);
+  useEffect(() => {
+    if (me) api<number[]>('/favorites').then(setFavs).catch(() => undefined);
+    else setFavs([]);
+  }, [me]);
+  const toggleFav = async (id: number) => {
+    const on = favs.includes(id);
+    setFavs(on ? favs.filter((x) => x !== id) : [...favs, id]);
+    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
+  };
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput } | null>(null);
@@ -24,6 +37,7 @@ function ServerList() {
       .finally(() => setLoaded(true));
   usePoll(load, 10_000);
 
+  const sorted = [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)));
   const online = servers.filter((s) => s.online);
   const players = online.reduce((n, s) => n + s.players, 0);
   const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
@@ -31,7 +45,7 @@ function ServerList() {
 
   const remove = async (s: Server) => {
     if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
-    await api(`/servers/${s.id}`, 'DELETE').catch((e) => setError(e.message));
+    await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e) => setError(e.message));
     load();
   };
 
@@ -40,8 +54,8 @@ function ServerList() {
 
   return (
     <div className="space-y-6">
-      <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени">
-        <button className="btn" onClick={add}>+ Добавить сервер</button>
+      <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени" icon={<IconServers />}>
+        {isAdmin && <button className="btn" onClick={add}>+ Добавить сервер</button>}
       </PageHead>
       <ErrorLine text={error} />
 
@@ -61,6 +75,14 @@ function ServerList() {
         </div>
       )}
 
+      {servers.length > 0 && (
+        <FleetBar
+          online={servers.filter((x) => x.online && !(x.ping != null && x.ping > 100)).length}
+          lag={servers.filter((x) => x.online && x.ping != null && x.ping > 100).length}
+          offline={servers.filter((x) => x.hasStatus && !x.online).length}
+        />
+      )}
+
       {!loaded && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((i) => <div key={i} className="skeleton panel h-56" />)}
@@ -68,13 +90,13 @@ function ServerList() {
       )}
 
       {loaded && servers.length === 0 && (
-        <Empty title="Добавьте первый сервер" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.">
-          <button className="btn mt-3" onClick={add}>+ Добавить сервер</button>
+        <Empty art={<ServersArt />} title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'} text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже.'}>
+          {isAdmin && <button className="btn mt-3" onClick={add}>+ Добавить сервер</button>}
         </Empty>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {servers.map((s) => {
+        {sorted.map((s) => {
           const color = gameColor(s.game);
           const lag = s.ping != null && s.ping > 100;
           return (
@@ -93,7 +115,17 @@ function ServerList() {
                     <div className="truncate text-sm font-bold text-mute">{gameLabel(s.game)}</div>
                   </div>
                 </div>
-                <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+                  {me && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void toggleFav(s.id); }}
+                      className={`text-xl leading-none transition hover:scale-110 ${favs.includes(s.id) ? 'text-warn' : 'text-mute'}`}
+                      title={favs.includes(s.id) ? 'Убрать из избранного' : 'В избранное'}
+                      aria-pressed={favs.includes(s.id)}
+                    >{favs.includes(s.id) ? '★' : '☆'}</button>
+                  )}
+                </div>
               </div>
 
               {s.online ? (
@@ -121,15 +153,15 @@ function ServerList() {
 
               <div className="mt-auto flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
                 <a className="btn btn-soft btn-sm" href={`#/servers/${s.id}`}>Подробнее</a>
-                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
-                <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>
+                {isAdmin && <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>}
+                {isAdmin && <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>}
               </div>
             </article>
           );
         })}
       </div>
 
-      {editing && <ServerForm initial={editing.data} id={editing.id} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {editing && <ServerForm initial={editing.data} id={editing.id} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast('Сервер сохранён'); load(); }} />}
     </div>
   );
 }

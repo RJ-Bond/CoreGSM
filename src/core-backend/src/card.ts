@@ -1,8 +1,9 @@
 import skia from 'skia-canvas';
 import { db, type ServerRow, type StatusRow } from './db.js';
 import { gameLabel } from './games.js';
+import { gameIconPath } from './gameIcons.js';
 
-const { Canvas } = skia;
+const { Canvas, Path2D } = skia;
 
 // Pastel Soft palette (matches the web panel)
 const C = {
@@ -88,10 +89,24 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   ctx.beginPath();
   ctx.roundRect(64, 56, 84, 84, 26);
   ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `700 ${abbr.length > 2 ? 28 : 34}px ${SANS}`;
-  ctx.textAlign = 'center';
-  ctx.fillText(abbr, 106, 109);
+  const iconPath = gameIconPath(s.game);
+  if (iconPath) {
+    // the same pictogram as in the panel: 24x24 grid scaled to ~46px, centred in the 84px square
+    ctx.save();
+    ctx.translate(106 - 12 * 1.95, 98 - 12 * 1.95);
+    ctx.scale(1.95, 1.95);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(new Path2D(iconPath));
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${abbr.length > 2 ? 28 : 34}px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(abbr, 106, 109);
+  }
   ctx.textAlign = 'left';
 
   // status pill (top right)

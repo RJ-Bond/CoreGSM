@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from 'react';
-import { api, type BotStatus, type SettingsInfo, type UpdateInfo } from '../api';
-import { ErrorLine, Field, InviteButton, PageHead, ProxyField, usePoll, type ProxyType } from '../ui';
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { useAuth } from '../auth';
+import { ErrorLine, Field, IconSettings, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -15,6 +16,7 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
 
 const TABS = [
   { id: 'bot', label: 'Discord-бот' },
+  { id: 'access', label: 'Доступ' },
   { id: 'security', label: 'Безопасность' },
   { id: 'updates', label: 'Обновления' },
 ] as const;
@@ -23,7 +25,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
   const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
     <div className="space-y-6">
-      <PageHead title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
+      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
       <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
@@ -39,6 +41,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       </nav>
       <div className="max-w-2xl space-y-5">
         {tab === 'bot' && <BotCard />}
+        {tab === 'access' && <AccessTab />}
         {tab === 'security' && (
           <>
             <PasswordCard />
@@ -85,6 +88,7 @@ function BotCard() {
       setProxy('');
       setClearProxy(false);
       setSaved(true);
+      toast('Настройки сохранены');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -173,6 +177,7 @@ function PasswordCard() {
     try {
       await api('/auth/password', 'POST', { current, next });
       setDone(true);
+      toast('Пароль изменён');
       setCurrent('');
       setNext('');
     } catch (err) {
@@ -308,5 +313,81 @@ function UpdateCard() {
       </div>
       {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
     </div>
+  );
+}
+
+function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3">
+      <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[var(--brand,#5865f2)]" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        <span className="block font-extrabold">{label}</span>
+        <span className="block text-sm font-semibold text-mute">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
+function AccessTab() {
+  const { me, reload } = useAuth();
+  const [access, setAccess] = useState<Access | null>(null);
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [error, setError] = useState('');
+
+  const load = () => {
+    api<Access>('/access').then(setAccess).catch((e) => setError(e.message));
+    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
+  };
+  useEffect(load, []);
+
+  const save = async (patch: Partial<Access>) => {
+    await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast('Сохранено'); }).catch((e) => setError(e.message));
+  };
+  const setRole = async (u: UserRow, role: UserRow['role']) => {
+    await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
+    load();
+  };
+  const resetPassword = async (u: UserRow) => {
+    const pw = window.prompt(`Новый пароль для «${u.username}» (от 8 символов):`);
+    if (!pw) return;
+    await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
+  };
+  const remove = async (u: UserRow) => {
+    if (!window.confirm(`Удалить пользователя «${u.username}»?`)) return;
+    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
+    load();
+  };
+
+  return (
+    <>
+      <div className="panel space-y-4 p-6">
+        <h2 className="text-lg font-black">Кто видит панель</h2>
+        {access && (
+          <>
+            <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
+            <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
+          </>
+        )}
+        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы, писать новости и менять настройки могут администраторы.</p>
+      </div>
+
+      <div className="panel space-y-3 p-6">
+        <h2 className="text-lg font-black">Пользователи</h2>
+        <ErrorLine text={error} />
+        <ul className="divide-y divide-line">
+          {users.map((u) => (
+            <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+              <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.username === me?.username ? ' (вы)' : ''}</span>
+              <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
+                <option value="player">Игрок</option>
+                <option value="admin">Администратор</option>
+              </select>
+              <button className="btn btn-soft btn-sm" onClick={() => void resetPassword(u)}>Пароль</button>
+              <button className="btn btn-danger btn-sm" onClick={() => void remove(u)} disabled={u.username === me?.username}>Удалить</button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </>
   );
 }

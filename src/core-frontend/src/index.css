@@ -95,3 +95,25 @@
 @keyframes shimmer { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .skeleton { animation: shimmer 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .pop, .skeleton { animation: none; } }
+
+/* soft colour glow behind the pages, so the background is not a flat sheet */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(640px 420px at 88% -6%, rgb(var(--brand) / 0.13), transparent 70%),
+    radial-gradient(520px 400px at -6% 22%, rgb(var(--ok) / 0.07), transparent 70%),
+    radial-gradient(520px 380px at 60% 108%, rgb(var(--brand) / 0.08), transparent 70%);
+}
+
+/* a gently pulsing ring on the ONLINE pill */
+@keyframes live-ring {
+  0% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0.45); }
+  70% { box-shadow: 0 0 0 7px rgb(var(--ok) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
+}
+.pill.live::before { animation: live-ring 2.2s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
