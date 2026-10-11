@@ -14,15 +14,24 @@ find src -type f \
   | LC_ALL=C sort > "$FILES"
 
 # Build id: hash of everything that ends up inside install.sh. Same sources -> same id.
-BUILD_ID="$( { cat tools/installer-head.sh tools/coregsm.sh; while IFS= read -r f; do printf '%s\n' "$f"; tr -d '\r' < "$f"; done < "$FILES"; } | sha256sum | cut -c1-12 )"
+is_binary() { case "$1" in *.png|*.ico|*.jpg|*.jpeg|*.gif|*.webp|*.woff|*.woff2) return 0 ;; *) return 1 ;; esac; }
+
+BUILD_ID="$( { cat tools/installer-head.sh tools/coregsm.sh; while IFS= read -r f; do printf '%s\n' "$f"; if is_binary "$f"; then cat "$f"; else tr -d '\r' < "$f"; fi; done < "$FILES"; } | sha256sum | cut -c1-12 )"
 
 {
   echo 'generate_project() {'
   echo '  mkdir -p "$APP_DIR"'
   while IFS= read -r f; do
     rel="${f#src/}"
-    if grep -q "$DELIM" "$f"; then echo "Delimiter found inside $f" >&2; exit 1; fi
     echo "  mkdir -p \"\$APP_DIR/$(dirname "$rel")\""
+    if is_binary "$f"; then
+      # binary assets (icons) travel as base64 so the heredoc stays plain text
+      echo "  base64 -d > \"\$APP_DIR/$rel\" << '$DELIM'"
+      base64 -w 76 "$f"
+      echo "$DELIM"
+      continue
+    fi
+    if grep -q "$DELIM" "$f"; then echo "Delimiter found inside $f" >&2; exit 1; fi
     echo "  cat > \"\$APP_DIR/$rel\" << '$DELIM'"
     tr -d '\r' < "$f"
     if [ -n "$(tail -c1 "$f")" ]; then echo; fi
