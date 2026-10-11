@@ -44,6 +44,8 @@ export interface Binding {
   messageId: string | null;
   intervalSec: number;
   enabled: boolean;
+  /** how the message looks in Discord */
+  style: 'embed' | 'card' | 'both';
   lastUpdate: number | null;
   lastError: string | null;
 }

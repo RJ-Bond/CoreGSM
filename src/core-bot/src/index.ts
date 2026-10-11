@@ -20,6 +20,8 @@ interface Binding {
   channelId: string;
   messageId: string | null;
   intervalSec: number;
+  /** embed (default), card (PNG) or both */
+  style?: 'embed' | 'card' | 'both';
 }
 
 interface BotConfig {
@@ -200,21 +202,35 @@ async function applyConfig(): Promise<void> {
 }
 
 async function update(c: DiscordClient, b: Binding): Promise<void> {
-  const img = await backend(`/api/card/${b.serverId}.png`, { headers: { 'content-type': 'image/png' } });
-  if (!img.ok) throw new Error(`card HTTP ${img.status}`);
-  const png = Buffer.from(await img.arrayBuffer());
+  const style = b.style ?? 'embed';
+
+  // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
+  let embed: InstanceType<typeof EmbedBuilder>;
+  if (style === 'card') {
+    embed = new EmbedBuilder().setColor(0x5a4bd1).setTimestamp();
+  } else {
+    const r = await backend(`/internal/servers/${b.serverId}/embed?interval=${b.intervalSec}`);
+    if (!r.ok) throw new Error(`embed HTTP ${r.status}`);
+    embed = new EmbedBuilder((await r.json()) as ConstructorParameters<typeof EmbedBuilder>[0]);
+  }
+
+  const files: InstanceType<typeof AttachmentBuilder>[] = [];
+  if (style !== 'embed') {
+    const img = await backend(`/api/card/${b.serverId}.png`, { headers: { 'content-type': 'image/png' } });
+    if (!img.ok) throw new Error(`card HTTP ${img.status}`);
+    files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name: 'card.png' }));
+    embed.setImage('attachment://card.png');
+  }
 
   const channel = await c.channels.fetch(b.channelId);
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
-  const payload = () => ({
-    embeds: [new EmbedBuilder().setColor(0x5a4bd1).setImage('attachment://card.png').setTimestamp()],
-    files: [new AttachmentBuilder(png, { name: 'card.png' })],
-  });
+  const payload = () => ({ embeds: [embed], files });
 
   if (b.messageId) {
     try {
       const msg = await channel.messages.fetch(b.messageId);
+      // attachments: [] drops a picture left over from a previous style
       await msg.edit({ ...payload(), attachments: [] });
       return await report(b.id, { error: null });
     } catch (e) {

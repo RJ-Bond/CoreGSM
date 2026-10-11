@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { ErrorLine, Field, Logo } from '../ui';
+import { ErrorLine, Field, Logo, Wordmark } from '../ui';
 
 export default function Login({ onDone }: { onDone: () => void }) {
   const [username, setUsername] = useState('admin');
@@ -28,7 +28,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
       <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
         <div>
           <div className="mb-1"><Logo size={48} /></div>
-          <div className="text-3xl font-black tracking-tight text-link">coregsm</div>
+          <Wordmark className="text-3xl" />
           <div className="font-semibold text-mute">Войдите в панель управления</div>
         </div>
         <Field label="Логин">

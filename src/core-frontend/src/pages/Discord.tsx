@@ -2,8 +2,10 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
+import EmbedPreview from './EmbedPreview';
 
-interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean }
+type Style = 'embed' | 'card' | 'both';
+interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean; style: Style }
 
 export default function DiscordPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -32,7 +34,7 @@ export default function DiscordPage() {
   };
 
   const toggle = async (b: Binding) => {
-    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled }).catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
     load();
   };
 
@@ -46,7 +48,7 @@ export default function DiscordPage() {
   return (
     <div className="space-y-6">
       <PageHead title="Discord" subtitle="Куда бот публикует карточки серверов">
-        <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true })}>+ Привязать канал</button>
+        <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -94,12 +96,15 @@ export default function DiscordPage() {
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
 
-              <img
-                src={`/api/card/${b.serverId}.png?t=${tick}`}
-                alt={`Так карточка выглядит в Discord: ${s?.name ?? ''}`}
-                loading="lazy"
-                className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
-              />
+              {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
+              {b.style !== 'embed' && (
+                <img
+                  src={`/api/card/${b.serverId}.png?t=${tick}`}
+                  alt={`Карточка: ${s?.name ?? ''}`}
+                  loading="lazy"
+                  className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
+                />
+              )}
 
               {b.lastError && b.enabled && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{b.lastError}</p>}
               <div className="flex justify-between text-sm font-bold text-mute">
@@ -108,7 +113,7 @@ export default function DiscordPage() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-soft btn-sm" onClick={() => toggle(b)}>{b.enabled ? 'Пауза' : 'Включить'}</button>
-                <button className="btn btn-soft btn-sm" onClick={() => setDraft({ id: b.id, serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled })}>Изменить</button>
+                <button className="btn btn-soft btn-sm" onClick={() => setDraft({ id: b.id, serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>Изменить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => remove(b)}>Удалить</button>
               </div>
             </div>
@@ -201,6 +206,13 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
           </>
         )}
 
+        <Field label="Оформление сообщения">
+          <select id="bind-style" className="input" value={f.style} onChange={(e) => setF({ ...f, style: e.target.value as Style })}>
+            <option value="embed">Embed: цвет, эмодзи, поля (рекомендуется)</option>
+            <option value="card">Картинка-карточка</option>
+            <option value="both">Embed и картинка</option>
+          </select>
+        </Field>
         <Field label="Обновлять каждые, секунд (30–3600)">
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>

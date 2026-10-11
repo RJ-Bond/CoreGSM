@@ -551,6 +551,14 @@ UNIT
 
 installed_already() { [ -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/docker-compose.yml" ] && [ -x /usr/local/bin/coregsm ]; }
 
+# A finished install is a successful update: tell the panel, so an old failure is not shown any more.
+mark_update_done() {
+  [ -d "$APP_DIR/update" ] || return 0
+  printf '{"state":"done","message":"Установлена версия %s","time":%s000}
+' "${COREGSM_BUILD:0:7}" "$(date +%s)" > "$APP_DIR/update/status.json" 2>/dev/null || true
+  chmod 644 "$APP_DIR/update/status.json" 2>/dev/null || true
+}
+
 main() {
   local do_install=0 arg
   for arg in "$@"; do
@@ -594,6 +602,7 @@ HELP
   install_manager
   issue_certificate
   launch
+  mark_update_done
   report
 }
 

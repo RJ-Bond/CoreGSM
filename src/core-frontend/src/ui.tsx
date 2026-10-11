@@ -328,3 +328,12 @@ export function InviteButton({ url, className = '' }: { url: string | null; clas
     </a>
   );
 }
+
+/** "CoreGSM": Core in the brand colour, GSM in the text colour. */
+export function Wordmark({ className = '' }: { className?: string }) {
+  return (
+    <span className={`font-black tracking-tight text-link ${className}`}>
+      Core<span className="text-ink">GSM</span>
+    </span>
+  );
+}

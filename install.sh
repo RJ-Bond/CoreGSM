@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2a67c6562408"
+COREGSM_BUILD="c75de112edb4"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -417,6 +417,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/card.ts" << '__COREGSM_EOF__'
 import skia from 'skia-canvas';
 import { db, type ServerRow, type StatusRow } from './db.js';
+import { gameLabel } from './games.js';
 
 const { Canvas } = skia;
 
@@ -561,7 +562,7 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   }
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
-  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, subtitleY);
+  ctx.fillText(fit(ctx, `${gameLabel(s.game)}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, subtitleY);
 
   // players
   ctx.fillStyle = C.mute;
@@ -644,7 +645,7 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   ctx.fillText(`Обновлено ${when}`, 64, H - 60 + 24);
   ctx.textAlign = 'right';
   ctx.fillStyle = C.brand;
-  ctx.fillText('coregsm', W - 64, H - 60 + 24);
+  ctx.fillText('CoreGSM', W - 64, H - 60 + 24);
   ctx.textAlign = 'left';
 
   const buf = (await canvas.toBuffer('png')) as Buffer;
@@ -717,6 +718,13 @@ CREATE TABLE IF NOT EXISTS bindings (
 );
 `);
 
+// older databases: new columns are added once
+try {
+  db.exec("ALTER TABLE bindings ADD COLUMN style TEXT NOT NULL DEFAULT 'embed'");
+} catch {
+  /* column already exists */
+}
+
 // older databases: add the column once
 try {
   db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
@@ -773,6 +781,124 @@ export interface BindingRow {
   enabled: number;
   last_update: number | null;
   last_error: string | null;
+  /** how the message looks in Discord: embed (default), card (PNG) or both */
+  style: string;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/embed.ts" << '__COREGSM_EOF__'
+/**
+ * The Discord embed for a server: one definition used by the bot (what is posted in the channel)
+ * and by the panel (the preview). The result is a plain Discord API embed object.
+ */
+import { gameLabel } from './games.js';
+
+export interface EmbedServer {
+  name: string;
+  game: string;
+  address: string;
+  hasStatus: boolean;
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+  map: string | null;
+  version: string | null;
+  ping: number | null;
+  playerNames: string[];
+  error: string | null;
+  updatedAt: number | null;
+}
+
+export interface DiscordEmbed {
+  title?: string;
+  description?: string;
+  color?: number;
+  author?: { name: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string };
+  timestamp?: string;
+}
+
+const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
+
+const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/** ▰▰▰▰▱▱▱▱▱▱ 40% */
+function bar(value: number, max: number): string {
+  const ratio = Math.max(0, Math.min(1, value / max));
+  const filled = Math.round(ratio * 10);
+  return `${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)}`;
+}
+
+function every(sec: number): string {
+  if (sec === 60) return 'каждую минуту';
+  if (sec === 3600) return 'каждый час';
+  if (sec % 60 === 0) return `каждые ${sec / 60} мин`;
+  return `каждые ${sec} с`;
+}
+
+export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec: number): DiscordEmbed {
+  const footer = { text: `CoreGSM · обновляется ${every(intervalSec)}` };
+  const stamp = (s.updatedAt ? new Date(s.updatedAt) : new Date()).toISOString();
+
+  if (!s.hasStatus) {
+    return {
+      title: cut(`⏳ ${s.name}`, 256),
+      description: `📍 \`${s.address}\`\nЖду первого ответа сервера…`,
+      color: COLOR.unknown,
+      author: { name: `🎮 ${gameLabel(s.game)}` },
+      footer,
+      timestamp: stamp,
+    };
+  }
+
+  const lag = s.online && s.ping != null && s.ping > 100;
+  const emoji = !s.online ? '🔴' : lag ? '🟡' : '🟢';
+  const status = !s.online ? '🔴 Офлайн' : lag ? '🟡 Лаги' : '🟢 Онлайн';
+  const checked = s.updatedAt ? `<t:${Math.floor(s.updatedAt / 1000)}:R>` : '—';
+  const uptime = uptimePct == null ? '—' : `${(Math.round(uptimePct * 10) / 10).toFixed(1)}%`;
+
+  const fields: NonNullable<DiscordEmbed['fields']> = [];
+  fields.push({ name: '📶 Статус', value: status, inline: true });
+  fields.push({
+    name: '👥 Игроки',
+    // "31 / 50 · 62%" on the first line, the bar below it, so neither wraps in a narrow column
+    value: s.online
+      ? `**${s.players}** / ${s.maxPlayers || '?'}${
+          s.maxPlayers ? ` · ${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%\n${bar(s.players, s.maxPlayers)}` : ''
+        }`
+      : '—',
+    inline: true,
+  });
+  fields.push({ name: '📡 Пинг', value: s.online && s.ping != null ? `${s.ping} мс` : '—', inline: true });
+  fields.push({ name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true });
+  fields.push({ name: '📈 Аптайм 24 ч', value: uptime, inline: true });
+  fields.push({ name: '🕒 Проверено', value: checked, inline: true });
+
+  if (s.online) {
+    if (s.playerNames.length > 0) {
+      const shown = s.playerNames.slice(0, 15).map((n) => `• ${cut(n, 32)}`);
+      const rest = s.players - shown.length;
+      let list = shown.join('\n');
+      if (rest > 0) list += `\n… и ещё ${rest}`;
+      fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list, 1000) });
+    } else if (s.players === 0) {
+      fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
+    }
+  }
+
+  const description = [`📍 \`${s.address}\``];
+  if (!s.online && s.error) description.push(`⚠️ ${cut(s.error, 300)}`);
+
+  return {
+    title: cut(`${emoji} ${s.name}`, 256),
+    description: description.join('\n'),
+    color: !s.online ? COLOR.offline : lag ? COLOR.lag : COLOR.online,
+    author: { name: `🎮 ${gameLabel(s.game)}${s.version ? ` · ${s.version}` : ''}` },
+    fields,
+    footer,
+    timestamp: stamp,
+  };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -791,6 +917,39 @@ declare module 'gamedig' {
     static query(options: QueryOptions): Promise<any>;
   }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/games.ts" << '__COREGSM_EOF__'
+// Display names for GameDig ids (kept in sync with core-frontend/src/games.ts)
+export const GAME_LABELS: Record<string, string> = {
+  minecraft: 'Minecraft: Java',
+  mbe: 'Minecraft: Bedrock',
+  counterstrike2: 'Counter-Strike 2',
+  csgo: 'CS:GO',
+  counterstrike16: 'Counter-Strike 1.6',
+  css: 'Counter-Strike: Source',
+  rust: 'Rust',
+  valheim: 'Valheim',
+  garrysmod: "Garry's Mod",
+  teamfortress2: 'Team Fortress 2',
+  l4d2: 'Left 4 Dead 2',
+  terraria: 'Terraria',
+  sdtd: '7 Days to Die',
+  dayz: 'DayZ',
+  ase: 'ARK: Survival Evolved',
+  asa: 'ARK: Survival Ascended',
+  conanexiles: 'Conan Exiles',
+  palworld: 'Palworld',
+  factorio: 'Factorio',
+  unturned: 'Unturned',
+  vrising: 'V Rising',
+  projectzomboid: 'Project Zomboid',
+  gta5f: 'FiveM (GTA V)',
+  gtasam: 'SA-MP',
+  teamspeak3: 'TeamSpeak 3',
+};
+
+export const gameLabel = (id: string): string => GAME_LABELS[id] ?? id;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gsm.ts" << '__COREGSM_EOF__'
@@ -934,6 +1093,7 @@ import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
+import { buildEmbed } from './embed.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -1494,6 +1654,8 @@ const bindingSchema = z.object({
   channelId: z.string().regex(/^\d{15,25}$/, 'ID канала — число из 15–25 цифр'),
   intervalSec: z.number().int().min(30).max(3600).default(60),
   enabled: z.boolean().default(true),
+  // omitted on update = keep the current style
+  style: z.enum(['embed', 'card', 'both']).optional(),
 });
 
 // guilds and text channels the bot can post in (reported by the bot, used for the channel picker)
@@ -1526,6 +1688,25 @@ const serializeBinding = (b: BindingRow) => ({
   enabled: !!b.enabled,
   lastUpdate: b.last_update,
   lastError: b.last_error,
+  style: b.style,
+});
+
+// The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
+function embedFor(serverId: number, intervalSec: number) {
+  const server = getServer(serverId);
+  if (!server) return null;
+  const up = db
+    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ?')
+    .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
+  return buildEmbed(server, up.u, intervalSec);
+}
+
+const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
+
+app.get('/api/servers/:id/embed', auth, (req, res) => {
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  if (!e) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json(e);
 });
 
 app.get('/api/bindings', auth, (_req, res) => {
@@ -1539,8 +1720,8 @@ app.post('/api/bindings', auth, (req, res) => {
     return res.status(400).json({ error: 'Сервер не найден' });
   }
   const info = db
-    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled) VALUES (?, ?, ?, ?)')
-    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0);
+    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style) VALUES (?, ?, ?, ?, ?)')
+    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed');
   res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
 });
 
@@ -1553,8 +1734,8 @@ app.put('/api/bindings/:id', auth, (req, res) => {
   // moving to another channel/server means a new message must be posted
   const resetMsg = old.channel_id !== b.data.channelId || old.server_id !== b.data.serverId;
   db.prepare(
-    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
-  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, resetMsg ? 1 : 0, id);
+    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
+  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, resetMsg ? 1 : 0, id);
   res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
 });
 
@@ -1569,6 +1750,12 @@ function internal(req: Request, res: Response, next: NextFunction) {
   if (safeEqual(String(req.headers['x-internal-token'] ?? ''), INTERNAL_TOKEN)) return next();
   res.status(403).json({ error: 'forbidden' });
 }
+
+app.get('/internal/servers/:id/embed', internal, (req, res) => {
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  if (!e) return res.status(404).json({ error: 'not found' });
+  res.json(e);
+});
 
 app.get('/internal/config', internal, (_req, res) => {
   res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
@@ -1724,6 +1911,8 @@ interface Binding {
   channelId: string;
   messageId: string | null;
   intervalSec: number;
+  /** embed (default), card (PNG) or both */
+  style?: 'embed' | 'card' | 'both';
 }
 
 interface BotConfig {
@@ -1904,21 +2093,35 @@ async function applyConfig(): Promise<void> {
 }
 
 async function update(c: DiscordClient, b: Binding): Promise<void> {
-  const img = await backend(`/api/card/${b.serverId}.png`, { headers: { 'content-type': 'image/png' } });
-  if (!img.ok) throw new Error(`card HTTP ${img.status}`);
-  const png = Buffer.from(await img.arrayBuffer());
+  const style = b.style ?? 'embed';
+
+  // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
+  let embed: InstanceType<typeof EmbedBuilder>;
+  if (style === 'card') {
+    embed = new EmbedBuilder().setColor(0x5a4bd1).setTimestamp();
+  } else {
+    const r = await backend(`/internal/servers/${b.serverId}/embed?interval=${b.intervalSec}`);
+    if (!r.ok) throw new Error(`embed HTTP ${r.status}`);
+    embed = new EmbedBuilder((await r.json()) as ConstructorParameters<typeof EmbedBuilder>[0]);
+  }
+
+  const files: InstanceType<typeof AttachmentBuilder>[] = [];
+  if (style !== 'embed') {
+    const img = await backend(`/api/card/${b.serverId}.png`, { headers: { 'content-type': 'image/png' } });
+    if (!img.ok) throw new Error(`card HTTP ${img.status}`);
+    files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name: 'card.png' }));
+    embed.setImage('attachment://card.png');
+  }
 
   const channel = await c.channels.fetch(b.channelId);
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
-  const payload = () => ({
-    embeds: [new EmbedBuilder().setColor(0x5a4bd1).setImage('attachment://card.png').setTimestamp()],
-    files: [new AttachmentBuilder(png, { name: 'card.png' })],
-  });
+  const payload = () => ({ embeds: [embed], files });
 
   if (b.messageId) {
     try {
       const msg = await channel.messages.fetch(b.messageId);
+      // attachments: [] drops a picture left over from a previous style
       await msg.edit({ ...payload(), attachments: [] });
       return await report(b.id, { error: null });
     } catch (e) {
@@ -2941,7 +3144,7 @@ import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
 import SettingsPage from './pages/Settings';
-import { IconCards, IconDiscord, IconServers, IconSettings, Logo, ThemeToggle, useHash } from './ui';
+import { IconCards, IconDiscord, IconServers, IconSettings, Logo, ThemeToggle, Wordmark, useHash } from './ui';
 
 const PAGES: { id: string; label: string; icon: () => ReactNode }[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
@@ -2986,7 +3189,7 @@ export default function App() {
   }, []);
 
   if (!authed) {
-    if (needsSetup === null) return <div className="grid min-h-full place-items-center font-black text-link">coregsm</div>;
+    if (needsSetup === null) return <div className="grid min-h-full place-items-center text-2xl"><Wordmark /></div>;
     if (needsSetup) return <Setup onDone={() => { setNeedsSetup(false); setAuthed(true); }} />;
     return <Login onDone={() => setAuthed(true)} />;
   }
@@ -2998,7 +3201,7 @@ export default function App() {
       <header className="mb-6 flex items-center gap-x-4 md:mb-8">
         <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight text-link">
           <Logo size={34} />
-          coregsm
+          <Wordmark />
         </a>
         {/* desktop navigation; on phones the same sections live in the bottom bar */}
         <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
@@ -3107,6 +3310,8 @@ export interface Binding {
   messageId: string | null;
   intervalSec: number;
   enabled: boolean;
+  /** how the message looks in Discord */
+  style: 'embed' | 'card' | 'both';
   lastUpdate: number | null;
   lastError: string | null;
 }
@@ -3406,8 +3611,10 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
+import EmbedPreview from './EmbedPreview';
 
-interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean }
+type Style = 'embed' | 'card' | 'both';
+interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean; style: Style }
 
 export default function DiscordPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -3436,7 +3643,7 @@ export default function DiscordPage() {
   };
 
   const toggle = async (b: Binding) => {
-    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled }).catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
     load();
   };
 
@@ -3450,7 +3657,7 @@ export default function DiscordPage() {
   return (
     <div className="space-y-6">
       <PageHead title="Discord" subtitle="Куда бот публикует карточки серверов">
-        <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true })}>+ Привязать канал</button>
+        <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -3498,12 +3705,15 @@ export default function DiscordPage() {
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
 
-              <img
-                src={`/api/card/${b.serverId}.png?t=${tick}`}
-                alt={`Так карточка выглядит в Discord: ${s?.name ?? ''}`}
-                loading="lazy"
-                className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
-              />
+              {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
+              {b.style !== 'embed' && (
+                <img
+                  src={`/api/card/${b.serverId}.png?t=${tick}`}
+                  alt={`Карточка: ${s?.name ?? ''}`}
+                  loading="lazy"
+                  className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
+                />
+              )}
 
               {b.lastError && b.enabled && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{b.lastError}</p>}
               <div className="flex justify-between text-sm font-bold text-mute">
@@ -3512,7 +3722,7 @@ export default function DiscordPage() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-soft btn-sm" onClick={() => toggle(b)}>{b.enabled ? 'Пауза' : 'Включить'}</button>
-                <button className="btn btn-soft btn-sm" onClick={() => setDraft({ id: b.id, serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled })}>Изменить</button>
+                <button className="btn btn-soft btn-sm" onClick={() => setDraft({ id: b.id, serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>Изменить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => remove(b)}>Удалить</button>
               </div>
             </div>
@@ -3605,6 +3815,13 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
           </>
         )}
 
+        <Field label="Оформление сообщения">
+          <select id="bind-style" className="input" value={f.style} onChange={(e) => setF({ ...f, style: e.target.value as Style })}>
+            <option value="embed">Embed: цвет, эмодзи, поля (рекомендуется)</option>
+            <option value="card">Картинка-карточка</option>
+            <option value="both">Embed и картинка</option>
+          </select>
+        </Field>
         <Field label="Обновлять каждые, секунд (30–3600)">
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>
@@ -3622,10 +3839,103 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/EmbedPreview.tsx" << '__COREGSM_EOF__'
+import { Fragment, useState, type ReactNode } from 'react';
+import { api } from '../api';
+import { ago, usePoll } from '../ui';
+
+interface DiscordEmbed {
+  title?: string;
+  description?: string;
+  color?: number;
+  author?: { name: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string };
+  timestamp?: string;
+}
+
+// Discord's own palette: the preview should look like the real message in either panel theme
+const D = { bg: '#2b2d31', outer: '#313338', text: '#dbdee1', title: '#ffffff', muted: '#949ba4', code: '#1e1f22' };
+
+/** The small subset of Discord markdown the embed uses: `code`, **bold** and <t:unix:R> relative times. */
+function inline(text: string): ReactNode[] {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|<t:\d+:R>)/g).map((part, i) => {
+    if (part.startsWith('`')) {
+      return <code key={i} style={{ background: D.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.92em' }}>{part.slice(1, -1)}</code>;
+    }
+    if (part.startsWith('**')) return <strong key={i} style={{ color: D.title }}>{part.slice(2, -2)}</strong>;
+    const t = /^<t:(\d+):R>$/.exec(part);
+    if (t) return <span key={i} title={new Date(Number(t[1]) * 1000).toLocaleString('ru-RU')}>{ago(Number(t[1]) * 1000)}</span>;
+    return <Fragment key={i}>{part}</Fragment>;
+  });
+}
+
+function lines(text: string): ReactNode[] {
+  return text.split('\n').map((l, i) => (
+    <Fragment key={i}>
+      {i > 0 && <br />}
+      {inline(l)}
+    </Fragment>
+  ));
+}
+
+export function EmbedView({ embed }: { embed: DiscordEmbed }) {
+  const color = `#${(embed.color ?? 0x5a4bd1).toString(16).padStart(6, '0')}`;
+  const inlineFields = embed.fields?.filter((f) => f.inline) ?? [];
+  const wideFields = embed.fields?.filter((f) => !f.inline) ?? [];
+  return (
+    <div style={{ background: D.outer, color: D.text }} className="rounded-2xl p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm">
+        <span className="grid h-8 w-8 place-items-center rounded-full bg-[#5865f2] font-black text-white">C</span>
+        <span className="font-bold" style={{ color: D.title }}>CoreGSM</span>
+        <span className="rounded px-1 text-[11px] font-bold text-white" style={{ background: '#5865f2' }}>БОТ</span>
+      </div>
+      <div className="max-w-full rounded-md py-2.5 pl-3.5 pr-3.5" style={{ background: D.bg, borderLeft: `4px solid ${color}` }}>
+        {embed.author && <div className="mb-1 text-[13px] font-bold" style={{ color: D.title }}>{embed.author.name}</div>}
+        {embed.title && <div className="mb-1 break-words text-base font-bold" style={{ color: D.title }}>{embed.title}</div>}
+        {embed.description && <div className="mb-2 break-words text-sm leading-snug">{lines(embed.description)}</div>}
+        {inlineFields.length > 0 && (
+          <div className="mb-2 grid grid-cols-3 gap-x-3 gap-y-2">
+            {inlineFields.map((f) => (
+              <div key={f.name} className="min-w-0 text-sm">
+                <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
+                <div className="break-words leading-snug">{lines(f.value)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {wideFields.map((f) => (
+          <div key={f.name} className="mb-2 text-sm">
+            <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
+            <div className="break-words leading-snug">{lines(f.value)}</div>
+          </div>
+        ))}
+        {embed.footer && (
+          <div className="mt-1 text-xs" style={{ color: D.muted }}>
+            {embed.footer.text}
+            {embed.timestamp ? ` • ${ago(new Date(embed.timestamp).getTime())}` : ''}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Live preview of exactly what the bot posts (the same builder runs in the backend). */
+export default function EmbedPreview({ serverId, intervalSec }: { serverId: number; intervalSec: number }) {
+  const [embed, setEmbed] = useState<DiscordEmbed | null>(null);
+  usePoll(() => {
+    api<DiscordEmbed>(`/servers/${serverId}/embed?interval=${intervalSec}`).then(setEmbed).catch(() => undefined);
+  }, 30_000);
+  if (!embed) return <div className="skeleton h-48 rounded-2xl bg-soft" />;
+  return <EmbedView embed={embed} />;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Login.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { ErrorLine, Field, Logo } from '../ui';
+import { ErrorLine, Field, Logo, Wordmark } from '../ui';
 
 export default function Login({ onDone }: { onDone: () => void }) {
   const [username, setUsername] = useState('admin');
@@ -3653,7 +3963,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
       <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
         <div>
           <div className="mb-1"><Logo size={48} /></div>
-          <div className="text-3xl font-black tracking-tight text-link">coregsm</div>
+          <Wordmark className="text-3xl" />
           <div className="font-semibold text-mute">Войдите в панель управления</div>
         </div>
         <Field label="Логин">
@@ -4428,6 +4738,14 @@ function PasswordCard() {
 
 const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
 
+const DISMISS_KEY = 'coregsm_dismissed_update_error';
+const readDismissed = (): number => {
+  try { return Number(localStorage.getItem(DISMISS_KEY)) || 0; } catch { return 0; }
+};
+const rememberDismissed = (t: number) => {
+  try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
+};
+
 function UpdateCard() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState('');
@@ -4485,6 +4803,9 @@ function UpdateCard() {
   };
 
   const running = !!waiting || info?.job?.state === 'running';
+  // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
+  const [dismissed, setDismissed] = useState<number>(readDismissed);
+  const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
   return (
@@ -4513,7 +4834,12 @@ function UpdateCard() {
         </p>
       )}
       {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
-      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
+      {showOldFailure && info?.job && (
+        <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+          <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
+          <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+        </div>
+      )}
       <ErrorLine text={error} />
 
       <div className="flex flex-wrap gap-2">
@@ -4529,7 +4855,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Setup.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { ErrorLine, Field, Logo, ProxyField, type ProxyType } from '../ui';
+import { ErrorLine, Field, Logo, ProxyField, Wordmark, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -4582,7 +4908,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     <div className="flex min-h-full items-center justify-center p-4">
       <div className="pop panel w-full max-w-md p-7">
         <div className="mb-2"><Logo size={48} /></div>
-        <div className="mb-1 text-3xl font-black tracking-tight text-link">coregsm</div>
+        <Wordmark className="mb-1 block text-3xl" />
         <p className="mb-5 font-semibold text-mute">Первоначальная настройка панели</p>
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
@@ -4982,6 +5308,15 @@ export function InviteButton({ url, className = '' }: { url: string | null; clas
       Пригласить бота на сервер
       <span aria-hidden>↗</span>
     </a>
+  );
+}
+
+/** "CoreGSM": Core in the brand colour, GSM in the text colour. */
+export function Wordmark({ className = '' }: { className?: string }) {
+  return (
+    <span className={`font-black tracking-tight text-link ${className}`}>
+      Core<span className="text-ink">GSM</span>
+    </span>
   );
 }
 __COREGSM_EOF__
@@ -6109,6 +6444,14 @@ UNIT
 
 installed_already() { [ -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/docker-compose.yml" ] && [ -x /usr/local/bin/coregsm ]; }
 
+# A finished install is a successful update: tell the panel, so an old failure is not shown any more.
+mark_update_done() {
+  [ -d "$APP_DIR/update" ] || return 0
+  printf '{"state":"done","message":"Установлена версия %s","time":%s000}
+' "${COREGSM_BUILD:0:7}" "$(date +%s)" > "$APP_DIR/update/status.json" 2>/dev/null || true
+  chmod 644 "$APP_DIR/update/status.json" 2>/dev/null || true
+}
+
 main() {
   local do_install=0 arg
   for arg in "$@"; do
@@ -6152,6 +6495,7 @@ HELP
   install_manager
   issue_certificate
   launch
+  mark_update_done
   report
 }
 

@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS bindings (
 );
 `);
 
+// older databases: new columns are added once
+try {
+  db.exec("ALTER TABLE bindings ADD COLUMN style TEXT NOT NULL DEFAULT 'embed'");
+} catch {
+  /* column already exists */
+}
+
 // older databases: add the column once
 try {
   db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
@@ -117,4 +124,6 @@ export interface BindingRow {
   enabled: number;
   last_update: number | null;
   last_error: string | null;
+  /** how the message looks in Discord: embed (default), card (PNG) or both */
+  style: string;
 }

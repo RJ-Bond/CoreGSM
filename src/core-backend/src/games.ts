@@ -1,0 +1,30 @@
+// Display names for GameDig ids (kept in sync with core-frontend/src/games.ts)
+export const GAME_LABELS: Record<string, string> = {
+  minecraft: 'Minecraft: Java',
+  mbe: 'Minecraft: Bedrock',
+  counterstrike2: 'Counter-Strike 2',
+  csgo: 'CS:GO',
+  counterstrike16: 'Counter-Strike 1.6',
+  css: 'Counter-Strike: Source',
+  rust: 'Rust',
+  valheim: 'Valheim',
+  garrysmod: "Garry's Mod",
+  teamfortress2: 'Team Fortress 2',
+  l4d2: 'Left 4 Dead 2',
+  terraria: 'Terraria',
+  sdtd: '7 Days to Die',
+  dayz: 'DayZ',
+  ase: 'ARK: Survival Evolved',
+  asa: 'ARK: Survival Ascended',
+  conanexiles: 'Conan Exiles',
+  palworld: 'Palworld',
+  factorio: 'Factorio',
+  unturned: 'Unturned',
+  vrising: 'V Rising',
+  projectzomboid: 'Project Zomboid',
+  gta5f: 'FiveM (GTA V)',
+  gtasam: 'SA-MP',
+  teamspeak3: 'TeamSpeak 3',
+};
+
+export const gameLabel = (id: string): string => GAME_LABELS[id] ?? id;

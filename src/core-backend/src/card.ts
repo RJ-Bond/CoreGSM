@@ -1,5 +1,6 @@
 import skia from 'skia-canvas';
 import { db, type ServerRow, type StatusRow } from './db.js';
+import { gameLabel } from './games.js';
 
 const { Canvas } = skia;
 
@@ -144,7 +145,7 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   }
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
-  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, subtitleY);
+  ctx.fillText(fit(ctx, `${gameLabel(s.game)}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, subtitleY);
 
   // players
   ctx.fillStyle = C.mute;
@@ -227,7 +228,7 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   ctx.fillText(`Обновлено ${when}`, 64, H - 60 + 24);
   ctx.textAlign = 'right';
   ctx.fillStyle = C.brand;
-  ctx.fillText('coregsm', W - 64, H - 60 + 24);
+  ctx.fillText('CoreGSM', W - 64, H - 60 + 24);
   ctx.textAlign = 'left';
 
   const buf = (await canvas.toBuffer('png')) as Buffer;
