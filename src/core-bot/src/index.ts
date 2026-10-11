@@ -56,19 +56,21 @@ let failedKey: string | null = null;
 let state: BotState = 'idle';
 let tag: string | null = null;
 let lastError: string | null = null;
+let clientId: string | null = null;
 const lastRun = new Map<number, number>();
 
 async function publishStatus(): Promise<void> {
   try {
-    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, error: lastError }) });
+    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError }) });
   } catch {
     /* backend is restarting: the next tick will retry */
   }
 }
 
-function setState(s: BotState, opts: { tag?: string | null; error?: string | null } = {}) {
+function setState(s: BotState, opts: { tag?: string | null; clientId?: string | null; error?: string | null } = {}) {
   state = s;
   tag = opts.tag ?? null;
+  clientId = opts.clientId ?? null;
   lastError = opts.error ?? null;
 }
 
@@ -129,7 +131,7 @@ async function applyConfig(): Promise<void> {
   try {
     await c.login(cfg.discordToken);
     log(`Logged in as ${c.user?.tag}`);
-    setState('online', { tag: c.user?.tag ?? null });
+    setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
   } catch (e) {
     const msg = (e as Error).message.slice(0, 250);
     log('Discord login failed:', msg);

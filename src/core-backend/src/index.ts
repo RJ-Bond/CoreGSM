@@ -223,17 +223,47 @@ app.put('/api/settings', auth, (req, res) => {
   res.json(settingsPayload());
 });
 
-let botStatus: { state: 'idle' | 'connecting' | 'online' | 'error'; tag: string | null; error: string | null; updatedAt: number } = {
+let botStatus: {
+  state: 'idle' | 'connecting' | 'online' | 'error';
+  tag: string | null;
+  clientId: string | null;
+  error: string | null;
+  updatedAt: number;
+} = {
   state: 'idle',
   tag: null,
+  clientId: null,
   error: null,
   updatedAt: 0,
 };
 
+// View Channel + Send Messages + Embed Links + Attach Files
+const BOT_PERMISSIONS = 52224;
+
+/** The first segment of a bot token is the base64 of the bot user id (= application id). */
+function clientIdFromToken(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const id = Buffer.from(token.split('.')[0], 'base64').toString('utf8');
+    return /^\d{15,25}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function invitePayload() {
+  const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
+  return {
+    clientId,
+    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=${BOT_PERMISSIONS}` : null,
+  };
+}
+
 app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
-  res.json(stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus);
+  const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus;
+  res.json({ ...base, ...invitePayload() });
 });
 
 // ---------- updates ----------
@@ -515,11 +545,12 @@ app.post('/internal/bot-status', internal, (req, res) => {
     .object({
       state: z.enum(['idle', 'connecting', 'online', 'error']),
       tag: z.string().max(100).nullable().optional(),
+      clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
       error: z.string().max(300).nullable().optional(),
     })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
-  botStatus = { state: b.data.state, tag: b.data.tag ?? null, error: b.data.error ?? null, updatedAt: Date.now() };
+  botStatus = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, updatedAt: Date.now() };
   res.json({ ok: true });
 });
 

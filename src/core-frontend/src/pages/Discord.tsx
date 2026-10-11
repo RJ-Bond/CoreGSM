@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type Server, type SettingsInfo } from '../api';
-import { Empty, ErrorLine, Field, GameAvatar, Modal, PageHead, ago, usePoll } from '../ui';
+import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
 
 interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean }
@@ -37,7 +37,7 @@ export default function DiscordPage() {
 
   const steps = [
     { done: servers.length > 0, title: 'Добавьте сервер', text: 'На вкладке «Серверы».' },
-    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Права бота: просмотр канала, отправка сообщений, прикрепление файлов, встраивание ссылок.' },
+    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» выше откроет Discord: выберите сервер и подтвердите права.' },
     { done: working, title: 'Бот отправит карточку', text: 'Одно сообщение, которое потом обновляется по таймеру.' },
   ];
 
@@ -54,6 +54,7 @@ export default function DiscordPage() {
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
         {!settings?.discordTokenSet && <a href="#/settings" className="font-extrabold text-brand hover:underline">Указать токен в настройках</a>}
+        {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <span className="text-[13px] font-bold text-bad">{bot.error}</span>}
       </div>
 

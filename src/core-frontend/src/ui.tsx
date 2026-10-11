@@ -205,3 +205,14 @@ export function ProxyField({
     </div>
   );
 }
+
+/** Opens Discord's own "add bot to a server" screen: the user picks the server there and confirms the permissions. */
+export function InviteButton({ url, className = '' }: { url: string | null; className?: string }) {
+  if (!url) return null;
+  return (
+    <a className={`btn ${className}`} href={url} target="_blank" rel="noreferrer">
+      Пригласить бота на сервер
+      <span aria-hidden>↗</span>
+    </a>
+  );
+}

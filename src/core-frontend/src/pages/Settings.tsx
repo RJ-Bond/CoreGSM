@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, type BotStatus, type SettingsInfo, type UpdateInfo } from '../api';
-import { ErrorLine, Field, PageHead, ProxyField, usePoll, type ProxyType } from '../ui';
+import { ErrorLine, Field, InviteButton, PageHead, ProxyField, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -124,6 +124,12 @@ function BotCard() {
       <p className="text-[13px] font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
 
       <ErrorLine text={error} />
+      {tokenSet && status?.inviteUrl && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
+          <InviteButton url={status.inviteUrl} />
+          <span className="text-[13px] font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
+        </div>
+      )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
       <button className="btn" disabled={busy || (!token.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
     </form>
