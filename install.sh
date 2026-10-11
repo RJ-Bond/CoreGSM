@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="aec8682f2835"
+COREGSM_BUILD="a79e7c34188f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -517,7 +517,8 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   const titleX = 172;
   ctx.fillStyle = C.ink;
   ctx.font = `700 44px ${SANS}`;
-  ctx.fillText(fit(ctx, s.name, px - titleX - 24), titleX, 96);
+  const title = s.name || st?.name || `${s.host}:${s.port}`;
+  ctx.fillText(fit(ctx, title, px - titleX - 24), titleX, 96);
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
   ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, 132);
@@ -676,6 +677,9 @@ CREATE TABLE IF NOT EXISTS bindings (
 );
 `);
 
+/** Title shown for a server: the custom name if set, otherwise the name the game server reports, otherwise host:port. */
+export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port)";
+
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
   return row ? row.value : null;
@@ -809,7 +813,7 @@ const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at)
 VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts)
 ON CONFLICT(server_id) DO UPDATE SET
-  online=excluded.online, name=excluded.name, players=excluded.players, max_players=excluded.max_players,
+  online=excluded.online, name=COALESCE(excluded.name, status.name), players=excluded.players, max_players=excluded.max_players,
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
   error=excluded.error, updated_at=excluded.updated_at
 `);
@@ -865,7 +869,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { db, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
+import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
 
@@ -1224,19 +1228,23 @@ app.post(
 
 // ---------- servers ----------
 const serverSchema = z.object({
-  name: z.string().trim().min(1).max(64),
+  // optional: when empty the title is taken from the game server's own reply
+  name: z.string().trim().max(64).optional(),
   game: z.string().trim().min(1).max(32).regex(/^[a-z0-9_]+$/i),
   host: z.string().trim().min(1).max(255).regex(/^[a-z0-9.\-:]+$/i),
   port: z.number().int().min(1).max(65535),
   queryPort: z.number().int().min(1).max(65535).nullable().optional(),
 });
 
-type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id'>> & { has_status: number | null };
+type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
 
 function serialize(r: ServerJoin) {
   return {
     id: r.id,
-    name: r.name,
+    // shown title: custom name > name reported by the server > host:port
+    name: r.name || r.query_name || `${r.host}:${r.port}`,
+    customName: r.name,
+    nameAuto: !r.name,
     game: r.game,
     host: r.host,
     port: r.port,
@@ -1256,7 +1264,7 @@ function serialize(r: ServerJoin) {
 
 const SELECT_SERVERS = `
 SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, st.player_names, st.error,
-       st.updated_at, st.server_id AS has_status
+       st.updated_at, st.server_id AS has_status, st.name AS query_name
 FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
 
 function getServer(id: number) {
@@ -1277,7 +1285,7 @@ app.post(
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const info = db
       .prepare('INSERT INTO servers (name, game, host, port, query_port, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(b.data.name, b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, Date.now());
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
@@ -1293,7 +1301,7 @@ app.put(
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const r = db
       .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=? WHERE id=?')
-      .run(b.data.name, b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, id);
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));
@@ -1417,7 +1425,7 @@ app.post('/internal/bot-status', internal, (req, res) => {
 app.get('/internal/bindings', internal, (_req, res) => {
   const rows = db
     .prepare(
-      `SELECT b.*, s.name AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id WHERE b.enabled = 1`,
+      `SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.enabled = 1`,
     )
     .all() as (BindingRow & { server_name: string })[];
   res.json(rows.map((r) => ({ ...serializeBinding(r), serverName: r.server_name })));
@@ -2042,7 +2050,11 @@ export const setToken = (t: string) => {
 
 export interface Server {
   id: number;
+  /** shown title: custom name > name reported by the game server > host:port */
   name: string;
+  /** the name typed by the user ('' = taken automatically from the server's reply) */
+  customName: string;
+  nameAuto: boolean;
   game: string;
   host: string;
   port: number;
@@ -2553,7 +2565,7 @@ export default function ServersPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   <GameAvatar game={s.game} />
                   <div className="min-w-0">
-                    <h3 className="truncate font-black leading-tight">{s.name}</h3>
+                    <h3 className="truncate font-black leading-tight" title={s.nameAuto && s.hasStatus ? 'Название получено от сервера' : undefined}>{s.name}</h3>
                     <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
                   </div>
                 </div>
@@ -2575,7 +2587,7 @@ export default function ServersPage() {
               {!s.online && s.error && <p className="truncate rounded-xl bg-badbg px-3 py-1.5 text-[12px] font-bold text-bad" title={s.error}>{s.error}</p>}
 
               <div className="mt-auto flex gap-2 pt-1">
-                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.name, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort } })}>Изменить</button>
+                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort } })}>Изменить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>
               </div>
             </article>
@@ -2617,9 +2629,10 @@ function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; i
   return (
     <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
-        <Field label="Название">
-          <input id="srv-name" className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={64} autoFocus placeholder="EU Survival #1" />
+        <Field label="Название (необязательно)">
+          <input id="srv-name" className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={64} autoFocus placeholder="определится само по ответу сервера" />
         </Field>
+        <p className="-mt-1.5 text-[13px] font-semibold text-mute">Оставьте пустым: панель возьмёт название, которое сервер сообщает сам (например, из настроек Minecraft или CS2). Своё название задайте, только если хотите его переопределить.</p>
         <Field label="Игра">
           <select id="srv-game" className="input" value={custom ? '__custom' : f.game} onChange={(e) => pickGame(e.target.value)}>
             {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}

@@ -76,7 +76,7 @@ export default function ServersPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   <GameAvatar game={s.game} />
                   <div className="min-w-0">
-                    <h3 className="truncate font-black leading-tight">{s.name}</h3>
+                    <h3 className="truncate font-black leading-tight" title={s.nameAuto && s.hasStatus ? 'Название получено от сервера' : undefined}>{s.name}</h3>
                     <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
                   </div>
                 </div>
@@ -98,7 +98,7 @@ export default function ServersPage() {
               {!s.online && s.error && <p className="truncate rounded-xl bg-badbg px-3 py-1.5 text-[12px] font-bold text-bad" title={s.error}>{s.error}</p>}
 
               <div className="mt-auto flex gap-2 pt-1">
-                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.name, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort } })}>Изменить</button>
+                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort } })}>Изменить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>
               </div>
             </article>
@@ -140,9 +140,10 @@ function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; i
   return (
     <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
-        <Field label="Название">
-          <input id="srv-name" className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={64} autoFocus placeholder="EU Survival #1" />
+        <Field label="Название (необязательно)">
+          <input id="srv-name" className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={64} autoFocus placeholder="определится само по ответу сервера" />
         </Field>
+        <p className="-mt-1.5 text-[13px] font-semibold text-mute">Оставьте пустым: панель возьмёт название, которое сервер сообщает сам (например, из настроек Minecraft или CS2). Своё название задайте, только если хотите его переопределить.</p>
         <Field label="Игра">
           <select id="srv-game" className="input" value={custom ? '__custom' : f.game} onChange={(e) => pickGame(e.target.value)}>
             {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}

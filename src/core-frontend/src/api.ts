@@ -9,7 +9,11 @@ export const setToken = (t: string) => {
 
 export interface Server {
   id: number;
+  /** shown title: custom name > name reported by the game server > host:port */
   name: string;
+  /** the name typed by the user ('' = taken automatically from the server's reply) */
+  customName: string;
+  nameAuto: boolean;
   game: string;
   host: string;
   port: number;
