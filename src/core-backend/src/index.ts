@@ -9,6 +9,7 @@ import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type Serve
 import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
 import { buildEmbed } from './embed.js';
+import { registerNews } from './news.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -577,7 +578,9 @@ const bindingSchema = z.object({
 interface BotGuild {
   id: string;
   name: string;
-  channels: { id: string; name: string }[];
+  /** text channels the bot can see but not write to */
+  hidden?: number;
+  channels: { id: string; name: string; missing?: string[] }[];
 }
 // persisted, so a backend restart does not leave the channel picker empty until the bot reports again
 function loadGuilds(): BotGuild[] {
@@ -590,12 +593,12 @@ function loadGuilds(): BotGuild[] {
 }
 let botGuilds: BotGuild[] = loadGuilds();
 
-function channelInfo(channelId: string): { channelName: string | null; guildName: string | null } {
+function channelInfo(channelId: string): { channelName: string | null; guildName: string | null; guildId: string | null } {
   for (const g of botGuilds) {
     const c = g.channels.find((x) => x.id === channelId);
-    if (c) return { channelName: c.name, guildName: g.name };
+    if (c) return { channelName: c.name, guildName: g.name, guildId: g.id };
   }
-  return { channelName: null, guildName: null };
+  return { channelName: null, guildName: null, guildId: null };
 }
 
 app.get('/api/discord/channels', auth, (_req, res) => {
@@ -603,7 +606,8 @@ app.get('/api/discord/channels', auth, (_req, res) => {
 });
 
 const serializeBinding = (b: BindingRow) => ({
-  ...channelInfo(b.channel_id),
+  channelName: channelInfo(b.channel_id).channelName,
+  guildName: channelInfo(b.channel_id).guildName,
   id: b.id,
   serverId: b.server_id,
   channelId: b.channel_id,
@@ -691,7 +695,8 @@ app.post('/internal/bot-guilds', internal, (req, res) => {
       z.object({
         id: z.string().max(30),
         name: z.string().max(120),
-        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(300),
+        hidden: z.number().int().min(0).optional(),
+        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
       }),
     )
     .max(60)
@@ -735,6 +740,8 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   db.prepare('UPDATE bindings SET last_update = ?, last_error = ? WHERE id = ?').run(Date.now(), b.data.error ?? null, id);
   res.json({ ok: true });
 });
+
+registerNews({ app, auth, internal, channelInfo });
 
 // ---------- errors ----------
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
+import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
 
 type Style = 'embed' | 'card' | 'both';
@@ -200,9 +201,10 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             <Field label={guilds!.length === 1 ? `Канал на сервере «${guild?.name ?? ''}»` : 'Канал'}>
               <select id="bind-channel-pick" className="input" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} required>
                 <option value="" disabled>Выберите канал…</option>
-                {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}`}</option>)}
+                {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}${c.missing?.length ? ' ⚠' : ''}`}</option>)}
               </select>
             </Field>
+            <MissingNote guild={guild} channelId={f.channelId} />
             <div className="flex flex-wrap gap-x-4 gap-y-1">
               <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
               <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
@@ -217,7 +219,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
               {guilds && guilds.length === 0 && allGuilds.length === 0
                 ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер» (на этой странице), затем нажмите «Обновить список». Пока можно ввести ID канала вручную: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
                 : guilds && guilds.length === 0
-                  ? `Бот есть на сервере Discord «${allGuilds.map((g) => g.name).join('», «')}», но там нет канала, куда ему разрешено писать. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».`
+                  ? `Бот есть на сервере Discord «${allGuilds.map((g) => g.name).join('», «')}»${allGuilds.some((g) => g.hidden) ? ` и видит ${allGuilds.reduce((n, g) => n + (g.hidden ?? 0), 0)} текстовых каналов`: ''}, но не может писать ни в один из них. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».`
                   : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1">

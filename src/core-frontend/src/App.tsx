@@ -5,13 +5,15 @@ import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
+import NewsPage from './pages/News';
 import SettingsPage from './pages/Settings';
-import { IconCards, IconDiscord, IconServers, IconSettings, Logo, ThemeToggle, Wordmark, useHash } from './ui';
+import { IconCards, IconDiscord, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Wordmark, useHash } from './ui';
 
 const PAGES: { id: string; label: string; icon: () => ReactNode }[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
   { id: 'cards', label: 'Карточки', icon: IconCards },
   { id: 'discord', label: 'Discord', icon: IconDiscord },
+  { id: 'news', label: 'Новости', icon: IconNews },
   { id: 'settings', label: 'Настройки', icon: IconSettings },
 ];
 
@@ -93,6 +95,7 @@ export default function App() {
         {page === 'servers' && <ServersPage sub={sub} />}
         {page === 'cards' && <CardsPage />}
         {page === 'discord' && <DiscordPage />}
+        {page === 'news' && <NewsPage sub={sub} />}
         {page === 'settings' && <SettingsPage sub={sub} updateAvailable={updateAvailable} />}
       </main>
 
