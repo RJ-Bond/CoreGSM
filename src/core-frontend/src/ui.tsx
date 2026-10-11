@@ -263,25 +263,9 @@ export function CopyButton({ text, label = 'Копировать', className = '
   );
 }
 
-/** The CoreGSM mark: a server rack whose three lights use the same colours as the status pills. */
+/** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
 export function Logo({ size = 32 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="CoreGSM" className="shrink-0">
-      <defs>
-        <linearGradient id="cg-logo" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#7a6cf5" />
-          <stop offset="1" stopColor="#4a3cb8" />
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx="16" fill="url(#cg-logo)" />
-      <rect x="13" y="14" width="38" height="10" rx="5" fill="#fff" />
-      <rect x="13" y="27" width="38" height="10" rx="5" fill="#fff" fillOpacity=".85" />
-      <rect x="13" y="40" width="38" height="10" rx="5" fill="#fff" fillOpacity=".7" />
-      <circle cx="43" cy="19" r="2.6" fill="#23a55a" />
-      <circle cx="43" cy="32" r="2.6" fill="#f0b232" />
-      <circle cx="43" cy="45" r="2.6" fill="#f23f42" />
-    </svg>
-  );
+  return <img src="/logo-128.png" width={size} height={size} alt="CoreGSM" className="shrink-0" draggable={false} />;
 }
 
 export type ProxyType = 'socks5' | 'http';
