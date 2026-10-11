@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="620df69417ba"
+COREGSM_BUILD="fdc3b05055ae"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -152,12 +152,25 @@ preflight() {
 
   local mem_mb disk_mb busy
   mem_mb="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
-  [ "$mem_mb" -ge 900 ] || die "Недостаточно памяти: ${mem_mb} МБ (нужно от 1 ГБ, лучше 2 ГБ)"
-  if [ "$mem_mb" -ge 1800 ]; then ok "Память: ${mem_mb} МБ"
-  else warn "Памяти ${mem_mb} МБ: сборка образов может идти долго. Рекомендуется 2 ГБ"; fi
+  # On a system that already runs CoreGSM (update/reinstall) low resources only produce warnings:
+  # the images exist, and a real shortage will show up as a clear build error with the cause in the log.
+  local reinstall=0
+  [ -f "$APP_DIR/docker-compose.yml" ] && reinstall=1
+  if [ "$mem_mb" -lt 900 ] && [ "$reinstall" = 0 ]; then
+    die "Недостаточно памяти: ${mem_mb} МБ (нужно от 1 ГБ, лучше 2 ГБ)"
+  elif [ "$mem_mb" -lt 1800 ]; then
+    warn "Памяти ${mem_mb} МБ: сборка образов может идти долго. Рекомендуется 2 ГБ"
+  else
+    ok "Память: ${mem_mb} МБ"
+  fi
   disk_mb="$(df -Pm / | awk 'NR==2{print $4}')"
-  [ "$disk_mb" -ge 4000 ] || die "Мало места на диске: свободно ${disk_mb} МБ (нужно от 4 ГБ)"
-  ok "Диск: свободно ${disk_mb} МБ"
+  if [ "$disk_mb" -lt 3000 ] && [ "$reinstall" = 0 ]; then
+    die "Мало места на диске: свободно ${disk_mb} МБ (нужно от 3 ГБ)"
+  elif [ "$disk_mb" -lt 1500 ]; then
+    warn "Свободно только ${disk_mb} МБ: сборка образов может не поместиться. Очистить место: docker system prune -f"
+  else
+    ok "Диск: свободно ${disk_mb} МБ"
+  fi
   # ports 80/443: skipped on a reinstall, where our own containers hold them
   if [ ! -f "$APP_DIR/docker-compose.yml" ]; then
     busy="$(ss -ltnH 'sport = :80 or sport = :443' 2>/dev/null | awk '{print $4}' | tr '\n' ' ' || true)"
@@ -4158,8 +4171,15 @@ cmd_update() {
     status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
-    status_file error "Установка не удалась (код $rc), прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
-    bad "Установка не удалась, прежняя версия работает. Журнал: /var/log/coregsm-install.log"; return "$rc"
+    # pull the actual cause out of the installer output so it is visible in the panel and on screen
+    local reason
+    reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
+    status_file error "Установка не удалась (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
+    bad "Установка не удалась (код $rc), прежняя версия работает."
+    [ -n "$reason" ] && say "Причина: $reason"
+    dim "Последние строки журнала:"; tail -n 12 "$LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g; s/^/    /'
+    dim "Полный журнал: /var/log/coregsm-install.log"
+    return "$rc"
   fi
   warn "Новая версия не запустилась. Возвращаю предыдущую…"
   if rollback_apply; then

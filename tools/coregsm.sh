@@ -441,8 +441,15 @@ cmd_update() {
     status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
-    status_file error "Установка не удалась (код $rc), прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
-    bad "Установка не удалась, прежняя версия работает. Журнал: /var/log/coregsm-install.log"; return "$rc"
+    # pull the actual cause out of the installer output so it is visible in the panel and on screen
+    local reason
+    reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
+    status_file error "Установка не удалась (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
+    bad "Установка не удалась (код $rc), прежняя версия работает."
+    [ -n "$reason" ] && say "Причина: $reason"
+    dim "Последние строки журнала:"; tail -n 12 "$LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g; s/^/    /'
+    dim "Полный журнал: /var/log/coregsm-install.log"
+    return "$rc"
   fi
   warn "Новая версия не запустилась. Возвращаю предыдущую…"
   if rollback_apply; then
