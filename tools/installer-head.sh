@@ -165,6 +165,11 @@ configure_docker_proxy() {
 # ---------- 2. system update ----------
 system_update() {
   step "Обновление системы"
+  if [ "${SKIP_UPDATE:-}" = "1" ]; then
+    apt-get update -y
+    ok "SKIP_UPDATE=1: полное обновление пропущено (список пакетов обновлён)"
+    return 0
+  fi
   apt-get update -y
   apt-get upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
   ok "Система обновлена"
@@ -202,7 +207,7 @@ install_docker() {
 collect_input() {
   step "Настройка"
   echo -e "  ${DIM}Подготовьте токен бота (Discord Developer Portal → Bot → Reset Token),${NC}"
-  echo -e "  ${DIM}домен с A-записью на IP этого сервера и e-mail для Let's Encrypt.${NC}\n"
+  echo -e "  ${DIM}домен с A-записью на этот сервер и e-mail для Let's Encrypt (для локальной сети достаточно IP-адреса).${NC}\n"
 
   : "${DISCORD_TOKEN:=$(env_get DISCORD_TOKEN)}"
   : "${DOMAIN:=$(env_get DOMAIN)}"
@@ -214,8 +219,18 @@ collect_input() {
     warn "Токен не задан: бот будет простаивать, пока вы не добавите DISCORD_TOKEN в $APP_DIR/.env"
   fi
 
-  ask DOMAIN "Доменное имя (например, gsm.my-domain.com)"
+  ask DOMAIN "Домен (gsm.my-domain.com) или IP сервера для локальной сети (192.168.88.152)"
   DOMAIN="$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')"
+
+  if [ "${LOCAL_MODE:-}" = "1" ] || is_local_host "$DOMAIN"; then
+    # Local / development: Let's Encrypt cannot issue certificates for IPs and private names.
+    LOCAL_MODE=1
+    [[ "$DOMAIN" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || die "Некорректный адрес: $DOMAIN"
+    LE_EMAIL=""
+    ok "Локальный режим: $DOMAIN (самоподписанный сертификат, без Let's Encrypt)"
+    return 0
+  fi
+
   [[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "Некорректное доменное имя: $DOMAIN"
 
   ask LE_EMAIL "E-mail для Let's Encrypt"
@@ -234,6 +249,13 @@ collect_input() {
   else
     ok "DNS: $DOMAIN → ${dns_ip}"
   fi
+}
+
+# IPv4 address, "localhost", or a private suffix: Let's Encrypt is impossible for these.
+is_local_host() {
+  [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && return 0
+  [[ "$1" =~ (^localhost$|\.(local|lan|home|internal|test|localdomain)$|\.home\.arpa$) ]] && return 0
+  return 1
 }
 
 # ---------- 6. firewall ----------
@@ -287,9 +309,27 @@ ENVFILE
 
 # ---------- 8. TLS ----------
 issue_certificate() {
-  step "Выпуск SSL-сертификата Let's Encrypt (Certbot в Docker)"
   local conf="$APP_DIR/certbot/conf" live="$APP_DIR/certbot/conf/live/$DOMAIN"
   mkdir -p "$conf" "$APP_DIR/certbot/www"
+
+  if [ "${LOCAL_MODE:-}" = "1" ]; then
+    step "SSL-сертификат для локального режима (самоподписанный)"
+    if [ -f "$APP_DIR/docker-compose.yml" ]; then
+      (cd "$APP_DIR" && docker compose down >/dev/null 2>&1) || true
+    fi
+    rm -rf "$live"
+    mkdir -p "$live"
+    local san="DNS:${DOMAIN}"
+    [[ "$DOMAIN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && san="IP:${DOMAIN}"
+    openssl req -x509 -nodes -newkey rsa:2048 -days 825 -subj "/CN=${DOMAIN}" -addext "subjectAltName=${san}" \
+      -keyout "$live/privkey.pem" -out "$live/fullchain.pem" >/dev/null 2>&1
+    touch "$live/.selfsigned"
+    CERT_MODE="local"
+    ok "Сертификат создан (825 дней). Браузер покажет предупреждение: это ожидаемо."
+    return 0
+  fi
+
+  step "Выпуск SSL-сертификата Let's Encrypt (Certbot в Docker)"
 
   # Stop a previous stack so port 80 is free for the standalone challenge.
   if [ -f "$APP_DIR/docker-compose.yml" ]; then
@@ -347,6 +387,10 @@ report() {
   echo -e "  ${BOLD}Логин:${NC}    ${YELLOW}admin${NC}"
   echo -e "  ${BOLD}Пароль:${NC}   ${YELLOW}${ADMIN_PASSWORD}${NC}"
   echo -e "${GREEN}${line}${NC}"
+  if [ "${CERT_MODE:-}" = "local" ]; then
+    echo -e "  ${YELLOW}Локальный режим:${NC} сертификат самоподписанный, браузер покажет предупреждение."
+    echo -e "  Нажмите «Дополнительно» → «Перейти на ${DOMAIN}»."
+  fi
   if [ "${CERT_MODE:-}" = "selfsigned" ]; then
     echo -e "  ${RED}Сертификат самоподписанный${NC}: браузер покажет предупреждение."
     echo -e "  Настройте A-запись ${DOMAIN} на этот сервер и повторите: ${BOLD}sudo bash install.sh${NC}"
