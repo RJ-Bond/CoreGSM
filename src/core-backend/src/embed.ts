@@ -26,7 +26,7 @@ export interface DiscordEmbed {
   color?: number;
   author?: { name: string };
   fields?: { name: string; value: string; inline?: boolean }[];
-  footer?: { text: string };
+  footer?: { text: string; icon_url?: string };
   thumbnail?: { url: string };
   timestamp?: string;
 }
@@ -36,18 +36,15 @@ export interface EmbedExtra {
   lastOnlineAt?: number | null;
   /** public URL of the game icon (needs a public domain; omitted otherwise) */
   thumbUrl?: string | null;
+  /** public base URL (https://domain): used for the footer logo */
+  baseUrl?: string | null;
+  /** panel build id, shown in the footer */
+  version?: string | null;
 }
 
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-
-/** █████░░░░░ — a solid bar (the emoji squares render with gaps in Discord) */
-function bar(value: number, max: number): string {
-  const ratio = Math.max(0, Math.min(1, value / max));
-  const filled = Math.round(ratio * 10);
-  return `${'█'.repeat(filled)}${'░'.repeat(10 - filled)}`;
-}
 
 /** games whose clients have a console with the "connect" command */
 const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
@@ -73,15 +70,19 @@ function nameRows(names: string[], per = 3): string {
 }
 
 function every(sec: number): string {
-  if (sec === 60) return 'каждую минуту';
-  if (sec === 3600) return 'каждый час';
-  if (sec % 60 === 0) return `каждые ${sec / 60} мин`;
-  return `каждые ${sec} с`;
+  if (sec === 60) return 'раз в минуту';
+  if (sec === 3600) return 'раз в час';
+  if (sec % 60 === 0) return `раз в ${sec / 60} мин`;
+  return `раз в ${sec} с`;
 }
 
 export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec: number, extra: EmbedExtra = {}): DiscordEmbed {
-  const uptime = uptimePct == null ? '' : ` · аптайм 24 ч ${(Math.round(uptimePct * 10) / 10).toFixed(1)}%`;
-  const footer = { text: `CoreGSM${uptime} · обновляется ${every(intervalSec)}` };
+  const parts = ['CoreGSM'];
+  if (extra.version) parts[0] += ` v${extra.version.slice(0, 7)}`;
+  if (uptimePct != null) parts.push(`аптайм ${Math.round(uptimePct * 10) / 10}%`);
+  parts.push(`обновление ${every(intervalSec)}`);
+  const footer: { text: string; icon_url?: string } = { text: parts.join(' · ') };
+  if (extra.baseUrl) footer.icon_url = `${extra.baseUrl}/logo-128.png`;
   const stamp = (s.updatedAt ? new Date(s.updatedAt) : new Date()).toISOString();
   const thumbnail = extra.thumbUrl ? { url: extra.thumbUrl } : undefined;
 
@@ -102,7 +103,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   const fields: NonNullable<DiscordEmbed['fields']> = [];
   if (s.online) {
-    const pct = s.maxPlayers ? ` · ${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%\n\`${bar(s.players, s.maxPlayers)}\`` : '';
+    const pct = s.maxPlayers ? ` · ${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%` : '';
     fields.push({ name: '👥 Игроки', value: `**${s.players}** / ${s.maxPlayers || '?'}${pct}`, inline: true });
     fields.push({ name: '📡 Пинг', value: s.ping != null ? `${s.ping} мс` : '—', inline: true });
     fields.push({ name: '🗺️ Карта', value: s.map ? cut(s.map, 100) : '—', inline: true });

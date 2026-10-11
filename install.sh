@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="46f2ae18f8e3"
+COREGSM_BUILD="a34436995db6"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -953,7 +953,7 @@ export interface DiscordEmbed {
   color?: number;
   author?: { name: string };
   fields?: { name: string; value: string; inline?: boolean }[];
-  footer?: { text: string };
+  footer?: { text: string; icon_url?: string };
   thumbnail?: { url: string };
   timestamp?: string;
 }
@@ -963,18 +963,15 @@ export interface EmbedExtra {
   lastOnlineAt?: number | null;
   /** public URL of the game icon (needs a public domain; omitted otherwise) */
   thumbUrl?: string | null;
+  /** public base URL (https://domain): used for the footer logo */
+  baseUrl?: string | null;
+  /** panel build id, shown in the footer */
+  version?: string | null;
 }
 
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-
-/** █████░░░░░ — a solid bar (the emoji squares render with gaps in Discord) */
-function bar(value: number, max: number): string {
-  const ratio = Math.max(0, Math.min(1, value / max));
-  const filled = Math.round(ratio * 10);
-  return `${'█'.repeat(filled)}${'░'.repeat(10 - filled)}`;
-}
 
 /** games whose clients have a console with the "connect" command */
 const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
@@ -1000,15 +997,19 @@ function nameRows(names: string[], per = 3): string {
 }
 
 function every(sec: number): string {
-  if (sec === 60) return 'каждую минуту';
-  if (sec === 3600) return 'каждый час';
-  if (sec % 60 === 0) return `каждые ${sec / 60} мин`;
-  return `каждые ${sec} с`;
+  if (sec === 60) return 'раз в минуту';
+  if (sec === 3600) return 'раз в час';
+  if (sec % 60 === 0) return `раз в ${sec / 60} мин`;
+  return `раз в ${sec} с`;
 }
 
 export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec: number, extra: EmbedExtra = {}): DiscordEmbed {
-  const uptime = uptimePct == null ? '' : ` · аптайм 24 ч ${(Math.round(uptimePct * 10) / 10).toFixed(1)}%`;
-  const footer = { text: `CoreGSM${uptime} · обновляется ${every(intervalSec)}` };
+  const parts = ['CoreGSM'];
+  if (extra.version) parts[0] += ` v${extra.version.slice(0, 7)}`;
+  if (uptimePct != null) parts.push(`аптайм ${Math.round(uptimePct * 10) / 10}%`);
+  parts.push(`обновление ${every(intervalSec)}`);
+  const footer: { text: string; icon_url?: string } = { text: parts.join(' · ') };
+  if (extra.baseUrl) footer.icon_url = `${extra.baseUrl}/logo-128.png`;
   const stamp = (s.updatedAt ? new Date(s.updatedAt) : new Date()).toISOString();
   const thumbnail = extra.thumbUrl ? { url: extra.thumbUrl } : undefined;
 
@@ -1029,7 +1030,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   const fields: NonNullable<DiscordEmbed['fields']> = [];
   if (s.online) {
-    const pct = s.maxPlayers ? ` · ${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%\n\`${bar(s.players, s.maxPlayers)}\`` : '';
+    const pct = s.maxPlayers ? ` · ${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%` : '';
     fields.push({ name: '👥 Игроки', value: `**${s.players}** / ${s.maxPlayers || '?'}${pct}`, inline: true });
     fields.push({ name: '📡 Пинг', value: s.ping != null ? `${s.ping} мс` : '—', inline: true });
     fields.push({ name: '🗺️ Карта', value: s.map ? cut(s.map, 100) : '—', inline: true });
@@ -2091,7 +2092,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = getSetting('public_base');
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -4739,7 +4740,7 @@ export interface DiscordEmbed {
   thumbnail?: { url: string };
   image?: { url: string };
   fields?: { name: string; value: string; inline?: boolean }[];
-  footer?: { text: string };
+  footer?: { text: string; icon_url?: string };
   timestamp?: string;
 }
 
@@ -4796,10 +4797,11 @@ export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; con
           ))}
           {embed.image && <img src={embed.image.url} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
           {(embed.footer || embed.timestamp) && (
-            <div className="mt-2 text-xs" style={{ color: D.muted }}>
-              {embed.footer?.text}
+            <div className="mt-2 flex items-center gap-1.5 text-xs" style={{ color: D.muted }}>
+              {embed.footer?.icon_url && <img src={embed.footer.icon_url} alt="" className="h-5 w-5 rounded-full" />}
+              <span>{embed.footer?.text}
               {embed.footer && embed.timestamp ? ' • ' : ''}
-              {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}
+              {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}</span>
             </div>
           )}
         </div>
