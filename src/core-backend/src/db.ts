@@ -61,8 +61,15 @@ CREATE TABLE IF NOT EXISTS bindings (
 );
 `);
 
+// older databases: add the column once
+try {
+  db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
+} catch {
+  /* column already exists */
+}
+
 /** Title shown for a server: the custom name if set, otherwise the name the game server reports, otherwise host:port. */
-export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port)";
+export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)";
 
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
@@ -77,6 +84,8 @@ export function setSetting(key: string, value: string | null): void {
 
 export interface ServerRow {
   id: number;
+  /** address shown to people (public IP or domain); '' = show host:port */
+  display_address: string;
   name: string;
   game: string;
   host: string;

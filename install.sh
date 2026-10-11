@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a79e7c34188f"
+COREGSM_BUILD="620df69417ba"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -517,7 +517,9 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   const titleX = 172;
   ctx.fillStyle = C.ink;
   ctx.font = `700 44px ${SANS}`;
-  const title = s.name || st?.name || `${s.host}:${s.port}`;
+  // never put the internal query address on a public card: prefer the display address
+  const address = s.display_address || `${s.host}:${s.port}`;
+  const title = s.name || st?.name || address;
   ctx.fillText(fit(ctx, title, px - titleX - 24), titleX, 96);
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
@@ -587,7 +589,7 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   };
   const tx = 640;
   const tw = W - 64 - tx;
-  tile(tx, 176, tw, 'Адрес', `${s.host}:${s.port}`, true);
+  tile(tx, 176, tw, 'Адрес', address, true);
   tile(tx, 264, tw / 2 - 8, 'Карта', online && st?.map ? st.map : '–');
   tile(tx + tw / 2 + 8, 264, tw / 2 - 8, 'Пинг', online && st?.ping != null ? `${st.ping} мс` : '–', false, laggy ? C.warn : C.ink);
 
@@ -677,8 +679,15 @@ CREATE TABLE IF NOT EXISTS bindings (
 );
 `);
 
+// older databases: add the column once
+try {
+  db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
+} catch {
+  /* column already exists */
+}
+
 /** Title shown for a server: the custom name if set, otherwise the name the game server reports, otherwise host:port. */
-export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port)";
+export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)";
 
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
@@ -693,6 +702,8 @@ export function setSetting(key: string, value: string | null): void {
 
 export interface ServerRow {
   id: number;
+  /** address shown to people (public IP or domain); '' = show host:port */
+  display_address: string;
   name: string;
   game: string;
   host: string;
@@ -1234,6 +1245,13 @@ const serverSchema = z.object({
   host: z.string().trim().min(1).max(255).regex(/^[a-z0-9.\-:]+$/i),
   port: z.number().int().min(1).max(65535),
   queryPort: z.number().int().min(1).max(65535).nullable().optional(),
+  // what people see instead of host:port, e.g. a public IP or domain (the panel still queries `host`)
+  displayAddress: z
+    .string()
+    .trim()
+    .max(100)
+    .regex(/^[^s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
+    .optional(),
 });
 
 type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
@@ -1242,13 +1260,16 @@ function serialize(r: ServerJoin) {
   return {
     id: r.id,
     // shown title: custom name > name reported by the server > host:port
-    name: r.name || r.query_name || `${r.host}:${r.port}`,
+    name: r.name || r.query_name || r.display_address || `${r.host}:${r.port}`,
     customName: r.name,
     nameAuto: !r.name,
     game: r.game,
     host: r.host,
     port: r.port,
     queryPort: r.query_port,
+    displayAddress: r.display_address,
+    // the address shown in the panel and on cards
+    address: r.display_address || `${r.host}:${r.port}`,
     hasStatus: r.has_status != null,
     online: !!r.online,
     players: r.players ?? 0,
@@ -1284,8 +1305,8 @@ app.post(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const info = db
-      .prepare('INSERT INTO servers (name, game, host, port, query_port, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, Date.now());
+      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
@@ -1300,8 +1321,8 @@ app.put(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const r = db
-      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=? WHERE id=?')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, id);
+      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=? WHERE id=?')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));
@@ -2059,6 +2080,10 @@ export interface Server {
   host: string;
   port: number;
   queryPort: number | null;
+  /** what people see instead of host:port ('' = not set) */
+  displayAddress: string;
+  /** the address shown in the panel and on cards */
+  address: string;
   hasStatus: boolean;
   online: boolean;
   players: number;
@@ -2088,6 +2113,7 @@ export interface ServerInput {
   host: string;
   port: number;
   queryPort: number | null;
+  displayAddress: string;
 }
 
 export class ApiError extends Error {}
@@ -2492,7 +2518,7 @@ import { api, type Server, type ServerInput } from '../api';
 import { GAMES, gameColor, gameLabel } from '../games';
 import { Empty, ErrorLine, Field, FillBar, GameAvatar, Modal, PageHead, Spark, StatusPill, ago, usePoll } from '../ui';
 
-const empty: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null };
+const empty: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '' };
 
 export default function ServersPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -2581,13 +2607,13 @@ export default function ServersPage() {
               <Spark serverId={s.id} color={color} />
 
               <div className="flex items-center justify-between gap-2 text-[13px] font-bold text-mute">
-                <span className="truncate font-mono text-[12px]" title={`${s.host}:${s.port}`}>{s.host}:{s.port}</span>
+                <span className="truncate font-mono text-[12px]" title={s.address}>{s.address}</span>
                 <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
               </div>
               {!s.online && s.error && <p className="truncate rounded-xl bg-badbg px-3 py-1.5 text-[12px] font-bold text-bad" title={s.error}>{s.error}</p>}
 
               <div className="mt-auto flex gap-2 pt-1">
-                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort } })}>Изменить</button>
+                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>
               </div>
             </article>
@@ -2646,7 +2672,7 @@ function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; i
         )}
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
-            <Field label="Адрес (IP или домен)">
+            <Field label="Адрес для опроса (IP или домен)">
               <input id="srv-host" className="input" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value.trim() })} required placeholder="play.example.com" />
             </Field>
           </div>
@@ -2657,6 +2683,10 @@ function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; i
         <Field label="Query-порт (если отличается)">
           <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => setF({ ...f, queryPort: e.target.value ? Number(e.target.value) : null })} placeholder="не указан" />
         </Field>
+        <Field label="Адрес для отображения (необязательно)">
+          <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => setF({ ...f, displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
+        </Field>
+        <p className="-mt-1.5 text-[13px] font-semibold text-mute">Панель опрашивает сервер по адресу выше, а людям на странице и в карточке Discord показывает этот адрес. Подойдёт, если сервер стоит в локальной сети и снаружи доступен по другому IP или домену.</p>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
