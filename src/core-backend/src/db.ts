@@ -15,6 +15,11 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS favorites (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, server_id)
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -60,6 +65,18 @@ CREATE TABLE IF NOT EXISTS bindings (
   last_error TEXT
 );
 `);
+
+// older databases: users get a role (every existing account was created by the setup wizard, so it is an admin)
+try {
+  db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER');
+} catch {
+  /* column already exists */
+}
 
 // older databases: new columns are added once
 try {

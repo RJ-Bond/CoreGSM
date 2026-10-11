@@ -180,3 +180,32 @@ export interface NewsSettings {
   channelName?: string | null;
   guildName?: string | null;
 }
+
+// ---------- accounts and access ----------
+export interface Me {
+  username: string;
+  role: 'admin' | 'player';
+}
+
+export interface Access {
+  /** the server list and news are visible without signing in */
+  publicPanel: boolean;
+  /** players may create accounts */
+  registration: boolean;
+}
+
+export interface UserRow {
+  id: number;
+  username: string;
+  role: 'admin' | 'player';
+  createdAt: number | null;
+}
+
+/** what guests and players get for a posted news item */
+export interface PublicNews {
+  id: number;
+  status: NewsStatus;
+  title: string;
+  payload: NewsPayload;
+  sentAt: number | null;
+}

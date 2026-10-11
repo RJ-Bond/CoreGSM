@@ -1,10 +1,15 @@
 import { useState } from 'react';
-import { api, type NewsItem, type NewsSettings } from '../api';
+import { api, type NewsItem, type NewsSettings, type PublicNews } from '../api';
+import { useAuth } from '../auth';
+import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { Empty, ErrorLine, PageHead, fmtDateTime, usePoll } from '../ui';
+import { NewsArt } from '../components/Illustrations';
+import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
 import NewsEditor from './NewsEditor';
 
 export default function NewsPage({ sub }: { sub: string }) {
+  const { isAdmin } = useAuth();
+  if (!isAdmin) return <NewsFeed />;
   if (sub === 'new') return <NewsEditor id={null} />;
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <NewsEditor id={id} />;
@@ -54,23 +59,23 @@ function NewsList() {
   };
 
   const publish = async (n: NewsItem) => {
-    await api(`/news/${n.id}/publish`, 'POST').catch((e) => setError(e.message));
+    await api(`/news/${n.id}/publish`, 'POST').then(() => toast('Новость отправляется в Discord')).catch((e) => setError(e.message));
     void load();
   };
   const copy = async (n: NewsItem) => {
-    await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).catch((e) => setError(e.message));
+    await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast('Копия сохранена как черновик')).catch((e) => setError(e.message));
     void load();
   };
   const remove = async (n: NewsItem) => {
     const sent = n.status === 'sent';
     if (!window.confirm(sent ? 'Удалить новость? Сообщение также будет удалено из Discord.' : 'Удалить новость?')) return;
-    await api(`/news/${n.id}`, 'DELETE').catch((e) => setError(e.message));
+    await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
     void load();
   };
 
   return (
     <div className="space-y-6">
-      <PageHead title="Новости" subtitle="Публикации от имени бота в Discord">
+      <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
         <a className="btn" href="#/news/new">+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
@@ -91,7 +96,7 @@ function NewsList() {
       </div>
 
       {loaded && items.length === 0 && (
-        <Empty title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
+        <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/news/new">+ Написать новость</a>
         </Empty>
       )}
@@ -118,6 +123,37 @@ function NewsList() {
             </article>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/** stored embed -> what EmbedView draws (an uploaded picture is served by the panel) */
+function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
+  if (!e) return null;
+  const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
+  return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
+}
+
+/** read-only feed for players and guests: only what has been posted */
+function NewsFeed() {
+  const [items, setItems] = useState<PublicNews[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
+  usePoll(() => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true)), 30_000);
+
+  return (
+    <div className="space-y-6">
+      <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
+      <ErrorLine text={error} />
+      {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
+      <div className="mx-auto max-w-2xl space-y-4">
+        {items.map((n) => (
+          <article key={n.id} className="panel space-y-2 p-4">
+            {n.sentAt && <div className="text-sm font-bold text-mute">{fmtDateTime(n.sentAt)}</div>}
+            <EmbedView embed={toView(n.payload.embed)} content={n.payload.content} />
+          </article>
+        ))}
       </div>
     </div>
   );

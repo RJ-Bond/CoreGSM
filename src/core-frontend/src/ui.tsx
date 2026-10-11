@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from './api';
 import { gameAbbr, gameColor } from './games';
+import { gameIconPath } from './gameIcons';
+import { AuthArt } from './components/Illustrations';
 
 export function usePoll(fn: () => void, ms: number) {
   const ref = useRef(fn);
@@ -167,17 +169,25 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function StatusPill({ online, known, lag }: { online: boolean; known: boolean; lag?: boolean }) {
   if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
   if (!online) return <span className="pill pill-bad">OFFLINE</span>;
-  return lag ? <span className="pill pill-warn">LAG</span> : <span className="pill pill-ok">ONLINE</span>;
+  return lag ? <span className="pill pill-warn">LAG</span> : <span className="pill pill-ok live">ONLINE</span>;
 }
 
 export function GameAvatar({ game, size = 44 }: { game: string; size?: number }) {
+  const icon = gameIconPath(game);
+  const color = gameColor(game);
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-2xl font-black text-white"
-      style={{ width: size, height: size, background: gameColor(game), fontSize: size * 0.34 }}
+      className="grid shrink-0 place-items-center rounded-2xl font-black text-white shadow-pop"
+      style={{ width: size, height: size, background: `linear-gradient(145deg, ${color}, ${color}cc)`, fontSize: size * 0.34 }}
       aria-hidden
     >
-      {gameAbbr(game)}
+      {icon ? (
+        <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d={icon} />
+        </svg>
+      ) : (
+        gameAbbr(game)
+      )}
     </div>
   );
 }
@@ -219,12 +229,15 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
   );
 }
 
-export function PageHead({ title, subtitle, children }: { title: string; subtitle?: string; children?: ReactNode }) {
+export function PageHead({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon?: ReactNode; children?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-3xl font-black tracking-tight">{title}</h1>
-        {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+      <div className="flex items-center gap-3.5">
+        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-soft text-link">{icon}</span>}
+        <div>
+          <h1 className="text-3xl font-black tracking-tight">{title}</h1>
+          {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+        </div>
       </div>
       <div className="flex flex-wrap gap-2">{children}</div>
     </div>
@@ -235,10 +248,10 @@ export function ErrorLine({ text }: { text: string }) {
   return text ? <p className="rounded-2xl bg-badbg px-4 py-2.5 font-bold text-bad" role="alert">{text}</p> : null;
 }
 
-export function Empty({ title, text, children }: { title: string; text: string; children?: ReactNode }) {
+export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="panel flex flex-col items-center gap-2 px-6 py-14 text-center">
-      <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>
+    <div className="panel flex flex-col items-center gap-2 px-6 py-10 text-center">
+      {art ?? <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>}
       <h3 className="text-lg font-black">{title}</h3>
       <p className="max-w-sm font-semibold text-mute">{text}</p>
       {children}
@@ -338,5 +351,92 @@ export function Wordmark({ className = '' }: { className?: string }) {
     <span className={`font-black tracking-tight text-link ${className}`}>
       Core<span className="text-ink">GSM</span>
     </span>
+  );
+}
+
+// ---------- toasts: short confirmations that do not interrupt ----------
+type ToastKind = 'ok' | 'err' | 'info';
+interface ToastItem { id: number; text: string; kind: ToastKind }
+let toasts: ToastItem[] = [];
+let toastSeq = 0;
+const toastListeners = new Set<(t: ToastItem[]) => void>();
+const emitToasts = () => toastListeners.forEach((l) => l(toasts));
+
+export function toast(text: string, kind: ToastKind = 'ok', ms = 3500) {
+  const t = { id: ++toastSeq, text, kind };
+  toasts = [...toasts, t].slice(-4);
+  emitToasts();
+  setTimeout(() => {
+    toasts = toasts.filter((x) => x.id !== t.id);
+    emitToasts();
+  }, ms);
+}
+
+export function Toaster() {
+  const [list, setList] = useState<ToastItem[]>(toasts);
+  useEffect(() => {
+    toastListeners.add(setList);
+    return () => { toastListeners.delete(setList); };
+  }, []);
+  const tone = { ok: 'bg-okbg text-ok', err: 'bg-badbg text-bad', info: 'bg-soft text-ink' } as const;
+  return (
+    <div aria-live="polite" className="pointer-events-none fixed inset-x-4 bottom-24 z-[70] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+      {list.map((t) => (
+        <div key={t.id} role="status" className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl px-4 py-3 text-sm font-bold shadow-soft ring-1 ring-black/5 ${tone[t.kind]}`}>
+          <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- sign-in / first-run shell: a brand panel next to the form ----------
+export function AuthShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="grid min-h-full md:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+      <aside className="relative hidden flex-col justify-between overflow-hidden p-10 text-white md:flex" style={{ background: 'linear-gradient(150deg, #6a5cf0 0%, #4a3cb8 55%, #2a2070 100%)' }}>
+        <div className="flex items-center gap-3 text-2xl font-black tracking-tight">
+          <Logo size={40} />
+          CoreGSM
+        </div>
+        <div className="space-y-6">
+          <div className="flex justify-center"><AuthArt /></div>
+          <div className="space-y-3">
+            <h2 className="text-3xl font-black leading-tight">Игровые серверы под присмотром</h2>
+            <ul className="space-y-2 text-[15px] font-semibold text-white/85">
+              <li className="flex gap-2.5"><span aria-hidden>✓</span>Онлайн, пинг и история игроков в одном месте</li>
+              <li className="flex gap-2.5"><span aria-hidden>✓</span>Красивые сообщения в Discord, которые обновляются сами</li>
+              <li className="flex gap-2.5"><span aria-hidden>✓</span>Новости и объявления от имени бота</li>
+            </ul>
+          </div>
+        </div>
+        <div className="text-sm font-bold text-white/60">Self-hosted · открытый исходный код</div>
+      </aside>
+      <div className="flex items-center justify-center p-4 sm:p-8">{children}</div>
+    </div>
+  );
+}
+
+// ---------- fleet status: one segmented bar for online / lag / offline ----------
+export function FleetBar({ online, lag, offline }: { online: number; lag: number; offline: number }) {
+  const total = online + lag + offline;
+  if (total === 0) return null;
+  const seg = [
+    { n: online, cls: 'bg-ok', label: 'онлайн' },
+    { n: lag, cls: 'bg-warn', label: 'лагают' },
+    { n: offline, cls: 'bg-bad', label: 'недоступны' },
+  ].filter((x) => x.n > 0);
+  return (
+    <div className="panel px-5 py-4">
+      <div className="flex h-2.5 gap-1 overflow-hidden rounded-full" role="img" aria-label={seg.map((x) => `${x.n} ${x.label}`).join(', ')}>
+        {seg.map((x) => <div key={x.label} className={`${x.cls} rounded-full transition-all duration-500`} style={{ flex: x.n }} />)}
+      </div>
+      <div className="mt-2.5 flex flex-wrap gap-x-5 gap-y-1 text-sm font-bold text-mute">
+        {seg.map((x) => (
+          <span key={x.label} className="inline-flex items-center gap-1.5"><span className={`h-2.5 w-2.5 rounded-full ${x.cls}`} />{x.n} {x.label}</span>
+        ))}
+      </div>
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api, type Server } from '../api';
-import { Empty, ErrorLine, PageHead, usePoll } from '../ui';
+import { CardsArt } from '../components/Illustrations';
+import { Empty, ErrorLine, IconCards, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -19,6 +20,7 @@ export default function CardsPage() {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(s.id);
+      toast('Ссылка скопирована');
       setTimeout(() => setCopied(null), 1800);
     } catch {
       window.prompt('Ссылка на картинку', url);
@@ -27,9 +29,9 @@ export default function CardsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHead title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно." />
+      <PageHead icon={<IconCards />} title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно." />
       <ErrorLine text={error} />
-      {loaded && servers.length === 0 && <Empty title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»." />}
+      {loaded && servers.length === 0 && <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»." />}
       <div className="grid gap-5 xl:grid-cols-2">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-4">

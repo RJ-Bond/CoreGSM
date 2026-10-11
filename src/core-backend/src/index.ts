@@ -92,20 +92,54 @@ const wrap =
   };
 
 // ---------- auth ----------
+type Role = 'admin' | 'player';
 interface AuthedRequest extends Request {
-  user?: { id: number; username: string };
+  user?: { id: number; username: string; role: Role };
 }
 
-function auth(req: AuthedRequest, res: Response, next: NextFunction) {
+/** The signed-in user (checked against the database, so a deleted or demoted account loses access at once). */
+function loadUser(req: Request): { id: number; username: string; role: Role } | null {
   const h = req.headers.authorization ?? '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
+  if (!token) return null;
   try {
-    const p = jwt.verify(token, JWT_SECRET) as { sub: string; username: string };
-    req.user = { id: Number(p.sub), username: p.username };
-    next();
+    const p = jwt.verify(token, JWT_SECRET) as { sub: string };
+    const u = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
+    return u ?? null;
   } catch {
-    res.status(401).json({ error: 'Требуется вход' });
+    return null;
   }
+}
+
+const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
+const flag = (key: string, fallback: boolean) => {
+  const v = getSetting(key);
+  return v === null ? fallback : v === '1';
+};
+const publicPanel = () => flag('public_panel', true);
+const registrationOpen = () => flag('registration_open', true);
+
+/** any signed-in user */
+function auth(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  req.user = u;
+  next();
+}
+/** administrators only */
+function admin(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  if (u.role !== 'admin') return void res.status(403).json({ error: 'Это действие доступно только администратору' });
+  req.user = u;
+  next();
+}
+/** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
+function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (u) req.user = u;
+  if (!u && !publicPanel()) return void res.status(401).json({ error: 'Требуется вход' });
+  next();
 }
 
 const attempts = new Map<string, { n: number; reset: number }>();
@@ -133,13 +167,13 @@ app.post(
     const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
     const u = db.prepare('SELECT * FROM users WHERE username = ?').get(body.data.username) as
-      | { id: number; username: string; password_hash: string }
+      | { id: number; username: string; password_hash: string; role: Role }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi');
     if (!u || !ok) return res.status(401).json({ error: 'Неверный логин или пароль' });
     attempts.delete(req.ip ?? 'x');
     const token = jwt.sign({ username: u.username }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
-    res.json({ token, username: u.username });
+    res.json({ token, username: u.username, role: u.role });
   }),
 );
 
@@ -180,7 +214,7 @@ app.post(
       db.transaction(() => {
         // re-check inside the transaction so two concurrent requests cannot both create an admin
         if (!needsSetup()) throw new Error('already-setup');
-        userId = Number(db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(b.data.username, hash).lastInsertRowid);
+        userId = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
         if (b.data.discordToken) setSetting('discord_token', b.data.discordToken);
         if (proxyUrl) setSetting('proxy_url', proxyUrl);
       })();
@@ -190,7 +224,7 @@ app.post(
     attempts.delete(req.ip ?? 'x');
     console.log(`setup completed, admin "${b.data.username}" created`);
     const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(userId), expiresIn: '7d' });
-    res.status(201).json({ token, username: b.data.username });
+    res.status(201).json({ token, username: b.data.username, role: 'admin' });
   }),
 );
 
@@ -205,7 +239,7 @@ function settingsPayload() {
   };
 }
 
-app.get('/api/settings', auth, (_req, res) => {
+app.get('/api/settings', admin, (_req, res) => {
   res.json(settingsPayload());
 });
 
@@ -216,7 +250,7 @@ const settingsSchema = z.object({
   proxyType: z.enum(['socks5', 'http']).optional(),
 });
 
-app.put('/api/settings', auth, (req, res) => {
+app.put('/api/settings', admin, (req, res) => {
   const b = settingsSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
   const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
@@ -262,7 +296,7 @@ function invitePayload() {
   };
 }
 
-app.get('/api/bot/status', auth, (_req, res) => {
+app.get('/api/bot/status', admin, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
@@ -336,7 +370,7 @@ function updatePayload() {
 
 app.get(
   '/api/update/status',
-  auth,
+  admin,
   wrap(async (_req, res) => {
     await checkRemote();
     res.json(updatePayload());
@@ -345,14 +379,14 @@ app.get(
 
 app.post(
   '/api/update/check',
-  auth,
+  admin,
   wrap(async (_req, res) => {
     await checkRemote(true);
     res.json(updatePayload());
   }),
 );
 
-app.post('/api/update/apply', auth, (_req, res) => {
+app.post('/api/update/apply', admin, (_req, res) => {
   const state = updatePayload();
   if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm update' });
   if (state.job?.state === 'running') return res.status(409).json({ error: 'Обновление уже выполняется' });
@@ -365,16 +399,114 @@ app.post('/api/update/apply', auth, (_req, res) => {
   res.status(202).json(updatePayload());
 });
 
+// ---------- access: who may look at the panel, who may register ----------
+app.get('/api/access', (_req, res) => {
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+});
+app.put('/api/access', admin, (req, res) => {
+  const b = z.object({ publicPanel: z.boolean().optional(), registration: z.boolean().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
+  if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+});
+
+// ---------- registration of players ----------
+const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
+app.post(
+  '/api/auth/register',
+  loginLimiter,
+  wrap(async (req, res) => {
+    if (needsSetup()) return res.status(409).json({ error: 'Панель ещё не настроена: сначала создайте администратора' });
+    if (!registrationOpen()) return res.status(403).json({ error: 'Регистрация закрыта администратором' });
+    const b = z
+      .object({
+        username: z.string().trim().regex(USERNAME_RE, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
+        password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
+    if (db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE').get(b.data.username)) {
+      return res.status(409).json({ error: 'Этот логин уже занят' });
+    }
+    const hash = await bcrypt.hash(b.data.password, 12);
+    try {
+      const id = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'player', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
+      const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(id), expiresIn: '7d' });
+      res.status(201).json({ token, username: b.data.username, role: 'player' });
+    } catch {
+      res.status(409).json({ error: 'Этот логин уже занят' });
+    }
+  }),
+);
+
+// ---------- user management (administrators) ----------
+const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get() as { n: number }).n;
+
+app.get('/api/users', admin, (_req, res) => {
+  const rows = db.prepare('SELECT id, username, role, created_at FROM users ORDER BY id').all() as { id: number; username: string; role: Role; created_at: number | null }[];
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at })));
+});
+
+app.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
+  const b = z.object({ role: z.enum(['admin', 'player']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
+  const id = Number(req.params.id);
+  const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
+  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
+  res.json({ ok: true });
+});
+
+app.put(
+  '/api/users/:id/password',
+  admin,
+  wrap(async (req, res) => {
+    const b = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Пароль должен быть не короче 8 символов' });
+    const r = db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), Number(req.params.id));
+    if (!r.changes) return res.status(404).json({ error: 'Пользователь не найден' });
+    res.json({ ok: true });
+  }),
+);
+
+app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
+  const u = db.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: Role } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+// ---------- favourites (any signed-in user) ----------
+app.get('/api/favorites', auth, (req: AuthedRequest, res) => {
+  const rows = db.prepare('SELECT server_id FROM favorites WHERE user_id = ?').all(req.user!.id) as { server_id: number }[];
+  res.json(rows.map((r) => r.server_id));
+});
+app.put('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
+  const sid = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(sid)) return res.status(404).json({ error: 'Сервер не найден' });
+  db.prepare('INSERT OR IGNORE INTO favorites (user_id, server_id) VALUES (?, ?)').run(req.user!.id, sid);
+  res.json({ ok: true });
+});
+app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM favorites WHERE user_id = ? AND server_id = ?').run(req.user!.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
-  res.json({ username: req.user!.username });
+  res.json({ username: req.user!.username, role: req.user!.role });
 });
 
 app.post(
   '/api/auth/password',
   auth,
   wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ current: z.string(), next: z.string().min(10).max(256) }).safeParse(req.body);
-    if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 10 символов' });
+    const body = z.object({ current: z.string(), next: z.string().min(8).max(256) }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as { password_hash: string };
     if (!(await bcrypt.compare(body.data.current, u.password_hash))) {
       return res.status(403).json({ error: 'Текущий пароль неверен' });
@@ -400,6 +532,11 @@ const serverSchema = z.object({
     .regex(/^[^\s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
     .optional(),
 });
+
+/** What a non-admin may see: the display address, never the internal host/port used for querying. */
+function publicServer<T extends { host: string; port: number; queryPort: number | null; customName: string }>(s: T): T {
+  return { ...s, host: '', port: 0, queryPort: null, customName: '' };
+}
 
 type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
 
@@ -440,14 +577,15 @@ function getServer(id: number) {
   return row ? serialize(row) : null;
 }
 
-app.get('/api/servers', auth, (_req, res) => {
+app.get('/api/servers', viewer, (req, res) => {
   const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
-  res.json(rows.map(serialize));
+  const list = rows.map(serialize);
+  res.json(isAdmin(req) ? list : list.map(publicServer));
 });
 
 app.post(
   '/api/servers',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
@@ -462,7 +600,7 @@ app.post(
 
 app.put(
   '/api/servers/:id',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     const b = serverSchema.safeParse(req.body);
@@ -476,7 +614,7 @@ app.put(
   }),
 );
 
-app.delete('/api/servers/:id', auth, (req, res) => {
+app.delete('/api/servers/:id', admin, (req, res) => {
   const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
   res.json({ ok: true });
@@ -485,7 +623,7 @@ app.delete('/api/servers/:id', auth, (req, res) => {
 // try a server without saving it: used by the "Проверить" button in the add/edit form
 app.post(
   '/api/servers/test',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
@@ -504,7 +642,7 @@ app.post(
 );
 
 // everything the server page needs: chart points, uptime, peak, outage log
-app.get('/api/servers/:id/details', auth, (req, res) => {
+app.get('/api/servers/:id/details', viewer, (req, res) => {
   const id = Number(req.params.id);
   const server = getServer(id);
   if (!server) return res.status(404).json({ error: 'Сервер не найден' });
@@ -540,7 +678,7 @@ app.get('/api/servers/:id/details', auth, (req, res) => {
   ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
 
   res.json({
-    server,
+    server: isAdmin(req) ? server : publicServer(server),
     hours,
     points,
     stats: {
@@ -556,7 +694,7 @@ app.get('/api/servers/:id/details', auth, (req, res) => {
 
 app.post(
   '/api/servers/:id/refresh',
-  auth,
+  admin,
   wrap(async (req, res) => {
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
     if (!row) return res.status(404).json({ error: 'Сервер не найден' });
@@ -565,7 +703,7 @@ app.post(
   }),
 );
 
-app.get('/api/servers/:id/history', auth, (req, res) => {
+app.get('/api/servers/:id/history', viewer, (req, res) => {
   const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
   const rows = db
     .prepare('SELECT ts, online, players FROM history WHERE server_id = ? AND ts > ? ORDER BY ts')
@@ -620,7 +758,7 @@ function channelInfo(channelId: string): { channelName: string | null; guildName
   return { channelName: null, guildName: null, guildId: null };
 }
 
-app.get('/api/discord/channels', auth, (_req, res) => {
+app.get('/api/discord/channels', admin, (_req, res) => {
   res.json(botGuilds);
 });
 
@@ -650,17 +788,17 @@ function embedFor(serverId: number, intervalSec: number) {
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
 
-app.get('/api/servers/:id/embed', auth, (req, res) => {
+app.get('/api/servers/:id/embed', admin, (req, res) => {
   const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
   if (!e) return res.status(404).json({ error: 'Сервер не найден' });
   res.json(e);
 });
 
-app.get('/api/bindings', auth, (_req, res) => {
+app.get('/api/bindings', admin, (_req, res) => {
   res.json((db.prepare('SELECT * FROM bindings ORDER BY id').all() as BindingRow[]).map(serializeBinding));
 });
 
-app.post('/api/bindings', auth, (req, res) => {
+app.post('/api/bindings', admin, (req, res) => {
   const b = bindingSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
   if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(b.data.serverId)) {
@@ -672,7 +810,7 @@ app.post('/api/bindings', auth, (req, res) => {
   res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
 });
 
-app.put('/api/bindings/:id', auth, (req, res) => {
+app.put('/api/bindings/:id', admin, (req, res) => {
   const b = bindingSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
   const id = Number(req.params.id);
@@ -686,7 +824,7 @@ app.put('/api/bindings/:id', auth, (req, res) => {
   res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
 });
 
-app.delete('/api/bindings/:id', auth, (req, res) => {
+app.delete('/api/bindings/:id', admin, (req, res) => {
   const r = db.prepare('DELETE FROM bindings WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
   res.json({ ok: true });
@@ -760,7 +898,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   res.json({ ok: true });
 });
 
-registerNews({ app, auth, internal, channelInfo });
+registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
 
 // ---------- errors ----------
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
