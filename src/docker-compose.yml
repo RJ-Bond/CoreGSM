@@ -1,0 +1,74 @@
+name: coregsm
+
+services:
+  backend:
+    build: ./core-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      DB_PATH: /data/coregsm.db
+    volumes:
+      - coregsm-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  bot:
+    build: ./core-bot
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      BACKEND_URL: http://backend:3000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [internal]
+
+  frontend:
+    build: ./core-frontend
+    restart: unless-stopped
+    networks: [internal]
+
+  nginx-proxy:
+    build: ./nginx
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    depends_on:
+      - backend
+      - frontend
+    networks: [internal]
+
+  certbot:
+    image: certbot/certbot
+    restart: unless-stopped
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: >
+      /bin/sh -c "trap exit TERM;
+      while :; do
+      certbot renew --quiet --authenticator webroot --webroot-path /var/www/certbot;
+      sleep 12h & wait $${!};
+      done"
+    networks: [internal]
+
+# Only nginx-proxy publishes ports (80/443). Backend, bot and frontend are reachable
+# only inside the "internal" network, so Docker cannot bypass the UFW rules for them.
+networks:
+  internal:
+
+volumes:
+  coregsm-data:

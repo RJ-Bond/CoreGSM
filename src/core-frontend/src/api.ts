@@ -1,0 +1,66 @@
+const KEY = 'coregsm_token';
+
+export const getToken = () => {
+  try { return localStorage.getItem(KEY) ?? ''; } catch { return ''; }
+};
+export const setToken = (t: string) => {
+  try { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); } catch { /* ignore */ }
+};
+
+export interface Server {
+  id: number;
+  name: string;
+  game: string;
+  host: string;
+  port: number;
+  queryPort: number | null;
+  hasStatus: boolean;
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+  map: string | null;
+  version: string | null;
+  ping: number | null;
+  playerNames: string[];
+  error: string | null;
+  updatedAt: number | null;
+}
+
+export interface Binding {
+  id: number;
+  serverId: number;
+  channelId: string;
+  messageId: string | null;
+  intervalSec: number;
+  enabled: boolean;
+  lastUpdate: number | null;
+  lastError: string | null;
+}
+
+export interface ServerInput {
+  name: string;
+  game: string;
+  host: string;
+  port: number;
+  queryPort: number | null;
+}
+
+export class ApiError extends Error {}
+
+export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const res = await fetch('/api' + path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && path !== '/auth/login') {
+    setToken('');
+    window.dispatchEvent(new Event('coregsm:logout'));
+  }
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`);
+  return data as T;
+}

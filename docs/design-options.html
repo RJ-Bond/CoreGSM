@@ -1,0 +1,156 @@
+<title>CoreGSM Design Options</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Rubik:wght@400;500;700;900&family=Bricolage+Grotesque:wght@400;600;800&family=DM+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: intro, then three full-width mockup frames stacked, each with its own fixed palette */
+:root{--bg:#f4f4f2;--fg:#17181a;--mut:#62666d;--line:#d9d9d4;--card:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121315;--fg:#ececea;--mut:#9a9ea6;--line:#2c2e32;--card:#1a1b1e;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#121315;--fg:#ececea;--mut:#9a9ea6;--line:#2c2e32;--card:#1a1b1e;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:'DM Sans',system-ui,sans-serif;padding-inline:16px;padding-block:32px;line-height:1.5}
+*{box-sizing:border-box}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:56px}
+h1{font:800 clamp(28px,5vw,44px)/1.1 'Bricolage Grotesque',sans-serif;margin:0 0 8px;text-wrap:balance}
+.lead{color:var(--mut);max-width:62ch;margin:0}
+.head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.head h2{font:800 22px 'Bricolage Grotesque',sans-serif;margin:0}
+.head span{color:var(--mut);font-size:14px}
+.tag{font:600 12px 'IBM Plex Mono',monospace;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:2px 8px}
+.frame{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.scroll{overflow-x:auto}
+.mock{min-width:860px}
+.pick{margin-top:12px;color:var(--mut);font-size:14px;max-width:70ch}
+.pick b{color:var(--fg)}
+
+/* ---------- A: Terminal Ops ---------- */
+.A{--b:#0b0e0c;--p:#111612;--l:#243026;--t:#cfe8d6;--m:#6f8a77;--ac:#5dff8f;--w:#ffb454;--e:#ff5d5d;
+ background:var(--b);color:var(--t);font:13px 'IBM Plex Mono',monospace;display:grid;grid-template-columns:200px 1fr;min-height:540px}
+.A aside{border-right:1px solid var(--l);padding:16px;display:flex;flex-direction:column;gap:4px;background:var(--p)}
+.A .logo{color:var(--ac);font-weight:600;margin-bottom:16px;letter-spacing:.04em}
+.A aside a{padding:6px 8px;color:var(--m);border-left:2px solid transparent}
+.A aside a.on{color:var(--ac);border-color:var(--ac);background:#16201a}
+.A main{padding:20px;display:flex;flex-direction:column;gap:16px}
+.A .top{display:flex;justify-content:space-between;color:var(--m)}
+.A .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--l);border:1px solid var(--l)}
+.A .kpis div{background:var(--p);padding:10px 12px}
+.A .kpis small{color:var(--m);display:block;text-transform:uppercase;letter-spacing:.1em;font-size:10px}
+.A .kpis b{font-size:22px;font-weight:500;color:var(--ac)}
+.A table{width:100%;border-collapse:collapse}
+.A th{text-align:left;color:var(--m);font-weight:400;font-size:11px;text-transform:uppercase;letter-spacing:.1em;padding:6px 8px;border-bottom:1px solid var(--l)}
+.A td{padding:9px 8px;border-bottom:1px solid #18211b;font-variant-numeric:tabular-nums}
+.A .up{color:var(--ac)}.A .dn{color:var(--e)}.A .wn{color:var(--w)}
+.A .bar{display:inline-block;width:70px;height:6px;background:#1c2a20;vertical-align:middle;margin-right:6px}
+.A .bar i{display:block;height:100%;background:var(--ac)}
+.A .prev{border:1px dashed var(--l);padding:12px;display:flex;gap:16px;align-items:center}
+
+/* ---------- B: Arcade ---------- */
+.B{--b:#0d1020;--p:#161a33;--l:#272d54;--t:#eef0ff;--m:#8d94c4;--ac:#ffd23f;--c2:#2de2e6;--c3:#ff4d8d;
+ background:radial-gradient(900px 400px at 85% -10%,#2a1b4d55,transparent),var(--b);color:var(--t);font:14px 'Rubik',sans-serif;padding:20px;display:flex;flex-direction:column;gap:18px;min-height:540px}
+.B nav{display:flex;align-items:center;gap:20px}
+.B .logo{font:900 20px 'Rubik';letter-spacing:.02em}.B .logo em{color:var(--ac);font-style:normal}
+.B nav a{color:var(--m)}.B nav a.on{color:var(--t);border-bottom:2px solid var(--ac);padding-bottom:4px}
+.B nav .sp{flex:1}
+.B .btn{background:var(--ac);color:#1a1500;font-weight:700;padding:8px 14px;border-radius:999px}
+.B .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.B .card{background:var(--p);border:1px solid var(--l);border-radius:16px;overflow:hidden}
+.B .art{height:96px;position:relative;display:flex;align-items:flex-end;padding:10px 14px;font:900 22px 'Rubik'}
+.B .art::after{content:"";position:absolute;inset:0;background:linear-gradient(transparent 30%,#0d1020dd)}
+.B .art span{position:relative;z-index:1}
+.B .body{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.B .row{display:flex;justify-content:space-between;color:var(--m);font-size:13px}
+.B .row b{color:var(--t)}
+.B .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px}
+.B .on-p{background:#0f3d3f;color:var(--c2)}.B .off-p{background:#4a1230;color:var(--c3)}
+.B .meter{height:8px;border-radius:8px;background:#232950;overflow:hidden}.B .meter i{display:block;height:100%;background:linear-gradient(90deg,var(--c2),var(--ac))}
+
+/* ---------- C: Paper Console ---------- */
+.C{--b:#f7f7f5;--p:#fff;--l:#e3e3de;--t:#1b1d21;--m:#6b7078;--ac:#2f5bea;--ok:#1f8f5f;--wn:#b7791f;--er:#c93a3a;
+ background:var(--b);color:var(--t);font:14px 'DM Sans',sans-serif;display:grid;grid-template-columns:56px 1fr;min-height:540px}
+.C aside{background:var(--p);border-right:1px solid var(--l);display:flex;flex-direction:column;align-items:center;gap:14px;padding:14px 0}
+.C aside i{width:28px;height:28px;border-radius:7px;background:#ececE7}.C aside i.on{background:var(--ac)}
+.C main{padding:22px 26px;display:flex;flex-direction:column;gap:18px}
+.C h3{font:600 20px 'DM Sans';margin:0}
+.C .bar{display:flex;justify-content:space-between;align-items:center}
+.C .btn{background:var(--ac);color:#fff;padding:7px 14px;border-radius:6px;font-weight:500}
+.C .list{background:var(--p);border:1px solid var(--l);border-radius:8px}
+.C .li{display:grid;grid-template-columns:12px 2fr 1.2fr 1fr 1.4fr;gap:14px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--l)}
+.C .li:last-child{border:0}
+.C .dot{width:9px;height:9px;border-radius:50%}
+.C .li small{color:var(--m);display:block}
+.C .stat{font-variant-numeric:tabular-nums}
+.C .split{display:grid;grid-template-columns:1fr 1.1fr;gap:16px}
+.C .box{background:var(--p);border:1px solid var(--l);border-radius:8px;padding:14px}
+.C .box h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--m)}
+
+/* shared status-card thumbnail */
+.sc{width:300px;height:120px;border-radius:10px;padding:12px 14px;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;flex:none}
+.sc b{font-size:15px}.sc small{opacity:.8;font-size:11px}
+.sc .pl{font-size:26px;font-weight:700}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>CoreGSM: выберите дизайн панели</h1>
+    <p class="lead">Три направления для веб-интерфейса. Все показывают один и тот же экран: список игровых серверов, их статус и превью PNG-карточки, которую бот отправит в Discord. Скажите букву, и я соберу фронтенд в этом стиле.</p>
+  </header>
+
+  <section>
+    <div class="head"><span class="tag">Вариант A</span><h2>Terminal Ops</h2><span>тёмный, плотный, моноширинный</span></div>
+    <div class="frame scroll"><div class="mock A">
+      <aside><div class="logo">▌CORE//GSM</div><a class="on">Серверы</a><a>Карточки</a><a>Discord</a><a>Журнал</a><a>Настройки</a></aside>
+      <main>
+        <div class="top"><span>admin@coregsm ~ /servers</span><span>обновлено 12 с назад</span></div>
+        <div class="kpis"><div><small>Серверов</small><b>6</b></div><div><small>Онлайн</small><b>5</b></div><div><small>Игроков</small><b>87</b></div><div><small>Ср. пинг</small><b>34 мс</b></div></div>
+        <table>
+          <tr><th>Статус</th><th>Сервер</th><th>Игра</th><th>Игроки</th><th>Карта</th><th>Пинг</th></tr>
+          <tr><td class="up">● UP</td><td>EU Survival #1</td><td>Minecraft</td><td><span class="bar"><i style="width:62%"></i></span>31/50</td><td>world</td><td>28</td></tr>
+          <tr><td class="up">● UP</td><td>Dust2 24/7</td><td>CS2</td><td><span class="bar"><i style="width:94%"></i></span>30/32</td><td>de_dust2</td><td>41</td></tr>
+          <tr><td class="wn">● LAG</td><td>Rust Vanilla</td><td>Rust</td><td><span class="bar"><i style="width:40%;background:#ffb454"></i></span>80/200</td><td>Procedural</td><td class="wn">112</td></tr>
+          <tr><td class="dn">● DOWN</td><td>Valheim Coop</td><td>Valheim</td><td><span class="bar"></span>0/10</td><td>-</td><td>-</td></tr>
+        </table>
+        <div class="prev">
+          <div class="sc" style="background:linear-gradient(135deg,#0f2a18,#0b0e0c);border:1px solid #1f5a33;color:#cfe8d6;font-family:'IBM Plex Mono',monospace"><div><b>EU Survival #1</b><br><small>Minecraft · 1.21.4</small></div><div class="pl" style="color:#5dff8f">31 / 50</div><small>play.eu-survival.net:25565 · ● ONLINE</small></div>
+          <div style="color:#6f8a77">Превью PNG-карточки<br>1200×480, обновляется каждые 60 с</div>
+        </div>
+      </main>
+    </div></div>
+    <p class="pick"><b>Подходит, если</b> панель в основном для админов. Максимум данных на экране, быстрый скан статуса, ощущение инструмента мониторинга.</p>
+  </section>
+
+  <section>
+    <div class="head"><span class="tag">Вариант B</span><h2>Arcade</h2><span>тёмно-синий, яркие карточки с играми</span></div>
+    <div class="frame scroll"><div class="mock B">
+      <nav><span class="logo">CORE<em>GSM</em></span><a class="on">Серверы</a><a>Карточки</a><a>Каналы</a><a>Настройки</a><span class="sp"></span><span class="btn">+ Добавить сервер</span></nav>
+      <div class="grid">
+        <div class="card"><div class="art" style="background:linear-gradient(120deg,#2a7a2a,#1b3f1b)"><span>Minecraft</span></div><div class="body"><div class="row"><b>EU Survival #1</b><span class="pill on-p">ONLINE</span></div><div class="meter"><i style="width:62%"></i></div><div class="row"><span>31 / 50 игроков</span><b>28 мс</b></div></div></div>
+        <div class="card"><div class="art" style="background:linear-gradient(120deg,#d98a1c,#6b3d0a)"><span>CS2</span></div><div class="body"><div class="row"><b>Dust2 24/7</b><span class="pill on-p">ONLINE</span></div><div class="meter"><i style="width:94%"></i></div><div class="row"><span>30 / 32 игроков</span><b>41 мс</b></div></div></div>
+        <div class="card"><div class="art" style="background:linear-gradient(120deg,#b3331f,#4a1208)"><span>Rust</span></div><div class="body"><div class="row"><b>Rust Vanilla</b><span class="pill on-p">ONLINE</span></div><div class="meter"><i style="width:40%"></i></div><div class="row"><span>80 / 200 игроков</span><b>112 мс</b></div></div></div>
+        <div class="card"><div class="art" style="background:linear-gradient(120deg,#3b6fa0,#14283d)"><span>Valheim</span></div><div class="body"><div class="row"><b>Valheim Coop</b><span class="pill off-p">OFFLINE</span></div><div class="meter"><i style="width:0"></i></div><div class="row"><span>0 / 10 игроков</span><b>-</b></div></div></div>
+        <div class="card" style="grid-column:span 2;display:flex;align-items:center;gap:16px;padding:14px">
+          <div class="sc" style="background:linear-gradient(120deg,#2a7a2a,#12301a);color:#fff;font-family:Rubik"><div><b>EU Survival #1</b><br><small>Minecraft · 1.21.4</small></div><div class="pl" style="color:#ffd23f">31 / 50</div><small>play.eu-survival.net · ONLINE</small></div>
+          <div style="color:#8d94c4">Превью карточки для Discord</div>
+        </div>
+      </div>
+    </div></div>
+    <p class="pick"><b>Подходит, если</b> панелью пользуются и игроки или модераторы. Игры узнаются с первого взгляда, больше характера, меньше плотности данных.</p>
+  </section>
+
+  <section>
+    <div class="head"><span class="tag">Вариант C</span><h2>Paper Console</h2><span>светлый, спокойный, как SaaS-панель</span></div>
+    <div class="frame scroll"><div class="mock C">
+      <aside><i class="on"></i><i></i><i></i><i></i></aside>
+      <main>
+        <div class="bar"><h3>Серверы</h3><span class="btn">Добавить сервер</span></div>
+        <div class="list">
+          <div class="li"><span class="dot" style="background:var(--ok)"></span><div>EU Survival #1<small>play.eu-survival.net:25565</small></div><div>Minecraft</div><div class="stat">31 / 50</div><div class="stat">world · 28 мс</div></div>
+          <div class="li"><span class="dot" style="background:var(--ok)"></span><div>Dust2 24/7<small>185.20.4.17:27015</small></div><div>CS2</div><div class="stat">30 / 32</div><div class="stat">de_dust2 · 41 мс</div></div>
+          <div class="li"><span class="dot" style="background:var(--wn)"></span><div>Rust Vanilla<small>rust.example.org:28015</small></div><div>Rust</div><div class="stat">80 / 200</div><div class="stat">Procedural · 112 мс</div></div>
+          <div class="li"><span class="dot" style="background:var(--er)"></span><div>Valheim Coop<small>val.example.org:2456</small></div><div>Valheim</div><div class="stat">0 / 10</div><div class="stat">недоступен</div></div>
+        </div>
+        <div class="split">
+          <div class="box"><h4>Discord</h4>#server-status · обновление раз в 60 с<br>Сообщение будет редактироваться, а не дублироваться.</div>
+          <div class="box"><h4>Карточка</h4><div class="sc" style="background:#fff;border:1px solid #e3e3de;color:#1b1d21;width:100%;max-width:300px"><div><b>EU Survival #1</b><br><small>Minecraft · 1.21.4</small></div><div class="pl" style="color:#2f5bea">31 / 50</div><small>play.eu-survival.net · ● Online</small></div></div>
+        </div>
+      </main>
+    </div></div>
+    <p class="pick"><b>Подходит, если</b> нужна нейтральная привычная панель без лишнего оформления. Лучше всего читается, проще всего поддерживать.</p>
+  </section>
+</div>
