@@ -12,7 +12,7 @@ export interface DiscordEmbed {
   thumbnail?: { url: string };
   image?: { url: string };
   fields?: { name: string; value: string; inline?: boolean }[];
-  footer?: { text: string };
+  footer?: { text: string; icon_url?: string };
   timestamp?: string;
 }
 
@@ -69,10 +69,11 @@ export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; con
           ))}
           {embed.image && <img src={embed.image.url} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
           {(embed.footer || embed.timestamp) && (
-            <div className="mt-2 text-xs" style={{ color: D.muted }}>
-              {embed.footer?.text}
+            <div className="mt-2 flex items-center gap-1.5 text-xs" style={{ color: D.muted }}>
+              {embed.footer?.icon_url && <img src={embed.footer.icon_url} alt="" className="h-5 w-5 rounded-full" />}
+              <span>{embed.footer?.text}
               {embed.footer && embed.timestamp ? ' • ' : ''}
-              {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}
+              {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}</span>
             </div>
           )}
         </div>
