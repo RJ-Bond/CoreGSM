@@ -7,7 +7,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { queryServer, refreshServer, startPoller } from './gsm.js';
-import { renderCard } from './card.js';
+import { renderCard, renderGameIcon } from './card.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 
@@ -400,7 +400,16 @@ app.post('/api/update/apply', admin, (_req, res) => {
 });
 
 // ---------- access: who may look at the panel, who may register ----------
-app.get('/api/access', (_req, res) => {
+// remember the public https address the panel is opened at: Discord needs it to load the embed thumbnail
+function rememberPublicBase(req: Request) {
+  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(':')[0];
+  if (!host || host === 'localhost' || /^[\d.]+$/.test(host) || !host.includes('.')) return;
+  const base = `https://${host}`;
+  if (getSetting('public_base') !== base) setSetting('public_base', base);
+}
+
+app.get('/api/access', (req, res) => {
+  rememberPublicBase(req);
   res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
 });
 app.put('/api/access', admin, (req, res) => {
@@ -721,6 +730,15 @@ app.get(
   }),
 );
 
+// game pictogram for embeds (public: Discord fetches it)
+app.get(
+  '/api/game-icon/:game.png',
+  wrap(async (req, res) => {
+    const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(game));
+  }),
+);
+
 // ---------- discord bindings ----------
 const bindingSchema = z.object({
   serverId: z.number().int(),
@@ -783,7 +801,9 @@ function embedFor(serverId: number, intervalSec: number) {
   const up = db
     .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ?')
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
-  return buildEmbed(server, up.u, intervalSec);
+  const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
+  const base = getSetting('public_base');
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
