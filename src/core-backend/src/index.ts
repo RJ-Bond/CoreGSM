@@ -36,6 +36,47 @@ if (getSetting('proxy_url') === null && process.env.PROXY_URL) setSetting('proxy
 const PROXY_RE = /^(socks5h?|http|https):\/\/([^@/\s]+@)?[^@/:\s]+:\d{1,5}\/?$/;
 const maskProxy = (u: string) => u.replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:***@');
 
+type ProxyType = 'socks5' | 'http';
+
+/**
+ * Accepts what proxy sellers usually hand out and turns it into a URL:
+ *   socks5://user:pass@host:port   (kept as is)
+ *   host:port:user:pass            (the password may contain ":")
+ *   user:pass@host:port
+ *   host:port
+ * The scheme comes from `type` when the text has none. Credentials are percent-encoded.
+ */
+function normalizeProxy(raw: string, type: ProxyType): string {
+  const v = raw.trim();
+  if (!v || /^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return v;
+  let host = '';
+  let port = '';
+  let user: string | undefined;
+  let pass: string | undefined;
+  const at = v.lastIndexOf('@');
+  // "host:port:user:pass" is recognised first: the password itself may contain "@" or ":"
+  if (/^[^@:\s]+:\d{1,5}:[^\s]+$/.test(v)) {
+    const p = v.split(':');
+    [host, port, user] = p;
+    pass = p.slice(3).join(':');
+  } else if (at > 0) {
+    const cred = v.slice(0, at);
+    const ci = cred.indexOf(':');
+    user = ci < 0 ? cred : cred.slice(0, ci);
+    pass = ci < 0 ? undefined : cred.slice(ci + 1);
+    [host, port] = v.slice(at + 1).split(':');
+  } else {
+    const p = v.split(':');
+    if (p.length === 2) [host, port] = p;
+    else if (p.length >= 4) {
+      [host, port, user] = p;
+      pass = p.slice(3).join(':');
+    } else return v;
+  }
+  const auth = user ? `${encodeURIComponent(user)}${pass !== undefined ? ':' + encodeURIComponent(pass) : ''}@` : '';
+  return `${type}://${auth}${host}:${port}`;
+}
+
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -86,7 +127,7 @@ app.post(
   '/api/auth/login',
   loginLimiter,
   wrap(async (req, res) => {
-    const body = z.object({ username: z.string().max(64), password: z.string().max(256) }).safeParse(req.body);
+    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
     const u = db.prepare('SELECT * FROM users WHERE username = ?').get(body.data.username) as
       | { id: number; username: string; password_hash: string }
@@ -106,11 +147,18 @@ app.get('/api/setup/status', (_req, res) => {
 
 const setupSchema = z.object({
   code: z.string().min(1).max(64),
-  username: z.string().trim().regex(/^[a-zA-Z0-9_.-]{3,32}$/, 'Логин: 3-32 символа, буквы, цифры и _ . -'),
+  // letters (any alphabet), digits, _ . - and single spaces between words; 3-32 characters
+  username: z
+    .string()
+    .trim()
+    .regex(/^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
   password: z.string().min(10, 'Пароль должен быть не короче 10 символов').max(256),
   discordToken: z.string().trim().max(200).optional(),
   proxyUrl: z.string().trim().max(300).optional(),
+  proxyType: z.enum(['socks5', 'http']).optional(),
 });
+
+const PROXY_HELP = 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port';
 
 app.post(
   '/api/setup',
@@ -120,9 +168,8 @@ app.post(
     const b = setupSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
     if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
-    if (b.data.proxyUrl && !PROXY_RE.test(b.data.proxyUrl)) {
-      return res.status(400).json({ error: 'Прокси: формат socks5://host:port или http://host:port' });
-    }
+    const proxyUrl = normalizeProxy(b.data.proxyUrl ?? '', b.data.proxyType ?? 'socks5');
+    if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
 
     const hash = await bcrypt.hash(b.data.password, 12);
     let userId = 0;
@@ -132,7 +179,7 @@ app.post(
         if (!needsSetup()) throw new Error('already-setup');
         userId = Number(db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(b.data.username, hash).lastInsertRowid);
         if (b.data.discordToken) setSetting('discord_token', b.data.discordToken);
-        if (b.data.proxyUrl) setSetting('proxy_url', b.data.proxyUrl);
+        if (proxyUrl) setSetting('proxy_url', proxyUrl);
       })();
     } catch {
       return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
@@ -163,16 +210,16 @@ app.get('/api/settings', auth, (_req, res) => {
 const settingsSchema = z.object({
   discordToken: z.string().trim().max(200).optional(),
   proxyUrl: z.string().trim().max(300).optional(),
+  proxyType: z.enum(['socks5', 'http']).optional(),
 });
 
 app.put('/api/settings', auth, (req, res) => {
   const b = settingsSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
-  if (b.data.proxyUrl && !PROXY_RE.test(b.data.proxyUrl)) {
-    return res.status(400).json({ error: 'Прокси: формат socks5://host:port или http://host:port (можно с логином и паролем)' });
-  }
+  const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
+  if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
   if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
-  if (b.data.proxyUrl !== undefined) setSetting('proxy_url', b.data.proxyUrl);
+  if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
   res.json(settingsPayload());
 });
 
@@ -255,7 +302,7 @@ app.post(
 
 app.post('/api/update/apply', auth, (_req, res) => {
   const state = updatePayload();
-  if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm-update' });
+  if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm update' });
   if (state.job?.state === 'running') return res.status(409).json({ error: 'Обновление уже выполняется' });
   try {
     fs.writeFileSync(updateFile('request'), String(Date.now()));

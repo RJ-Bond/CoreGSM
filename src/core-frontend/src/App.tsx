@@ -6,6 +6,7 @@ import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
 import SettingsPage from './pages/Settings';
+import { Logo } from './ui';
 
 const PAGES = [
   { id: 'servers', label: 'Серверы' },
@@ -69,7 +70,10 @@ export default function App() {
   return (
     <div className="mx-auto min-h-full max-w-6xl px-4 pb-16 pt-5 sm:px-6">
       <header className="mb-8 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <a href="#/servers" className="text-2xl font-black tracking-tight text-brand">coregsm</a>
+        <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight text-brand">
+          <Logo size={34} />
+          coregsm
+        </a>
         <nav className="flex max-w-full gap-1.5 overflow-x-auto" aria-label="Разделы">
           {PAGES.map((p) => (
             <a
