@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { api, type BotStatus, type SettingsInfo } from '../api';
+import { api, type BotStatus, type SettingsInfo, type UpdateInfo } from '../api';
 import { ErrorLine, Field, PageHead, usePoll } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
@@ -20,10 +20,10 @@ export default function SettingsPage() {
       <div className="grid items-start gap-5 md:grid-cols-2">
         <BotCard />
         <PasswordCard />
+        <UpdateCard />
       </div>
       <p className="max-w-2xl font-semibold text-mute">
-        Домен и порты задаются при установке и хранятся в <span className="font-mono text-[13px] text-ink">/app/.env</span>. Обновить панель до новой версии можно командой{' '}
-        <span className="font-mono text-[13px] text-ink">sudo coregsm-update</span> на сервере.
+        Домен и порты задаются при установке и хранятся в <span className="font-mono text-[13px] text-ink">/app/.env</span>.
       </p>
     </div>
   );
@@ -162,5 +162,104 @@ function PasswordCard() {
       {done && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
       <button className="btn">Сохранить пароль</button>
     </form>
+  );
+}
+
+const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
+
+function UpdateCard() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  // set when "Update" was pressed: remembers the previous job timestamp to recognise the new result
+  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null } | null>(null);
+  const [offline, setOffline] = useState(false);
+
+  usePoll(() => {
+    api<UpdateInfo>('/update/status')
+      .then((r) => {
+        setOffline(false);
+        setInfo(r);
+        if (!waiting || !r.job || r.job.time === waiting.baseTime) return;
+        if (r.job.state === 'done') {
+          setWaiting(null);
+          // new frontend files are served now: reload to pick them up
+          setTimeout(() => window.location.reload(), 1500);
+        } else if (r.job.state === 'error') {
+          setWaiting(null);
+          setError(r.job.message);
+        }
+      })
+      .catch(() => {
+        // the backend restarts during an update
+        if (waiting) setOffline(true);
+      });
+  }, waiting ? 3_000 : 30_000);
+
+  const check = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      setInfo(await api<UpdateInfo>('/update/check', 'POST'));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!window.confirm('Обновить панель? Она будет недоступна 1-3 минуты, данные и настройки сохранятся.')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<UpdateInfo>('/update/apply', 'POST');
+      setInfo(r);
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const running = !!waiting || info?.job?.state === 'running';
+  const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
+
+  return (
+    <div className="panel space-y-3.5 p-6 md:col-span-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-black">Обновления</h2>
+        {running ? <span className="pill pill-warn">ОБНОВЛЕНИЕ</span>
+          : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
+          : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
+          : <span className="pill pill-mute">ПРОВЕРКА</span>}
+      </div>
+
+      <dl className="grid grid-cols-2 gap-3 text-[13px] font-bold sm:max-w-sm">
+        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
+        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
+      </dl>
+
+      {running && (
+        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
+          {offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : 'Запрос отправлен серверу…'}
+        </p>
+      )}
+      {stuck && (
+        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">
+          Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm-update</span>.
+        </p>
+      )}
+      {info?.error && !running && <p className="text-[13px] font-semibold text-mute">{info.error}</p>}
+      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
+      <ErrorLine text={error} />
+
+      <div className="flex flex-wrap gap-2">
+        <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
+        {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
+      </div>
+      {info && !info.canApply && <p className="text-[13px] font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm-update</span>.</p>}
+    </div>
   );
 }

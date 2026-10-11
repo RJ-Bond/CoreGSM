@@ -13,8 +13,11 @@ services:
     environment:
       PORT: "3000"
       DB_PATH: /data/coregsm.db
+      UPDATE_DIR: /update
     volumes:
       - coregsm-data:/data
+      # update requests/status exchanged with the host updater (no Docker socket is exposed)
+      - ./update:/update
     networks: [internal]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
