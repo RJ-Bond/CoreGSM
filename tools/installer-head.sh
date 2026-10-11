@@ -106,9 +106,12 @@ ART
 ask() { # ask VAR "Prompt" [default] [secret]
   local __var="$1" __prompt="$2" __def="${3:-}" __secret="${4:-}" __val=""
   if [ -n "${!__var:-}" ]; then return 0; fi
-  if [ ! -r /dev/tty ]; then
+  # Never prompt when there is no usable terminal: the update button in the panel (systemd), cron,
+  # or "coregsm update". /dev/tty may exist as a file yet fail to open ("No such device or address"),
+  # so test that it can really be opened instead of just being readable.
+  if [ "${COREGSM_FROM_MANAGER:-}" = 1 ] || ! { : < /dev/tty; } 2>/dev/null; then
     [ -n "$__def" ] && { printf -v "$__var" '%s' "$__def"; return 0; }
-    die "Нет терминала для ввода. Передайте $__var через переменную окружения."
+    die "Нет терминала для ввода. Передайте $__var через переменную окружения или впишите в $APP_DIR/.env"
   fi
   if [ -n "$__def" ]; then __prompt="$__prompt [${__def}]"; fi
   if [ -n "$__secret" ]; then
