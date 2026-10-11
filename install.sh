@@ -24,7 +24,7 @@ else
 fi
 
 STEP=0
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; }
 info()  { echo -e "  ${CYAN}>${NC} $*"; }
 ok()    { echo -e "  ${GREEN}✔${NC} $*"; }
@@ -94,6 +94,74 @@ preflight() {
   esac
 }
 
+# ---------- 1b. proxy (optional) ----------
+PROXY_MARK="# managed by CoreGSM installer"
+
+# Accepts socks5://, socks5h://, http://, https:// (optionally with user:pass@)
+valid_proxy() { [[ "$1" =~ ^(socks5h?|http|https)://([^@/[:space:]]+@)?[^@/:[:space:]]+:[0-9]{1,5}/?$ ]]; }
+
+setup_proxy() {
+  step "Прокси (необязательно)"
+  : "${PROXY_URL:=$(env_get PROXY_URL)}"
+  echo -e "  ${DIM}Если задан, через прокси пойдут: бот → Discord, apt, curl, загрузка образов Docker.${NC}"
+  echo -e "  ${DIM}Формат: socks5://[user:pass@]host:1080  или  http://[user:pass@]host:3128${NC}"
+  echo -e "  ${DIM}Опрос игровых серверов (UDP/TCP query) всегда идёт напрямую.${NC}\n"
+  ask PROXY_URL "Прокси (Enter — без прокси)" "-"
+  [ "$PROXY_URL" = "-" ] && PROXY_URL=""
+  BUILD_PROXY=""
+
+  if [ -z "$PROXY_URL" ]; then
+    ok "Прокси не используется"
+    if grep -qs "$PROXY_MARK" /etc/apt/apt.conf.d/99coregsm-proxy; then rm -f /etc/apt/apt.conf.d/99coregsm-proxy; fi
+    return 0
+  fi
+
+  valid_proxy "$PROXY_URL" || die "Некорректный адрес прокси: $PROXY_URL (пример: socks5://127.0.0.1:1080)"
+  # SOCKS: resolve hostnames on the proxy side (socks5h) for curl/apt
+  local tool_proxy="${PROXY_URL/#socks5:/socks5h:}"
+  export http_proxy="$tool_proxy" https_proxy="$tool_proxy" all_proxy="$tool_proxy"
+  export HTTP_PROXY="$tool_proxy" HTTPS_PROXY="$tool_proxy" ALL_PROXY="$tool_proxy"
+  export no_proxy="localhost,127.0.0.1,::1" NO_PROXY="localhost,127.0.0.1,::1"
+
+  printf '%s\nAcquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$PROXY_MARK" "$tool_proxy" "$tool_proxy" \
+    > /etc/apt/apt.conf.d/99coregsm-proxy
+
+  if curl -fsS --max-time 15 -o /dev/null https://download.docker.com/linux/debian/gpg; then
+    ok "Прокси работает"
+  else
+    die "Прокси недоступен или не пускает наружу: проверьте адрес, логин и пароль"
+  fi
+
+  case "$PROXY_URL" in
+    http://*|https://*) BUILD_PROXY="$PROXY_URL" ;;
+    *) warn "SOCKS5: npm и certbot внутри Docker не умеют SOCKS, поэтому сборка образов и продление сертификата идут напрямую." ;;
+  esac
+}
+
+# The Docker daemon (image pulls) reads HTTP(S)_PROXY from a systemd drop-in; Go also accepts socks5:// there.
+configure_docker_proxy() {
+  local dir=/etc/systemd/system/docker.service.d
+  local file=$dir/coregsm-proxy.conf tmp
+  tmp="$(mktemp)"
+  if [ -n "${PROXY_URL:-}" ]; then
+    printf '%s\n[Service]\nEnvironment="HTTP_PROXY=%s"\nEnvironment="HTTPS_PROXY=%s"\nEnvironment="NO_PROXY=localhost,127.0.0.1,::1"\n' \
+      "$PROXY_MARK" "$PROXY_URL" "$PROXY_URL" > "$tmp"
+    mkdir -p "$dir"
+    if ! cmp -s "$tmp" "$file"; then
+      install -m 0644 "$tmp" "$file"
+      systemctl daemon-reload
+      systemctl restart docker
+      ok "Docker настроен на работу через прокси"
+    fi
+  elif grep -qs "$PROXY_MARK" "$file"; then
+    rm -f "$file"
+    systemctl daemon-reload
+    systemctl restart docker
+    ok "Прокси для Docker отключён"
+  fi
+  rm -f "$tmp"
+}
+
 # ---------- 2. system update ----------
 system_update() {
   step "Обновление системы"
@@ -114,6 +182,7 @@ install_docker() {
   step "Установка Docker Engine и Docker Compose (docker.com)"
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     ok "Docker уже установлен: $(docker --version)"
+    configure_docker_proxy
     return 0
   fi
   install -m 0755 -d /etc/apt/keyrings
@@ -126,6 +195,7 @@ install_docker() {
   systemctl enable --now docker
   docker compose version >/dev/null 2>&1 || die "Docker Compose не установился"
   ok "Установлено: $(docker --version)"
+  configure_docker_proxy
 }
 
 # ---------- 5. questions ----------
@@ -155,7 +225,7 @@ collect_input() {
 
   # DNS sanity check (warning only)
   local server_ip dns_ip
-  server_ip="$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
+  server_ip="$(curl -4 -fsS --noproxy "*" --max-time 8 https://api.ipify.org 2>/dev/null || true)"
   dns_ip="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)"
   if [ -z "$dns_ip" ]; then
     warn "Домен $DOMAIN пока не резолвится. Выпуск сертификата, скорее всего, не удастся."
@@ -1030,7 +1100,12 @@ __COREGSM_EOF__
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "discord.js": "^14.16.3"
+    "discord.js": "^14.16.3",
+    "fetch-socks": "^1.3.2",
+    "https-proxy-agent": "^7.0.6",
+    "socks-proxy-agent": "^8.0.5",
+    "undici": "^6.27.0",
+    "ws": "^8.17.0"
   },
   "devDependencies": {
     "@types/node": "^20.16.0",
@@ -1040,12 +1115,18 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/index.ts" << '__COREGSM_EOF__'
-import { AttachmentBuilder, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { parseProxy, patchGatewayAgent } from './proxy.js';
 
 const TOKEN = process.env.DISCORD_TOKEN ?? '';
 const BACKEND = process.env.BACKEND_URL ?? 'http://backend:3000';
 const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN ?? '';
 const TICK_MS = 10_000;
+
+// Optional proxy for everything the bot sends to Discord (REST + gateway).
+// Calls to the backend inside the Docker network always go direct.
+const proxy = parseProxy(process.env.PROXY_URL ?? '');
+if (proxy) patchGatewayAgent(proxy.ws);
+const { AttachmentBuilder, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 
 interface Binding {
   id: number;
@@ -1078,7 +1159,11 @@ if (!TOKEN) {
   log('DISCORD_TOKEN is empty: bot is idle. Set it in /app/.env and run "docker compose up -d bot".');
   setInterval(() => undefined, 1 << 30);
 } else {
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  if (proxy) console.log('Using proxy for Discord:', proxy.label);
+  const client = new Client({
+    intents: [GatewayIntentBits.Guilds],
+    ...(proxy ? { rest: { agent: proxy.rest } } : {}),
+  });
   const lastRun = new Map<number, number>();
   let busy = false;
 
@@ -1147,6 +1232,91 @@ if (!TOKEN) {
     console.error('Discord login failed:', e.message);
     process.exit(1);
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/proxy.ts" << '__COREGSM_EOF__'
+import { createRequire } from 'node:module';
+import type { Agent } from 'node:http';
+import { ProxyAgent, type Dispatcher } from 'undici';
+import { socksDispatcher } from 'fetch-socks';
+import { SocksProxyAgent } from 'socks-proxy-agent';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+
+export interface ProxySetup {
+  /** dispatcher for Discord REST (HTTPS API) */
+  rest: Dispatcher;
+  /** agent for the Discord gateway WebSocket */
+  ws: Agent;
+  /** credentials-free description for logs */
+  label: string;
+}
+
+/**
+ * Parses PROXY_URL: socks5://[user:pass@]host:port, socks5h://..., http://..., https://...
+ * SOCKS hostnames are always resolved by the proxy (socks5h), so DNS poisoning of Discord does not matter.
+ */
+export function parseProxy(raw: string): ProxySetup | null {
+  const value = raw.trim();
+  if (!value) return null;
+
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    throw new Error(`PROXY_URL is not a valid URL: ${value.replace(/\/\/.*@/, '//***@')}`);
+  }
+
+  const user = decodeURIComponent(u.username);
+  const pass = decodeURIComponent(u.password);
+  const label = `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}`;
+
+  switch (u.protocol) {
+    case 'socks5:':
+    case 'socks5h:':
+    case 'socks:': {
+      const port = Number(u.port) || 1080;
+      const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
+      return {
+        rest: socksDispatcher({
+          type: 5,
+          host: u.hostname,
+          port,
+          ...(user ? { userId: user, password: pass } : {}),
+        }) as unknown as Dispatcher,
+        ws: new SocksProxyAgent(`socks5h://${auth}${u.hostname}:${port}`) as unknown as Agent,
+        label,
+      };
+    }
+    case 'http:':
+    case 'https:':
+      return {
+        rest: new ProxyAgent(u.toString()),
+        ws: new HttpsProxyAgent(u.toString()) as unknown as Agent,
+        label,
+      };
+    default:
+      throw new Error(`Unsupported proxy protocol "${u.protocol}". Use socks5://, socks5h://, http:// or https://`);
+  }
+}
+
+/**
+ * @discordjs/ws creates its gateway socket with `new (require("ws").WebSocket)(url, [], opts)` and offers no
+ * way to pass an agent. We replace that export BEFORE discord.js is loaded, so every gateway connection
+ * is tunnelled through the proxy. Must be called before `await import('discord.js')`.
+ */
+export function patchGatewayAgent(agent: Agent): void {
+  const require = createRequire(import.meta.url);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ws: any = require('ws');
+  const Base = ws.WebSocket as new (...a: unknown[]) => unknown;
+
+  class ProxiedWebSocket extends (Base as new (...a: unknown[]) => object) {
+    constructor(url: string, protocols?: unknown, options: Record<string, unknown> = {}) {
+      super(url, protocols, { ...options, agent });
+    }
+  }
+  ws.WebSocket = ProxiedWebSocket;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot"
@@ -2029,7 +2199,12 @@ name: coregsm
 
 services:
   backend:
-    build: ./core-backend
+    build:
+      context: ./core-backend
+      args:
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
     env_file: .env
     environment:
@@ -2046,19 +2221,30 @@ services:
       start_period: 15s
 
   bot:
-    build: ./core-bot
+    build:
+      context: ./core-bot
+      args:
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN:-}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       BACKEND_URL: http://backend:3000
+      PROXY_URL: ${PROXY_URL:-}
     depends_on:
       backend:
         condition: service_healthy
     networks: [internal]
 
   frontend:
-    build: ./core-frontend
+    build:
+      context: ./core-frontend
+      args:
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
     networks: [internal]
 
@@ -2081,6 +2267,8 @@ services:
   certbot:
     image: certbot/certbot
     restart: unless-stopped
+    environment:
+      HTTPS_PROXY: ${BUILD_PROXY:-}
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
@@ -2202,6 +2390,10 @@ write_env() {
 DOMAIN=${DOMAIN}
 LE_EMAIL=${LE_EMAIL}
 DISCORD_TOKEN=${DISCORD_TOKEN}
+# socks5://[user:pass@]host:port or http://[user:pass@]host:port; empty = no proxy
+PROXY_URL=${PROXY_URL:-}
+# http(s) proxy for Docker image builds and certbot renewal (SOCKS is not supported there)
+BUILD_PROXY=${BUILD_PROXY:-}
 ADMIN_PASSWORD=${admin_pw}
 JWT_SECRET=${jwt}
 INTERNAL_TOKEN=${internal}
@@ -2231,7 +2423,7 @@ issue_certificate() {
     return 0
   fi
 
-  if docker run --rm -p 80:80 \
+  if docker run --rm -p 80:80 ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
       -v "$conf:/etc/letsencrypt" -v "$APP_DIR/certbot/www:/var/www/certbot" \
       certbot/certbot certonly --standalone --non-interactive --agree-tos --no-eff-email \
       -m "$LE_EMAIL" -d "$DOMAIN"; then
@@ -2256,7 +2448,7 @@ launch() {
   info "Жду готовности панели…"
   local i
   for i in $(seq 1 60); do
-    if curl -fsk --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
+    if curl -fsk --noproxy "*" --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
       ok "Панель отвечает"
       return 0
     fi
@@ -2289,6 +2481,7 @@ report() {
 main() {
   banner
   preflight
+  setup_proxy
   system_update
   base_packages
   install_docker

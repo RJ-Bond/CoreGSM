@@ -35,6 +35,20 @@ sudo DISCORD_TOKEN=... DOMAIN=gsm.example.com LE_EMAIL=me@example.com -E bash in
 
 Если сертификат получить не удалось (например, DNS ещё не обновился), скрипт создаёт временный самоподписанный, а после исправления DNS достаточно запустить `install.sh` снова.
 
+## Прокси (SOCKS5 / HTTP)
+
+Установщик спросит прокси: `socks5://[user:pass@]host:1080`, `socks5h://...`, `http://[user:pass@]host:3128` или `https://...`. Enter означает работу без прокси. Адрес можно передать заранее: `PROXY_URL=socks5://127.0.0.1:1080`.
+
+| Что | Через прокси |
+| --- | --- |
+| Бот → Discord (REST и gateway WebSocket) | да, SOCKS5 и HTTP |
+| apt, curl, загрузка образов Docker при установке | да, SOCKS5 и HTTP |
+| Сборка образов (npm) и продление сертификата | только HTTP/HTTPS (npm и certbot не умеют SOCKS) |
+| Опрос игровых серверов (GameDig) | нет, всегда напрямую: это UDP/TCP-query, HTTP-прокси его не пропускает |
+| Бот → backend внутри Docker | нет, напрямую |
+
+Для SOCKS имена хостов резолвятся на стороне прокси (socks5h), поэтому блокировка DNS для Discord не мешает. Сменить прокси позже: поправьте `PROXY_URL` (и `BUILD_PROXY`) в `/app/.env` и выполните `cd /app && docker compose up -d bot`.
+
 ## Подключение бота
 
 1. В [Discord Developer Portal](https://discord.com/developers/applications) создайте приложение, во вкладке Bot скопируйте токен.

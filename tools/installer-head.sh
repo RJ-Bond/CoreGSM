@@ -24,7 +24,7 @@ else
 fi
 
 STEP=0
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; }
 info()  { echo -e "  ${CYAN}>${NC} $*"; }
 ok()    { echo -e "  ${GREEN}✔${NC} $*"; }
@@ -94,6 +94,74 @@ preflight() {
   esac
 }
 
+# ---------- 1b. proxy (optional) ----------
+PROXY_MARK="# managed by CoreGSM installer"
+
+# Accepts socks5://, socks5h://, http://, https:// (optionally with user:pass@)
+valid_proxy() { [[ "$1" =~ ^(socks5h?|http|https)://([^@/[:space:]]+@)?[^@/:[:space:]]+:[0-9]{1,5}/?$ ]]; }
+
+setup_proxy() {
+  step "Прокси (необязательно)"
+  : "${PROXY_URL:=$(env_get PROXY_URL)}"
+  echo -e "  ${DIM}Если задан, через прокси пойдут: бот → Discord, apt, curl, загрузка образов Docker.${NC}"
+  echo -e "  ${DIM}Формат: socks5://[user:pass@]host:1080  или  http://[user:pass@]host:3128${NC}"
+  echo -e "  ${DIM}Опрос игровых серверов (UDP/TCP query) всегда идёт напрямую.${NC}\n"
+  ask PROXY_URL "Прокси (Enter — без прокси)" "-"
+  [ "$PROXY_URL" = "-" ] && PROXY_URL=""
+  BUILD_PROXY=""
+
+  if [ -z "$PROXY_URL" ]; then
+    ok "Прокси не используется"
+    if grep -qs "$PROXY_MARK" /etc/apt/apt.conf.d/99coregsm-proxy; then rm -f /etc/apt/apt.conf.d/99coregsm-proxy; fi
+    return 0
+  fi
+
+  valid_proxy "$PROXY_URL" || die "Некорректный адрес прокси: $PROXY_URL (пример: socks5://127.0.0.1:1080)"
+  # SOCKS: resolve hostnames on the proxy side (socks5h) for curl/apt
+  local tool_proxy="${PROXY_URL/#socks5:/socks5h:}"
+  export http_proxy="$tool_proxy" https_proxy="$tool_proxy" all_proxy="$tool_proxy"
+  export HTTP_PROXY="$tool_proxy" HTTPS_PROXY="$tool_proxy" ALL_PROXY="$tool_proxy"
+  export no_proxy="localhost,127.0.0.1,::1" NO_PROXY="localhost,127.0.0.1,::1"
+
+  printf '%s\nAcquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$PROXY_MARK" "$tool_proxy" "$tool_proxy" \
+    > /etc/apt/apt.conf.d/99coregsm-proxy
+
+  if curl -fsS --max-time 15 -o /dev/null https://download.docker.com/linux/debian/gpg; then
+    ok "Прокси работает"
+  else
+    die "Прокси недоступен или не пускает наружу: проверьте адрес, логин и пароль"
+  fi
+
+  case "$PROXY_URL" in
+    http://*|https://*) BUILD_PROXY="$PROXY_URL" ;;
+    *) warn "SOCKS5: npm и certbot внутри Docker не умеют SOCKS, поэтому сборка образов и продление сертификата идут напрямую." ;;
+  esac
+}
+
+# The Docker daemon (image pulls) reads HTTP(S)_PROXY from a systemd drop-in; Go also accepts socks5:// there.
+configure_docker_proxy() {
+  local dir=/etc/systemd/system/docker.service.d
+  local file=$dir/coregsm-proxy.conf tmp
+  tmp="$(mktemp)"
+  if [ -n "${PROXY_URL:-}" ]; then
+    printf '%s\n[Service]\nEnvironment="HTTP_PROXY=%s"\nEnvironment="HTTPS_PROXY=%s"\nEnvironment="NO_PROXY=localhost,127.0.0.1,::1"\n' \
+      "$PROXY_MARK" "$PROXY_URL" "$PROXY_URL" > "$tmp"
+    mkdir -p "$dir"
+    if ! cmp -s "$tmp" "$file"; then
+      install -m 0644 "$tmp" "$file"
+      systemctl daemon-reload
+      systemctl restart docker
+      ok "Docker настроен на работу через прокси"
+    fi
+  elif grep -qs "$PROXY_MARK" "$file"; then
+    rm -f "$file"
+    systemctl daemon-reload
+    systemctl restart docker
+    ok "Прокси для Docker отключён"
+  fi
+  rm -f "$tmp"
+}
+
 # ---------- 2. system update ----------
 system_update() {
   step "Обновление системы"
@@ -114,6 +182,7 @@ install_docker() {
   step "Установка Docker Engine и Docker Compose (docker.com)"
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     ok "Docker уже установлен: $(docker --version)"
+    configure_docker_proxy
     return 0
   fi
   install -m 0755 -d /etc/apt/keyrings
@@ -126,6 +195,7 @@ install_docker() {
   systemctl enable --now docker
   docker compose version >/dev/null 2>&1 || die "Docker Compose не установился"
   ok "Установлено: $(docker --version)"
+  configure_docker_proxy
 }
 
 # ---------- 5. questions ----------
@@ -155,7 +225,7 @@ collect_input() {
 
   # DNS sanity check (warning only)
   local server_ip dns_ip
-  server_ip="$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
+  server_ip="$(curl -4 -fsS --noproxy "*" --max-time 8 https://api.ipify.org 2>/dev/null || true)"
   dns_ip="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)"
   if [ -z "$dns_ip" ]; then
     warn "Домен $DOMAIN пока не резолвится. Выпуск сертификата, скорее всего, не удастся."
@@ -201,6 +271,10 @@ write_env() {
 DOMAIN=${DOMAIN}
 LE_EMAIL=${LE_EMAIL}
 DISCORD_TOKEN=${DISCORD_TOKEN}
+# socks5://[user:pass@]host:port or http://[user:pass@]host:port; empty = no proxy
+PROXY_URL=${PROXY_URL:-}
+# http(s) proxy for Docker image builds and certbot renewal (SOCKS is not supported there)
+BUILD_PROXY=${BUILD_PROXY:-}
 ADMIN_PASSWORD=${admin_pw}
 JWT_SECRET=${jwt}
 INTERNAL_TOKEN=${internal}
@@ -230,7 +304,7 @@ issue_certificate() {
     return 0
   fi
 
-  if docker run --rm -p 80:80 \
+  if docker run --rm -p 80:80 ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
       -v "$conf:/etc/letsencrypt" -v "$APP_DIR/certbot/www:/var/www/certbot" \
       certbot/certbot certonly --standalone --non-interactive --agree-tos --no-eff-email \
       -m "$LE_EMAIL" -d "$DOMAIN"; then
@@ -255,7 +329,7 @@ launch() {
   info "Жду готовности панели…"
   local i
   for i in $(seq 1 60); do
-    if curl -fsk --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
+    if curl -fsk --noproxy "*" --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
       ok "Панель отвечает"
       return 0
     fi
@@ -288,6 +362,7 @@ report() {
 main() {
   banner
   preflight
+  setup_proxy
   system_update
   base_packages
   install_docker
