@@ -2678,7 +2678,30 @@ report() {
     echo -e "  ${BOLD}cd ${APP_DIR} && docker compose up -d bot${NC}"
   fi
   echo -e "  ${DIM}Секреты:  ${APP_DIR}/.env      Логи:  cd ${APP_DIR} && docker compose logs -f${NC}"
+  echo -e "  ${DIM}Обновление до новой версии из GitHub:  sudo coregsm-update${NC}"
   echo -e "  ${DIM}Пароль можно сменить в панели: Настройки.${NC}\n"
+}
+
+# /usr/local/bin/coregsm-update: downloads the latest install.sh from GitHub and re-runs it.
+install_update_command() {
+  cat > /usr/local/bin/.coregsm-update.new << 'UPDATER'
+#!/usr/bin/env bash
+# Updates CoreGSM to the latest version from GitHub. Secrets, database and certificates are kept.
+set -euo pipefail
+[ "$(id -u)" -eq 0 ] || { echo "Запустите от root: sudo coregsm-update" >&2; exit 1; }
+URL="${COREGSM_URL:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/main/install.sh}"
+proxy="$(grep -E '^PROXY_URL=' /app/.env 2>/dev/null | cut -d= -f2- || true)"
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+echo "Скачиваю $URL"
+curl -fsSL ${proxy:+--proxy "${proxy/#socks5:/socks5h:}"} "$URL" -o "$tmp"
+bash -n "$tmp"
+echo "Получено $(wc -l < "$tmp") строк, запускаю обновление…"
+SKIP_UPDATE=1 bash "$tmp" "$@"
+UPDATER
+  chmod +x /usr/local/bin/.coregsm-update.new
+  # atomic replace: a running updater keeps reading its old file safely
+  mv -f /usr/local/bin/.coregsm-update.new /usr/local/bin/coregsm-update
 }
 
 main() {
@@ -2694,6 +2717,7 @@ main() {
   generate_project
   ok "Файлы проекта созданы"
   write_env
+  install_update_command
   issue_certificate
   launch
   report
