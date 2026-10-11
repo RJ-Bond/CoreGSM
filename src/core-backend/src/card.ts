@@ -250,3 +250,37 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   cache.set(serverId, { at: Date.now(), buf });
   return buf;
 }
+
+const iconCache = new Map<string, Buffer>();
+
+/** 256px game pictogram (white on the game colour), used as the embed thumbnail */
+export async function renderGameIcon(game: string): Promise<Buffer> {
+  const hit = iconCache.get(game);
+  if (hit) return hit;
+  const color = GAME_COLORS[game]?.[1] ?? C.brand;
+  const canvas = new Canvas(256, 256);
+  const ctx = canvas.getContext('2d') as any;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 256, 256, 64);
+  ctx.fill();
+  const p = gameIconPath(game);
+  if (p) {
+    ctx.translate(128 - 12 * 7, 128 - 12 * 7);
+    ctx.scale(7, 7);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(new Path2D(p));
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 96px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(GAME_COLORS[game]?.[0] ?? game.slice(0, 2).toUpperCase(), 128, 134);
+  }
+  const buf = await canvas.toBuffer('png');
+  iconCache.set(game, buf);
+  return buf;
+}

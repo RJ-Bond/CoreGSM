@@ -27,18 +27,49 @@ export interface DiscordEmbed {
   author?: { name: string };
   fields?: { name: string; value: string; inline?: boolean }[];
   footer?: { text: string };
+  thumbnail?: { url: string };
   timestamp?: string;
+}
+
+export interface EmbedExtra {
+  /** last time the server answered (for the offline note) */
+  lastOnlineAt?: number | null;
+  /** public URL of the game icon (needs a public domain; omitted otherwise) */
+  thumbUrl?: string | null;
 }
 
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-/** ▰▰▰▰▱▱▱▱▱▱ 40% */
+/** █████░░░░░ — a solid bar (the emoji squares render with gaps in Discord) */
 function bar(value: number, max: number): string {
   const ratio = Math.max(0, Math.min(1, value / max));
   const filled = Math.round(ratio * 10);
-  return `${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)}`;
+  return `${'█'.repeat(filled)}${'░'.repeat(10 - filled)}`;
+}
+
+/** games whose clients have a console with the "connect" command */
+const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
+
+/** placeholder versions such as 0.0.0.1 say nothing */
+const usefulVersion = (v: string | null): string | null => {
+  const t = (v ?? '').trim();
+  return t && !/^0(\.0)*(\.\d+)?$/.test(t) ? t : null;
+};
+
+/** player names in rows of three: "Hustler · 69 · qlte" */
+function nameRows(names: string[], per = 3): string {
+  const rows: string[] = [];
+  for (let i = 0; i < names.length; i += per) {
+    rows.push(
+      names
+        .slice(i, i + per)
+        .map((n) => cut(n.replace(/[*_~`|>]/g, ''), 20))
+        .join(' · '),
+    );
+  }
+  return rows.join('\n');
 }
 
 function every(sec: number): string {
@@ -48,9 +79,11 @@ function every(sec: number): string {
   return `каждые ${sec} с`;
 }
 
-export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec: number): DiscordEmbed {
-  const footer = { text: `CoreGSM · обновляется ${every(intervalSec)}` };
+export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec: number, extra: EmbedExtra = {}): DiscordEmbed {
+  const uptime = uptimePct == null ? '' : ` · аптайм 24 ч ${(Math.round(uptimePct * 10) / 10).toFixed(1)}%`;
+  const footer = { text: `CoreGSM${uptime} · обновляется ${every(intervalSec)}` };
   const stamp = (s.updatedAt ? new Date(s.updatedAt) : new Date()).toISOString();
+  const thumbnail = extra.thumbUrl ? { url: extra.thumbUrl } : undefined;
 
   if (!s.hasStatus) {
     return {
@@ -58,6 +91,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       description: `📍 \`${s.address}\`\nЖду первого ответа сервера…`,
       color: COLOR.unknown,
       author: { name: `🎮 ${gameLabel(s.game)}` },
+      thumbnail,
       footer,
       timestamp: stamp,
     };
@@ -65,47 +99,42 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   const lag = s.online && s.ping != null && s.ping > 100;
   const emoji = !s.online ? '🔴' : lag ? '🟡' : '🟢';
-  const status = !s.online ? '🔴 Офлайн' : lag ? '🟡 Лаги' : '🟢 Онлайн';
-  const checked = s.updatedAt ? `<t:${Math.floor(s.updatedAt / 1000)}:R>` : '—';
-  const uptime = uptimePct == null ? '—' : `${(Math.round(uptimePct * 10) / 10).toFixed(1)}%`;
 
   const fields: NonNullable<DiscordEmbed['fields']> = [];
-  fields.push({ name: '📶 Статус', value: status, inline: true });
-  fields.push({
-    name: '👥 Игроки',
-    // "31 / 50 · 62%" on the first line, the bar below it, so neither wraps in a narrow column
-    value: s.online
-      ? `**${s.players}** / ${s.maxPlayers || '?'}${
-          s.maxPlayers ? ` · ${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%\n${bar(s.players, s.maxPlayers)}` : ''
-        }`
-      : '—',
-    inline: true,
-  });
-  fields.push({ name: '📡 Пинг', value: s.online && s.ping != null ? `${s.ping} мс` : '—', inline: true });
-  fields.push({ name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true });
-  fields.push({ name: '📈 Аптайм 24 ч', value: uptime, inline: true });
-  fields.push({ name: '🕒 Проверено', value: checked, inline: true });
-
   if (s.online) {
+    const pct = s.maxPlayers ? ` · ${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%\n\`${bar(s.players, s.maxPlayers)}\`` : '';
+    fields.push({ name: '👥 Игроки', value: `**${s.players}** / ${s.maxPlayers || '?'}${pct}`, inline: true });
+    fields.push({ name: '📡 Пинг', value: s.ping != null ? `${s.ping} мс` : '—', inline: true });
+    fields.push({ name: '🗺️ Карта', value: s.map ? cut(s.map, 100) : '—', inline: true });
     if (s.playerNames.length > 0) {
-      const shown = s.playerNames.slice(0, 15).map((n) => `• ${cut(n, 32)}`);
+      const shown = s.playerNames.slice(0, 18);
       const rest = s.players - shown.length;
-      let list = shown.join('\n');
+      let list = nameRows(shown);
       if (rest > 0) list += `\n… и ещё ${rest}`;
       fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list, 1000) });
     } else if (s.players === 0) {
       fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
     }
+  } else {
+    fields.push({
+      name: '⏱️ Последний раз онлайн',
+      value: extra.lastOnlineAt ? `<t:${Math.floor(extra.lastOnlineAt / 1000)}:R>` : 'за последние сутки не отвечал',
+      inline: true,
+    });
+    fields.push({ name: '🔄 Проверено', value: s.updatedAt ? `<t:${Math.floor(s.updatedAt / 1000)}:R>` : '—', inline: true });
   }
 
-  const description = [`📍 \`${s.address}\``];
-  if (!s.online && s.error) description.push(`⚠️ ${cut(s.error, 300)}`);
+  const addr = `📍 \`${s.address}\``;
+  const description = [SOURCE_GAMES.has(s.game) ? `${addr}  ·  консоль: \`connect ${s.address}\`` : addr];
+  if (!s.online) description.push(`⚠️ ${s.error ? cut(s.error, 300) : 'Сервер не отвечает'}`);
 
+  const version = usefulVersion(s.version);
   return {
     title: cut(`${emoji} ${s.name}`, 256),
     description: description.join('\n'),
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : COLOR.online,
-    author: { name: `🎮 ${gameLabel(s.game)}${s.version ? ` · ${s.version}` : ''}` },
+    author: { name: `🎮 ${gameLabel(s.game)}${version ? ` · ${version}` : ''}` },
+    thumbnail,
     fields,
     footer,
     timestamp: stamp,
