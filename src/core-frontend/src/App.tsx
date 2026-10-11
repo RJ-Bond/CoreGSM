@@ -42,25 +42,28 @@ export default function App() {
   if (!authed) return <Login onDone={() => setAuthed(true)} />;
 
   return (
-    <div className="flex h-full flex-col md:flex-row">
-      <aside className="flex shrink-0 gap-1 overflow-x-auto border-b border-line bg-panel p-3 md:w-52 md:flex-col md:border-b-0 md:border-r md:p-4">
-        <div className="mr-4 flex items-center font-semibold tracking-wider text-blurple-soft md:mb-5 md:mr-0">▌CORE//GSM</div>
-        {PAGES.map((p) => (
-          <a
-            key={p.id}
-            href={`#/${p.id}`}
-            className={`whitespace-nowrap border-l-2 px-2.5 py-1.5 ${
-              page === p.id ? 'border-blurple bg-raise text-blurple-soft' : 'border-transparent text-mute hover:text-fg'
-            }`}
-          >
-            {p.label}
-          </a>
-        ))}
-        <button onClick={logout} className="ml-auto whitespace-nowrap px-2.5 py-1.5 text-left text-mute hover:text-bad md:ml-0 md:mt-auto">
+    <div className="mx-auto min-h-full max-w-6xl px-4 pb-16 pt-5 sm:px-6">
+      <header className="mb-8 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <a href="#/servers" className="text-2xl font-black tracking-tight text-brand">coregsm</a>
+        <nav className="flex max-w-full gap-1.5 overflow-x-auto" aria-label="Разделы">
+          {PAGES.map((p) => (
+            <a
+              key={p.id}
+              href={`#/${p.id}`}
+              aria-current={page === p.id ? 'page' : undefined}
+              className={`whitespace-nowrap rounded-full px-4 py-1.5 font-extrabold transition ${
+                page === p.id ? 'bg-brand text-white shadow-pop' : 'bg-white text-ink shadow-pop hover:text-brand'
+              }`}
+            >
+              {p.label}
+            </a>
+          ))}
+        </nav>
+        <button onClick={logout} className="ml-auto rounded-full bg-white px-4 py-1.5 font-extrabold text-mute shadow-pop hover:text-bad">
           Выйти
         </button>
-      </aside>
-      <main className="min-w-0 flex-1 overflow-auto p-4 md:p-6">
+      </header>
+      <main key={page} className="pop min-w-0">
         {page === 'servers' && <ServersPage />}
         {page === 'cards' && <CardsPage />}
         {page === 'discord' && <DiscordPage />}

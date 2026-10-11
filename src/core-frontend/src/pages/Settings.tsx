@@ -23,21 +23,30 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead title="settings" />
-      <form onSubmit={submit} className="max-w-sm space-y-3 rounded border border-line bg-panel p-4">
-        <h2 className="text-[11px] uppercase tracking-widest text-mute">Смена пароля администратора</h2>
-        <Field label="Текущий пароль">
-          <input id="pw-current" className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required />
-        </Field>
-        <Field label="Новый пароль (от 10 символов)">
-          <input id="pw-next" className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" minLength={10} required />
-        </Field>
-        <ErrorLine text={error} />
-        {done && <p className="rounded border border-ok/40 bg-ok/10 px-3 py-2 text-ok">Пароль изменён.</p>}
-        <button className="btn">Сохранить пароль</button>
-      </form>
-      <p className="max-w-xl text-mute">Токен Discord-бота и домен хранятся в /app/.env на сервере. После изменения выполните <span className="text-fg">cd /app && docker compose up -d</span>.</p>
+    <div className="space-y-6">
+      <PageHead title="Настройки" subtitle="Доступ к панели и конфигурация сервера" />
+      <div className="grid gap-5 md:grid-cols-2">
+        <form onSubmit={submit} className="panel space-y-3.5 p-6">
+          <h2 className="text-lg font-black">Пароль администратора</h2>
+          <Field label="Текущий пароль">
+            <input id="pw-current" className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required />
+          </Field>
+          <Field label="Новый пароль (от 10 символов)">
+            <input id="pw-next" className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" minLength={10} required />
+          </Field>
+          <ErrorLine text={error} />
+          {done && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
+          <button className="btn">Сохранить пароль</button>
+        </form>
+        <div className="panel space-y-2 p-6">
+          <h2 className="text-lg font-black">Бот, домен и прокси</h2>
+          <p className="font-semibold text-mute">
+            Токен Discord-бота, домен и прокси хранятся в <span className="font-mono text-[13px] text-ink">/app/.env</span> на сервере.
+            После изменения выполните:
+          </p>
+          <p className="rounded-2xl bg-soft px-4 py-2.5 font-mono text-[13px] font-bold">cd /app && docker compose up -d</p>
+        </div>
+      </div>
     </div>
   );
 }

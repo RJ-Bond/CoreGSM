@@ -59,7 +59,7 @@ if (!TOKEN) {
     if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
     const payload = () => ({
-      embeds: [new EmbedBuilder().setColor(0x5865f2).setImage('attachment://card.png').setTimestamp()],
+      embeds: [new EmbedBuilder().setColor(0x5a4bd1).setImage('attachment://card.png').setTimestamp()],
       files: [new AttachmentBuilder(png, { name: 'card.png' })],
     });
 

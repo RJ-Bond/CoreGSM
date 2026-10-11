@@ -3,17 +3,30 @@
 @tailwind utilities;
 
 @layer base {
-  html, body, #root { height: 100%; }
-  body { @apply bg-ink text-fg font-mono text-[13px] antialiased; }
-  ::selection { @apply bg-blurple/60; }
+  html, body, #root { min-height: 100%; }
+  body { @apply bg-page text-ink font-sans text-[15px] antialiased; }
+  ::selection { @apply bg-brand/25; }
+  :focus-visible { @apply outline-none ring-2 ring-brand/60; }
 }
 
 @layer components {
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded px-3 py-1.5 font-medium bg-blurple text-white hover:bg-blurple-hover disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blurple-soft; }
-  .btn-ghost { @apply bg-transparent text-fg border border-line hover:bg-raise; }
-  .btn-danger { @apply bg-transparent text-bad border border-bad/50 hover:bg-bad/10; }
-  .input { @apply w-full rounded border border-line bg-ink px-2.5 py-1.5 text-fg placeholder:text-mute/60 focus:outline-none focus:border-blurple focus:ring-1 focus:ring-blurple; }
-  .label { @apply mb-1 block text-[11px] uppercase tracking-widest text-mute; }
-  .th { @apply px-3 py-2 text-left text-[11px] font-normal uppercase tracking-widest text-mute border-b border-line; }
-  .td { @apply px-3 py-2.5 border-b border-raise tabular-nums; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full bg-brand px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-brand-hover active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none; }
+  .btn-soft { @apply bg-soft text-brand shadow-none hover:bg-line; }
+  .btn-danger { @apply bg-badbg text-bad shadow-none hover:bg-bad/20; }
+  .btn-sm { @apply px-3 py-1 text-[13px]; }
+  .input { @apply w-full rounded-2xl border-2 border-line bg-white px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute/70 focus:border-brand focus:outline-none; }
+  .label { @apply mb-1.5 block text-[13px] font-extrabold text-mute; }
+  .panel { @apply rounded-3xl bg-card shadow-soft; }
+  .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-extrabold; }
+  .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
+  .pill-ok { @apply bg-okbg text-ok; }
+  .pill-warn { @apply bg-warnbg text-warn; }
+  .pill-bad { @apply bg-badbg text-bad; }
+  .pill-mute { @apply bg-soft text-mute; }
 }
+
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+.pop { animation: pop .25s ease-out both; }
+@keyframes shimmer { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+.skeleton { animation: shimmer 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pop, .skeleton { animation: none; } }
