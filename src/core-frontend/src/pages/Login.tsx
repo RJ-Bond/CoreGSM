@@ -24,11 +24,11 @@ export default function Login({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="flex h-full items-center justify-center p-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-md border border-line bg-panel p-6">
+    <div className="flex min-h-full items-center justify-center p-4">
+      <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
         <div>
-          <div className="font-semibold tracking-wider text-blurple-soft">▌CORE//GSM</div>
-          <div className="text-mute">вход в панель управления</div>
+          <div className="text-3xl font-black tracking-tight text-brand">coregsm</div>
+          <div className="font-semibold text-mute">Войдите в панель управления</div>
         </div>
         <Field label="Логин">
           <input id="login-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
@@ -37,7 +37,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
           <input id="login-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus />
         </Field>
         <ErrorLine text={error} />
-        <button className="btn w-full" disabled={busy || !password}>{busy ? 'Проверка…' : 'Войти'}</button>
+        <button className="btn w-full" disabled={busy || !password}>{busy ? 'Проверяю…' : 'Войти'}</button>
       </form>
     </div>
   );

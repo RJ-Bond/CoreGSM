@@ -3,24 +3,40 @@ import { db, type ServerRow, type StatusRow } from './db.js';
 
 const { Canvas } = skia;
 
-// Discord palette
+// Pastel Soft palette (matches the web panel)
 const C = {
-  bg: '#1e1f22',
-  panel: '#2b2d31',
-  line: '#3f4147',
-  text: '#dbdee1',
-  mute: '#949ba4',
-  blurple: '#5865f2',
-  blurpleLight: '#949cf7',
-  green: '#23a55a',
-  yellow: '#f0b232',
-  red: '#f23f42',
+  page: '#f1effe',
+  card: '#ffffff',
+  ink: '#2b2650',
+  mute: '#7a74a8',
+  line: '#e2defa',
+  soft: '#ece9ff',
+  brand: '#5a4bd1',
+  ok: '#168a4f',
+  okBg: '#d9f7e6',
+  warn: '#b27300',
+  warnBg: '#fff0cc',
+  bad: '#c53030',
+  badBg: '#ffdede',
 };
 
+// per-game accent colours (same as the panel); unknown games use the brand colour
+const GAME_COLORS: Record<string, [string, string]> = {
+  minecraft: ['MC', '#62b543'], mbe: ['MB', '#4fa33a'], counterstrike2: ['CS', '#f0a020'], csgo: ['GO', '#e8962a'],
+  counterstrike16: ['1.6', '#d9a441'], css: ['CS', '#d98f3a'], rust: ['RS', '#e0502d'], valheim: ['VH', '#4d8fc7'],
+  garrysmod: ['GM', '#3a8fd9'], teamfortress2: ['TF', '#c9533a'], l4d2: ['L4', '#b83a3a'], terraria: ['TR', '#46b86a'],
+  sdtd: ['7D', '#b5483a'], dayz: ['DZ', '#6f8f4a'], ase: ['AK', '#3aa6a0'], asa: ['AS', '#2f9ea8'],
+  conanexiles: ['CE', '#a8743a'], palworld: ['PW', '#2fc4bf'], factorio: ['FC', '#d98a3a'], unturned: ['UT', '#4aa86a'],
+  vrising: ['VR', '#a83a5a'], projectzomboid: ['PZ', '#7a8a4a'], gta5f: ['5M', '#f26a3d'], gtasam: ['SA', '#8a6ad9'],
+  teamspeak3: ['TS', '#3a7ad9'],
+};
+
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 const MONO = '"DejaVu Sans Mono", "Liberation Mono", monospace';
 const W = 1200;
 const H = 480;
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 function fit(ctx: any, text: string, maxWidth: number): string {
   if (ctx.measureText(text).width <= maxWidth) return text;
   let t = text;
@@ -45,139 +61,146 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   const players = st?.players ?? 0;
   const max = st?.max_players ?? 0;
   const names: string[] = st ? JSON.parse(st.player_names) : [];
-  const accent = !st ? C.mute : online ? C.green : C.red;
+  const [abbr, accent] = GAME_COLORS[s.game] ?? [s.game.slice(0, 2).toUpperCase(), C.brand];
+  const laggy = online && st?.ping != null && st.ping > 100;
 
   const canvas = new Canvas(W, H);
   const ctx: any = canvas.getContext('2d');
 
-  // background + panel
-  ctx.fillStyle = C.bg;
+  // page + white card
+  ctx.fillStyle = C.page;
   ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = C.panel;
+  ctx.save();
+  ctx.shadowColor = 'rgba(90, 75, 209, 0.16)';
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 8;
+  ctx.fillStyle = C.card;
   ctx.beginPath();
-  ctx.roundRect(16, 16, W - 32, H - 32, 16);
+  ctx.roundRect(24, 20, W - 48, H - 48, 36);
   ctx.fill();
-  ctx.strokeStyle = C.line;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // left accent stripe
-  ctx.fillStyle = C.blurple;
-  ctx.beginPath();
-  ctx.roundRect(16, 16, 10, H - 32, [16, 0, 0, 16]);
-  ctx.fill();
+  ctx.restore();
 
   ctx.textBaseline = 'alphabetic';
 
-  // header
-  ctx.fillStyle = C.blurpleLight;
-  ctx.font = `600 20px ${MONO}`;
-  ctx.fillText('▌CORE//GSM', 56, 64);
-
-  const badge = !st ? 'WAITING' : online ? 'ONLINE' : 'OFFLINE';
-  ctx.font = `600 22px ${MONO}`;
-  const bw = ctx.measureText(badge).width + 56;
-  ctx.fillStyle = accent + '26';
-  ctx.beginPath();
-  ctx.roundRect(W - 56 - bw, 38, bw, 38, 19);
-  ctx.fill();
+  // game avatar
   ctx.fillStyle = accent;
   ctx.beginPath();
-  ctx.arc(W - 56 - bw + 20, 57, 7, 0, Math.PI * 2);
+  ctx.roundRect(64, 56, 84, 84, 26);
   ctx.fill();
-  ctx.fillText(badge, W - 56 - bw + 36, 65);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `700 ${abbr.length > 2 ? 28 : 34}px ${SANS}`;
+  ctx.textAlign = 'center';
+  ctx.fillText(abbr, 106, 109);
+  ctx.textAlign = 'left';
+
+  // status pill (top right)
+  const label = !st ? 'ОЖИДАНИЕ' : !online ? 'OFFLINE' : laggy ? 'LAG' : 'ONLINE';
+  const [pillBg, pillFg] = !st ? [C.soft, C.mute] : !online ? [C.badBg, C.bad] : laggy ? [C.warnBg, C.warn] : [C.okBg, C.ok];
+  ctx.font = `700 22px ${SANS}`;
+  const pw = ctx.measureText(label).width + 62;
+  const px = W - 64 - pw;
+  ctx.fillStyle = pillBg;
+  ctx.beginPath();
+  ctx.roundRect(px, 62, pw, 44, 22);
+  ctx.fill();
+  ctx.fillStyle = pillFg;
+  ctx.beginPath();
+  ctx.arc(px + 26, 84, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillText(label, px + 42, 92);
 
   // title
-  ctx.fillStyle = C.text;
-  ctx.font = `700 54px ${MONO}`;
-  ctx.fillText(fit(ctx, s.name, W - 112), 56, 140);
+  const titleX = 172;
+  ctx.fillStyle = C.ink;
+  ctx.font = `700 44px ${SANS}`;
+  ctx.fillText(fit(ctx, s.name, px - titleX - 24), titleX, 96);
   ctx.fillStyle = C.mute;
-  ctx.font = `400 22px ${MONO}`;
-  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, W - 112), 56, 176);
+  ctx.font = `700 22px ${SANS}`;
+  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, 132);
 
-  // players block
+  // players
   ctx.fillStyle = C.mute;
-  ctx.font = `600 18px ${MONO}`;
-  ctx.fillText('PLAYERS', 56, 236);
-  ctx.fillStyle = online ? C.text : C.mute;
-  ctx.font = `700 96px ${MONO}`;
+  ctx.font = `700 20px ${SANS}`;
+  ctx.fillText('Игроки', 64, 206);
+  ctx.fillStyle = online ? C.ink : C.mute;
+  ctx.font = `700 100px ${SANS}`;
   const big = online ? `${players}` : '–';
-  ctx.fillText(big, 56, 322);
+  ctx.fillText(big, 64, 300);
   const bigW = ctx.measureText(big).width;
-  ctx.fillStyle = C.mute;
-  ctx.font = `400 44px ${MONO}`;
-  ctx.fillText(online && max ? `/ ${max}` : '', 56 + bigW + 14, 322);
+  if (online && max) {
+    ctx.fillStyle = C.mute;
+    ctx.font = `700 44px ${SANS}`;
+    ctx.fillText(`/ ${max}`, 64 + bigW + 14, 300);
+  }
 
   // fill bar
-  const barW = 460;
-  ctx.fillStyle = C.bg;
+  const barW = 500;
+  ctx.fillStyle = C.soft;
   ctx.beginPath();
-  ctx.roundRect(56, 346, barW, 14, 7);
+  ctx.roundRect(64, 322, barW, 20, 10);
   ctx.fill();
   if (online && max > 0) {
     const ratio = Math.min(1, players / max);
-    ctx.fillStyle = ratio > 0.9 ? C.yellow : C.blurple;
+    ctx.fillStyle = accent;
     ctx.beginPath();
-    ctx.roundRect(56, 346, Math.max(14, barW * ratio), 14, 7);
+    ctx.roundRect(64, 322, Math.max(20, barW * ratio), 20, 10);
     ctx.fill();
-  }
-
-  // stats column
-  const sx = 620;
-  const stat = (label: string, value: string, y: number, color: string = C.text) => {
-    ctx.fillStyle = C.mute;
-    ctx.font = `600 16px ${MONO}`;
-    ctx.fillText(label, sx, y);
-    ctx.fillStyle = color;
-    ctx.font = `500 24px ${MONO}`;
-    ctx.fillText(fit(ctx, value, 530), sx, y + 30);
-  };
-  stat('ADDRESS', `${s.host}:${s.port}`, 236);
-  stat('MAP', online && st?.map ? st.map : '–', 304);
-  const ping = online && st?.ping != null ? `${st.ping} ms` : '–';
-  stat('PING', ping, 372, st?.ping != null && st.ping > 100 ? C.yellow : C.text);
-
-  // player names
-  if (online && names.length) {
-    ctx.fillStyle = C.mute;
-    ctx.font = `600 16px ${MONO}`;
-    ctx.fillText('ONLINE NOW', sx + 270, 304);
-    ctx.fillStyle = C.text;
-    ctx.font = `400 20px ${MONO}`;
-    names.slice(0, 4).forEach((n, i) => ctx.fillText(fit(ctx, n, 260), sx + 270, 334 + i * 26));
-    if (names.length > 4) {
-      ctx.fillStyle = C.mute;
-      ctx.fillText(`+${names.length - 4} more`, sx + 270, 334 + 4 * 26);
-    }
   }
 
   // sparkline (24h)
   if (hist.length > 1) {
-    const x0 = 56;
-    const y0 = 380;
-    const w = barW;
-    const h = 36;
+    const x0 = 64, y0 = 362, w = barW, h = 40;
     const top = Math.max(1, max, ...hist.map((p) => p.players));
-    ctx.strokeStyle = C.blurpleLight;
-    ctx.lineWidth = 2;
+    const pts = hist.map((p, i) => [x0 + (i / (hist.length - 1)) * w, y0 + h - (p.players / top) * h]);
     ctx.beginPath();
-    hist.forEach((p, i) => {
-      const x = x0 + (i / (hist.length - 1)) * w;
-      const y = y0 + h - (p.players / top) * h;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
+    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.lineTo(x0 + w, y0 + h);
+    ctx.lineTo(x0, y0 + h);
+    ctx.closePath();
+    ctx.fillStyle = accent + '24';
+    ctx.fill();
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
     ctx.stroke();
-    ctx.fillStyle = C.mute;
-    ctx.font = `400 14px ${MONO}`;
-    ctx.fillText('24h', x0 + w + 10, y0 + h);
   }
+
+  // info tiles
+  const tile = (x: number, y: number, w: number, k: string, v: string, mono = false, color: string = C.ink) => {
+    ctx.fillStyle = C.soft;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, 76, 22);
+    ctx.fill();
+    ctx.fillStyle = C.mute;
+    ctx.font = `700 16px ${SANS}`;
+    ctx.fillText(k, x + 20, y + 28);
+    ctx.fillStyle = color;
+    ctx.font = `700 24px ${mono ? MONO : SANS}`;
+    ctx.fillText(fit(ctx, v, w - 40), x + 20, y + 58);
+  };
+  const tx = 640;
+  const tw = W - 64 - tx;
+  tile(tx, 176, tw, 'Адрес', `${s.host}:${s.port}`, true);
+  tile(tx, 264, tw / 2 - 8, 'Карта', online && st?.map ? st.map : '–');
+  tile(tx + tw / 2 + 8, 264, tw / 2 - 8, 'Пинг', online && st?.ping != null ? `${st.ping} мс` : '–', false, laggy ? C.warn : C.ink);
+
+  // online players line
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 18px ${SANS}`;
+  const shown = online && names.length ? names.slice(0, 4).join(', ') + (names.length > 4 ? ` +${names.length - 4}` : '') : '';
+  if (shown) ctx.fillText(fit(ctx, 'В игре: ' + shown, tw), tx, 380);
 
   // footer
   ctx.fillStyle = C.mute;
-  ctx.font = `400 16px ${MONO}`;
+  ctx.font = `700 16px ${SANS}`;
   const when = st ? new Date(st.updated_at).toISOString().slice(11, 19) + ' UTC' : '–';
-  ctx.fillText(`updated ${when}`, 56, H - 40);
+  ctx.fillText(`Обновлено ${when}`, 64, H - 60 + 24);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = C.brand;
+  ctx.fillText('coregsm', W - 64, H - 60 + 24);
+  ctx.textAlign = 'left';
 
   const buf = (await canvas.toBuffer('png')) as Buffer;
   cache.set(serverId, { at: Date.now(), buf });

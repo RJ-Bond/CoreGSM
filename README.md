@@ -3,9 +3,11 @@
 Self-hosted аналог DiscordGSM: веб-панель для мониторинга игровых серверов и бот, который публикует в Discord красивые PNG-карточки со статусом и обновляет их по таймеру.
 
 - **Backend**: Node.js 20, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig), SQLite, генерация карточек на skia-canvas.
-- **Frontend**: React, Tailwind CSS (дизайн Terminal Ops в цветах Discord), собирается в статику.
+- **Frontend**: React, Tailwind CSS (дизайн Pastel Soft: светлый, округлый, карточки серверов), собирается в статику.
 - **Bot**: discord.js 14, редактирует одно сообщение с карточкой в каждом привязанном канале.
 - **Proxy**: nginx, HTTPS (Let's Encrypt, автопродление), редирект с HTTP.
+
+![Пример карточки](docs/card-preview.png)
 
 ## Установка
 
@@ -70,7 +72,7 @@ tools/
   installer-head.sh   логика установщика
   build-installer.sh  собирает install.sh со всеми файлами внутри
 install.sh            готовый монолитный установщик (генерируется)
-docs/                 макеты дизайна
+docs/                 макеты дизайна и превью карточки
 ```
 
 `install.sh` создаётся командой `bash tools/build-installer.sh`. Правьте файлы в `src/` и `tools/`, затем пересобирайте установщик.
