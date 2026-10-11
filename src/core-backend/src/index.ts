@@ -265,7 +265,7 @@ app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
-  res.json({ ...base, ...invitePayload() });
+  res.json({ ...base, ...invitePayload(), guildCount: botGuilds.length, channelCount: botGuilds.reduce((n, g) => n + g.channels.length, 0) });
 });
 
 // ---------- updates ----------
@@ -579,7 +579,16 @@ interface BotGuild {
   name: string;
   channels: { id: string; name: string }[];
 }
-let botGuilds: BotGuild[] = [];
+// persisted, so a backend restart does not leave the channel picker empty until the bot reports again
+function loadGuilds(): BotGuild[] {
+  try {
+    const v = JSON.parse(getSetting('bot_guilds') ?? '[]');
+    return Array.isArray(v) ? (v as BotGuild[]) : [];
+  } catch {
+    return [];
+  }
+}
+let botGuilds: BotGuild[] = loadGuilds();
 
 function channelInfo(channelId: string): { channelName: string | null; guildName: string | null } {
   for (const g of botGuilds) {
@@ -689,6 +698,7 @@ app.post('/internal/bot-guilds', internal, (req, res) => {
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
   botGuilds = b.data;
+  setSetting('bot_guilds', JSON.stringify(b.data));
   res.json({ ok: true });
 });
 
