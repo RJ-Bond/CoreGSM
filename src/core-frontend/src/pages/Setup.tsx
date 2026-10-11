@@ -53,16 +53,16 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     <div className="flex min-h-full items-center justify-center p-4">
       <div className="pop panel w-full max-w-md p-7">
         <div className="mb-2"><Logo size={48} /></div>
-        <div className="mb-1 text-3xl font-black tracking-tight text-brand">coregsm</div>
+        <div className="mb-1 text-3xl font-black tracking-tight text-link">coregsm</div>
         <p className="mb-5 font-semibold text-mute">Первоначальная настройка панели</p>
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
           {STEPS.map((s, i) => (
             <li key={s} className="flex flex-1 items-center gap-2" aria-current={i === step ? 'step' : undefined}>
-              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[13px] font-black ${i < step ? 'bg-okbg text-ok' : i === step ? 'bg-brand text-white' : 'bg-soft text-mute'}`}>
+              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-sm font-black ${i < step ? 'bg-okbg text-ok' : i === step ? 'bg-brand text-white' : 'bg-soft text-mute'}`}>
                 {i < step ? '✓' : i + 1}
               </span>
-              <span className={`text-[13px] font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{s}</span>
+              <span className={`text-sm font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{s}</span>
               {i < STEPS.length - 1 && <span className="h-0.5 flex-1 rounded bg-soft" />}
             </li>
           ))}
@@ -73,7 +73,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             <Field label="Код установки">
               <input id="setup-code" className="input font-mono" value={code} onChange={(e) => setCode(e.target.value)} required autoFocus autoComplete="off" placeholder="из вывода install.sh" />
             </Field>
-            <p className="-mt-1 text-[13px] font-semibold text-mute">
+            <p className="-mt-1 text-sm font-semibold text-mute">
               Код показан в конце установки. Если потерялся: <span className="font-mono">grep SETUP_TOKEN /app/.env</span>
             </p>
             <Field label="Логин администратора">

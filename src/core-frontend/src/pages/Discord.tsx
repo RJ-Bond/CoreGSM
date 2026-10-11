@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react';
-import { api, type Binding, type BotStatus, type Server, type SettingsInfo } from '../api';
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
 
@@ -13,13 +13,14 @@ export default function DiscordPage() {
   const [error, setError] = useState('');
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
+  const [tick, setTick] = useState(0);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
-      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); })
+      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); setTick((t) => t + 1); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
-  usePoll(load, 10_000);
+  usePoll(load, 15_000);
 
   const server = (id: number) => servers.find((s) => s.id === id);
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
@@ -37,9 +38,10 @@ export default function DiscordPage() {
 
   const steps = [
     { done: servers.length > 0, title: 'Добавьте сервер', text: 'На вкладке «Серверы».' },
-    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» выше откроет Discord: выберите сервер и подтвердите права.' },
+    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» откроет Discord: выберите сервер и подтвердите права. Затем выберите канал здесь.' },
     { done: working, title: 'Бот отправит карточку', text: 'Одно сообщение, которое потом обновляется по таймеру.' },
   ];
+  const allDone = steps.every((s) => s.done);
 
   return (
     <div className="space-y-6">
@@ -48,28 +50,29 @@ export default function DiscordPage() {
       </PageHead>
       <ErrorLine text={error} />
 
-      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-3">
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
-        {!settings?.discordTokenSet && <a href="#/settings" className="font-extrabold text-brand hover:underline">Указать токен в настройках</a>}
+        {!settings?.discordTokenSet && <a href="#/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
         {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
-        {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <span className="text-[13px] font-bold text-bad">{bot.error}</span>}
+        {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </div>
 
-      <ol className="grid gap-3 md:grid-cols-3">
-        {steps.map((s, i) => (
-          <li key={s.title} className="panel flex gap-3 p-4">
-            <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
-            <div>
-              <div className="font-black">{s.title}</div>
-              <div className="text-[13px] font-semibold text-mute">{s.text}</div>
-            </div>
-          </li>
-        ))}
-      </ol>
-      <p className="text-[13px] font-semibold text-mute">ID канала: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».</p>
+      {!allDone && (
+        <ol className="grid gap-3 md:grid-cols-3">
+          {steps.map((s, i) => (
+            <li key={s.title} className="panel flex gap-3 p-4">
+              <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
+              <div>
+                <div className="font-black">{s.title}</div>
+                <div className="text-sm font-semibold text-mute">{s.text}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
 
       {loaded && bindings.length === 0 && <Empty title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
 
@@ -78,18 +81,28 @@ export default function DiscordPage() {
           const s = server(b.serverId);
           return (
             <div key={b.id} className="panel space-y-3 p-5">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
                     <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
-                    <div className="font-mono text-[12px] font-bold text-mute">#{b.channelId}</div>
+                    <div className="truncate text-sm font-bold text-mute" title={`ID канала ${b.channelId}`}>
+                      {b.channelName ? `# ${b.channelName}${b.guildName ? ` · ${b.guildName}` : ''}` : `Канал ${b.channelId}`}
+                    </div>
                   </div>
                 </div>
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
-              {b.lastError && b.enabled && <p className="rounded-xl bg-badbg px-3 py-1.5 text-[12px] font-bold text-bad">{b.lastError}</p>}
-              <div className="flex justify-between text-[13px] font-bold text-mute">
+
+              <img
+                src={`/api/card/${b.serverId}.png?t=${tick}`}
+                alt={`Так карточка выглядит в Discord: ${s?.name ?? ''}`}
+                loading="lazy"
+                className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
+              />
+
+              {b.lastError && b.enabled && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{b.lastError}</p>}
+              <div className="flex justify-between text-sm font-bold text-mute">
                 <span>Каждые {b.intervalSec} с</span>
                 <span>Обновлено: {ago(b.lastUpdate)}</span>
               </div>
@@ -112,9 +125,30 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
   const [f, setF] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [guilds, setGuilds] = useState<DiscordGuild[] | null>(null);
+  const [guildId, setGuildId] = useState('');
+  const [manual, setManual] = useState(false);
+
+  // the bot reports the servers and channels it can post in: pick from the list instead of copying an ID
+  useEffect(() => {
+    api<DiscordGuild[]>('/discord/channels')
+      .then((g) => {
+        const withChannels = g.filter((x) => x.channels.length > 0);
+        setGuilds(withChannels);
+        const known = withChannels.find((x) => x.channels.some((c) => c.id === initial.channelId));
+        if (known) setGuildId(known.id);
+        else if (initial.channelId) setManual(true);
+        else if (withChannels[0]) setGuildId(withChannels[0].id);
+      })
+      .catch(() => setGuilds([]));
+  }, [initial.channelId]);
+
+  const hasList = !!guilds && guilds.length > 0;
+  const guild = guilds?.find((g) => g.id === guildId);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!/^\d{15,25}$/.test(f.channelId)) return setError('Выберите канал из списка или введите его ID');
     setBusy(true);
     setError('');
     const { id, ...body } = f;
@@ -135,9 +169,38 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
-        <Field label="ID канала Discord">
-          <input id="bind-channel" className="input" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value.trim() })} placeholder="123456789012345678" required pattern="\d{15,25}" inputMode="numeric" autoFocus />
-        </Field>
+
+        {hasList && !manual ? (
+          <>
+            {guilds!.length > 1 && (
+              <Field label="Сервер Discord">
+                <select id="bind-guild" className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); setF({ ...f, channelId: '' }); }}>
+                  {guilds!.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              </Field>
+            )}
+            <Field label={guilds!.length === 1 ? `Канал на сервере «${guild?.name ?? ''}»` : 'Канал'}>
+              <select id="bind-channel-pick" className="input" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} required>
+                <option value="" disabled>Выберите канал…</option>
+                {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}`}</option>)}
+              </select>
+            </Field>
+            <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+          </>
+        ) : (
+          <>
+            <Field label="ID канала Discord">
+              <input id="bind-channel" className="input font-mono" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value.trim() })} placeholder="123456789012345678" required pattern="\d{15,25}" inputMode="numeric" autoFocus />
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">
+              {guilds && guilds.length === 0
+                ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер», и каналы появятся списком. Пока можно ввести ID: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
+                : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
+            </p>
+            {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
+          </>
+        )}
+
         <Field label="Обновлять каждые, секунд (30–3600)">
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>
@@ -145,7 +208,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
           <input id="bind-enabled" type="checkbox" className="h-4 w-4 accent-brand" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Включена
         </label>
         <ErrorLine text={error} />
-        <div className="flex justify-end gap-2 pt-2">
+        <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
           <button className="btn" disabled={busy}>Сохранить</button>
         </div>

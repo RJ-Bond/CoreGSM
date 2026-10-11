@@ -13,18 +13,42 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
-export default function SettingsPage() {
+const TABS = [
+  { id: 'bot', label: 'Discord-бот' },
+  { id: 'security', label: 'Безопасность' },
+  { id: 'updates', label: 'Обновления' },
+] as const;
+
+export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+  const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
     <div className="space-y-6">
-      <PageHead title="Настройки" subtitle="Discord-бот, прокси и доступ к панели" />
-      <div className="grid items-start gap-5 md:grid-cols-2">
-        <BotCard />
-        <PasswordCard />
-        <UpdateCard />
+      <PageHead title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
+      <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
+        {TABS.map((t) => (
+          <a
+            key={t.id}
+            href={`#/settings/${t.id}`}
+            aria-current={tab === t.id ? 'page' : undefined}
+            className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+          >
+            {t.label}
+            {t.id === 'updates' && updateAvailable && <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />}
+          </a>
+        ))}
+      </nav>
+      <div className="max-w-2xl space-y-5">
+        {tab === 'bot' && <BotCard />}
+        {tab === 'security' && (
+          <>
+            <PasswordCard />
+            <p className="font-semibold text-mute">
+              Домен и порты задаются при установке и хранятся в <span className="font-mono text-sm text-ink">/app/.env</span>. Изменить их можно командой <span className="font-mono text-sm text-ink">sudo coregsm</span> на сервере (пункт «Домен и прокси»).
+            </p>
+          </>
+        )}
+        {tab === 'updates' && <UpdateCard />}
       </div>
-      <p className="max-w-2xl font-semibold text-mute">
-        Домен и порты задаются при установке и хранятся в <span className="font-mono text-[13px] text-ink">/app/.env</span>.
-      </p>
     </div>
   );
 }
@@ -86,7 +110,7 @@ function BotCard() {
         <BotPill status={status} tokenSet={tokenSet} />
       </div>
       {tokenSet && status?.state === 'error' && status.error && (
-        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">{status.error}</p>
+        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
       )}
 
       <Field label="Токен бота">
@@ -101,7 +125,7 @@ function BotCard() {
         />
       </Field>
       {tokenSet && (
-        <button type="button" className="text-[13px] font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
+        <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
       )}
 
       <Field label="Прокси (необязательно)">
@@ -116,18 +140,18 @@ function BotCard() {
         />
       </Field>
       {info?.proxyUrl && (
-        <label className="flex items-center gap-2 text-[13px] font-bold text-mute">
+        <label className="flex items-center gap-2 text-sm font-bold text-mute">
           <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearProxy} onChange={(e) => setClearProxy(e.target.checked)} />
           Отключить прокси
         </label>
       )}
-      <p className="text-[13px] font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
+      <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
 
       <ErrorLine text={error} />
       {tokenSet && status?.inviteUrl && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
           <InviteButton url={status.inviteUrl} />
-          <span className="text-[13px] font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
+          <span className="text-sm font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
         </div>
       )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
@@ -234,7 +258,7 @@ function UpdateCard() {
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
   return (
-    <div className="panel space-y-3.5 p-6 md:col-span-2">
+    <div className="panel space-y-3.5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-black">Обновления</h2>
         {running ? <span className="pill pill-warn">ОБНОВЛЕНИЕ</span>
@@ -243,7 +267,7 @@ function UpdateCard() {
           : <span className="pill pill-mute">ПРОВЕРКА</span>}
       </div>
 
-      <dl className="grid grid-cols-2 gap-3 text-[13px] font-bold sm:max-w-sm">
+      <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
         <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
         <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
       </dl>
@@ -254,19 +278,19 @@ function UpdateCard() {
         </p>
       )}
       {stuck && (
-        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">
+        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
           Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm update</span>.
         </p>
       )}
-      {info?.error && !running && <p className="text-[13px] font-semibold text-mute">{info.error}</p>}
-      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
+      {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
+      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
       <ErrorLine text={error} />
 
       <div className="flex flex-wrap gap-2">
         <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
         {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
       </div>
-      {info && !info.canApply && <p className="text-[13px] font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
+      {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
     </div>
   );
 }

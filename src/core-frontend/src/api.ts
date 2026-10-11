@@ -38,6 +38,9 @@ export interface Binding {
   id: number;
   serverId: number;
   channelId: string;
+  /** resolved by the bot when it can see the channel */
+  channelName: string | null;
+  guildName: string | null;
   messageId: string | null;
   intervalSec: number;
   enabled: boolean;
@@ -98,4 +101,30 @@ export interface UpdateInfo {
   canApply: boolean;
   pending: boolean;
   job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
+}
+
+export interface TestResult {
+  online: boolean;
+  name: string | null;
+  players: number;
+  maxPlayers: number;
+  map: string | null;
+  version: string | null;
+  ping: number | null;
+  playerNames: string[];
+  error: string | null;
+}
+
+export interface ServerDetails {
+  server: Server;
+  hours: number;
+  points: { ts: number; players: number; online: number }[];
+  stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
+  events: { ts: number; type: 'up' | 'down' }[];
+}
+
+export interface DiscordGuild {
+  id: string;
+  name: string;
+  channels: { id: string; name: string }[];
 }

@@ -1,22 +1,27 @@
 /** @type {import('tailwindcss').Config} */
+// Colours come from CSS variables (see index.css), so one set of classes serves both the light and the dark theme.
+const c = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        page: '#f1effe',
-        card: '#ffffff',
-        ink: '#2b2650',
-        mute: '#7a74a8',
-        line: '#e2defa',
-        soft: '#ece9ff',
-        brand: { DEFAULT: '#5a4bd1', hover: '#4a3cb8' },
-        ok: '#168a4f',
-        okbg: '#d9f7e6',
-        warn: '#b27300',
-        warnbg: '#fff0cc',
-        bad: '#c53030',
-        badbg: '#ffdede',
+        page: c('page'),
+        card: c('card'),
+        ink: c('ink'),
+        mute: c('mute'),
+        line: c('line'),
+        soft: c('soft'),
+        // brand: fills and buttons; link: brand-coloured text (lighter in the dark theme for contrast)
+        brand: { DEFAULT: c('brand'), hover: c('brand-hover') },
+        link: c('link'),
+        ok: c('ok'),
+        okbg: c('okbg'),
+        warn: c('warn'),
+        warnbg: c('warnbg'),
+        bad: c('bad'),
+        badbg: c('badbg'),
       },
       fontFamily: {
         sans: ['Nunito', 'ui-sans-serif', 'system-ui', 'sans-serif'],
@@ -24,8 +29,8 @@ export default {
       },
       borderRadius: { '4xl': '2rem' },
       boxShadow: {
-        soft: '0 8px 28px rgba(90, 75, 209, 0.09)',
-        pop: '0 2px 10px rgba(90, 75, 209, 0.12)',
+        soft: 'var(--shadow-soft)',
+        pop: 'var(--shadow-pop)',
       },
     },
   },

@@ -10,7 +10,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
 patchGatewayAgent(() => gatewayAgent);
-const { AttachmentBuilder, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
+const { AttachmentBuilder, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
 
 interface Binding {
@@ -30,6 +30,24 @@ interface BotConfig {
 type BotState = 'idle' | 'connecting' | 'online' | 'error';
 
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
+
+/** Turns Discord/network errors into a message a person can act on (shown in the panel). */
+function humanDiscordError(e: unknown): string {
+  const err = e as { code?: number | string; message?: string };
+  const m = String(err?.message ?? e);
+  switch (err?.code) {
+    case 50001: return 'У бота нет доступа к каналу. Пригласите бота на этот сервер и выдайте права на канал.';
+    case 10003: return 'Канал не найден. Проверьте ID и что бот приглашён на сервер, где находится канал.';
+    case 50013: return 'Не хватает прав: боту нужны «Отправка сообщений», «Прикрепление файлов» и «Встраивание ссылок» в этом канале.';
+    case 50035: return 'Неверный ID канала.';
+    case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
+  }
+  if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|timeout|socks|proxy/i.test(m)) {
+    return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
+  }
+  return m.slice(0, 200);
+}
 
 // Calls to the backend inside the Docker network never use the proxy.
 async function backend(path: string, init: RequestInit = {}): Promise<Response> {
@@ -74,6 +92,41 @@ function setState(s: BotState, opts: { tag?: string | null; clientId?: string | 
   lastError = opts.error ?? null;
 }
 
+let lastGuildsJson = '';
+let lastGuildsAt = 0;
+
+/** Text channels the bot can post in, grouped by server. */
+function collectGuilds(c: DiscordClient) {
+  const out: { id: string; name: string; channels: { id: string; name: string; pos: number }[] }[] = [];
+  for (const g of c.guilds.cache.values()) {
+    const me = g.members.me;
+    const channels: { id: string; name: string; pos: number }[] = [];
+    for (const ch of g.channels.cache.values()) {
+      if (ch.type !== ChannelType.GuildText && ch.type !== ChannelType.GuildAnnouncement) continue;
+      const perms = me ? ch.permissionsFor(me) : null;
+      if (perms && !perms.has(['ViewChannel', 'SendMessages', 'AttachFiles'])) continue;
+      channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition });
+    }
+    channels.sort((a, b) => a.pos - b.pos);
+    out.push({ id: g.id, name: g.name, channels: channels.slice(0, 250) });
+  }
+  return out.slice(0, 50);
+}
+
+async function publishGuilds(): Promise<void> {
+  if (!client || state !== 'online') return;
+  const list = collectGuilds(client).map((g) => ({ id: g.id, name: g.name, channels: g.channels.map(({ id, name }) => ({ id, name })) }));
+  const json = JSON.stringify(list);
+  // send on change, and every 5 minutes so a restarted backend learns the list again
+  if (json === lastGuildsJson && Date.now() - lastGuildsAt < 5 * 60_000) return;
+  try {
+    const r = await backend('/internal/bot-guilds', { method: 'POST', body: json });
+    if (r.ok) { lastGuildsJson = json; lastGuildsAt = Date.now(); }
+  } catch {
+    /* retry on the next tick */
+  }
+}
+
 async function stopClient(): Promise<void> {
   if (!client) return;
   const c = client;
@@ -100,9 +153,12 @@ async function applyConfig(): Promise<void> {
   await stopClient();
   gatewayAgent = undefined;
   lastRun.clear();
+  lastGuildsJson = '';
 
   if (!cfg.discordToken) {
     setState('idle');
+    // forget the channel list of a bot that is no longer configured
+    backend('/internal/bot-guilds', { method: 'POST', body: '[]' }).catch(() => undefined);
     log('No Discord token configured. Add it in the panel: Settings.');
     return;
   }
@@ -133,9 +189,8 @@ async function applyConfig(): Promise<void> {
     log(`Logged in as ${c.user?.tag}`);
     setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
   } catch (e) {
-    const msg = (e as Error).message.slice(0, 250);
-    log('Discord login failed:', msg);
-    setState('error', { error: msg });
+    log('Discord login failed:', (e as Error).message);
+    setState('error', { error: humanDiscordError(e) });
     await stopClient();
     // do not hammer Discord: retry later with the same config
     appliedKey = null;
@@ -185,9 +240,8 @@ async function updateBindings(): Promise<void> {
       await update(c, b);
       log(`binding ${b.id} (${b.serverName}) updated`);
     } catch (e) {
-      const msg = (e as Error).message.slice(0, 250);
-      log(`binding ${b.id} failed:`, msg);
-      await report(b.id, { error: msg });
+      log(`binding ${b.id} failed:`, (e as Error).message);
+      await report(b.id, { error: humanDiscordError(e) });
     }
   }
 }
@@ -198,6 +252,7 @@ async function tick(): Promise<void> {
   busy = true;
   try {
     await applyConfig();
+    await publishGuilds();
     await updateBindings();
   } catch (e) {
     log('tick failed:', (e as Error).message);
