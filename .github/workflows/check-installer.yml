@@ -1,0 +1,22 @@
+name: check-installer
+
+# install.sh and version.txt are generated from src/ and tools/. Fail if someone forgot to rebuild them,
+# otherwise servers would be updated to a stale build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  up-to-date:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild installer
+        run: bash tools/build-installer.sh
+      - name: install.sh and version.txt must match the committed files
+        run: git diff --exit-code -- install.sh version.txt
+      - name: Shell syntax
+        run: |
+          bash -n install.sh
+          bash -n tools/coregsm-update.sh

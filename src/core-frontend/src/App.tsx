@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, getToken, setToken } from './api';
+import { api, getToken, setToken, type UpdateInfo } from './api';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
@@ -31,6 +31,17 @@ export default function App() {
     api<{ needed: boolean }>('/setup/status')
       .then((r) => setNeedsSetup(r.needed))
       .catch(() => setNeedsSetup(false));
+  }, [authed]);
+
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+
+  // small dot on "Настройки" when a newer version is published in the repository
+  useEffect(() => {
+    if (!authed) return;
+    const check = () => api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
+    void check();
+    const t = setInterval(check, 30 * 60_000);
+    return () => clearInterval(t);
   }, [authed]);
 
   useEffect(() => {
@@ -70,6 +81,9 @@ export default function App() {
               }`}
             >
               {p.label}
+              {p.id === 'settings' && updateAvailable && (
+                <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />
+              )}
             </a>
           ))}
         </nav>

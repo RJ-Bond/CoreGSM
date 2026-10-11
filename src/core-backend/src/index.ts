@@ -2,6 +2,8 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { db, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { refreshServer, startPoller } from './gsm.js';
@@ -185,6 +187,83 @@ app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   res.json(stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus);
+});
+
+// ---------- updates ----------
+// The container never touches Docker or the host. "Update" drops a request file into UPDATE_DIR (a bind mount);
+// a root systemd path unit on the host notices it and runs `coregsm-update`, which reports progress in status.json.
+const UPDATE_DIR = process.env.UPDATE_DIR ?? '';
+const APP_VERSION = process.env.APP_VERSION ?? '';
+const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main';
+
+let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
+
+async function checkRemote(force = false): Promise<void> {
+  if (!force && Date.now() - remote.at < 5 * 60_000) return;
+  try {
+    const res = await fetch(`${UPDATE_BASE}/version.txt`, { signal: AbortSignal.timeout(8000), headers: { 'cache-control': 'no-cache' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const m = /^build=([a-f0-9]{6,64})$/m.exec(await res.text());
+    if (!m) throw new Error('некорректный version.txt');
+    remote = { build: m[1], error: null, at: Date.now() };
+  } catch (e) {
+    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now() };
+  }
+}
+
+function updateFile(name: string): string {
+  return path.join(UPDATE_DIR, name);
+}
+
+function updatePayload() {
+  let job: { state: string; message: string; time: number } | null = null;
+  try {
+    job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
+  } catch {
+    /* no update has run yet */
+  }
+  const dirOk = !!UPDATE_DIR && fs.existsSync(UPDATE_DIR);
+  return {
+    current: APP_VERSION || null,
+    latest: remote.build,
+    available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build),
+    checkedAt: remote.at || null,
+    error: remote.error,
+    canApply: dirOk,
+    pending: dirOk && fs.existsSync(updateFile('request')),
+    job,
+  };
+}
+
+app.get(
+  '/api/update/status',
+  auth,
+  wrap(async (_req, res) => {
+    await checkRemote();
+    res.json(updatePayload());
+  }),
+);
+
+app.post(
+  '/api/update/check',
+  auth,
+  wrap(async (_req, res) => {
+    await checkRemote(true);
+    res.json(updatePayload());
+  }),
+);
+
+app.post('/api/update/apply', auth, (_req, res) => {
+  const state = updatePayload();
+  if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm-update' });
+  if (state.job?.state === 'running') return res.status(409).json({ error: 'Обновление уже выполняется' });
+  try {
+    fs.writeFileSync(updateFile('request'), String(Date.now()));
+  } catch {
+    return res.status(500).json({ error: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)' });
+  }
+  console.log('update requested from the panel');
+  res.status(202).json(updatePayload());
 });
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {

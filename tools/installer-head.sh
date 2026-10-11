@@ -16,6 +16,8 @@ set -Eeuo pipefail
 export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
+# set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
+COREGSM_BUILD="@@BUILD_ID@@"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -293,6 +295,8 @@ DISCORD_TOKEN=${DISCORD_TOKEN:-}
 PROXY_URL=${PROXY_URL:-}
 # http(s) proxy for Docker image builds and certbot renewal (SOCKS is not supported there)
 BUILD_PROXY=${BUILD_PROXY:-}
+# installed build, compared with version.txt in the repository
+APP_VERSION=${COREGSM_BUILD}
 # one-time code for the first-run setup wizard in the browser
 SETUP_TOKEN=${SETUP_TOKEN}
 JWT_SECRET=${jwt}
@@ -404,26 +408,50 @@ report() {
   echo -e "  ${DIM}Токен Discord-бота, прокси и пароль: в панели, раздел «Настройки».${NC}\n"
 }
 
-# /usr/local/bin/coregsm-update: downloads the latest install.sh from GitHub and re-runs it.
+# /usr/local/bin/coregsm-update (see tools/coregsm-update.sh) plus a systemd path unit that runs it
+# when the panel's "Update" button creates /app/update/request.
 install_update_command() {
   cat > /usr/local/bin/.coregsm-update.new << 'UPDATER'
-#!/usr/bin/env bash
-# Updates CoreGSM to the latest version from GitHub. Secrets, database and certificates are kept.
-set -euo pipefail
-[ "$(id -u)" -eq 0 ] || { echo "Запустите от root: sudo coregsm-update" >&2; exit 1; }
-URL="${COREGSM_URL:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh}"
-proxy="$(grep -E '^PROXY_URL=' /app/.env 2>/dev/null | cut -d= -f2- || true)"
-tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
-echo "Скачиваю $URL"
-curl -fsSL ${proxy:+--proxy "${proxy/#socks5:/socks5h:}"} "$URL" -o "$tmp"
-bash -n "$tmp"
-echo "Получено $(wc -l < "$tmp") строк, запускаю обновление…"
-SKIP_UPDATE=1 bash "$tmp" "$@"
+@@UPDATER_SCRIPT@@
 UPDATER
   chmod +x /usr/local/bin/.coregsm-update.new
-  # atomic replace: a running updater keeps reading its old file safely
+  # atomic replace: an updater that is running right now keeps reading its old file safely
   mv -f /usr/local/bin/.coregsm-update.new /usr/local/bin/coregsm-update
+
+  # the panel (container user "node", uid 1000) may only drop a request file here; root does the work
+  mkdir -p "$APP_DIR/update"
+  chown 1000:1000 "$APP_DIR/update"
+  chmod 755 "$APP_DIR/update"
+
+  if [ -d /run/systemd/system ]; then
+    cat > /etc/systemd/system/coregsm-update.service << UNIT
+[Unit]
+Description=CoreGSM update (started from the web panel)
+
+[Service]
+Type=oneshot
+Environment=APP_DIR=${APP_DIR}
+ExecStart=/usr/local/bin/coregsm-update --from-panel
+TimeoutStartSec=1800
+UNIT
+    cat > /etc/systemd/system/coregsm-update.path << UNIT
+[Unit]
+Description=Watch for update requests from the CoreGSM web panel
+
+[Path]
+PathExists=${APP_DIR}/update/request
+Unit=coregsm-update.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now coregsm-update.path >/dev/null 2>&1 \
+      && ok "Кнопка «Обновить» в панели включена" \
+      || warn "Не удалось включить systemd-юнит coregsm-update.path: кнопка в панели работать не будет, обновляйте командой sudo coregsm-update"
+  else
+    warn "systemd не найден: кнопка «Обновить» в панели недоступна, используйте sudo coregsm-update"
+  fi
 }
 
 main() {

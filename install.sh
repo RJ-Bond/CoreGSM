@@ -16,6 +16,8 @@ set -Eeuo pipefail
 export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
+# set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
+COREGSM_BUILD="8f659b7dd576"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -794,6 +796,8 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { db, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { refreshServer, startPoller } from './gsm.js';
@@ -977,6 +981,83 @@ app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   res.json(stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus);
+});
+
+// ---------- updates ----------
+// The container never touches Docker or the host. "Update" drops a request file into UPDATE_DIR (a bind mount);
+// a root systemd path unit on the host notices it and runs `coregsm-update`, which reports progress in status.json.
+const UPDATE_DIR = process.env.UPDATE_DIR ?? '';
+const APP_VERSION = process.env.APP_VERSION ?? '';
+const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main';
+
+let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
+
+async function checkRemote(force = false): Promise<void> {
+  if (!force && Date.now() - remote.at < 5 * 60_000) return;
+  try {
+    const res = await fetch(`${UPDATE_BASE}/version.txt`, { signal: AbortSignal.timeout(8000), headers: { 'cache-control': 'no-cache' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const m = /^build=([a-f0-9]{6,64})$/m.exec(await res.text());
+    if (!m) throw new Error('некорректный version.txt');
+    remote = { build: m[1], error: null, at: Date.now() };
+  } catch (e) {
+    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now() };
+  }
+}
+
+function updateFile(name: string): string {
+  return path.join(UPDATE_DIR, name);
+}
+
+function updatePayload() {
+  let job: { state: string; message: string; time: number } | null = null;
+  try {
+    job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
+  } catch {
+    /* no update has run yet */
+  }
+  const dirOk = !!UPDATE_DIR && fs.existsSync(UPDATE_DIR);
+  return {
+    current: APP_VERSION || null,
+    latest: remote.build,
+    available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build),
+    checkedAt: remote.at || null,
+    error: remote.error,
+    canApply: dirOk,
+    pending: dirOk && fs.existsSync(updateFile('request')),
+    job,
+  };
+}
+
+app.get(
+  '/api/update/status',
+  auth,
+  wrap(async (_req, res) => {
+    await checkRemote();
+    res.json(updatePayload());
+  }),
+);
+
+app.post(
+  '/api/update/check',
+  auth,
+  wrap(async (_req, res) => {
+    await checkRemote(true);
+    res.json(updatePayload());
+  }),
+);
+
+app.post('/api/update/apply', auth, (_req, res) => {
+  const state = updatePayload();
+  if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm-update' });
+  if (state.job?.state === 'running') return res.status(409).json({ error: 'Обновление уже выполняется' });
+  try {
+    fs.writeFileSync(updateFile('request'), String(Date.now()));
+  } catch {
+    return res.status(500).json({ error: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)' });
+  }
+  console.log('update requested from the panel');
+  res.status(202).json(updatePayload());
 });
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
@@ -1678,7 +1759,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useState } from 'react';
-import { api, getToken, setToken } from './api';
+import { api, getToken, setToken, type UpdateInfo } from './api';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
@@ -1710,6 +1791,17 @@ export default function App() {
     api<{ needed: boolean }>('/setup/status')
       .then((r) => setNeedsSetup(r.needed))
       .catch(() => setNeedsSetup(false));
+  }, [authed]);
+
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+
+  // small dot on "Настройки" when a newer version is published in the repository
+  useEffect(() => {
+    if (!authed) return;
+    const check = () => api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
+    void check();
+    const t = setInterval(check, 30 * 60_000);
+    return () => clearInterval(t);
   }, [authed]);
 
   useEffect(() => {
@@ -1749,6 +1841,9 @@ export default function App() {
               }`}
             >
               {p.label}
+              {p.id === 'settings' && updateAvailable && (
+                <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />
+              )}
             </a>
           ))}
         </nav>
@@ -1846,6 +1941,17 @@ export interface BotStatus {
   tag: string | null;
   error: string | null;
   updatedAt: number;
+}
+
+export interface UpdateInfo {
+  current: string | null;
+  latest: string | null;
+  available: boolean;
+  checkedAt: number | null;
+  error: string | null;
+  canApply: boolean;
+  pending: boolean;
+  job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -2379,7 +2485,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
-import { api, type BotStatus, type SettingsInfo } from '../api';
+import { api, type BotStatus, type SettingsInfo, type UpdateInfo } from '../api';
 import { ErrorLine, Field, PageHead, usePoll } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
@@ -2400,10 +2506,10 @@ export default function SettingsPage() {
       <div className="grid items-start gap-5 md:grid-cols-2">
         <BotCard />
         <PasswordCard />
+        <UpdateCard />
       </div>
       <p className="max-w-2xl font-semibold text-mute">
-        Домен и порты задаются при установке и хранятся в <span className="font-mono text-[13px] text-ink">/app/.env</span>. Обновить панель до новой версии можно командой{' '}
-        <span className="font-mono text-[13px] text-ink">sudo coregsm-update</span> на сервере.
+        Домен и порты задаются при установке и хранятся в <span className="font-mono text-[13px] text-ink">/app/.env</span>.
       </p>
     </div>
   );
@@ -2542,6 +2648,105 @@ function PasswordCard() {
       {done && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
       <button className="btn">Сохранить пароль</button>
     </form>
+  );
+}
+
+const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
+
+function UpdateCard() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  // set when "Update" was pressed: remembers the previous job timestamp to recognise the new result
+  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null } | null>(null);
+  const [offline, setOffline] = useState(false);
+
+  usePoll(() => {
+    api<UpdateInfo>('/update/status')
+      .then((r) => {
+        setOffline(false);
+        setInfo(r);
+        if (!waiting || !r.job || r.job.time === waiting.baseTime) return;
+        if (r.job.state === 'done') {
+          setWaiting(null);
+          // new frontend files are served now: reload to pick them up
+          setTimeout(() => window.location.reload(), 1500);
+        } else if (r.job.state === 'error') {
+          setWaiting(null);
+          setError(r.job.message);
+        }
+      })
+      .catch(() => {
+        // the backend restarts during an update
+        if (waiting) setOffline(true);
+      });
+  }, waiting ? 3_000 : 30_000);
+
+  const check = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      setInfo(await api<UpdateInfo>('/update/check', 'POST'));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!window.confirm('Обновить панель? Она будет недоступна 1-3 минуты, данные и настройки сохранятся.')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<UpdateInfo>('/update/apply', 'POST');
+      setInfo(r);
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const running = !!waiting || info?.job?.state === 'running';
+  const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
+
+  return (
+    <div className="panel space-y-3.5 p-6 md:col-span-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-black">Обновления</h2>
+        {running ? <span className="pill pill-warn">ОБНОВЛЕНИЕ</span>
+          : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
+          : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
+          : <span className="pill pill-mute">ПРОВЕРКА</span>}
+      </div>
+
+      <dl className="grid grid-cols-2 gap-3 text-[13px] font-bold sm:max-w-sm">
+        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
+        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
+      </dl>
+
+      {running && (
+        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
+          {offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : 'Запрос отправлен серверу…'}
+        </p>
+      )}
+      {stuck && (
+        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">
+          Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm-update</span>.
+        </p>
+      )}
+      {info?.error && !running && <p className="text-[13px] font-semibold text-mute">{info.error}</p>}
+      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
+      <ErrorLine text={error} />
+
+      <div className="flex flex-wrap gap-2">
+        <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
+        {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
+      </div>
+      {info && !info.canApply && <p className="text-[13px] font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm-update</span>.</p>}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -2887,8 +3092,11 @@ services:
     environment:
       PORT: "3000"
       DB_PATH: /data/coregsm.db
+      UPDATE_DIR: /update
     volumes:
       - coregsm-data:/data
+      # update requests/status exchanged with the host updater (no Docker socket is exposed)
+      - ./update:/update
     networks: [internal]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -3070,6 +3278,8 @@ DISCORD_TOKEN=${DISCORD_TOKEN:-}
 PROXY_URL=${PROXY_URL:-}
 # http(s) proxy for Docker image builds and certbot renewal (SOCKS is not supported there)
 BUILD_PROXY=${BUILD_PROXY:-}
+# installed build, compared with version.txt in the repository
+APP_VERSION=${COREGSM_BUILD}
 # one-time code for the first-run setup wizard in the browser
 SETUP_TOKEN=${SETUP_TOKEN}
 JWT_SECRET=${jwt}
@@ -3181,26 +3391,151 @@ report() {
   echo -e "  ${DIM}Токен Discord-бота, прокси и пароль: в панели, раздел «Настройки».${NC}\n"
 }
 
-# /usr/local/bin/coregsm-update: downloads the latest install.sh from GitHub and re-runs it.
+# /usr/local/bin/coregsm-update (see tools/coregsm-update.sh) plus a systemd path unit that runs it
+# when the panel's "Update" button creates /app/update/request.
 install_update_command() {
   cat > /usr/local/bin/.coregsm-update.new << 'UPDATER'
 #!/usr/bin/env bash
-# Updates CoreGSM to the latest version from GitHub. Secrets, database and certificates are kept.
-set -euo pipefail
+# CoreGSM updater. Compares the installed build with the repository, downloads install.sh,
+# verifies its SHA-256 against version.txt and re-runs it. Data and settings are kept.
+#
+#   coregsm-update            update if a newer build exists
+#   coregsm-update --check    only report (exit code 10 = update available)
+#   coregsm-update --force    reinstall even if the build is the same (repairs modified files)
+#   coregsm-update --from-panel   used by the systemd unit that serves the panel's "Update" button
+set -uo pipefail
+export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
+
+APP_DIR="${APP_DIR:-/app}"
+BASE="${COREGSM_BASE:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main}"
+UPD="$APP_DIR/update"
+LOG="$UPD/update.log"
+CHECK=0; FORCE=0; PANEL=0
+
+for a in "$@"; do
+  case "$a" in
+    --check) CHECK=1 ;;
+    --force) FORCE=1 ;;
+    --from-panel) PANEL=1 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Неизвестный параметр: $a" >&2; exit 2 ;;
+  esac
+done
+
 [ "$(id -u)" -eq 0 ] || { echo "Запустите от root: sudo coregsm-update" >&2; exit 1; }
-URL="${COREGSM_URL:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh}"
-proxy="$(grep -E '^PROXY_URL=' /app/.env 2>/dev/null | cut -d= -f2- || true)"
+
+mkdir -p "$UPD"
+# the request flag must go first, otherwise the systemd path unit would fire again
+[ "$PANEL" = 1 ] && rm -f "$UPD/request"
+
+# the panel reads this file to show progress
+status() { # status STATE MESSAGE
+  local msg
+  msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+  printf '{"state":"%s","message":"%s","time":%s000}\n' "$1" "$msg" "$(date +%s)" > "$UPD/status.json.tmp"
+  mv -f "$UPD/status.json.tmp" "$UPD/status.json"
+  chmod 644 "$UPD/status.json"
+}
+fail() { echo "✖ $1" >&2; [ "$CHECK" = 1 ] || status error "$1"; exit 1; }
+
+# one update at a time (flock is part of util-linux, always present on Debian)
+if command -v flock >/dev/null 2>&1; then
+  exec 9> "$UPD/.lock"
+  flock -n 9 || { echo "Обновление уже выполняется"; exit 0; }
+fi
+
+current="$(grep -E '^APP_VERSION=' "$APP_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+proxy="$(grep -E '^PROXY_URL=' "$APP_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+fetch() { curl -fsSL --max-time 60 ${proxy:+--proxy "${proxy/#socks5:/socks5h:}"} "$1"; }
+
+meta="$(fetch "$BASE/version.txt")" || fail "Не удалось скачать version.txt из репозитория"
+latest="$(printf '%s\n' "$meta" | sed -n 's/^build=//p' | head -n1)"
+want_sha="$(printf '%s\n' "$meta" | sed -n 's/^sha256=//p' | head -n1)"
+[ -n "$latest" ] && [ -n "$want_sha" ] || fail "version.txt в репозитории повреждён"
+
+echo "Установлено: ${current:-неизвестно}   В репозитории: $latest"
+
+if [ "$CHECK" = 1 ]; then
+  if [ "$current" = "$latest" ]; then echo "У вас последняя версия."; exit 0; fi
+  echo "Доступно обновление. Выполните: sudo coregsm-update"
+  exit 10
+fi
+
+if [ "$current" = "$latest" ] && [ "$FORCE" = 0 ]; then
+  echo "У вас последняя версия. Для переустановки файлов: sudo coregsm-update --force"
+  [ "$PANEL" = 1 ] && status done "Уже установлена последняя версия ($latest)"
+  exit 0
+fi
+
+status running "Скачиваю версию $latest"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-echo "Скачиваю $URL"
-curl -fsSL ${proxy:+--proxy "${proxy/#socks5:/socks5h:}"} "$URL" -o "$tmp"
-bash -n "$tmp"
-echo "Получено $(wc -l < "$tmp") строк, запускаю обновление…"
-SKIP_UPDATE=1 bash "$tmp" "$@"
+
+# the raw CDN can lag behind version.txt for a few minutes: retry until the checksum matches
+verified=0
+for i in 1 2 3 4; do
+  if fetch "$BASE/install.sh" > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$want_sha" ]; then
+    verified=1
+    break
+  fi
+  echo "Контрольная сумма не совпала (попытка $i из 4), жду…"
+  sleep 8
+done
+[ "$verified" = 1 ] || fail "Контрольная сумма install.sh не совпала с version.txt. Подождите пару минут (кэш GitHub) и повторите"
+bash -n "$tmp" || fail "Скачанный install.sh содержит синтаксическую ошибку"
+echo "✔ Файл проверен (sha256 совпал)"
+
+status running "Устанавливаю версию $latest: сборка и перезапуск контейнеров"
+: > "$LOG"
+SKIP_UPDATE=1 bash "$tmp" 2>&1 | tee -a "$LOG"
+rc="${PIPESTATUS[0]}"
+
+if [ "$rc" -eq 0 ]; then
+  status done "Обновлено до версии $latest"
+  echo "✔ Обновлено до $latest"
+else
+  status error "Установка завершилась с ошибкой (код $rc). Журнал: $LOG"
+  exit "$rc"
+fi
 UPDATER
   chmod +x /usr/local/bin/.coregsm-update.new
-  # atomic replace: a running updater keeps reading its old file safely
+  # atomic replace: an updater that is running right now keeps reading its old file safely
   mv -f /usr/local/bin/.coregsm-update.new /usr/local/bin/coregsm-update
+
+  # the panel (container user "node", uid 1000) may only drop a request file here; root does the work
+  mkdir -p "$APP_DIR/update"
+  chown 1000:1000 "$APP_DIR/update"
+  chmod 755 "$APP_DIR/update"
+
+  if [ -d /run/systemd/system ]; then
+    cat > /etc/systemd/system/coregsm-update.service << UNIT
+[Unit]
+Description=CoreGSM update (started from the web panel)
+
+[Service]
+Type=oneshot
+Environment=APP_DIR=${APP_DIR}
+ExecStart=/usr/local/bin/coregsm-update --from-panel
+TimeoutStartSec=1800
+UNIT
+    cat > /etc/systemd/system/coregsm-update.path << UNIT
+[Unit]
+Description=Watch for update requests from the CoreGSM web panel
+
+[Path]
+PathExists=${APP_DIR}/update/request
+Unit=coregsm-update.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now coregsm-update.path >/dev/null 2>&1 \
+      && ok "Кнопка «Обновить» в панели включена" \
+      || warn "Не удалось включить systemd-юнит coregsm-update.path: кнопка в панели работать не будет, обновляйте командой sudo coregsm-update"
+  else
+    warn "systemd не найден: кнопка «Обновить» в панели недоступна, используйте sudo coregsm-update"
+  fi
 }
 
 main() {

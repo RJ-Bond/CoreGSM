@@ -77,3 +77,14 @@ export interface BotStatus {
   error: string | null;
   updatedAt: number;
 }
+
+export interface UpdateInfo {
+  current: string | null;
+  latest: string | null;
+  available: boolean;
+  checkedAt: number | null;
+  error: string | null;
+  canApply: boolean;
+  pending: boolean;
+  job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
+}
