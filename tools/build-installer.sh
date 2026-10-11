@@ -20,7 +20,7 @@ trap 'rm -f "$GEN"' EXIT
     echo "$DELIM"
     case "$rel" in *.sh) echo "  chmod +x \"\$APP_DIR/$rel\"" ;; esac
   done < <(find src -type f \
-      -not -path '*/node_modules/*' -not -path '*/dist/*' -not -name 'package-lock.json' \
+      -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.*/*' -not -name 'package-lock.json' \
       | LC_ALL=C sort)
   echo '}'
 } > "$GEN"
