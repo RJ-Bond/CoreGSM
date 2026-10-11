@@ -119,11 +119,17 @@ async function publishGuilds(): Promise<void> {
   if (!client || state !== 'online') return;
   const list = collectGuilds(client).map((g) => ({ id: g.id, name: g.name, channels: g.channels.map(({ id, name }) => ({ id, name })) }));
   const json = JSON.stringify(list);
-  // send on change, and every 5 minutes so a restarted backend learns the list again
-  if (json === lastGuildsJson && Date.now() - lastGuildsAt < 5 * 60_000) return;
+  // send on change, and every minute so a restarted backend learns the list again
+  if (json === lastGuildsJson && Date.now() - lastGuildsAt < 60_000) return;
   try {
     const r = await backend('/internal/bot-guilds', { method: 'POST', body: json });
-    if (r.ok) { lastGuildsJson = json; lastGuildsAt = Date.now(); }
+    if (r.ok) {
+      if (json !== lastGuildsJson) {
+        log(`Discord servers visible to the bot: ${list.length}, text channels it can post in: ${list.reduce((n, g) => n + g.channels.length, 0)}`);
+      }
+      lastGuildsJson = json;
+      lastGuildsAt = Date.now();
+    }
   } catch {
     /* retry on the next tick */
   }

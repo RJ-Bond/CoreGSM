@@ -90,6 +90,9 @@ export interface BotStatus {
   tag: string | null;
   clientId: string | null;
   inviteUrl: string | null;
+  /** Discord servers the bot is on, and text channels it can post in */
+  guildCount?: number;
+  channelCount?: number;
   error: string | null;
   updatedAt: number;
 }

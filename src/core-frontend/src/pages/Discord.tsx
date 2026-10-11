@@ -58,6 +58,12 @@ export default function DiscordPage() {
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
         {!settings?.discordTokenSet && <a href="#/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
+        {settings?.discordTokenSet && bot?.state === 'online' && typeof bot.guildCount === 'number' && (
+          <span className="text-sm font-bold text-mute">
+            Серверов Discord: {bot.guildCount}
+            {bot.guildCount > 0 ? ` · каналов для публикации: ${bot.channelCount ?? 0}` : ''}
+          </span>
+        )}
         {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </div>
@@ -131,22 +137,29 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [guilds, setGuilds] = useState<DiscordGuild[] | null>(null);
+  // every Discord server the bot is on, including those where it has no channel to post in
+  const [allGuilds, setAllGuilds] = useState<DiscordGuild[]>([]);
   const [guildId, setGuildId] = useState('');
   const [manual, setManual] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // the bot reports the servers and channels it can post in: pick from the list instead of copying an ID
-  useEffect(() => {
+  const loadChannels = () =>
     api<DiscordGuild[]>('/discord/channels')
       .then((g) => {
+        setAllGuilds(g);
         const withChannels = g.filter((x) => x.channels.length > 0);
         setGuilds(withChannels);
-        const known = withChannels.find((x) => x.channels.some((c) => c.id === initial.channelId));
-        if (known) setGuildId(known.id);
-        else if (initial.channelId) setManual(true);
-        else if (withChannels[0]) setGuildId(withChannels[0].id);
+        setGuildId((cur) => {
+          if (cur && withChannels.some((x) => x.id === cur)) return cur;
+          const known = withChannels.find((x) => x.channels.some((c) => c.id === initial.channelId));
+          return (known ?? withChannels[0])?.id ?? '';
+        });
+        if (initial.channelId && !withChannels.some((x) => x.channels.some((c) => c.id === initial.channelId))) setManual(true);
       })
       .catch(() => setGuilds([]));
-  }, [initial.channelId]);
+  useEffect(() => { void loadChannels(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const refresh = async () => { setRefreshing(true); await loadChannels(); setRefreshing(false); };
 
   const hasList = !!guilds && guilds.length > 0;
   const guild = guilds?.find((g) => g.id === guildId);
@@ -190,7 +203,10 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
                 {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}`}</option>)}
               </select>
             </Field>
-            <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+            </div>
           </>
         ) : (
           <>
@@ -198,11 +214,16 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
               <input id="bind-channel" className="input font-mono" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value.trim() })} placeholder="123456789012345678" required pattern="\d{15,25}" inputMode="numeric" autoFocus />
             </Field>
             <p className="-mt-2 text-sm font-semibold text-mute">
-              {guilds && guilds.length === 0
-                ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер», и каналы появятся списком. Пока можно ввести ID: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
-                : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
+              {guilds && guilds.length === 0 && allGuilds.length === 0
+                ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер» (на этой странице), затем нажмите «Обновить список». Пока можно ввести ID канала вручную: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
+                : guilds && guilds.length === 0
+                  ? `Бот есть на сервере Discord «${allGuilds.map((g) => g.name).join('», «')}», но там нет канала, куда ему разрешено писать. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».`
+                  : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
             </p>
-            {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
+              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+            </div>
           </>
         )}
 

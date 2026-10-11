@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="976aa3a09a60"
+COREGSM_BUILD="bd7c2903a82d"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -1350,7 +1350,7 @@ app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
-  res.json({ ...base, ...invitePayload() });
+  res.json({ ...base, ...invitePayload(), guildCount: botGuilds.length, channelCount: botGuilds.reduce((n, g) => n + g.channels.length, 0) });
 });
 
 // ---------- updates ----------
@@ -1664,7 +1664,16 @@ interface BotGuild {
   name: string;
   channels: { id: string; name: string }[];
 }
-let botGuilds: BotGuild[] = [];
+// persisted, so a backend restart does not leave the channel picker empty until the bot reports again
+function loadGuilds(): BotGuild[] {
+  try {
+    const v = JSON.parse(getSetting('bot_guilds') ?? '[]');
+    return Array.isArray(v) ? (v as BotGuild[]) : [];
+  } catch {
+    return [];
+  }
+}
+let botGuilds: BotGuild[] = loadGuilds();
 
 function channelInfo(channelId: string): { channelName: string | null; guildName: string | null } {
   for (const g of botGuilds) {
@@ -1774,6 +1783,7 @@ app.post('/internal/bot-guilds', internal, (req, res) => {
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
   botGuilds = b.data;
+  setSetting('bot_guilds', JSON.stringify(b.data));
   res.json({ ok: true });
 });
 
@@ -2010,11 +2020,17 @@ async function publishGuilds(): Promise<void> {
   if (!client || state !== 'online') return;
   const list = collectGuilds(client).map((g) => ({ id: g.id, name: g.name, channels: g.channels.map(({ id, name }) => ({ id, name })) }));
   const json = JSON.stringify(list);
-  // send on change, and every 5 minutes so a restarted backend learns the list again
-  if (json === lastGuildsJson && Date.now() - lastGuildsAt < 5 * 60_000) return;
+  // send on change, and every minute so a restarted backend learns the list again
+  if (json === lastGuildsJson && Date.now() - lastGuildsAt < 60_000) return;
   try {
     const r = await backend('/internal/bot-guilds', { method: 'POST', body: json });
-    if (r.ok) { lastGuildsJson = json; lastGuildsAt = Date.now(); }
+    if (r.ok) {
+      if (json !== lastGuildsJson) {
+        log(`Discord servers visible to the bot: ${list.length}, text channels it can post in: ${list.reduce((n, g) => n + g.channels.length, 0)}`);
+      }
+      lastGuildsJson = json;
+      lastGuildsAt = Date.now();
+    }
   } catch {
     /* retry on the next tick */
   }
@@ -2807,6 +2823,9 @@ export interface BotStatus {
   tag: string | null;
   clientId: string | null;
   inviteUrl: string | null;
+  /** Discord servers the bot is on, and text channels it can post in */
+  guildCount?: number;
+  channelCount?: number;
   error: string | null;
   updatedAt: number;
 }
@@ -3118,6 +3137,12 @@ export default function DiscordPage() {
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
         {!settings?.discordTokenSet && <a href="#/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
+        {settings?.discordTokenSet && bot?.state === 'online' && typeof bot.guildCount === 'number' && (
+          <span className="text-sm font-bold text-mute">
+            Серверов Discord: {bot.guildCount}
+            {bot.guildCount > 0 ? ` · каналов для публикации: ${bot.channelCount ?? 0}` : ''}
+          </span>
+        )}
         {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </div>
@@ -3191,22 +3216,29 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [guilds, setGuilds] = useState<DiscordGuild[] | null>(null);
+  // every Discord server the bot is on, including those where it has no channel to post in
+  const [allGuilds, setAllGuilds] = useState<DiscordGuild[]>([]);
   const [guildId, setGuildId] = useState('');
   const [manual, setManual] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // the bot reports the servers and channels it can post in: pick from the list instead of copying an ID
-  useEffect(() => {
+  const loadChannels = () =>
     api<DiscordGuild[]>('/discord/channels')
       .then((g) => {
+        setAllGuilds(g);
         const withChannels = g.filter((x) => x.channels.length > 0);
         setGuilds(withChannels);
-        const known = withChannels.find((x) => x.channels.some((c) => c.id === initial.channelId));
-        if (known) setGuildId(known.id);
-        else if (initial.channelId) setManual(true);
-        else if (withChannels[0]) setGuildId(withChannels[0].id);
+        setGuildId((cur) => {
+          if (cur && withChannels.some((x) => x.id === cur)) return cur;
+          const known = withChannels.find((x) => x.channels.some((c) => c.id === initial.channelId));
+          return (known ?? withChannels[0])?.id ?? '';
+        });
+        if (initial.channelId && !withChannels.some((x) => x.channels.some((c) => c.id === initial.channelId))) setManual(true);
       })
       .catch(() => setGuilds([]));
-  }, [initial.channelId]);
+  useEffect(() => { void loadChannels(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const refresh = async () => { setRefreshing(true); await loadChannels(); setRefreshing(false); };
 
   const hasList = !!guilds && guilds.length > 0;
   const guild = guilds?.find((g) => g.id === guildId);
@@ -3250,7 +3282,10 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
                 {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}`}</option>)}
               </select>
             </Field>
-            <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+            </div>
           </>
         ) : (
           <>
@@ -3258,11 +3293,16 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
               <input id="bind-channel" className="input font-mono" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value.trim() })} placeholder="123456789012345678" required pattern="\d{15,25}" inputMode="numeric" autoFocus />
             </Field>
             <p className="-mt-2 text-sm font-semibold text-mute">
-              {guilds && guilds.length === 0
-                ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер», и каналы появятся списком. Пока можно ввести ID: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
-                : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
+              {guilds && guilds.length === 0 && allGuilds.length === 0
+                ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер» (на этой странице), затем нажмите «Обновить список». Пока можно ввести ID канала вручную: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
+                : guilds && guilds.length === 0
+                  ? `Бот есть на сервере Discord «${allGuilds.map((g) => g.name).join('», «')}», но там нет канала, куда ему разрешено писать. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».`
+                  : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
             </p>
-            {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
+              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+            </div>
           </>
         )}
 
