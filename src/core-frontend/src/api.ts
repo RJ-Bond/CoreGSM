@@ -64,3 +64,16 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`);
   return data as T;
 }
+
+export interface SettingsInfo {
+  discordTokenSet: boolean;
+  discordTokenHint: string | null;
+  proxyUrl: string | null;
+}
+
+export interface BotStatus {
+  state: 'idle' | 'connecting' | 'online' | 'error';
+  tag: string | null;
+  error: string | null;
+  updatedAt: number;
+}

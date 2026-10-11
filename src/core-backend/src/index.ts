@@ -3,30 +3,36 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { db, type BindingRow, type ServerRow, type StatusRow } from './db.js';
+import { db, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
 const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN ?? '';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
 const POLL_MS = Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000;
+// one-time code that protects the first-run setup wizard from strangers who find the panel first
+const SETUP_TOKEN = process.env.SETUP_TOKEN || crypto.randomBytes(8).toString('hex');
 
 if (JWT_SECRET.length < 16 || INTERNAL_TOKEN.length < 16) {
   console.error('JWT_SECRET and INTERNAL_TOKEN must be set (min 16 chars)');
   process.exit(1);
 }
 
-// admin account is created once; later password changes are kept
-if (!db.prepare('SELECT 1 FROM users WHERE username = ?').get('admin')) {
-  if (!ADMIN_PASSWORD) {
-    console.error('ADMIN_PASSWORD is required for first start');
-    process.exit(1);
-  }
-  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('admin', bcrypt.hashSync(ADMIN_PASSWORD, 12));
-  console.log('admin user created');
-}
+const needsSetup = () => !db.prepare('SELECT 1 FROM users LIMIT 1').get();
+
+const safeEqual = (a: string, b: string): boolean => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+
+// optional first-start defaults from .env (the panel settings take over afterwards)
+if (getSetting('discord_token') === null && process.env.DISCORD_TOKEN) setSetting('discord_token', process.env.DISCORD_TOKEN);
+if (getSetting('proxy_url') === null && process.env.PROXY_URL) setSetting('proxy_url', process.env.PROXY_URL);
+
+const PROXY_RE = /^(socks5h?|http|https):\/\/([^@/\s]+@)?[^@/:\s]+:\d{1,5}\/?$/;
+const maskProxy = (u: string) => u.replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:***@');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -90,6 +96,96 @@ app.post(
     res.json({ token, username: u.username });
   }),
 );
+
+// ---------- first-run setup wizard ----------
+app.get('/api/setup/status', (_req, res) => {
+  res.json({ needed: needsSetup() });
+});
+
+const setupSchema = z.object({
+  code: z.string().min(1).max(64),
+  username: z.string().trim().regex(/^[a-zA-Z0-9_.-]{3,32}$/, 'Логин: 3-32 символа, буквы, цифры и _ . -'),
+  password: z.string().min(10, 'Пароль должен быть не короче 10 символов').max(256),
+  discordToken: z.string().trim().max(200).optional(),
+  proxyUrl: z.string().trim().max(300).optional(),
+});
+
+app.post(
+  '/api/setup',
+  loginLimiter,
+  wrap(async (req, res) => {
+    if (!needsSetup()) return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
+    const b = setupSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
+    if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
+    if (b.data.proxyUrl && !PROXY_RE.test(b.data.proxyUrl)) {
+      return res.status(400).json({ error: 'Прокси: формат socks5://host:port или http://host:port' });
+    }
+
+    const hash = await bcrypt.hash(b.data.password, 12);
+    let userId = 0;
+    try {
+      db.transaction(() => {
+        // re-check inside the transaction so two concurrent requests cannot both create an admin
+        if (!needsSetup()) throw new Error('already-setup');
+        userId = Number(db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(b.data.username, hash).lastInsertRowid);
+        if (b.data.discordToken) setSetting('discord_token', b.data.discordToken);
+        if (b.data.proxyUrl) setSetting('proxy_url', b.data.proxyUrl);
+      })();
+    } catch {
+      return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
+    }
+    attempts.delete(req.ip ?? 'x');
+    console.log(`setup completed, admin "${b.data.username}" created`);
+    const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(userId), expiresIn: '7d' });
+    res.status(201).json({ token, username: b.data.username });
+  }),
+);
+
+// ---------- bot settings (token, proxy) ----------
+function settingsPayload() {
+  const tok = getSetting('discord_token');
+  const proxy = getSetting('proxy_url');
+  return {
+    discordTokenSet: !!tok,
+    discordTokenHint: tok ? `…${tok.slice(-4)}` : null,
+    proxyUrl: proxy ? maskProxy(proxy) : null,
+  };
+}
+
+app.get('/api/settings', auth, (_req, res) => {
+  res.json(settingsPayload());
+});
+
+// undefined = keep, empty string = clear
+const settingsSchema = z.object({
+  discordToken: z.string().trim().max(200).optional(),
+  proxyUrl: z.string().trim().max(300).optional(),
+});
+
+app.put('/api/settings', auth, (req, res) => {
+  const b = settingsSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  if (b.data.proxyUrl && !PROXY_RE.test(b.data.proxyUrl)) {
+    return res.status(400).json({ error: 'Прокси: формат socks5://host:port или http://host:port (можно с логином и паролем)' });
+  }
+  if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
+  if (b.data.proxyUrl !== undefined) setSetting('proxy_url', b.data.proxyUrl);
+  res.json(settingsPayload());
+});
+
+let botStatus: { state: 'idle' | 'connecting' | 'online' | 'error'; tag: string | null; error: string | null; updatedAt: number } = {
+  state: 'idle',
+  tag: null,
+  error: null,
+  updatedAt: 0,
+};
+
+app.get('/api/bot/status', auth, (_req, res) => {
+  // a bot that stopped reporting is considered offline
+  const stale = Date.now() - botStatus.updatedAt > 45_000;
+  res.json(stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus);
+});
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
   res.json({ username: req.user!.username });
@@ -280,11 +376,26 @@ app.delete('/api/bindings/:id', auth, (req, res) => {
 
 // ---------- internal (bot only, not exposed by nginx) ----------
 function internal(req: Request, res: Response, next: NextFunction) {
-  const given = Buffer.from(String(req.headers['x-internal-token'] ?? ''));
-  const want = Buffer.from(INTERNAL_TOKEN);
-  if (given.length === want.length && crypto.timingSafeEqual(given, want)) return next();
+  if (safeEqual(String(req.headers['x-internal-token'] ?? ''), INTERNAL_TOKEN)) return next();
   res.status(403).json({ error: 'forbidden' });
 }
+
+app.get('/internal/config', internal, (_req, res) => {
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
+});
+
+app.post('/internal/bot-status', internal, (req, res) => {
+  const b = z
+    .object({
+      state: z.enum(['idle', 'connecting', 'online', 'error']),
+      tag: z.string().max(100).nullable().optional(),
+      error: z.string().max(300).nullable().optional(),
+    })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'bad body' });
+  botStatus = { state: b.data.state, tag: b.data.tag ?? null, error: b.data.error ?? null, updatedAt: Date.now() };
+  res.json({ ok: true });
+});
 
 app.get('/internal/bindings', internal, (_req, res) => {
   const rows = db
@@ -314,6 +425,10 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 app.listen(PORT, () => {
   console.log(`CoreGSM backend listening on :${PORT}`);
+  if (needsSetup()) {
+    console.log('First run: open the panel in a browser and create the administrator.');
+    if (!process.env.SETUP_TOKEN) console.log(`Setup code: ${SETUP_TOKEN}`);
+  }
   startPoller(POLL_MS);
 });
 
