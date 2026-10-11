@@ -410,15 +410,76 @@ function rememberPublicBase(req: Request) {
 
 app.get('/api/access', (req, res) => {
   rememberPublicBase(req);
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
 });
 app.put('/api/access', admin, (req, res) => {
   const b = z.object({ publicPanel: z.boolean().optional(), registration: z.boolean().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
   if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
 });
+// ---------- branding: community name, accent colour and logo ----------
+const LOGO_PATH = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'brand-logo');
+const LOGO_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const logoFile = () => Object.values(LOGO_TYPES).map((e) => `${LOGO_PATH}.${e}`).find((f) => fs.existsSync(f)) ?? null;
+const brand = () => ({
+  name: getSetting('brand_name') || 'CoreGSM',
+  color: getSetting('brand_color') || '#4f46e5',
+  hasLogo: !!logoFile(),
+  logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
+});
+
+app.put('/api/branding', admin, (req, res) => {
+  const b = z
+    .object({ name: z.string().trim().min(1).max(32), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Название до 32 символов, цвет в виде #RRGGBB' });
+  setSetting('brand_name', b.data.name);
+  setSetting('brand_color', b.data.color.toLowerCase());
+  res.json(brand());
+});
+app.put(
+  '/api/branding/logo',
+  admin,
+  express.raw({ type: Object.keys(LOGO_TYPES), limit: '3mb' }),
+  (req, res) => {
+    const ext = LOGO_TYPES[String(req.headers['content-type'] ?? '').split(';')[0]];
+    if (!ext || !Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 3 МБ' });
+    const old = logoFile();
+    if (old) fs.rmSync(old, { force: true });
+    fs.writeFileSync(`${LOGO_PATH}.${ext}`, req.body);
+    res.json(brand());
+  },
+);
+app.delete('/api/branding/logo', admin, (_req, res) => {
+  const old = logoFile();
+  if (old) fs.rmSync(old, { force: true });
+  res.json(brand());
+});
+app.get('/api/branding/logo', (_req, res) => {
+  const f = logoFile();
+  if (!f) return res.status(404).end();
+  res.set('Cache-Control', 'public, max-age=300').type(path.extname(f).slice(1)).send(fs.readFileSync(f));
+});
+// web app manifest (install the panel to the phone's home screen)
+app.get('/api/manifest.json', (_req, res) => {
+  const b = brand();
+  const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
+  res.type('application/manifest+json').json({
+    name: b.name,
+    short_name: b.name.slice(0, 12),
+    start_url: '/',
+    display: 'standalone',
+    background_color: '#f4f5f7',
+    theme_color: b.color,
+    icons: [
+      { src: icon, sizes: '192x192', purpose: 'any' },
+      { src: icon, sizes: '512x512', purpose: 'any' },
+    ],
+  });
+});
+
 
 // ---------- registration of players ----------
 const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
@@ -803,7 +864,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = getSetting('public_base');
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));

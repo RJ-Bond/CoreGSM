@@ -59,7 +59,7 @@ export default function DiscordPage() {
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
-        {!settings?.discordTokenSet && <a href="#/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
+        {!settings?.discordTokenSet && <a href="#/admin/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
         {settings?.discordTokenSet && bot?.state === 'online' && typeof bot.guildCount === 'number' && (
           <span className="text-sm font-bold text-mute">
             Серверов Discord: {bot.guildCount}

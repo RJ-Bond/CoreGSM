@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useAuth } from './auth';
 import { api } from './api';
 import { gameAbbr, gameColor } from './games';
 import { gameIconPath } from './gameIcons';
@@ -16,8 +17,8 @@ export function usePoll(fn: () => void, ms: number) {
 
 /** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
 export function parseHash(): { page: string; sub: string } {
-  const [page = '', sub = ''] = window.location.hash.replace(/^#\/?/, '').split('/');
-  return { page, sub };
+  const [page = '', ...rest] = window.location.hash.replace(/^#\/?/, '').split('/');
+  return { page, sub: rest.join('/') };
 }
 
 export function useHash() {
@@ -281,7 +282,17 @@ export function CopyButton({ text, label = 'Копировать', className = '
 
 /** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
 export function Logo({ size = 32 }: { size?: number }) {
-  return <img src="/logo-128.png" width={size} height={size} alt="CoreGSM" className="shrink-0" draggable={false} />;
+  const { brand } = useAuth().access;
+  return (
+    <img
+      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
+      width={size}
+      height={size}
+      alt={brand.name}
+      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
+      draggable={false}
+    />
+  );
 }
 
 export type ProxyType = 'socks5' | 'http';
@@ -347,6 +358,8 @@ export function InviteButton({ url, className = '' }: { url: string | null; clas
 
 /** "CoreGSM": Core in the brand colour, GSM in the text colour. */
 export function Wordmark({ className = '' }: { className?: string }) {
+  const { name } = useAuth().access.brand;
+  if (name !== 'CoreGSM') return <span className={`font-extrabold tracking-tight text-ink ${className}`}>{name}</span>;
   return (
     <span className={`font-black tracking-tight text-link ${className}`}>
       Core<span className="text-ink">GSM</span>
@@ -398,7 +411,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
       <aside className="relative hidden flex-col justify-between overflow-hidden p-10 text-white md:flex" style={{ background: 'linear-gradient(150deg, #6a5cf0 0%, #4a3cb8 55%, #2a2070 100%)' }}>
         <div className="flex items-center gap-3 text-2xl font-black tracking-tight">
           <Logo size={40} />
-          CoreGSM
+          {useAuth().access.brand.name}
         </div>
         <div className="space-y-6">
           <div className="flex justify-center"><AuthArt /></div>

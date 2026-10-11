@@ -5,65 +5,65 @@
 /* Palette as space-separated RGB so Tailwind can apply opacity (bg-brand/20).
    Light is the default; dark applies with the system setting unless a theme is chosen explicitly. */
 :root {
-  --page: 241 239 254;
+  --page: 244 245 247;
   --card: 255 255 255;
-  --ink: 43 38 80;
-  --mute: 104 98 148;
-  --line: 226 222 250;
-  --soft: 236 233 255;
-  --brand: 90 75 209;
-  --brand-hover: 74 60 184;
-  --link: 90 75 209;
-  --ok: 22 122 70;
-  --okbg: 217 247 230;
-  --warn: 143 91 0;
-  --warnbg: 255 240 204;
-  --bad: 188 40 40;
-  --badbg: 255 222 222;
-  --shadow-soft: 0 8px 28px rgba(90, 75, 209, 0.09);
-  --shadow-pop: 0 2px 10px rgba(90, 75, 209, 0.12);
+  --ink: 20 22 26;
+  --mute: 107 114 128;
+  --line: 232 234 238;
+  --soft: 238 240 244;
+  --brand: 79 70 229;
+  --brand-hover: 67 56 202;
+  --link: 79 70 229;
+  --ok: 22 128 74;
+  --okbg: 220 247 232;
+  --warn: 146 94 0;
+  --warnbg: 255 241 205;
+  --bad: 197 48 48;
+  --badbg: 254 226 226;
+  --shadow-soft: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-pop: 0 1px 2px rgba(16, 24, 40, 0.08);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --page: 17 16 28;
-    --card: 28 26 45;
-    --ink: 236 235 255;
-    --mute: 166 163 204;
-    --line: 48 44 74;
-    --soft: 39 36 63;
-    --brand: 108 92 231;
-    --brand-hover: 128 113 245;
-    --link: 163 151 255;
+    --page: 15 16 18;
+    --card: 22 23 26;
+    --ink: 236 236 239;
+    --mute: 145 150 160;
+    --line: 38 39 43;
+    --soft: 29 30 34;
+    --brand: 99 102 241;
+    --brand-hover: 129 140 248;
+    --link: 165 170 255;
     --ok: 74 222 128;
     --okbg: 20 56 38;
     --warn: 251 191 36;
     --warnbg: 58 46 16;
     --bad: 248 113 113;
     --badbg: 62 26 31;
-    --shadow-soft: 0 8px 28px rgba(0, 0, 0, 0.35);
-    --shadow-pop: 0 2px 10px rgba(0, 0, 0, 0.3);
+    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
-  --page: 17 16 28;
-  --card: 28 26 45;
-  --ink: 236 235 255;
-  --mute: 166 163 204;
-  --line: 48 44 74;
-  --soft: 39 36 63;
-  --brand: 108 92 231;
-  --brand-hover: 128 113 245;
-  --link: 163 151 255;
+  --page: 15 16 18;
+  --card: 22 23 26;
+  --ink: 236 236 239;
+  --mute: 145 150 160;
+  --line: 38 39 43;
+  --soft: 29 30 34;
+  --brand: 99 102 241;
+  --brand-hover: 129 140 248;
+  --link: 165 170 255;
   --ok: 74 222 128;
   --okbg: 20 56 38;
   --warn: 251 191 36;
   --warnbg: 58 46 16;
   --bad: 248 113 113;
   --badbg: 62 26 31;
-  --shadow-soft: 0 8px 28px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 2px 10px rgba(0, 0, 0, 0.3);
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
 
@@ -81,7 +81,7 @@
   .btn-sm { @apply px-3 py-1 text-sm; }
   .input { @apply w-full rounded-2xl border-2 border-line bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:border-brand focus:outline-none disabled:opacity-60; }
   .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
-  .panel { @apply rounded-3xl bg-card shadow-soft; }
+  .panel { @apply rounded-3xl border border-line bg-card shadow-soft; }
   .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
   .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
   .pill-ok { @apply bg-okbg text-ok; }
@@ -95,19 +95,6 @@
 @keyframes shimmer { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .skeleton { animation: shimmer 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .pop, .skeleton { animation: none; } }
-
-/* soft colour glow behind the pages, so the background is not a flat sheet */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(640px 420px at 88% -6%, rgb(var(--brand) / 0.13), transparent 70%),
-    radial-gradient(520px 400px at -6% 22%, rgb(var(--ok) / 0.07), transparent 70%),
-    radial-gradient(520px 380px at 60% 108%, rgb(var(--brand) / 0.08), transparent 70%);
-}
 
 /* a gently pulsing ring on the ONLINE pill */
 @keyframes live-ring {

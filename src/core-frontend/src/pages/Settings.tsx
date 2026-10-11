@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { api, getToken, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
-import { ErrorLine, Field, IconSettings, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
+import { ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -14,9 +14,76 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
+/** название, цвет и логотип сообщества */
+function BrandCard() {
+  const { access, reload } = useAuth();
+  const b = access.brand;
+  const [name, setName] = useState(b.name);
+  const [color, setColor] = useState(b.color);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const swatches = ['#4f46e5', '#7c3aed', '#db2777', '#e11d48', '#ea580c', '#16a34a', '#0891b2', '#2563eb'];
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    await api('/branding', 'PUT', { name, color }).then(() => { toast('Оформление сохранено'); return reload(); }).catch((x: Error) => setError(x.message));
+  };
+  const upload = async (file: File) => {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch('/api/branding/logo', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить');
+      toast('Логотип обновлён');
+      await reload();
+    } catch (x) {
+      setError((x as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
+
+  return (
+    <form onSubmit={save} className="panel space-y-5 p-6">
+      <div>
+        <h2 className="text-lg font-black">Оформление</h2>
+        <p className="font-semibold text-mute">Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord.</p>
+      </div>
+      <Field label="Название">
+        <input id="brand-name" className="input" value={name} maxLength={32} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <div>
+        <span className="label">Цвет</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {swatches.map((c) => (
+            <button type="button" key={c} onClick={() => setColor(c)} aria-label={c} aria-pressed={color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card transition ${color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
+          ))}
+          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-lg border border-line bg-card" aria-label="Свой цвет" />
+        </div>
+      </div>
+      <div>
+        <span className="label">Логотип</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <Logo size={48} />
+          <label className="btn btn-soft btn-sm cursor-pointer">
+            {busy ? 'Загружаю…' : 'Загрузить картинку'}
+            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
+          </label>
+          {b.hasLogo && <button type="button" className="btn btn-soft btn-sm" onClick={() => void clearLogo()}>Сбросить</button>}
+          <span className="text-sm font-semibold text-mute">PNG, JPG или WebP до 3 МБ, лучше квадрат</span>
+        </div>
+      </div>
+      <ErrorLine text={error} />
+      <button className="btn">Сохранить</button>
+    </form>
+  );
+}
+
 const TABS = [
   { id: 'bot', label: 'Discord-бот' },
-  { id: 'access', label: 'Доступ' },
+  { id: 'brand', label: 'Оформление' },
   { id: 'security', label: 'Безопасность' },
   { id: 'updates', label: 'Обновления' },
 ] as const;
@@ -25,12 +92,12 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
   const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
     <div className="space-y-6">
-      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
+      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, оформление, безопасность и обновления" />
       <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
             key={t.id}
-            href={`#/settings/${t.id}`}
+            href={`#/admin/settings/${t.id}`}
             aria-current={tab === t.id ? 'page' : undefined}
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
           >
@@ -41,7 +108,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       </nav>
       <div className="max-w-2xl space-y-5">
         {tab === 'bot' && <BotCard />}
-        {tab === 'access' && <AccessTab />}
+        {tab === 'brand' && <BrandCard />}
         {tab === 'security' && (
           <>
             <PasswordCard />
@@ -328,7 +395,7 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
   );
 }
 
-function AccessTab() {
+export function UsersTab() {
   const { me, reload } = useAuth();
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
