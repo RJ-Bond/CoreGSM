@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c340be3ce5fa"
+COREGSM_BUILD="0a47ab75ae27"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -1288,7 +1288,7 @@ const serverSchema = z.object({
     .string()
     .trim()
     .max(100)
-    .regex(/^[^s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
+    .regex(/^[^\s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
     .optional(),
 });
 
