@@ -7,9 +7,8 @@ import { NewsArt } from '../components/Illustrations';
 import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
 import NewsEditor from './NewsEditor';
 
+// the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
-  const { isAdmin } = useAuth();
-  if (!isAdmin) return <NewsFeed />;
   if (sub === 'new') return <NewsEditor id={null} />;
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <NewsEditor id={id} />;
@@ -76,7 +75,7 @@ function NewsList() {
   return (
     <div className="space-y-6">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
-        <a className="btn" href="#/news/new">+ Написать новость</a>
+        <a className="btn" href="#/admin/news/new">+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -97,7 +96,7 @@ function NewsList() {
 
       {loaded && items.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
-          <a className="btn mt-3" href="#/news/new">+ Написать новость</a>
+          <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
         </Empty>
       )}
 
@@ -114,7 +113,7 @@ function NewsList() {
               {excerpt(n) && <p className="line-clamp-3 break-words text-sm font-semibold text-mute">{excerpt(n)}</p>}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
-                <a className="btn btn-soft btn-sm" href={`#/news/${n.id}`}>Изменить</a>
+                <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <button className="btn btn-soft btn-sm" onClick={() => copy(n)}>Копия</button>
@@ -136,7 +135,7 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
 }
 
 /** read-only feed for players and guests: only what has been posted */
-function NewsFeed() {
+export function NewsFeed() {
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');

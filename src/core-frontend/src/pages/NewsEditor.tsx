@@ -335,7 +335,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
       if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
       toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
-      window.location.hash = '#/news';
+      window.location.hash = '#/admin/news';
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
@@ -346,7 +346,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
 
   return (
     <div className="space-y-5">
-      <a href="#/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
+      <a href="#/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
       <div>
         <h1 className="text-3xl font-black tracking-tight">{id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}</h1>
         {isSent && <p className="mt-0.5 font-semibold text-mute">Сообщение в Discord будет отредактировано, новое отправлено не будет.</p>}

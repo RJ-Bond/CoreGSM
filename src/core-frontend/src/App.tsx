@@ -5,25 +5,45 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
-import CardsPage from './pages/Cards';
-import DiscordPage from './pages/Discord';
-import NewsPage from './pages/News';
+import { NewsFeed } from './pages/News';
+import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
-import SettingsPage from './pages/Settings';
-import { IconCards, IconDiscord, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, useHash } from './ui';
+import { IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, useHash } from './ui';
 
 interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
 
-// everybody can open the server list and the news; the rest is for administrators
+// everybody can open the server list and the news; everything that changes the panel is in "Админка"
 const PAGES: PageDef[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
-  { id: 'cards', label: 'Карточки', icon: IconCards, admin: true },
-  { id: 'discord', label: 'Discord', icon: IconDiscord, admin: true },
   { id: 'news', label: 'Новости', icon: IconNews },
-  { id: 'settings', label: 'Настройки', icon: IconSettings, admin: true },
+  { id: 'admin', label: 'Админка', icon: IconSettings, admin: true },
 ];
 
-const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true };
+const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+
+/** brand colour, name and tab colour; recomputed when the theme flips */
+function useBrand(b: Access['brand']) {
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = () => {
+      const hex = b.color.replace('#', '');
+      const [r, g, bl] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+      const dark = root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const mix = (c: number, t: number, k: number) => Math.round(c + (t - c) * k);
+      const hover = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.2) : mix(c, 0, 0.15))).join(' ');
+      const link = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.45) : c)).join(' ');
+      root.style.setProperty('--brand', `${r} ${g} ${bl}`);
+      root.style.setProperty('--brand-hover', hover);
+      root.style.setProperty('--link', link);
+    };
+    apply();
+    const mo = new MutationObserver(apply);
+    mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    document.title = b.name;
+    document.querySelector('meta[name=theme-color]')?.setAttribute('content', b.color);
+    return () => mo.disconnect();
+  }, [b.color, b.name]);
+}
 
 interface Boot { ready: boolean; needsSetup: boolean; me: Me | null; access: Access }
 
@@ -70,6 +90,8 @@ export default function App() {
     window.location.hash = '#/servers';
     void load();
   }, [load]);
+
+  useBrand(access.brand);
 
   const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, access, reload: load, logout }), [me, isAdmin, access, load, logout]);
 
@@ -120,7 +142,7 @@ export default function App() {
                 }`}
               >
                 {p.label}
-                {p.id === 'settings' && updateAvailable && dot}
+                {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
           </nav>
@@ -150,11 +172,9 @@ export default function App() {
 
         <main key={page} className="pop min-w-0">
           {page === 'servers' && <ServersPage sub={sub} />}
-          {page === 'cards' && <CardsPage />}
-          {page === 'discord' && <DiscordPage />}
-          {page === 'news' && <NewsPage sub={sub} />}
+          {page === 'news' && <NewsFeed />}
+          {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
-          {page === 'settings' && <SettingsPage sub={sub} updateAvailable={updateAvailable} />}
         </main>
 
         <Toaster />
@@ -176,7 +196,7 @@ export default function App() {
                   >
                     <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
                     {p.label}
-                    {p.id === 'settings' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
+                    {p.id === 'admin' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
                   </a>
                 </li>
               );

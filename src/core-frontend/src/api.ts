@@ -187,7 +187,15 @@ export interface Me {
   role: 'admin' | 'player';
 }
 
+export interface Brand {
+  name: string;
+  color: string;
+  hasLogo: boolean;
+  logoV: number;
+}
+
 export interface Access {
+  brand: Brand;
   /** the server list and news are visible without signing in */
   publicPanel: boolean;
   /** players may create accounts */

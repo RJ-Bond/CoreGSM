@@ -40,6 +40,9 @@ export interface EmbedExtra {
   baseUrl?: string | null;
   /** panel build id, shown in the footer */
   version?: string | null;
+  /** community name and custom logo from the branding settings */
+  brandName?: string | null;
+  logoUrl?: string | null;
 }
 
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
@@ -77,12 +80,12 @@ function every(sec: number): string {
 }
 
 export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec: number, extra: EmbedExtra = {}): DiscordEmbed {
-  const parts = ['CoreGSM'];
-  if (extra.version) parts[0] += ` v${extra.version.slice(0, 7)}`;
+  const parts = [extra.brandName || 'CoreGSM'];
+  if (extra.version) parts[0] += ` · v${extra.version.slice(0, 7)}`;
   if (uptimePct != null) parts.push(`аптайм ${Math.round(uptimePct * 10) / 10}%`);
   parts.push(`обновление ${every(intervalSec)}`);
   const footer: { text: string; icon_url?: string } = { text: parts.join(' · ') };
-  if (extra.baseUrl) footer.icon_url = `${extra.baseUrl}/logo-128.png`;
+  if (extra.baseUrl) footer.icon_url = extra.logoUrl || `${extra.baseUrl}/logo-128.png`;
   const stamp = (s.updatedAt ? new Date(s.updatedAt) : new Date()).toISOString();
   const thumbnail = extra.thumbUrl ? { url: extra.thumbUrl } : undefined;
 

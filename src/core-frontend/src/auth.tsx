@@ -14,7 +14,7 @@ export interface AuthState {
 export const AuthContext = createContext<AuthState>({
   me: null,
   isAdmin: false,
-  access: { publicPanel: true, registration: true },
+  access: { publicPanel: true, registration: true, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } },
   reload: async () => undefined,
   logout: () => undefined,
 });

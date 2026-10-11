@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a34436995db6"
+COREGSM_BUILD="0c6010416dc2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -967,6 +967,9 @@ export interface EmbedExtra {
   baseUrl?: string | null;
   /** panel build id, shown in the footer */
   version?: string | null;
+  /** community name and custom logo from the branding settings */
+  brandName?: string | null;
+  logoUrl?: string | null;
 }
 
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
@@ -1004,12 +1007,12 @@ function every(sec: number): string {
 }
 
 export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec: number, extra: EmbedExtra = {}): DiscordEmbed {
-  const parts = ['CoreGSM'];
-  if (extra.version) parts[0] += ` v${extra.version.slice(0, 7)}`;
+  const parts = [extra.brandName || 'CoreGSM'];
+  if (extra.version) parts[0] += ` · v${extra.version.slice(0, 7)}`;
   if (uptimePct != null) parts.push(`аптайм ${Math.round(uptimePct * 10) / 10}%`);
   parts.push(`обновление ${every(intervalSec)}`);
   const footer: { text: string; icon_url?: string } = { text: parts.join(' · ') };
-  if (extra.baseUrl) footer.icon_url = `${extra.baseUrl}/logo-128.png`;
+  if (extra.baseUrl) footer.icon_url = extra.logoUrl || `${extra.baseUrl}/logo-128.png`;
   const stamp = (s.updatedAt ? new Date(s.updatedAt) : new Date()).toISOString();
   const thumbnail = extra.thumbUrl ? { url: extra.thumbUrl } : undefined;
 
@@ -1699,15 +1702,76 @@ function rememberPublicBase(req: Request) {
 
 app.get('/api/access', (req, res) => {
   rememberPublicBase(req);
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
 });
 app.put('/api/access', admin, (req, res) => {
   const b = z.object({ publicPanel: z.boolean().optional(), registration: z.boolean().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
   if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen() });
+  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
 });
+// ---------- branding: community name, accent colour and logo ----------
+const LOGO_PATH = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'brand-logo');
+const LOGO_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const logoFile = () => Object.values(LOGO_TYPES).map((e) => `${LOGO_PATH}.${e}`).find((f) => fs.existsSync(f)) ?? null;
+const brand = () => ({
+  name: getSetting('brand_name') || 'CoreGSM',
+  color: getSetting('brand_color') || '#4f46e5',
+  hasLogo: !!logoFile(),
+  logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
+});
+
+app.put('/api/branding', admin, (req, res) => {
+  const b = z
+    .object({ name: z.string().trim().min(1).max(32), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Название до 32 символов, цвет в виде #RRGGBB' });
+  setSetting('brand_name', b.data.name);
+  setSetting('brand_color', b.data.color.toLowerCase());
+  res.json(brand());
+});
+app.put(
+  '/api/branding/logo',
+  admin,
+  express.raw({ type: Object.keys(LOGO_TYPES), limit: '3mb' }),
+  (req, res) => {
+    const ext = LOGO_TYPES[String(req.headers['content-type'] ?? '').split(';')[0]];
+    if (!ext || !Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 3 МБ' });
+    const old = logoFile();
+    if (old) fs.rmSync(old, { force: true });
+    fs.writeFileSync(`${LOGO_PATH}.${ext}`, req.body);
+    res.json(brand());
+  },
+);
+app.delete('/api/branding/logo', admin, (_req, res) => {
+  const old = logoFile();
+  if (old) fs.rmSync(old, { force: true });
+  res.json(brand());
+});
+app.get('/api/branding/logo', (_req, res) => {
+  const f = logoFile();
+  if (!f) return res.status(404).end();
+  res.set('Cache-Control', 'public, max-age=300').type(path.extname(f).slice(1)).send(fs.readFileSync(f));
+});
+// web app manifest (install the panel to the phone's home screen)
+app.get('/api/manifest.json', (_req, res) => {
+  const b = brand();
+  const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
+  res.type('application/manifest+json').json({
+    name: b.name,
+    short_name: b.name.slice(0, 12),
+    start_url: '/',
+    display: 'standalone',
+    background_color: '#f4f5f7',
+    theme_color: b.color,
+    icons: [
+      { src: icon, sizes: '192x192', purpose: 'any' },
+      { src: icon, sizes: '512x512', purpose: 'any' },
+    ],
+  });
+});
+
 
 // ---------- registration of players ----------
 const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
@@ -2092,7 +2156,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = getSetting('public_base');
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -3178,7 +3242,10 @@ __COREGSM_EOF__
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f1effe" />
+    <meta name="theme-color" content="#4f46e5" />
+    <link rel="manifest" href="/api/manifest.json" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="192x192" href="/logo-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -3221,6 +3288,7 @@ __COREGSM_EOF__
   },
   "dependencies": {
     "@fontsource/nunito": "^5.1.0",
+    "@fontsource/plus-jakarta-sans": "^5.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -3466,6 +3534,13 @@ QPmETblDb4WD9hukyn4HhPwT2EqUnwBDc7gYDM5llpYycy11WyjMNDfuzeWSVTNbmYWKzFRmelPu
 b8qDB+AfOEtKMnPBXXVbKaI0Ne/ZHdi7/dWJ8ozL/4yXZWp8qjLzZVmcX4TznfwHztzcnPy3mKCc
 lpZdO+rqtpoW7v8BFI4qdDVfylwAAAAASUVORK5CYII=
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/public"
+  cat > "$APP_DIR/core-frontend/public/sw.js" << '__COREGSM_EOF__'
+// Minimal service worker: lets the browser offer "install app". Nothing is cached, the panel is always live.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', () => {});
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -3475,25 +3550,45 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
-import CardsPage from './pages/Cards';
-import DiscordPage from './pages/Discord';
-import NewsPage from './pages/News';
+import { NewsFeed } from './pages/News';
+import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
-import SettingsPage from './pages/Settings';
-import { IconCards, IconDiscord, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, useHash } from './ui';
+import { IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, useHash } from './ui';
 
 interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
 
-// everybody can open the server list and the news; the rest is for administrators
+// everybody can open the server list and the news; everything that changes the panel is in "Админка"
 const PAGES: PageDef[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
-  { id: 'cards', label: 'Карточки', icon: IconCards, admin: true },
-  { id: 'discord', label: 'Discord', icon: IconDiscord, admin: true },
   { id: 'news', label: 'Новости', icon: IconNews },
-  { id: 'settings', label: 'Настройки', icon: IconSettings, admin: true },
+  { id: 'admin', label: 'Админка', icon: IconSettings, admin: true },
 ];
 
-const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true };
+const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+
+/** brand colour, name and tab colour; recomputed when the theme flips */
+function useBrand(b: Access['brand']) {
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = () => {
+      const hex = b.color.replace('#', '');
+      const [r, g, bl] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+      const dark = root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const mix = (c: number, t: number, k: number) => Math.round(c + (t - c) * k);
+      const hover = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.2) : mix(c, 0, 0.15))).join(' ');
+      const link = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.45) : c)).join(' ');
+      root.style.setProperty('--brand', `${r} ${g} ${bl}`);
+      root.style.setProperty('--brand-hover', hover);
+      root.style.setProperty('--link', link);
+    };
+    apply();
+    const mo = new MutationObserver(apply);
+    mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    document.title = b.name;
+    document.querySelector('meta[name=theme-color]')?.setAttribute('content', b.color);
+    return () => mo.disconnect();
+  }, [b.color, b.name]);
+}
 
 interface Boot { ready: boolean; needsSetup: boolean; me: Me | null; access: Access }
 
@@ -3540,6 +3635,8 @@ export default function App() {
     window.location.hash = '#/servers';
     void load();
   }, [load]);
+
+  useBrand(access.brand);
 
   const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, access, reload: load, logout }), [me, isAdmin, access, load, logout]);
 
@@ -3590,7 +3687,7 @@ export default function App() {
                 }`}
               >
                 {p.label}
-                {p.id === 'settings' && updateAvailable && dot}
+                {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
           </nav>
@@ -3620,11 +3717,9 @@ export default function App() {
 
         <main key={page} className="pop min-w-0">
           {page === 'servers' && <ServersPage sub={sub} />}
-          {page === 'cards' && <CardsPage />}
-          {page === 'discord' && <DiscordPage />}
-          {page === 'news' && <NewsPage sub={sub} />}
+          {page === 'news' && <NewsFeed />}
+          {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
-          {page === 'settings' && <SettingsPage sub={sub} updateAvailable={updateAvailable} />}
         </main>
 
         <Toaster />
@@ -3646,7 +3741,7 @@ export default function App() {
                   >
                     <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
                     {p.label}
-                    {p.id === 'settings' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
+                    {p.id === 'admin' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
                   </a>
                 </li>
               );
@@ -3857,7 +3952,15 @@ export interface Me {
   role: 'admin' | 'player';
 }
 
+export interface Brand {
+  name: string;
+  color: string;
+  hasLogo: boolean;
+  logoV: number;
+}
+
 export interface Access {
+  brand: Brand;
   /** the server list and news are visible without signing in */
   publicPanel: boolean;
   /** players may create accounts */
@@ -3898,7 +4001,7 @@ export interface AuthState {
 export const AuthContext = createContext<AuthState>({
   me: null,
   isAdmin: false,
-  access: { publicPanel: true, registration: true },
+  access: { publicPanel: true, registration: true, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } },
   reload: async () => undefined,
   logout: () => undefined,
 });
@@ -4283,65 +4386,65 @@ __COREGSM_EOF__
 /* Palette as space-separated RGB so Tailwind can apply opacity (bg-brand/20).
    Light is the default; dark applies with the system setting unless a theme is chosen explicitly. */
 :root {
-  --page: 241 239 254;
+  --page: 244 245 247;
   --card: 255 255 255;
-  --ink: 43 38 80;
-  --mute: 104 98 148;
-  --line: 226 222 250;
-  --soft: 236 233 255;
-  --brand: 90 75 209;
-  --brand-hover: 74 60 184;
-  --link: 90 75 209;
-  --ok: 22 122 70;
-  --okbg: 217 247 230;
-  --warn: 143 91 0;
-  --warnbg: 255 240 204;
-  --bad: 188 40 40;
-  --badbg: 255 222 222;
-  --shadow-soft: 0 8px 28px rgba(90, 75, 209, 0.09);
-  --shadow-pop: 0 2px 10px rgba(90, 75, 209, 0.12);
+  --ink: 20 22 26;
+  --mute: 107 114 128;
+  --line: 232 234 238;
+  --soft: 238 240 244;
+  --brand: 79 70 229;
+  --brand-hover: 67 56 202;
+  --link: 79 70 229;
+  --ok: 22 128 74;
+  --okbg: 220 247 232;
+  --warn: 146 94 0;
+  --warnbg: 255 241 205;
+  --bad: 197 48 48;
+  --badbg: 254 226 226;
+  --shadow-soft: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-pop: 0 1px 2px rgba(16, 24, 40, 0.08);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --page: 17 16 28;
-    --card: 28 26 45;
-    --ink: 236 235 255;
-    --mute: 166 163 204;
-    --line: 48 44 74;
-    --soft: 39 36 63;
-    --brand: 108 92 231;
-    --brand-hover: 128 113 245;
-    --link: 163 151 255;
+    --page: 15 16 18;
+    --card: 22 23 26;
+    --ink: 236 236 239;
+    --mute: 145 150 160;
+    --line: 38 39 43;
+    --soft: 29 30 34;
+    --brand: 99 102 241;
+    --brand-hover: 129 140 248;
+    --link: 165 170 255;
     --ok: 74 222 128;
     --okbg: 20 56 38;
     --warn: 251 191 36;
     --warnbg: 58 46 16;
     --bad: 248 113 113;
     --badbg: 62 26 31;
-    --shadow-soft: 0 8px 28px rgba(0, 0, 0, 0.35);
-    --shadow-pop: 0 2px 10px rgba(0, 0, 0, 0.3);
+    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
-  --page: 17 16 28;
-  --card: 28 26 45;
-  --ink: 236 235 255;
-  --mute: 166 163 204;
-  --line: 48 44 74;
-  --soft: 39 36 63;
-  --brand: 108 92 231;
-  --brand-hover: 128 113 245;
-  --link: 163 151 255;
+  --page: 15 16 18;
+  --card: 22 23 26;
+  --ink: 236 236 239;
+  --mute: 145 150 160;
+  --line: 38 39 43;
+  --soft: 29 30 34;
+  --brand: 99 102 241;
+  --brand-hover: 129 140 248;
+  --link: 165 170 255;
   --ok: 74 222 128;
   --okbg: 20 56 38;
   --warn: 251 191 36;
   --warnbg: 58 46 16;
   --bad: 248 113 113;
   --badbg: 62 26 31;
-  --shadow-soft: 0 8px 28px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 2px 10px rgba(0, 0, 0, 0.3);
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
 
@@ -4359,7 +4462,7 @@ __COREGSM_EOF__
   .btn-sm { @apply px-3 py-1 text-sm; }
   .input { @apply w-full rounded-2xl border-2 border-line bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:border-brand focus:outline-none disabled:opacity-60; }
   .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
-  .panel { @apply rounded-3xl bg-card shadow-soft; }
+  .panel { @apply rounded-3xl border border-line bg-card shadow-soft; }
   .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
   .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
   .pill-ok { @apply bg-okbg text-ok; }
@@ -4374,19 +4477,6 @@ __COREGSM_EOF__
 .skeleton { animation: shimmer 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .pop, .skeleton { animation: none; } }
 
-/* soft colour glow behind the pages, so the background is not a flat sheet */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(640px 420px at 88% -6%, rgb(var(--brand) / 0.13), transparent 70%),
-    radial-gradient(520px 400px at -6% 22%, rgb(var(--ok) / 0.07), transparent 70%),
-    radial-gradient(520px 380px at 60% 108%, rgb(var(--brand) / 0.08), transparent 70%);
-}
-
 /* a gently pulsing ring on the ONLINE pill */
 @keyframes live-ring {
   0% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0.45); }
@@ -4400,10 +4490,10 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import '@fontsource/nunito/500.css';
-import '@fontsource/nunito/700.css';
-import '@fontsource/nunito/800.css';
-import '@fontsource/nunito/900.css';
+import '@fontsource/plus-jakarta-sans/500.css';
+import '@fontsource/plus-jakarta-sans/600.css';
+import '@fontsource/plus-jakarta-sans/700.css';
+import '@fontsource/plus-jakarta-sans/800.css';
 import './index.css';
 import App from './App';
 
@@ -4412,6 +4502,152 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>,
 );
+
+// installable as an app (home screen on phones, window on desktop)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
+import { useState, type ReactNode } from 'react';
+import { api, type Server, type ServerInput } from '../api';
+import { gameLabel } from '../games';
+import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, toast, usePoll } from '../ui';
+import CardsPage from './Cards';
+import DiscordPage from './Discord';
+import NewsPage from './News';
+import ServerForm, { emptyServer } from './ServerForm';
+import SettingsPage, { UsersTab } from './Settings';
+
+const IconUsers = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+
+interface Section { id: string; label: string; icon: () => ReactNode }
+
+export const ADMIN_SECTIONS: Section[] = [
+  { id: 'servers', label: 'Серверы', icon: IconServers },
+  { id: 'discord', label: 'Discord', icon: IconDiscord },
+  { id: 'news', label: 'Новости', icon: IconNews },
+  { id: 'cards', label: 'Карточки', icon: IconCards },
+  { id: 'users', label: 'Пользователи', icon: IconUsers },
+  { id: 'settings', label: 'Настройки', icon: IconSettings },
+];
+
+/** The administrator's area: everything that changes the panel lives here. */
+export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+  const [section, ...rest] = sub.split('/');
+  const current = ADMIN_SECTIONS.some((s) => s.id === section) ? section : 'servers';
+  const tail = rest.join('/');
+
+  return (
+    <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
+      <nav className="flex gap-1 overflow-x-auto rounded-3xl border border-line bg-card p-1.5 shadow-soft md:sticky md:top-4 md:flex-col md:self-start md:overflow-visible md:p-2" aria-label="Разделы админки">
+        <div className="hidden px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute md:block">Админка</div>
+        {ADMIN_SECTIONS.map((s) => (
+          <a
+            key={s.id}
+            href={`#/admin/${s.id}`}
+            aria-current={current === s.id ? 'page' : undefined}
+            className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-2xl px-3.5 py-2 font-bold transition ${current === s.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+          >
+            {s.icon()}
+            {s.label}
+            {s.id === 'settings' && updateAvailable && <span className="h-2 w-2 rounded-full bg-warn" title="Доступно обновление" />}
+          </a>
+        ))}
+      </nav>
+      <div className="min-w-0">
+        {current === 'servers' && <ServersManage />}
+        {current === 'discord' && <DiscordPage />}
+        {current === 'news' && <NewsPage sub={tail} />}
+        {current === 'cards' && <CardsPage />}
+        {current === 'users' && <UsersTab />}
+        {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
+      </div>
+    </div>
+  );
+}
+
+/** Add, edit, delete and re-query servers. */
+function ServersManage() {
+  const [servers, setServers] = useState<Server[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [editing, setEditing] = useState<{ id?: number; data: ServerInput } | null>(null);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = () =>
+    api<Server[]>('/servers')
+      .then((s) => { setServers(s); setError(''); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoaded(true));
+  usePoll(load, 15_000);
+
+  const remove = async (s: Server) => {
+    if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
+    await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e: Error) => setError(e.message));
+    void load();
+  };
+  const refresh = async (s: Server) => {
+    setBusyId(s.id);
+    await api(`/servers/${s.id}/refresh`, 'POST').catch((e: Error) => setError(e.message));
+    await load();
+    setBusyId(null);
+  };
+
+  return (
+    <div className="space-y-5">
+      <PageHead title="Серверы" subtitle="Добавление и настройка игровых серверов" icon={<IconServers />}>
+        <button className="btn" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+      </PageHead>
+      <ErrorLine text={error} />
+
+      {loaded && servers.length === 0 && (
+        <Empty title="Серверов пока нет" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.">
+          <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+        </Empty>
+      )}
+
+      <div className="space-y-2.5">
+        {servers.map((s) => (
+          <div key={s.id} className="panel flex flex-wrap items-center gap-x-4 gap-y-2 p-4">
+            <GameAvatar game={s.game} size={40} />
+            <div className="min-w-0 flex-1 basis-56">
+              <a href={`#/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
+              <div className="truncate text-sm font-semibold text-mute">
+                {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
+                {s.displayAddress ? <> · показывается как <span className="font-mono">{s.displayAddress}</span></> : null}
+              </div>
+            </div>
+            <div className="text-sm font-bold tabular-nums text-mute">{s.online ? `${s.players}/${s.maxPlayers}` : ''}</div>
+            <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
+            <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
+            <div className="flex gap-2">
+              <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id}>{busyId === s.id ? '…' : 'Опросить'}</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
+              <button className="btn btn-danger btn-sm" onClick={() => void remove(s)}>Удалить</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {editing && (
+        <ServerForm
+          initial={editing.data}
+          id={editing.id}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); toast('Сервер сохранён'); void load(); }}
+        />
+      )}
+    </div>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Cards.tsx" << '__COREGSM_EOF__'
@@ -4530,7 +4766,7 @@ export default function DiscordPage() {
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
-        {!settings?.discordTokenSet && <a href="#/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
+        {!settings?.discordTokenSet && <a href="#/admin/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
         {settings?.discordTokenSet && bot?.state === 'online' && typeof bot.guildCount === 'number' && (
           <span className="text-sm font-bold text-mute">
             Серверов Discord: {bot.guildCount}
@@ -4885,9 +5121,8 @@ import { NewsArt } from '../components/Illustrations';
 import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
 import NewsEditor from './NewsEditor';
 
+// the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
-  const { isAdmin } = useAuth();
-  if (!isAdmin) return <NewsFeed />;
   if (sub === 'new') return <NewsEditor id={null} />;
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <NewsEditor id={id} />;
@@ -4954,7 +5189,7 @@ function NewsList() {
   return (
     <div className="space-y-6">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
-        <a className="btn" href="#/news/new">+ Написать новость</a>
+        <a className="btn" href="#/admin/news/new">+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -4975,7 +5210,7 @@ function NewsList() {
 
       {loaded && items.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
-          <a className="btn mt-3" href="#/news/new">+ Написать новость</a>
+          <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
         </Empty>
       )}
 
@@ -4992,7 +5227,7 @@ function NewsList() {
               {excerpt(n) && <p className="line-clamp-3 break-words text-sm font-semibold text-mute">{excerpt(n)}</p>}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
-                <a className="btn btn-soft btn-sm" href={`#/news/${n.id}`}>Изменить</a>
+                <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <button className="btn btn-soft btn-sm" onClick={() => copy(n)}>Копия</button>
@@ -5014,7 +5249,7 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
 }
 
 /** read-only feed for players and guests: only what has been posted */
-function NewsFeed() {
+export function NewsFeed() {
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -5376,7 +5611,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
       if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
       toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
-      window.location.hash = '#/news';
+      window.location.hash = '#/admin/news';
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
@@ -5387,7 +5622,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
 
   return (
     <div className="space-y-5">
-      <a href="#/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
+      <a href="#/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
       <div>
         <h1 className="text-3xl font-black tracking-tight">{id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}</h1>
         {isSent && <p className="mt-0.5 font-semibold text-mute">Сообщение в Discord будет отредактировано, новое отправлено не будет.</p>}
@@ -6088,13 +6323,12 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
-import { api, type Server, type ServerInput } from '../api';
+import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
 import { ServersArt } from '../components/Illustrations';
-import { Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, plural, usePoll } from '../ui';
 import ServerDetail from './ServerDetail';
-import ServerForm, { emptyServer } from './ServerForm';
 
 export default function ServersPage({ sub }: { sub: string }) {
   const id = Number(sub);
@@ -6116,7 +6350,6 @@ function ServerList() {
   };
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [editing, setEditing] = useState<{ id?: number; data: ServerInput } | null>(null);
   const [error, setError] = useState('');
 
   const load = () =>
@@ -6126,25 +6359,18 @@ function ServerList() {
       .finally(() => setLoaded(true));
   usePoll(load, 10_000);
 
-  const sorted = [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)));
+  const sorted = [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)) || Number(b.online) - Number(a.online));
   const online = servers.filter((s) => s.online);
   const players = online.reduce((n, s) => n + s.players, 0);
   const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
   const avg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
 
-  const remove = async (s: Server) => {
-    if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
-    await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e) => setError(e.message));
-    load();
-  };
-
-  const add = () => setEditing({ data: emptyServer });
   const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
   return (
     <div className="space-y-6">
       <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени" icon={<IconServers />}>
-        {isAdmin && <button className="btn" onClick={add}>+ Добавить сервер</button>}
+        {isAdmin && <a className="btn btn-soft" href="#/admin/servers">Управление серверами</a>}
       </PageHead>
       <ErrorLine text={error} />
 
@@ -6180,18 +6406,18 @@ function ServerList() {
 
       {loaded && servers.length === 0 && (
         <Empty art={<ServersArt />} title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'} text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже.'}>
-          {isAdmin && <button className="btn mt-3" onClick={add}>+ Добавить сервер</button>}
+          {isAdmin && <a className="btn mt-3" href="#/admin/servers">Добавить в админке</a>}
         </Empty>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {sorted.map((s) => {
+        {sorted.map((s, i) => {
           const color = gameColor(s.game);
           const lag = s.ping != null && s.ping > 100;
           return (
             <article
               key={s.id}
-              className="pop panel flex cursor-pointer flex-col gap-3 p-5 transition hover:-translate-y-0.5 hover:ring-2 hover:ring-brand/30"
+              className={`pop panel flex cursor-pointer flex-col gap-3 p-5 transition hover:-translate-y-0.5 hover:ring-2 hover:ring-brand/30 ${i === 0 && sorted.length > 2 ? 'lg:col-span-2' : ''}`}
               onClick={() => open(s)}
             >
               <div className="flex items-start justify-between gap-3">
@@ -6242,15 +6468,12 @@ function ServerList() {
 
               <div className="mt-auto flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
                 <a className="btn btn-soft btn-sm" href={`#/servers/${s.id}`}>Подробнее</a>
-                {isAdmin && <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>}
-                {isAdmin && <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>}
               </div>
             </article>
           );
         })}
       </div>
 
-      {editing && <ServerForm initial={editing.data} id={editing.id} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast('Сервер сохранён'); load(); }} />}
     </div>
   );
 }
@@ -6258,9 +6481,9 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { api, getToken, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
-import { ErrorLine, Field, IconSettings, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
+import { ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -6273,9 +6496,76 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
+/** название, цвет и логотип сообщества */
+function BrandCard() {
+  const { access, reload } = useAuth();
+  const b = access.brand;
+  const [name, setName] = useState(b.name);
+  const [color, setColor] = useState(b.color);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const swatches = ['#4f46e5', '#7c3aed', '#db2777', '#e11d48', '#ea580c', '#16a34a', '#0891b2', '#2563eb'];
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    await api('/branding', 'PUT', { name, color }).then(() => { toast('Оформление сохранено'); return reload(); }).catch((x: Error) => setError(x.message));
+  };
+  const upload = async (file: File) => {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch('/api/branding/logo', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить');
+      toast('Логотип обновлён');
+      await reload();
+    } catch (x) {
+      setError((x as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
+
+  return (
+    <form onSubmit={save} className="panel space-y-5 p-6">
+      <div>
+        <h2 className="text-lg font-black">Оформление</h2>
+        <p className="font-semibold text-mute">Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord.</p>
+      </div>
+      <Field label="Название">
+        <input id="brand-name" className="input" value={name} maxLength={32} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <div>
+        <span className="label">Цвет</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {swatches.map((c) => (
+            <button type="button" key={c} onClick={() => setColor(c)} aria-label={c} aria-pressed={color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card transition ${color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
+          ))}
+          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-lg border border-line bg-card" aria-label="Свой цвет" />
+        </div>
+      </div>
+      <div>
+        <span className="label">Логотип</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <Logo size={48} />
+          <label className="btn btn-soft btn-sm cursor-pointer">
+            {busy ? 'Загружаю…' : 'Загрузить картинку'}
+            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
+          </label>
+          {b.hasLogo && <button type="button" className="btn btn-soft btn-sm" onClick={() => void clearLogo()}>Сбросить</button>}
+          <span className="text-sm font-semibold text-mute">PNG, JPG или WebP до 3 МБ, лучше квадрат</span>
+        </div>
+      </div>
+      <ErrorLine text={error} />
+      <button className="btn">Сохранить</button>
+    </form>
+  );
+}
+
 const TABS = [
   { id: 'bot', label: 'Discord-бот' },
-  { id: 'access', label: 'Доступ' },
+  { id: 'brand', label: 'Оформление' },
   { id: 'security', label: 'Безопасность' },
   { id: 'updates', label: 'Обновления' },
 ] as const;
@@ -6284,12 +6574,12 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
   const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
     <div className="space-y-6">
-      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, доступ к панели и обновления" />
+      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, оформление, безопасность и обновления" />
       <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
             key={t.id}
-            href={`#/settings/${t.id}`}
+            href={`#/admin/settings/${t.id}`}
             aria-current={tab === t.id ? 'page' : undefined}
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
           >
@@ -6300,7 +6590,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       </nav>
       <div className="max-w-2xl space-y-5">
         {tab === 'bot' && <BotCard />}
-        {tab === 'access' && <AccessTab />}
+        {tab === 'brand' && <BrandCard />}
         {tab === 'security' && (
           <>
             <PasswordCard />
@@ -6587,7 +6877,7 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
   );
 }
 
-function AccessTab() {
+export function UsersTab() {
   const { me, reload } = useAuth();
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -6781,6 +7071,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useAuth } from './auth';
 import { api } from './api';
 import { gameAbbr, gameColor } from './games';
 import { gameIconPath } from './gameIcons';
@@ -6798,8 +7089,8 @@ export function usePoll(fn: () => void, ms: number) {
 
 /** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
 export function parseHash(): { page: string; sub: string } {
-  const [page = '', sub = ''] = window.location.hash.replace(/^#\/?/, '').split('/');
-  return { page, sub };
+  const [page = '', ...rest] = window.location.hash.replace(/^#\/?/, '').split('/');
+  return { page, sub: rest.join('/') };
 }
 
 export function useHash() {
@@ -7063,7 +7354,17 @@ export function CopyButton({ text, label = 'Копировать', className = '
 
 /** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
 export function Logo({ size = 32 }: { size?: number }) {
-  return <img src="/logo-128.png" width={size} height={size} alt="CoreGSM" className="shrink-0" draggable={false} />;
+  const { brand } = useAuth().access;
+  return (
+    <img
+      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
+      width={size}
+      height={size}
+      alt={brand.name}
+      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
+      draggable={false}
+    />
+  );
 }
 
 export type ProxyType = 'socks5' | 'http';
@@ -7129,6 +7430,8 @@ export function InviteButton({ url, className = '' }: { url: string | null; clas
 
 /** "CoreGSM": Core in the brand colour, GSM in the text colour. */
 export function Wordmark({ className = '' }: { className?: string }) {
+  const { name } = useAuth().access.brand;
+  if (name !== 'CoreGSM') return <span className={`font-extrabold tracking-tight text-ink ${className}`}>{name}</span>;
   return (
     <span className={`font-black tracking-tight text-link ${className}`}>
       Core<span className="text-ink">GSM</span>
@@ -7180,7 +7483,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
       <aside className="relative hidden flex-col justify-between overflow-hidden p-10 text-white md:flex" style={{ background: 'linear-gradient(150deg, #6a5cf0 0%, #4a3cb8 55%, #2a2070 100%)' }}>
         <div className="flex items-center gap-3 text-2xl font-black tracking-tight">
           <Logo size={40} />
-          CoreGSM
+          {useAuth().access.brand.name}
         </div>
         <div className="space-y-6">
           <div className="flex justify-center"><AuthArt /></div>
@@ -7251,7 +7554,7 @@ export default {
         badbg: c('badbg'),
       },
       fontFamily: {
-        sans: ['Nunito', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: ['Plus Jakarta Sans', 'Nunito', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
       borderRadius: { '4xl': '2rem' },

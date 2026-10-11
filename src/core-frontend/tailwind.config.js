@@ -24,7 +24,7 @@ export default {
         badbg: c('badbg'),
       },
       fontFamily: {
-        sans: ['Nunito', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: ['Plus Jakarta Sans', 'Nunito', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
       borderRadius: { '4xl': '2rem' },
