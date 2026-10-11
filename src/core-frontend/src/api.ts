@@ -18,6 +18,10 @@ export interface Server {
   host: string;
   port: number;
   queryPort: number | null;
+  /** what people see instead of host:port ('' = not set) */
+  displayAddress: string;
+  /** the address shown in the panel and on cards */
+  address: string;
   hasStatus: boolean;
   online: boolean;
   players: number;
@@ -47,6 +51,7 @@ export interface ServerInput {
   host: string;
   port: number;
   queryPort: number | null;
+  displayAddress: string;
 }
 
 export class ApiError extends Error {}

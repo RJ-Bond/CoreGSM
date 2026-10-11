@@ -3,7 +3,7 @@ import { api, type Server, type ServerInput } from '../api';
 import { GAMES, gameColor, gameLabel } from '../games';
 import { Empty, ErrorLine, Field, FillBar, GameAvatar, Modal, PageHead, Spark, StatusPill, ago, usePoll } from '../ui';
 
-const empty: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null };
+const empty: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '' };
 
 export default function ServersPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -92,13 +92,13 @@ export default function ServersPage() {
               <Spark serverId={s.id} color={color} />
 
               <div className="flex items-center justify-between gap-2 text-[13px] font-bold text-mute">
-                <span className="truncate font-mono text-[12px]" title={`${s.host}:${s.port}`}>{s.host}:{s.port}</span>
+                <span className="truncate font-mono text-[12px]" title={s.address}>{s.address}</span>
                 <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
               </div>
               {!s.online && s.error && <p className="truncate rounded-xl bg-badbg px-3 py-1.5 text-[12px] font-bold text-bad" title={s.error}>{s.error}</p>}
 
               <div className="mt-auto flex gap-2 pt-1">
-                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort } })}>Изменить</button>
+                <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => remove(s)}>Удалить</button>
               </div>
             </article>
@@ -157,7 +157,7 @@ function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; i
         )}
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
-            <Field label="Адрес (IP или домен)">
+            <Field label="Адрес для опроса (IP или домен)">
               <input id="srv-host" className="input" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value.trim() })} required placeholder="play.example.com" />
             </Field>
           </div>
@@ -168,6 +168,10 @@ function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; i
         <Field label="Query-порт (если отличается)">
           <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => setF({ ...f, queryPort: e.target.value ? Number(e.target.value) : null })} placeholder="не указан" />
         </Field>
+        <Field label="Адрес для отображения (необязательно)">
+          <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => setF({ ...f, displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
+        </Field>
+        <p className="-mt-1.5 text-[13px] font-semibold text-mute">Панель опрашивает сервер по адресу выше, а людям на странице и в карточке Discord показывает этот адрес. Подойдёт, если сервер стоит в локальной сети и снаружи доступен по другому IP или домену.</p>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>

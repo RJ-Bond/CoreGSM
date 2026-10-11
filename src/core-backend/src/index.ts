@@ -370,6 +370,13 @@ const serverSchema = z.object({
   host: z.string().trim().min(1).max(255).regex(/^[a-z0-9.\-:]+$/i),
   port: z.number().int().min(1).max(65535),
   queryPort: z.number().int().min(1).max(65535).nullable().optional(),
+  // what people see instead of host:port, e.g. a public IP or domain (the panel still queries `host`)
+  displayAddress: z
+    .string()
+    .trim()
+    .max(100)
+    .regex(/^[^s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
+    .optional(),
 });
 
 type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
@@ -378,13 +385,16 @@ function serialize(r: ServerJoin) {
   return {
     id: r.id,
     // shown title: custom name > name reported by the server > host:port
-    name: r.name || r.query_name || `${r.host}:${r.port}`,
+    name: r.name || r.query_name || r.display_address || `${r.host}:${r.port}`,
     customName: r.name,
     nameAuto: !r.name,
     game: r.game,
     host: r.host,
     port: r.port,
     queryPort: r.query_port,
+    displayAddress: r.display_address,
+    // the address shown in the panel and on cards
+    address: r.display_address || `${r.host}:${r.port}`,
     hasStatus: r.has_status != null,
     online: !!r.online,
     players: r.players ?? 0,
@@ -420,8 +430,8 @@ app.post(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const info = db
-      .prepare('INSERT INTO servers (name, game, host, port, query_port, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, Date.now());
+      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
@@ -436,8 +446,8 @@ app.put(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const r = db
-      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=? WHERE id=?')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, id);
+      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=? WHERE id=?')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));

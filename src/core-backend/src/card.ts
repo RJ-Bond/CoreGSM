@@ -113,7 +113,9 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   const titleX = 172;
   ctx.fillStyle = C.ink;
   ctx.font = `700 44px ${SANS}`;
-  const title = s.name || st?.name || `${s.host}:${s.port}`;
+  // never put the internal query address on a public card: prefer the display address
+  const address = s.display_address || `${s.host}:${s.port}`;
+  const title = s.name || st?.name || address;
   ctx.fillText(fit(ctx, title, px - titleX - 24), titleX, 96);
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
@@ -183,7 +185,7 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   };
   const tx = 640;
   const tw = W - 64 - tx;
-  tile(tx, 176, tw, 'Адрес', `${s.host}:${s.port}`, true);
+  tile(tx, 176, tw, 'Адрес', address, true);
   tile(tx, 264, tw / 2 - 8, 'Карта', online && st?.map ? st.map : '–');
   tile(tx + tw / 2 + 8, 264, tw / 2 - 8, 'Пинг', online && st?.ping != null ? `${st.ping} мс` : '–', false, laggy ? C.warn : C.ink);
 
