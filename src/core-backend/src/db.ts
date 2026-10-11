@@ -1,0 +1,93 @@
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+export const db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS servers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  game TEXT NOT NULL,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  query_port INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS status (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  online INTEGER NOT NULL DEFAULT 0,
+  name TEXT,
+  players INTEGER NOT NULL DEFAULT 0,
+  max_players INTEGER NOT NULL DEFAULT 0,
+  map TEXT,
+  version TEXT,
+  ping INTEGER,
+  player_names TEXT NOT NULL DEFAULT '[]',
+  error TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  online INTEGER NOT NULL,
+  players INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_history_server_ts ON history(server_id, ts);
+CREATE TABLE IF NOT EXISTS bindings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL,
+  message_id TEXT,
+  interval_sec INTEGER NOT NULL DEFAULT 60,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_update INTEGER,
+  last_error TEXT
+);
+`);
+
+export interface ServerRow {
+  id: number;
+  name: string;
+  game: string;
+  host: string;
+  port: number;
+  query_port: number | null;
+  created_at: number;
+}
+
+export interface StatusRow {
+  server_id: number;
+  online: number;
+  name: string | null;
+  players: number;
+  max_players: number;
+  map: string | null;
+  version: string | null;
+  ping: number | null;
+  player_names: string;
+  error: string | null;
+  updated_at: number;
+}
+
+export interface BindingRow {
+  id: number;
+  server_id: number;
+  channel_id: string;
+  message_id: string | null;
+  interval_sec: number;
+  enabled: number;
+  last_update: number | null;
+  last_error: string | null;
+}
