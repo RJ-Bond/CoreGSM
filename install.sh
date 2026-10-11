@@ -12,6 +12,9 @@
 # =============================================================================
 set -Eeuo pipefail
 
+# "su" without "-" keeps the caller's PATH, which lacks the sbin directories (ufw, sshd, ...)
+export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
+
 APP_DIR="${APP_DIR:-/app}"
 export DEBIAN_FRONTEND=noninteractive
 
