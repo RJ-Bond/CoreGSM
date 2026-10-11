@@ -198,6 +198,14 @@ function PasswordCard() {
 
 const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
 
+const DISMISS_KEY = 'coregsm_dismissed_update_error';
+const readDismissed = (): number => {
+  try { return Number(localStorage.getItem(DISMISS_KEY)) || 0; } catch { return 0; }
+};
+const rememberDismissed = (t: number) => {
+  try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
+};
+
 function UpdateCard() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState('');
@@ -255,6 +263,9 @@ function UpdateCard() {
   };
 
   const running = !!waiting || info?.job?.state === 'running';
+  // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
+  const [dismissed, setDismissed] = useState<number>(readDismissed);
+  const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
   return (
@@ -283,7 +294,12 @@ function UpdateCard() {
         </p>
       )}
       {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
-      {!running && info?.job?.state === 'error' && !error && <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">Прошлое обновление не удалось: {info.job.message}</p>}
+      {showOldFailure && info?.job && (
+        <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+          <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
+          <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+        </div>
+      )}
       <ErrorLine text={error} />
 
       <div className="flex flex-wrap gap-2">

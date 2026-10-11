@@ -6,7 +6,7 @@ import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
 import SettingsPage from './pages/Settings';
-import { IconCards, IconDiscord, IconServers, IconSettings, Logo, ThemeToggle, useHash } from './ui';
+import { IconCards, IconDiscord, IconServers, IconSettings, Logo, ThemeToggle, Wordmark, useHash } from './ui';
 
 const PAGES: { id: string; label: string; icon: () => ReactNode }[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
@@ -51,7 +51,7 @@ export default function App() {
   }, []);
 
   if (!authed) {
-    if (needsSetup === null) return <div className="grid min-h-full place-items-center font-black text-link">coregsm</div>;
+    if (needsSetup === null) return <div className="grid min-h-full place-items-center text-2xl"><Wordmark /></div>;
     if (needsSetup) return <Setup onDone={() => { setNeedsSetup(false); setAuthed(true); }} />;
     return <Login onDone={() => setAuthed(true)} />;
   }
@@ -63,7 +63,7 @@ export default function App() {
       <header className="mb-6 flex items-center gap-x-4 md:mb-8">
         <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight text-link">
           <Logo size={34} />
-          coregsm
+          <Wordmark />
         </a>
         {/* desktop navigation; on phones the same sections live in the bottom bar */}
         <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">

@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard } from './card.js';
+import { buildEmbed } from './embed.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -568,6 +569,8 @@ const bindingSchema = z.object({
   channelId: z.string().regex(/^\d{15,25}$/, 'ID канала — число из 15–25 цифр'),
   intervalSec: z.number().int().min(30).max(3600).default(60),
   enabled: z.boolean().default(true),
+  // omitted on update = keep the current style
+  style: z.enum(['embed', 'card', 'both']).optional(),
 });
 
 // guilds and text channels the bot can post in (reported by the bot, used for the channel picker)
@@ -600,6 +603,25 @@ const serializeBinding = (b: BindingRow) => ({
   enabled: !!b.enabled,
   lastUpdate: b.last_update,
   lastError: b.last_error,
+  style: b.style,
+});
+
+// The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
+function embedFor(serverId: number, intervalSec: number) {
+  const server = getServer(serverId);
+  if (!server) return null;
+  const up = db
+    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ?')
+    .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
+  return buildEmbed(server, up.u, intervalSec);
+}
+
+const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
+
+app.get('/api/servers/:id/embed', auth, (req, res) => {
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  if (!e) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json(e);
 });
 
 app.get('/api/bindings', auth, (_req, res) => {
@@ -613,8 +635,8 @@ app.post('/api/bindings', auth, (req, res) => {
     return res.status(400).json({ error: 'Сервер не найден' });
   }
   const info = db
-    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled) VALUES (?, ?, ?, ?)')
-    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0);
+    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style) VALUES (?, ?, ?, ?, ?)')
+    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed');
   res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
 });
 
@@ -627,8 +649,8 @@ app.put('/api/bindings/:id', auth, (req, res) => {
   // moving to another channel/server means a new message must be posted
   const resetMsg = old.channel_id !== b.data.channelId || old.server_id !== b.data.serverId;
   db.prepare(
-    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
-  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, resetMsg ? 1 : 0, id);
+    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
+  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, resetMsg ? 1 : 0, id);
   res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
 });
 
@@ -643,6 +665,12 @@ function internal(req: Request, res: Response, next: NextFunction) {
   if (safeEqual(String(req.headers['x-internal-token'] ?? ''), INTERNAL_TOKEN)) return next();
   res.status(403).json({ error: 'forbidden' });
 }
+
+app.get('/internal/servers/:id/embed', internal, (req, res) => {
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  if (!e) return res.status(404).json({ error: 'not found' });
+  res.json(e);
+});
 
 app.get('/internal/config', internal, (_req, res) => {
   res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });

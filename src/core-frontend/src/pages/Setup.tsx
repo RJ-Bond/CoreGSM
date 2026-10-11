@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { ErrorLine, Field, Logo, ProxyField, type ProxyType } from '../ui';
+import { ErrorLine, Field, Logo, ProxyField, Wordmark, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -53,7 +53,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     <div className="flex min-h-full items-center justify-center p-4">
       <div className="pop panel w-full max-w-md p-7">
         <div className="mb-2"><Logo size={48} /></div>
-        <div className="mb-1 text-3xl font-black tracking-tight text-link">coregsm</div>
+        <Wordmark className="mb-1 block text-3xl" />
         <p className="mb-5 font-semibold text-mute">Первоначальная настройка панели</p>
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
