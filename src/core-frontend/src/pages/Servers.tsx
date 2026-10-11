@@ -76,7 +76,7 @@ export default function ServersPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   <GameAvatar game={s.game} />
                   <div className="min-w-0">
-                    <h3 className="truncate font-black leading-tight" title={s.nameAuto && s.hasStatus ? 'Название получено от сервера' : undefined}>{s.name}</h3>
+                    <h3 className="line-clamp-3 break-words font-black leading-tight" title={s.name}>{s.name}</h3>
                     <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
                   </div>
                 </div>

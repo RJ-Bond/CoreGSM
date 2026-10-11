@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fdc3b05055ae"
+COREGSM_BUILD="c340be3ce5fa"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -533,10 +533,35 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   // never put the internal query address on a public card: prefer the display address
   const address = s.display_address || `${s.host}:${s.port}`;
   const title = s.name || st?.name || address;
-  ctx.fillText(fit(ctx, title, px - titleX - 24), titleX, 96);
+  // long titles: first shrink the font, then wrap onto two lines (ellipsis only if even that is not enough)
+  const maxTitleW = px - titleX - 24;
+  let titleSize = 44;
+  ctx.font = `700 ${titleSize}px ${SANS}`;
+  while (titleSize > 36 && ctx.measureText(title).width > maxTitleW) {
+    titleSize -= 2;
+    ctx.font = `700 ${titleSize}px ${SANS}`;
+  }
+  let subtitleY = 132;
+  if (ctx.measureText(title).width <= maxTitleW) {
+    ctx.fillText(title, titleX, 96);
+  } else {
+    ctx.font = `700 34px ${SANS}`;
+    const lines: string[] = [];
+    let cur = '';
+    for (const word of title.split(/\s+/)) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (ctx.measureText(next).width <= maxTitleW || !cur) cur = next;
+      else { lines.push(cur); cur = word; }
+    }
+    lines.push(cur);
+    // anything beyond two lines is cut with an ellipsis on the second one
+    const shown = lines.length > 2 ? [lines[0], `${lines.slice(1).join(' ')}`] : lines;
+    shown.forEach((ln, i) => ctx.fillText(fit(ctx, ln, maxTitleW), titleX, 84 + i * 40));
+    subtitleY = 84 + (shown.length - 1) * 40 + 36;
+  }
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
-  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, 132);
+  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, subtitleY);
 
   // players
   ctx.fillStyle = C.mute;
@@ -2404,7 +2429,7 @@ export default function DiscordPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
-                    <div className="truncate font-black">{s?.name ?? `Сервер #${b.serverId}`}</div>
+                    <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
                     <div className="font-mono text-[12px] font-bold text-mute">#{b.channelId}</div>
                   </div>
                 </div>
@@ -2604,7 +2629,7 @@ export default function ServersPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   <GameAvatar game={s.game} />
                   <div className="min-w-0">
-                    <h3 className="truncate font-black leading-tight" title={s.nameAuto && s.hasStatus ? 'Название получено от сервера' : undefined}>{s.name}</h3>
+                    <h3 className="line-clamp-3 break-words font-black leading-tight" title={s.name}>{s.name}</h3>
                     <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
                   </div>
                 </div>

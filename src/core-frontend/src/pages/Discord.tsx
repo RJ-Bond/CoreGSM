@@ -82,7 +82,7 @@ export default function DiscordPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
-                    <div className="truncate font-black">{s?.name ?? `Сервер #${b.serverId}`}</div>
+                    <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
                     <div className="font-mono text-[12px] font-bold text-mute">#{b.channelId}</div>
                   </div>
                 </div>

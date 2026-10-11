@@ -116,10 +116,35 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   // never put the internal query address on a public card: prefer the display address
   const address = s.display_address || `${s.host}:${s.port}`;
   const title = s.name || st?.name || address;
-  ctx.fillText(fit(ctx, title, px - titleX - 24), titleX, 96);
+  // long titles: first shrink the font, then wrap onto two lines (ellipsis only if even that is not enough)
+  const maxTitleW = px - titleX - 24;
+  let titleSize = 44;
+  ctx.font = `700 ${titleSize}px ${SANS}`;
+  while (titleSize > 36 && ctx.measureText(title).width > maxTitleW) {
+    titleSize -= 2;
+    ctx.font = `700 ${titleSize}px ${SANS}`;
+  }
+  let subtitleY = 132;
+  if (ctx.measureText(title).width <= maxTitleW) {
+    ctx.fillText(title, titleX, 96);
+  } else {
+    ctx.font = `700 34px ${SANS}`;
+    const lines: string[] = [];
+    let cur = '';
+    for (const word of title.split(/\s+/)) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (ctx.measureText(next).width <= maxTitleW || !cur) cur = next;
+      else { lines.push(cur); cur = word; }
+    }
+    lines.push(cur);
+    // anything beyond two lines is cut with an ellipsis on the second one
+    const shown = lines.length > 2 ? [lines[0], `${lines.slice(1).join(' ')}`] : lines;
+    shown.forEach((ln, i) => ctx.fillText(fit(ctx, ln, maxTitleW), titleX, 84 + i * 40));
+    subtitleY = 84 + (shown.length - 1) * 40 + 36;
+  }
   ctx.fillStyle = C.mute;
   ctx.font = `700 22px ${SANS}`;
-  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, 132);
+  ctx.fillText(fit(ctx, `${s.game}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, subtitleY);
 
   // players
   ctx.fillStyle = C.mute;
