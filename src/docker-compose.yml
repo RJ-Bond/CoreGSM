@@ -32,10 +32,9 @@ services:
         NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
     environment:
-      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      # the Discord token and proxy are configured in the web panel and fetched from the backend
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       BACKEND_URL: http://backend:3000
-      PROXY_URL: ${PROXY_URL:-}
     depends_on:
       backend:
         condition: service_healthy

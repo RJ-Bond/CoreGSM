@@ -65,9 +65,9 @@ export function parseProxy(raw: string): ProxySetup | null {
 /**
  * @discordjs/ws creates its gateway socket with `new (require("ws").WebSocket)(url, [], opts)` and offers no
  * way to pass an agent. We replace that export BEFORE discord.js is loaded, so every gateway connection
- * is tunnelled through the proxy. Must be called before `await import('discord.js')`.
+ * is tunnelled through whatever proxy `getAgent()` returns at connect time (none = direct). Must be called before `await import('discord.js')`.
  */
-export function patchGatewayAgent(agent: Agent): void {
+export function patchGatewayAgent(getAgent: () => Agent | undefined): void {
   const require = createRequire(import.meta.url);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ws: any = require('ws');
@@ -75,7 +75,8 @@ export function patchGatewayAgent(agent: Agent): void {
 
   class ProxiedWebSocket extends (Base as new (...a: unknown[]) => object) {
     constructor(url: string, protocols?: unknown, options: Record<string, unknown> = {}) {
-      super(url, protocols, { ...options, agent });
+      const agent = getAgent();
+      super(url, protocols, agent ? { ...options, agent } : options);
     }
   }
   ws.WebSocket = ProxiedWebSocket;

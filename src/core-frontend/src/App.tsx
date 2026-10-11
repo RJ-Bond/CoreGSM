@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getToken, setToken } from './api';
+import { api, getToken, setToken } from './api';
 import Login from './pages/Login';
+import Setup from './pages/Setup';
 import ServersPage from './pages/Servers';
 import CardsPage from './pages/Cards';
 import DiscordPage from './pages/Discord';
@@ -22,6 +23,15 @@ const readHash = (): PageId => {
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken());
   const [page, setPage] = useState<PageId>(readHash());
+  // null = still checking whether the first-run wizard is needed
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(getToken() ? false : null);
+
+  useEffect(() => {
+    if (authed) return;
+    api<{ needed: boolean }>('/setup/status')
+      .then((r) => setNeedsSetup(r.needed))
+      .catch(() => setNeedsSetup(false));
+  }, [authed]);
 
   useEffect(() => {
     const h = () => setPage(readHash());
@@ -39,7 +49,11 @@ export default function App() {
     setAuthed(false);
   }, []);
 
-  if (!authed) return <Login onDone={() => setAuthed(true)} />;
+  if (!authed) {
+    if (needsSetup === null) return <div className="grid min-h-full place-items-center font-black text-brand">coregsm</div>;
+    if (needsSetup) return <Setup onDone={() => { setNeedsSetup(false); setAuthed(true); }} />;
+    return <Login onDone={() => setAuthed(true)} />;
+  }
 
   return (
     <div className="mx-auto min-h-full max-w-6xl px-4 pb-16 pt-5 sm:px-6">

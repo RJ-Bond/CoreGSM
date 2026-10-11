@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { api, type Binding, type Server } from '../api';
+import { api, type Binding, type BotStatus, type Server, type SettingsInfo } from '../api';
 import { Empty, ErrorLine, Field, GameAvatar, Modal, PageHead, ago, usePoll } from '../ui';
+import { BotPill } from './Settings';
 
 interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean }
 
@@ -10,10 +11,12 @@ export default function DiscordPage() {
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState('');
+  const [settings, setSettings] = useState<SettingsInfo | null>(null);
+  const [bot, setBot] = useState<BotStatus | null>(null);
 
   const load = () =>
-    Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings')])
-      .then(([s, b]) => { setServers(s); setBindings(b); })
+    Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
+      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 10_000);
@@ -44,6 +47,15 @@ export default function DiscordPage() {
         <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
+
+      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+        <div className="flex items-center gap-3">
+          <span className="font-black">Бот</span>
+          <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
+        </div>
+        {!settings?.discordTokenSet && <a href="#/settings" className="font-extrabold text-brand hover:underline">Указать токен в настройках</a>}
+        {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <span className="text-[13px] font-bold text-bad">{bot.error}</span>}
+      </div>
 
       <ol className="grid gap-3 md:grid-cols-3">
         {steps.map((s, i) => (
