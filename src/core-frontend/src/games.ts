@@ -34,3 +34,6 @@ export const findGame = (id: string) => GAMES.find((g) => g.id === id);
 export const gameLabel = (id: string) => findGame(id)?.label ?? id;
 export const gameColor = (id: string) => findGame(id)?.color ?? FALLBACK;
 export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toUpperCase();
+
+/** artwork used instead of the line pictogram (files in public/games) */
+export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png' };

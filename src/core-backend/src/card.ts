@@ -2,8 +2,18 @@ import skia from 'skia-canvas';
 import { db, type ServerRow, type StatusRow } from './db.js';
 import { gameLabel } from './games.js';
 import { gameIconPath } from './gameIcons.js';
+import { GAME_IMAGES } from './gameImages.js';
 
-const { Canvas, Path2D } = skia;
+const { Canvas, Path2D, loadImage } = skia;
+
+const imageCache = new Map<string, unknown>();
+/** artwork for a game (transparent PNG), or null when it only has a line pictogram */
+async function gameImage(game: string): Promise<any> {
+  const b64 = GAME_IMAGES[game];
+  if (!b64) return null;
+  if (!imageCache.has(game)) imageCache.set(game, await loadImage(Buffer.from(b64, 'base64')));
+  return imageCache.get(game);
+}
 
 // Pastel Soft palette (matches the web panel)
 const C = {
@@ -89,8 +99,11 @@ export async function renderCard(serverId: number): Promise<Buffer | null> {
   ctx.beginPath();
   ctx.roundRect(64, 56, 84, 84, 26);
   ctx.fill();
+  const art = await gameImage(s.game);
   const iconPath = gameIconPath(s.game);
-  if (iconPath) {
+  if (art) {
+    ctx.drawImage(art, 106 - 38, 98 - 38, 76, 76);
+  } else if (iconPath) {
     // the same pictogram as in the panel: 24x24 grid scaled to ~46px, centred in the 84px square
     ctx.save();
     ctx.translate(106 - 12 * 1.95, 98 - 12 * 1.95);
@@ -265,7 +278,10 @@ export async function renderGameIcon(game: string): Promise<Buffer> {
   ctx.roundRect(0, 0, 256, 256, 64);
   ctx.fill();
   const p = gameIconPath(game);
-  if (p) {
+  const art = await gameImage(game);
+  if (art) {
+    ctx.drawImage(art, 28, 28, 200, 200);
+  } else if (p) {
     ctx.translate(128 - 12 * 7, 128 - 12 * 7);
     ctx.scale(7, 7);
     ctx.strokeStyle = '#ffffff';

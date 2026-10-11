@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from './auth';
 import { api } from './api';
-import { gameAbbr, gameColor } from './games';
+import { GAME_IMAGE, gameAbbr, gameColor } from './games';
 import { gameIconPath } from './gameIcons';
 import { AuthArt } from './components/Illustrations';
 
@@ -182,7 +182,9 @@ export function GameAvatar({ game, size = 44 }: { game: string; size?: number })
       style={{ width: size, height: size, background: `linear-gradient(145deg, ${color}, ${color}cc)`, fontSize: size * 0.34 }}
       aria-hidden
     >
-      {icon ? (
+      {GAME_IMAGE[game] ? (
+        <img src={GAME_IMAGE[game]} width={size * 0.74} height={size * 0.74} alt="" draggable={false} className="object-contain" />
+      ) : icon ? (
         <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d={icon} />
         </svg>
