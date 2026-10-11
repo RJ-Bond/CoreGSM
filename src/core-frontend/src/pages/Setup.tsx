@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { ErrorLine, Field } from '../ui';
+import { ErrorLine, Field, Logo, ProxyField, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
+// same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
+const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
 
 export default function Setup({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
@@ -12,13 +14,14 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   const [repeat, setRepeat] = useState('');
   const [discordToken, setDiscordToken] = useState('');
   const [proxyUrl, setProxyUrl] = useState('');
+  const [proxyType, setProxyType] = useState<ProxyType>('socks5');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const next = (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) return setError('Логин: 3-32 символа, буквы, цифры и _ . -');
+    if (!LOGIN_RE.test(username.trim())) return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -');
     if (password.length < 10) return setError('Пароль должен быть не короче 10 символов');
     if (password !== repeat) return setError('Пароли не совпадают');
     setStep(1);
@@ -30,9 +33,9 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     try {
       const r = await api<{ token: string }>('/setup', 'POST', {
         code,
-        username,
+        username: username.trim(),
         password,
-        ...(skip ? {} : { discordToken, proxyUrl }),
+        ...(skip ? {} : { discordToken, proxyUrl, proxyType }),
       });
       setToken(r.token);
       setStep(2);
@@ -49,6 +52,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   return (
     <div className="flex min-h-full items-center justify-center p-4">
       <div className="pop panel w-full max-w-md p-7">
+        <div className="mb-2"><Logo size={48} /></div>
         <div className="mb-1 text-3xl font-black tracking-tight text-brand">coregsm</div>
         <p className="mb-5 font-semibold text-mute">Первоначальная настройка панели</p>
 
@@ -93,7 +97,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               <input id="setup-token" className="input font-mono" type="password" value={discordToken} onChange={(e) => setDiscordToken(e.target.value)} autoComplete="off" placeholder="необязательно" />
             </Field>
             <Field label="Прокси для Discord">
-              <input id="setup-proxy" className="input font-mono" value={proxyUrl} onChange={(e) => setProxyUrl(e.target.value)} autoComplete="off" placeholder="socks5://host:1080 или http://host:3128" />
+              <ProxyField id="setup-proxy" value={proxyUrl} type={proxyType} onChange={setProxyUrl} onType={setProxyType} />
             </Field>
             <ErrorLine text={error} />
             <div className="flex gap-2 pt-1">
@@ -106,7 +110,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
         {step === 2 && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok">Администратор «{username}» создан.</div>
+            <div className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok">Администратор «{username.trim()}» создан.</div>
             <ol className="space-y-2 font-semibold text-mute">
               <li><span className="font-black text-ink">1.</span> Добавьте игровой сервер на вкладке «Серверы».</li>
               <li><span className="font-black text-ink">2.</span> {discordToken ? 'Привяжите Discord-канал на вкладке «Discord».' : 'Укажите токен бота в «Настройки», затем привяжите канал на вкладке «Discord».'}</li>

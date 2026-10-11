@@ -19,4 +19,4 @@ jobs:
       - name: Shell syntax
         run: |
           bash -n install.sh
-          bash -n tools/coregsm-update.sh
+          bash -n tools/coregsm.sh

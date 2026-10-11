@@ -97,6 +97,20 @@ preflight() {
     x86_64|aarch64) ok "Архитектура: $(uname -m)" ;;
     *) die "Неподдерживаемая архитектура: $(uname -m)" ;;
   esac
+
+  local mem_mb disk_mb busy
+  mem_mb="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
+  [ "$mem_mb" -ge 900 ] || die "Недостаточно памяти: ${mem_mb} МБ (нужно от 1 ГБ, лучше 2 ГБ)"
+  if [ "$mem_mb" -ge 1800 ]; then ok "Память: ${mem_mb} МБ"
+  else warn "Памяти ${mem_mb} МБ: сборка образов может идти долго. Рекомендуется 2 ГБ"; fi
+  disk_mb="$(df -Pm / | awk 'NR==2{print $4}')"
+  [ "$disk_mb" -ge 4000 ] || die "Мало места на диске: свободно ${disk_mb} МБ (нужно от 4 ГБ)"
+  ok "Диск: свободно ${disk_mb} МБ"
+  # ports 80/443: skipped on a reinstall, where our own containers hold them
+  if [ ! -f "$APP_DIR/docker-compose.yml" ]; then
+    busy="$(ss -ltnH 'sport = :80 or sport = :443' 2>/dev/null | awk '{print $4}' | tr '\n' ' ' || true)"
+    [ -z "$busy" ] || die "Порты 80/443 уже заняты ($busy). Остановите другой веб-сервер (nginx, apache) и запустите установку снова"
+  fi
 }
 
 # ---------- 1b. proxy (optional) ----------
@@ -404,19 +418,34 @@ report() {
     echo -e "  Настройте A-запись ${DOMAIN} на этот сервер и повторите: ${BOLD}sudo bash install.sh${NC}"
   fi
   echo -e "  ${DIM}Секреты:  ${APP_DIR}/.env      Логи:  cd ${APP_DIR} && docker compose logs -f${NC}"
-  echo -e "  ${DIM}Обновление до новой версии из GitHub:  sudo coregsm-update${NC}"
+  echo -e "  ${DIM}Управление, обновление, копии, удаление:  sudo coregsm${NC}"
   echo -e "  ${DIM}Токен Discord-бота, прокси и пароль: в панели, раздел «Настройки».${NC}\n"
 }
 
-# /usr/local/bin/coregsm-update (see tools/coregsm-update.sh) plus a systemd path unit that runs it
-# when the panel's "Update" button creates /app/update/request.
-install_update_command() {
-  cat > /usr/local/bin/.coregsm-update.new << 'UPDATER'
-@@UPDATER_SCRIPT@@
-UPDATER
+# /usr/local/bin/coregsm (the manager, see tools/coregsm.sh), the old coregsm-update name as an alias,
+# bash completion and the systemd path unit behind the panel's "Update" button.
+install_manager() {
+  cat > /usr/local/bin/.coregsm.new << 'MANAGER'
+@@MANAGER_SCRIPT@@
+MANAGER
+  chmod +x /usr/local/bin/.coregsm.new
+  # atomic replace: a manager that is running right now keeps reading its old file safely
+  mv -f /usr/local/bin/.coregsm.new /usr/local/bin/coregsm
+
+  printf '#!/bin/sh\nexec /usr/local/bin/coregsm update "$@"\n' > /usr/local/bin/.coregsm-update.new
   chmod +x /usr/local/bin/.coregsm-update.new
-  # atomic replace: an updater that is running right now keeps reading its old file safely
   mv -f /usr/local/bin/.coregsm-update.new /usr/local/bin/coregsm-update
+
+  mkdir -p /etc/bash_completion.d
+  cat > /etc/bash_completion.d/coregsm << 'COMP'
+_coregsm() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=($(compgen -W "update status doctor logs start stop restart backup restore domain reset-password uninstall help" -- "$cur"))
+  fi
+}
+complete -F _coregsm coregsm
+COMP
 
   # the panel (container user "node", uid 1000) may only drop a request file here; root does the work
   mkdir -p "$APP_DIR/update"
@@ -431,7 +460,7 @@ Description=CoreGSM update (started from the web panel)
 [Service]
 Type=oneshot
 Environment=APP_DIR=${APP_DIR}
-ExecStart=/usr/local/bin/coregsm-update --from-panel
+ExecStart=/usr/local/bin/coregsm update --from-panel
 TimeoutStartSec=1800
 UNIT
     cat > /etc/systemd/system/coregsm-update.path << UNIT
@@ -447,14 +476,45 @@ WantedBy=multi-user.target
 UNIT
     systemctl daemon-reload
     systemctl enable --now coregsm-update.path >/dev/null 2>&1 \
-      && ok "Кнопка «Обновить» в панели включена" \
-      || warn "Не удалось включить systemd-юнит coregsm-update.path: кнопка в панели работать не будет, обновляйте командой sudo coregsm-update"
+      && ok "Команда coregsm и кнопка «Обновить» в панели включены" \
+      || warn "Не удалось включить systemd-юнит coregsm-update.path: кнопка в панели работать не будет, обновляйте командой sudo coregsm update"
   else
-    warn "systemd не найден: кнопка «Обновить» в панели недоступна, используйте sudo coregsm-update"
+    ok "Команда coregsm установлена"
+    warn "systemd не найден: кнопка «Обновить» в панели недоступна, используйте sudo coregsm update"
   fi
 }
 
+installed_already() { [ -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/docker-compose.yml" ] && [ -x /usr/local/bin/coregsm ]; }
+
 main() {
+  local do_install=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --install) do_install=1 ;;
+      -h|--help)
+        cat << 'HELP'
+CoreGSM: установка и управление.
+
+  bash install.sh             установить; если CoreGSM уже стоит, откроет меню управления
+  bash install.sh --install   выполнить установку или переустановку без меню
+  coregsm                     меню управления (после установки доступно из любой папки)
+
+Переменные окружения: DOMAIN, LE_EMAIL, PROXY_URL, SKIP_UPDATE=1, LOCAL_MODE=1
+HELP
+        exit 0 ;;
+      *) die "Неизвестный параметр: $arg (см. bash install.sh --help)" ;;
+    esac
+  done
+
+  # On a machine that already runs CoreGSM a plain "bash install.sh" opens the management menu.
+  # --install, SKIP_UPDATE=1 (older updaters, dev flows) or a non-interactive shell run the installer.
+  if [ "$do_install" = 0 ] && [ -z "${SKIP_UPDATE:-}" ] && [ -t 0 ] && [ -t 1 ] && installed_already; then
+    exec /usr/local/bin/coregsm
+  fi
+
+  mkdir -p /var/log
+  exec > >(tee -a /var/log/coregsm-install.log) 2>&1
+
   banner
   preflight
   setup_proxy
@@ -467,10 +527,11 @@ main() {
   generate_project
   ok "Файлы проекта созданы"
   write_env
-  install_update_command
+  install_manager
   issue_certificate
   launch
   report
+  sleep 0.5   # let the log tee flush before the shell prompt returns
 }
 
 main "$@"

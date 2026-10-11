@@ -134,3 +134,74 @@ export const ago = (ts: number | null) => {
   if (s < 3600) return `${Math.floor(s / 60)} мин назад`;
   return `${Math.floor(s / 3600)} ч назад`;
 };
+
+/** The CoreGSM mark: a server rack whose three lights use the same colours as the status pills. */
+export function Logo({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="CoreGSM" className="shrink-0">
+      <defs>
+        <linearGradient id="cg-logo" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#7a6cf5" />
+          <stop offset="1" stopColor="#4a3cb8" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="16" fill="url(#cg-logo)" />
+      <rect x="13" y="14" width="38" height="10" rx="5" fill="#fff" />
+      <rect x="13" y="27" width="38" height="10" rx="5" fill="#fff" fillOpacity=".85" />
+      <rect x="13" y="40" width="38" height="10" rx="5" fill="#fff" fillOpacity=".7" />
+      <circle cx="43" cy="19" r="2.6" fill="#23a55a" />
+      <circle cx="43" cy="32" r="2.6" fill="#f0b232" />
+      <circle cx="43" cy="45" r="2.6" fill="#f23f42" />
+    </svg>
+  );
+}
+
+export type ProxyType = 'socks5' | 'http';
+
+/** Proxy input: a type selector plus one text field that accepts host:port:login:password, user:pass@host:port or a full URL. */
+export function ProxyField({
+  id,
+  value,
+  type,
+  onChange,
+  onType,
+  placeholder,
+  disabled,
+}: {
+  id: string;
+  value: string;
+  type: ProxyType;
+  onChange: (v: string) => void;
+  onType: (t: ProxyType) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div>
+      <div className="flex gap-2">
+        <select
+          aria-label="Тип прокси"
+          className="input !w-auto shrink-0"
+          value={type}
+          disabled={disabled}
+          onChange={(e) => onType(e.target.value as ProxyType)}
+        >
+          <option value="socks5">SOCKS5</option>
+          <option value="http">HTTP</option>
+        </select>
+        <input
+          id={id}
+          className="input font-mono"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete="off"
+          placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
+        />
+      </div>
+      <p className="mt-1.5 text-[13px] font-semibold text-mute">
+        Подойдёт формат <span className="font-mono">адрес:порт:логин:пароль</span> или готовая ссылка с <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>. Если бот не подключается, смените тип.
+      </p>
+    </div>
+  );
+}

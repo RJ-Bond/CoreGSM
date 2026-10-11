@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, type BotStatus, type SettingsInfo, type UpdateInfo } from '../api';
-import { ErrorLine, Field, PageHead, usePoll } from '../ui';
+import { ErrorLine, Field, PageHead, ProxyField, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -34,6 +34,7 @@ function BotCard() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [token, setTokenValue] = useState('');
   const [proxy, setProxy] = useState('');
+  const [proxyType, setProxyType] = useState<ProxyType>('socks5');
   const [clearProxy, setClearProxy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
@@ -50,10 +51,10 @@ function BotCard() {
     setError('');
     setSaved(false);
     try {
-      const body: { discordToken?: string; proxyUrl?: string } = {};
+      const body: { discordToken?: string; proxyUrl?: string; proxyType?: ProxyType } = {};
       if (token.trim()) body.discordToken = token.trim();
       if (clearProxy) body.proxyUrl = '';
-      else if (proxy.trim()) body.proxyUrl = proxy.trim();
+      else if (proxy.trim()) { body.proxyUrl = proxy.trim(); body.proxyType = proxyType; }
       const r = await api<SettingsInfo>('/settings', 'PUT', body);
       setInfo(r);
       setTokenValue('');
@@ -104,14 +105,14 @@ function BotCard() {
       )}
 
       <Field label="Прокси (необязательно)">
-        <input
+        <ProxyField
           id="set-proxy"
-          className="input font-mono"
           value={clearProxy ? '' : proxy}
+          type={proxyType}
+          onChange={setProxy}
+          onType={setProxyType}
           disabled={clearProxy}
-          onChange={(e) => setProxy(e.target.value)}
-          autoComplete="off"
-          placeholder={info?.proxyUrl ? `сейчас: ${info.proxyUrl}` : 'socks5://host:1080 или http://host:3128'}
+          placeholder={info?.proxyUrl ? `сейчас: ${info.proxyUrl}` : undefined}
         />
       </Field>
       {info?.proxyUrl && (
@@ -248,7 +249,7 @@ function UpdateCard() {
       )}
       {stuck && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-[13px] font-bold text-bad">
-          Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm-update</span>.
+          Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm update</span>.
         </p>
       )}
       {info?.error && !running && <p className="text-[13px] font-semibold text-mute">{info.error}</p>}
@@ -259,7 +260,7 @@ function UpdateCard() {
         <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
         {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
       </div>
-      {info && !info.canApply && <p className="text-[13px] font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm-update</span>.</p>}
+      {info && !info.canApply && <p className="text-[13px] font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
     </div>
   );
 }

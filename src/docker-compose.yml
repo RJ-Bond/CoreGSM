@@ -1,5 +1,12 @@
 name: coregsm
 
+# keeps container logs from filling the disk
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   backend:
     build:
@@ -9,6 +16,7 @@ services:
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
+    logging: *logging
     env_file: .env
     environment:
       PORT: "3000"
@@ -34,6 +42,7 @@ services:
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
+    logging: *logging
     environment:
       # the Discord token and proxy are configured in the web panel and fetched from the backend
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
@@ -51,11 +60,13 @@ services:
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
     restart: unless-stopped
+    logging: *logging
     networks: [internal]
 
   nginx-proxy:
     build: ./nginx
     restart: unless-stopped
+    logging: *logging
     environment:
       DOMAIN: ${DOMAIN}
     ports:
@@ -72,6 +83,7 @@ services:
   certbot:
     image: certbot/certbot
     restart: unless-stopped
+    logging: *logging
     environment:
       HTTPS_PROXY: ${BUILD_PROXY:-}
     volumes:
