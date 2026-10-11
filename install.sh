@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="260edd6b916a"
+COREGSM_BUILD="aec8682f2835"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -1083,17 +1083,47 @@ app.put('/api/settings', auth, (req, res) => {
   res.json(settingsPayload());
 });
 
-let botStatus: { state: 'idle' | 'connecting' | 'online' | 'error'; tag: string | null; error: string | null; updatedAt: number } = {
+let botStatus: {
+  state: 'idle' | 'connecting' | 'online' | 'error';
+  tag: string | null;
+  clientId: string | null;
+  error: string | null;
+  updatedAt: number;
+} = {
   state: 'idle',
   tag: null,
+  clientId: null,
   error: null,
   updatedAt: 0,
 };
 
+// View Channel + Send Messages + Embed Links + Attach Files
+const BOT_PERMISSIONS = 52224;
+
+/** The first segment of a bot token is the base64 of the bot user id (= application id). */
+function clientIdFromToken(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const id = Buffer.from(token.split('.')[0], 'base64').toString('utf8');
+    return /^\d{15,25}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function invitePayload() {
+  const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
+  return {
+    clientId,
+    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=${BOT_PERMISSIONS}` : null,
+  };
+}
+
 app.get('/api/bot/status', auth, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
-  res.json(stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus);
+  const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает. Проверьте: docker compose logs bot' } : botStatus;
+  res.json({ ...base, ...invitePayload() });
 });
 
 // ---------- updates ----------
@@ -1375,11 +1405,12 @@ app.post('/internal/bot-status', internal, (req, res) => {
     .object({
       state: z.enum(['idle', 'connecting', 'online', 'error']),
       tag: z.string().max(100).nullable().optional(),
+      clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
       error: z.string().max(300).nullable().optional(),
     })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
-  botStatus = { state: b.data.state, tag: b.data.tag ?? null, error: b.data.error ?? null, updatedAt: Date.now() };
+  botStatus = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, updatedAt: Date.now() };
   res.json({ ok: true });
 });
 
@@ -1539,19 +1570,21 @@ let failedKey: string | null = null;
 let state: BotState = 'idle';
 let tag: string | null = null;
 let lastError: string | null = null;
+let clientId: string | null = null;
 const lastRun = new Map<number, number>();
 
 async function publishStatus(): Promise<void> {
   try {
-    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, error: lastError }) });
+    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError }) });
   } catch {
     /* backend is restarting: the next tick will retry */
   }
 }
 
-function setState(s: BotState, opts: { tag?: string | null; error?: string | null } = {}) {
+function setState(s: BotState, opts: { tag?: string | null; clientId?: string | null; error?: string | null } = {}) {
   state = s;
   tag = opts.tag ?? null;
+  clientId = opts.clientId ?? null;
   lastError = opts.error ?? null;
 }
 
@@ -1612,7 +1645,7 @@ async function applyConfig(): Promise<void> {
   try {
     await c.login(cfg.discordToken);
     log(`Logged in as ${c.user?.tag}`);
-    setState('online', { tag: c.user?.tag ?? null });
+    setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
   } catch (e) {
     const msg = (e as Error).message.slice(0, 250);
     log('Discord login failed:', msg);
@@ -2074,6 +2107,8 @@ export interface SettingsInfo {
 export interface BotStatus {
   state: 'idle' | 'connecting' | 'online' | 'error';
   tag: string | null;
+  clientId: string | null;
+  inviteUrl: string | null;
   error: string | null;
   updatedAt: number;
 }
@@ -2236,7 +2271,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Discord.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type Server, type SettingsInfo } from '../api';
-import { Empty, ErrorLine, Field, GameAvatar, Modal, PageHead, ago, usePoll } from '../ui';
+import { Empty, ErrorLine, Field, GameAvatar, InviteButton, Modal, PageHead, ago, usePoll } from '../ui';
 import { BotPill } from './Settings';
 
 interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean }
@@ -2273,7 +2308,7 @@ export default function DiscordPage() {
 
   const steps = [
     { done: servers.length > 0, title: 'Добавьте сервер', text: 'На вкладке «Серверы».' },
-    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Права бота: просмотр канала, отправка сообщений, прикрепление файлов, встраивание ссылок.' },
+    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» выше откроет Discord: выберите сервер и подтвердите права.' },
     { done: working, title: 'Бот отправит карточку', text: 'Одно сообщение, которое потом обновляется по таймеру.' },
   ];
 
@@ -2290,6 +2325,7 @@ export default function DiscordPage() {
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
         {!settings?.discordTokenSet && <a href="#/settings" className="font-extrabold text-brand hover:underline">Указать токен в настройках</a>}
+        {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <span className="text-[13px] font-bold text-bad">{bot.error}</span>}
       </div>
 
@@ -2622,7 +2658,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, type BotStatus, type SettingsInfo, type UpdateInfo } from '../api';
-import { ErrorLine, Field, PageHead, ProxyField, usePoll, type ProxyType } from '../ui';
+import { ErrorLine, Field, InviteButton, PageHead, ProxyField, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -2746,6 +2782,12 @@ function BotCard() {
       <p className="text-[13px] font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
 
       <ErrorLine text={error} />
+      {tokenSet && status?.inviteUrl && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
+          <InviteButton url={status.inviteUrl} />
+          <span className="text-[13px] font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
+        </div>
+      )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
       <button className="btn" disabled={busy || (!token.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
     </form>
@@ -3221,6 +3263,17 @@ export function ProxyField({
         Подойдёт формат <span className="font-mono">адрес:порт:логин:пароль</span> или готовая ссылка с <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>. Если бот не подключается, смените тип.
       </p>
     </div>
+  );
+}
+
+/** Opens Discord's own "add bot to a server" screen: the user picks the server there and confirms the permissions. */
+export function InviteButton({ url, className = '' }: { url: string | null; className?: string }) {
+  if (!url) return null;
+  return (
+    <a className={`btn ${className}`} href={url} target="_blank" rel="noreferrer">
+      Пригласить бота на сервер
+      <span aria-hidden>↗</span>
+    </a>
   );
 }
 __COREGSM_EOF__

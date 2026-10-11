@@ -74,6 +74,8 @@ export interface SettingsInfo {
 export interface BotStatus {
   state: 'idle' | 'connecting' | 'online' | 'error';
   tag: string | null;
+  clientId: string | null;
+  inviteUrl: string | null;
   error: string | null;
   updatedAt: number;
 }
