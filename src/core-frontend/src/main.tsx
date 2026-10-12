@@ -21,3 +21,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
 }
+
+// pause decorative animations while the page is not visible or the window is not focused (see the black-square note in index.css)
+{
+  const sync = () => document.documentElement.toggleAttribute('data-hidden', document.hidden || !document.hasFocus());
+  document.addEventListener('visibilitychange', sync);
+  window.addEventListener('blur', sync);
+  window.addEventListener('focus', sync);
+  sync();
+}

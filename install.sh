@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="99033d07e72b"
+COREGSM_BUILD="dfa77bcd803c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -17460,6 +17460,33 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 
 /* admin sidebar groups */
 .adm-group-title { padding: 10px 14px 4px; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: rgb(var(--mute)); }
+
+/* ---------- black-square safeguard (Chrome) ----------
+   Elements with backdrop-filter inside content that animates opacity/transform (every route change re-mounts <main>
+   with an entrance animation, tiles cascade in) can flash as a black rectangle on some GPUs. The blur is cosmetic,
+   so it is dropped everywhere except full-screen modal overlays; translucent backgrounds are made a bit denser instead. */
+.glass {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background-image: linear-gradient(rgb(var(--card) / 0.55), rgb(var(--card) / 0.55));
+}
+.pill-glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgb(12 14 26 / 0.6); }
+.chip-glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(8, 10, 20, 0.5); }
+.btn-glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(255, 255, 255, 0.24); }
+.srv-tabbar.is-stuck { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgb(var(--page) / 0.96); }
+.auth-card { -webkit-backdrop-filter: none; backdrop-filter: none; }
+/* the page entrance is a plain fade: no transform on the big container that holds the whole page */
+@keyframes pop-fade { from { opacity: 0; } to { opacity: 1; } }
+.pop { animation: pop-fade 0.18s ease-out both; }
+
+/* ---------- no per-frame repaints of big layers (black-square fix, round 2) ----------
+   The rotating masked edge light (.depth::after) and the breathing big box-shadow (.srv-ok) re-rasterise large areas
+   every frame; when the tab is re-shown or a screenshot is taken Chrome could present such a layer as black. Both are
+   static now; the small decorative animations stay but are paused while the page is hidden (see main.tsx). */
+.depth::after { animation: none !important; display: none; }
+.srv-ok { animation: none !important; box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.4), 0 14px 40px -14px rgb(var(--g) / 0.45); }
+.pill-ok.live, .pill-warn.lag { animation: none !important; }
+html[data-hidden] *, html[data-hidden] *::before, html[data-hidden] *::after { animation-play-state: paused !important; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -17485,6 +17512,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 // installable as an app (home screen on phones, window on desktop)
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
+}
+
+// pause decorative animations while the page is not visible or the window is not focused (see the black-square note in index.css)
+{
+  const sync = () => document.documentElement.toggleAttribute('data-hidden', document.hidden || !document.hasFocus());
+  document.addEventListener('visibilitychange', sync);
+  window.addEventListener('blur', sync);
+  window.addEventListener('focus', sync);
+  sync();
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
