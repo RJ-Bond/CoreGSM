@@ -59,7 +59,17 @@ export interface ServerInput {
   displayAddress: string;
 }
 
-export class ApiError extends Error {}
+/** an error answer from the API; `data` is the whole JSON body (retryAfter, attemptsLeft, pending ...) */
+export class ApiError extends Error {
+  status: number;
+  data: Record<string, unknown>;
+  constructor(message: string, status = 0, data: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+  }
+}
 
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const res = await fetch('/api' + path, {
@@ -75,7 +85,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     setToken('');
     window.dispatchEvent(new Event('coregsm:logout'));
   }
-  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`);
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`, res.status, data as Record<string, unknown>);
   return data as T;
 }
 
@@ -83,6 +93,10 @@ export interface SettingsInfo {
   discordTokenSet: boolean;
   discordTokenHint: string | null;
   proxyUrl: string | null;
+  /** "Вход через Discord" (OAuth2) */
+  discordSecretSet?: boolean;
+  discordClientId?: string | null;
+  discordRedirect?: string;
 }
 
 export interface BotStatus {
@@ -185,6 +199,19 @@ export interface NewsSettings {
 export interface Me {
   username: string;
   role: 'admin' | 'player';
+  /** Discord CDN url */
+  avatarUrl: string | null;
+  discordName: string | null;
+  hasPassword: boolean;
+}
+
+export interface Session {
+  id: string | number;
+  createdAt: number;
+  lastSeen: number;
+  ip: string;
+  ua: string;
+  current: boolean;
 }
 
 export interface Brand {
@@ -200,6 +227,12 @@ export interface Access {
   publicPanel: boolean;
   /** players may create accounts */
   registration: boolean;
+  /** open: account at once; approval: an administrator must approve it */
+  registrationMode: 'open' | 'approval';
+  /** community rules ('' = none) */
+  rules: string;
+  /** "Войти через Discord" is configured */
+  discordLogin: boolean;
 }
 
 export interface UserRow {
@@ -207,6 +240,8 @@ export interface UserRow {
   username: string;
   role: 'admin' | 'player';
   createdAt: number | null;
+  status: 'active' | 'pending';
+  discordName: string | null;
 }
 
 /** what guests and players get for a posted news item */

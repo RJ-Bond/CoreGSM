@@ -24,6 +24,8 @@ if (fs.existsSync(pending)) {
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+// SQLite lower()/NOCASE only fold ASCII: logins in any alphabet are compared with this
+db.function('ulower', { deterministic: true }, (s) => String(s).toLowerCase());
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -100,6 +102,33 @@ try {
 } catch {
   /* column already exists */
 }
+
+// accounts: approval status, linked Discord account, sessions
+for (const ddl of [
+  "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+  'ALTER TABLE users ADD COLUMN discord_id TEXT',
+  'ALTER TABLE users ADD COLUMN discord_name TEXT',
+  'ALTER TABLE users ADD COLUMN discord_avatar TEXT',
+  'ALTER TABLE users ADD COLUMN no_password INTEGER NOT NULL DEFAULT 0',
+]) {
+  try {
+    db.exec(ddl);
+  } catch {
+    /* column already exists */
+  }
+}
+db.exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_discord ON users(discord_id) WHERE discord_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  ip TEXT NOT NULL DEFAULT '',
+  ua TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+`);
 
 // older databases: new columns are added once
 try {

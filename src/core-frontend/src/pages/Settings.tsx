@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
-import { ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
+import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -130,6 +130,7 @@ function BotCard() {
   const [proxy, setProxy] = useState('');
   const [proxyType, setProxyType] = useState<ProxyType>('socks5');
   const [clearProxy, setClearProxy] = useState(false);
+  const [secret, setSecret] = useState('');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -145,13 +146,15 @@ function BotCard() {
     setError('');
     setSaved(false);
     try {
-      const body: { discordToken?: string; proxyUrl?: string; proxyType?: ProxyType } = {};
+      const body: { discordToken?: string; discordClientSecret?: string; proxyUrl?: string; proxyType?: ProxyType } = {};
       if (token.trim()) body.discordToken = token.trim();
+      if (secret.trim()) body.discordClientSecret = secret.trim();
       if (clearProxy) body.proxyUrl = '';
       else if (proxy.trim()) { body.proxyUrl = proxy.trim(); body.proxyType = proxyType; }
       const r = await api<SettingsInfo>('/settings', 'PUT', body);
       setInfo(r);
       setTokenValue('');
+      setSecret('');
       setProxy('');
       setClearProxy(false);
       setSaved(true);
@@ -172,7 +175,17 @@ function BotCard() {
     }
   };
 
+  const removeSecret = async () => {
+    if (!window.confirm('Удалить Client Secret? Вход через Discord перестанет работать.')) return;
+    try {
+      setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   const tokenSet = !!info?.discordTokenSet;
+  const secretSet = !!info?.discordSecretSet;
 
   return (
     <form onSubmit={save} className="panel space-y-3.5 p-6">
@@ -218,6 +231,39 @@ function BotCard() {
       )}
       <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
 
+      <div className="space-y-3 rounded-2xl bg-soft p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-black">Вход через Discord</h3>
+          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? 'ВКЛЮЧЁН' : 'НЕ НАСТРОЕН'}</span>
+        </div>
+        <Field label="Client Secret">
+          <input
+            id="set-secret"
+            className="input font-mono"
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            autoComplete="off"
+            placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
+          />
+        </Field>
+        {secretSet && (
+          <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={() => void removeSecret()}>Удалить Client Secret</button>
+        )}
+        {info?.discordRedirect && (
+          <div>
+            <label htmlFor="set-redirect" className="label">Redirect URI</label>
+            <div className="flex gap-2">
+              <input id="set-redirect" className="input font-mono" readOnly value={info.discordRedirect} onFocus={(e) => e.currentTarget.select()} />
+              <CopyButton text={info.discordRedirect} className="shrink-0" />
+            </div>
+          </div>
+        )}
+        <p className="text-sm font-semibold text-mute">
+          Добавьте этот адрес в Developer Portal: OAuth2 → Redirects. Client Secret скопируйте на той же странице OAuth2.
+        </p>
+      </div>
+
       <ErrorLine text={error} />
       {tokenSet && status?.inviteUrl && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
@@ -226,7 +272,7 @@ function BotCard() {
         </div>
       )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
-      <button className="btn" disabled={busy || (!token.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
+      <button className="btn" disabled={busy || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
     </form>
   );
 }
@@ -400,15 +446,30 @@ export function UsersTab() {
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState('');
+  const [rules, setRules] = useState('');
 
   const load = () => {
-    api<Access>('/access').then(setAccess).catch((e) => setError(e.message));
+    api<Access>('/access').then((a) => { setAccess(a); setRules(a.rules ?? ''); }).catch((e) => setError(e.message));
     api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
   };
   useEffect(load, []);
 
   const save = async (patch: Partial<Access>) => {
     await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast('Сохранено'); }).catch((e) => setError(e.message));
+  };
+  const approve = async (u: UserRow) => {
+    await api(`/users/${u.id}/approve`, 'POST').then(() => toast(`«${u.username}» одобрен`)).catch((e) => setError(e.message));
+    load();
+  };
+  const reject = async (u: UserRow) => {
+    if (!window.confirm(`Отклонить заявку «${u.username}»?`)) return;
+    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
+    load();
+  };
+  const saveRules = async () => {
+    await api<Access>('/access', 'PUT', { rules: rules.trim() })
+      .then((a) => { setAccess(a); setRules(a.rules ?? ''); void reload(); toast(rules.trim() ? 'Правила сохранены' : 'Правила убраны'); })
+      .catch((e) => setError(e.message));
   };
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
@@ -425,6 +486,8 @@ export function UsersTab() {
     load();
   };
 
+  const pendingUsers = users.filter((u) => u.status === 'pending');
+
   return (
     <>
       <div className="panel space-y-4 p-6">
@@ -433,10 +496,42 @@ export function UsersTab() {
           <>
             <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
             <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
+            <div className="pl-8">
+              <label htmlFor="reg-mode" className="label">Режим регистрации</label>
+              <select id="reg-mode" className="input !w-auto max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
+                <option value="open">Открытая: сразу</option>
+                <option value="approval">По заявке: после одобрения администратором</option>
+              </select>
+            </div>
           </>
         )}
         <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы, писать новости и менять настройки могут администраторы.</p>
       </div>
+
+      <div className="panel space-y-3 p-6">
+        <h2 className="text-lg font-black">Правила сообщества</h2>
+        <p className="font-semibold text-mute">Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было.</p>
+        <textarea id="rules" className="input min-h-32" rows={6} maxLength={5000} value={rules} onChange={(e) => setRules(e.target.value)} aria-label="Правила сообщества" placeholder="1. Уважайте других игроков…" />
+        <div className="flex items-center justify-between gap-3">
+          <button className="btn" onClick={() => void saveRules()} disabled={!access || rules.trim() === (access.rules ?? '').trim()}>Сохранить</button>
+          <span className="text-sm font-semibold text-mute">{rules.length} / 5000</span>
+        </div>
+      </div>
+
+      {pendingUsers.length > 0 && (
+        <div className="panel space-y-3 p-6">
+          <h2 className="text-lg font-black">Заявки на регистрацию</h2>
+          <ul className="divide-y divide-line">
+            {pendingUsers.map((u) => (
+              <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.discordName ? ` · Discord: ${u.discordName}` : ''}</span>
+                <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
+                <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="panel space-y-3 p-6">
         <h2 className="text-lg font-black">Пользователи</h2>
@@ -444,7 +539,11 @@ export function UsersTab() {
         <ul className="divide-y divide-line">
           {users.map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-              <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.username === me?.username ? ' (вы)' : ''}</span>
+              <span className="min-w-0 flex-1 truncate font-bold">
+                {u.username}{u.username === me?.username ? ' (вы)' : ''}
+                {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
+              </span>
+              {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
                 <option value="player">Игрок</option>
                 <option value="admin">Администратор</option>

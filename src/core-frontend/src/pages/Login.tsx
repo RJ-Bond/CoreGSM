@@ -1,51 +1,158 @@
-import { useState, type FormEvent } from 'react';
-import { api, setToken } from '../api';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { AuthShell, ErrorLine, Field, Logo, Wordmark } from '../ui';
+import { DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, Spinner, useShake } from '../ui';
 
-export default function Login({ onDone }: { onDone: () => void }) {
+const NAME_KEY = 'coregsm_login_name';
+const readName = () => {
+  try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; }
+};
+const writeName = (v: string) => {
+  try { v ? localStorage.setItem(NAME_KEY, v) : localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
+};
+
+const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+/** the sign-in form; the card around it (brand, tabs) is AuthCard */
+export default function Login({ onDone, notice }: { onDone: () => void; notice?: string }) {
   const { access } = useAuth();
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(readName);
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(() => readName() !== '');
+  const [userErr, setUserErr] = useState('');
+  const [passErr, setPassErr] = useState('');
   const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [lockUntil, setLockUntil] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const userRef = useRef<HTMLInputElement>(null);
+  const passRef = useRef<HTMLInputElement>(null);
+  const [shakeCls, shake] = useShake();
+
+  // focus the first empty field
+  useEffect(() => { (username ? passRef : userRef).current?.focus(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // lockout countdown
+  useEffect(() => {
+    if (!lockUntil) return;
+    setNow(Date.now());
+    const t = setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      if (n >= lockUntil) {
+        setLockUntil(0);
+        setTimeout(() => passRef.current?.focus(), 0);
+      }
+    }, 250);
+    return () => clearInterval(t);
+  }, [lockUntil]);
+
+  const left = lockUntil ? Math.max(0, Math.ceil((lockUntil - now) / 1000)) : 0;
+  const locked = left > 0;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy || locked) return;
+    setUserErr(''); setPassErr(''); setError(''); setPending(false);
+    const name = username.trim();
+    if (!name || !password) {
+      if (!name) setUserErr('Введите логин');
+      if (!password) setPassErr('Введите пароль');
+      (name ? passRef : userRef).current?.focus();
+      shake();
+      return;
+    }
     setBusy(true);
-    setError('');
     try {
-      const r = await api<{ token: string }>('/auth/login', 'POST', { username, password });
+      const r = await api<{ token: string }>('/auth/login', 'POST', { username: name, password });
+      writeName(remember ? name : '');
       setToken(r.token);
       onDone();
     } catch (err) {
-      setError((err as Error).message);
+      const status = err instanceof ApiError ? err.status : 0;
+      const data = err instanceof ApiError ? err.data : {};
+      if (status === 429) {
+        const sec = Math.max(1, Number(data.retryAfter) || 60);
+        setLockUntil(Date.now() + sec * 1000);
+        setNow(Date.now());
+      } else if (status === 403 && data.pending) {
+        setPending(true);
+      } else if (status === 401) {
+        const n = typeof data.attemptsLeft === 'number' ? data.attemptsLeft : null;
+        setPassErr(`${(err as Error).message}${n !== null ? `. Осталось попыток: ${n}` : ''}`);
+        passRef.current?.focus();
+        passRef.current?.select();
+      } else {
+        setError((err as Error).message);
+      }
+      shake();
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <AuthShell>
-      <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
-        <div>
-          <div className="mb-1"><Logo size={48} /></div>
-          <Wordmark className="text-3xl" />
-          <div className="font-semibold text-mute">Вход в аккаунт</div>
-        </div>
-        <Field label="Логин">
-          <input id="login-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus />
-        </Field>
-        <Field label="Пароль">
-          <input id="login-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-        </Field>
-        <ErrorLine text={error} />
-        <button className="btn w-full" disabled={busy || !username || !password}>{busy ? 'Проверяю…' : 'Войти'}</button>
-        <div className="space-y-1.5 text-center text-sm font-bold text-mute">
-          {access.registration && <p>Нет аккаунта? <a href="#/register" className="text-link hover:underline">Зарегистрироваться</a></p>}
-          {access.publicPanel && <p><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>}
-        </div>
-      </form>
-    </AuthShell>
+    <form onSubmit={submit} noValidate className={`space-y-4 ${shakeCls}`}>
+      {notice && <ErrorLine text={notice} />}
+      {pending && (
+        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
+          Ваша заявка ещё не одобрена. Дождитесь решения администратора, затем войдите снова.
+        </p>
+      )}
+      {locked && (
+        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status" aria-live="off">
+          Слишком много попыток. Повторите через {clock(left)}
+        </p>
+      )}
+
+      <div>
+        <label htmlFor="login-user" className="label">Логин</label>
+        <input
+          id="login-user"
+          ref={userRef}
+          className="input"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !password) { e.preventDefault(); passRef.current?.focus(); } }}
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          disabled={locked}
+          aria-invalid={userErr ? true : undefined}
+          aria-describedby={userErr ? 'login-user-err' : undefined}
+        />
+        <FieldError id="login-user-err" text={userErr} />
+      </div>
+
+      <PasswordField
+        id="login-pass"
+        ref={passRef}
+        label="Пароль"
+        value={password}
+        onChange={setPassword}
+        autoComplete="current-password"
+        error={passErr}
+        disabled={locked}
+      />
+
+      <label className="flex cursor-pointer items-center gap-2.5 text-sm font-bold text-mute">
+        <input type="checkbox" className="h-4 w-4 accent-brand" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+        Запомнить меня (только логин)
+      </label>
+
+      <ErrorLine text={error} />
+      <button className="btn w-full" disabled={busy || locked}>
+        {busy && <Spinner />}
+        {busy ? 'Проверяю…' : 'Войти'}
+      </button>
+
+      {access.discordLogin && (
+        <>
+          <OrDivider />
+          <DiscordButton label="Войти через Discord" href="/api/auth/discord/start?mode=login" />
+        </>
+      )}
+    </form>
   );
 }

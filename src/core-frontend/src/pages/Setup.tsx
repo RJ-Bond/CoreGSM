@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { AuthShell, ErrorLine, Field, Logo, ProxyField, Wordmark, type ProxyType } from '../ui';
+import { AuthBrand, AuthShell, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -17,13 +17,14 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   const [proxyType, setProxyType] = useState<ProxyType>('socks5');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [shakeCls, shake] = useShake();
 
   const next = (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!LOGIN_RE.test(username.trim())) return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -');
-    if (password.length < 10) return setError('Пароль должен быть не короче 10 символов');
-    if (password !== repeat) return setError('Пароли не совпадают');
+    if (!LOGIN_RE.test(username.trim())) { shake(); return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'); }
+    if (password.length < 10) { shake(); return setError('Пароль должен быть не короче 10 символов'); }
+    if (password !== repeat) { shake(); return setError('Пароли не совпадают'); }
     setStep(1);
   };
 
@@ -51,10 +52,8 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
   return (
     <AuthShell>
-      <div className="pop panel w-full max-w-md p-7">
-        <div className="mb-2"><Logo size={48} /></div>
-        <Wordmark className="mb-1 block text-3xl" />
-        <p className="mb-5 font-semibold text-mute">Первоначальная настройка панели</p>
+      <div className={`auth-card w-full max-w-md rounded-3xl border bg-card/90 p-6 backdrop-blur sm:p-7 ${shakeCls}`}>
+        <AuthBrand subtitle="Первоначальная настройка панели" />
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
           {STEPS.map((s, i) => (
@@ -79,12 +78,10 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             <Field label="Логин администратора">
               <input id="setup-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="username" />
             </Field>
-            <Field label="Пароль (от 10 символов)">
-              <input id="setup-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={10} autoComplete="new-password" />
-            </Field>
-            <Field label="Повторите пароль">
-              <input id="setup-pass2" className="input" type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} required autoComplete="new-password" />
-            </Field>
+            <PasswordField id="setup-pass" label="Пароль (от 10 символов)" value={password} onChange={setPassword} autoComplete="new-password">
+              <PasswordStrength password={password} />
+            </PasswordField>
+            <PasswordField id="setup-pass2" label="Повторите пароль" value={repeat} onChange={setRepeat} autoComplete="new-password" />
             <ErrorLine text={error} />
             <button className="btn w-full">Далее</button>
           </form>
