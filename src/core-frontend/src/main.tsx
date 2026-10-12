@@ -30,3 +30,5 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('focus', sync);
   sync();
 }
+
+if (/[?&]flashdebug=1/.test(location.search)) void import('./flashDebug').then((m) => m.installFlashDebug());

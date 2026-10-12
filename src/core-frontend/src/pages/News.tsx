@@ -153,7 +153,7 @@ function NewsList() {
         </span>
         {changingTest && (
           <div className="w-full">
-            <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} />
+            <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => { if (v) void setTestChannel(v); }} />
           </div>
         )}
       </div>
