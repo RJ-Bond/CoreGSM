@@ -43,7 +43,7 @@ export default function ProfilePage() {
 
       <div className="grid items-start gap-5 md:grid-cols-2">
         <div className="panel flex flex-wrap items-center gap-4 p-5 md:col-span-2">
-          <UserAvatar name={me.username} url={me.avatarUrl} size={64} tone="brand" className="!rounded-3xl" />
+          <AvatarEditor onChanged={reload} />
           <div className="min-w-0 flex-1">
             <div className="line-clamp-2 break-words text-2xl font-black leading-tight">{me.username}</div>
             <div className="flex flex-wrap items-center gap-2">
@@ -81,6 +81,62 @@ export default function ProfilePage() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Profile picture: upload a photo (cropped to a square on the server), or fall back to the Discord avatar. */
+function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) {
+  const { me } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  if (!me) return null;
+
+  const upload = async (file: File) => {
+    setError('');
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) return setError('Нужна картинка PNG, JPG или WebP');
+    if (file.size > 3 * 1024 * 1024) return setError('Файл больше 3 МБ');
+    setBusy(true);
+    try {
+      const r = await fetch('/api/me/avatar', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
+      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить фото');
+      toast('Фото обновлено');
+      await onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    setBusy(true);
+    await api('/me/avatar', 'DELETE').then(() => toast(me.avatarSource === 'custom' && me.discordName ? 'Теперь показывается аватар Discord' : 'Фото удалено')).catch((e: Error) => setError(e.message));
+    await onChanged();
+    setBusy(false);
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <button
+        type="button"
+        onClick={() => input.current?.click()}
+        disabled={busy}
+        aria-label="Загрузить фото профиля"
+        className="group relative rounded-3xl"
+      >
+        <UserAvatar name={me.username} url={me.avatarUrl} size={72} tone="brand" className="!rounded-3xl" />
+        <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+          {busy ? '…' : 'Изменить'}
+        </span>
+      </button>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
+      <div className="flex gap-3 text-sm font-extrabold">
+        <button type="button" className="text-link hover:underline" onClick={() => input.current?.click()} disabled={busy}>Загрузить фото</button>
+        {me.avatarSource === 'custom' && <button type="button" className="text-mute hover:text-bad hover:underline" onClick={() => void remove()} disabled={busy}>{me.discordName ? 'Взять из Discord' : 'Убрать'}</button>}
+      </div>
+      {me.avatarSource === 'discord' && <p className="max-w-[12rem] text-center text-xs font-semibold text-mute">Сейчас аватар из Discord</p>}
+      {error && <p className="max-w-[12rem] text-center text-xs font-bold text-bad" role="alert">{error}</p>}
     </div>
   );
 }

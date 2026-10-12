@@ -283,6 +283,8 @@ export interface Me {
   role: 'admin' | 'moderator' | 'player';
   /** Discord CDN url */
   avatarUrl: string | null;
+  /** where the picture comes from: an uploaded file wins over Discord */
+  avatarSource: 'custom' | 'discord' | null;
   discordName: string | null;
   hasPassword: boolean;
 }
