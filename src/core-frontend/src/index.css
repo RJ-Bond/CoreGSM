@@ -306,3 +306,8 @@ main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #000
   .animate-spin { animation: spin 2s linear infinite !important; }
   .active\:scale-\[\.98\]:active, .hover\:-translate-y-0\.5:hover, .hover\:scale-110:hover { transform: none !important; }
 }
+
+/* decorative tiles next to the sign-in card */
+.showcase-tile { animation: showcase-in .6s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes showcase-in { from { opacity: 0; transform: translateY(20px) scale(.96) rotate(0deg); } }
+@media (prefers-reduced-motion: reduce) { .showcase-tile { animation: none; } }
