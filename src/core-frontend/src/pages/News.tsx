@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
-import { api, type NewsItem, type NewsSettings, type PublicNews } from '../api';
+import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
@@ -42,6 +43,14 @@ function NewsList() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [changingTest, setChangingTest] = useState(false);
+  const [view, setView] = useState<'list' | 'calendar'>(() => {
+    try { return localStorage.getItem('news_view') === 'calendar' ? 'calendar' : 'list'; } catch { return 'list'; }
+  });
+  const pickView = (v: 'list' | 'calendar') => {
+    setView(v);
+    try { localStorage.setItem('news_view', v); } catch { /* ignore */ }
+  };
 
   const load = () =>
     Promise.all([api<NewsItem[]>('/news'), api<NewsSettings>('/news/settings')])
@@ -62,8 +71,32 @@ function NewsList() {
     await api(`/news/${n.id}/publish`, 'POST').then(() => toast('Новость отправляется в Discord')).catch((e) => setError(e.message));
     void load();
   };
+  const setTestChannel = async (testChannelId: string) => {
+    if (testChannelId && !/^\d{15,25}$/.test(testChannelId)) return;
+    await api('/news/settings', 'PUT', { testChannelId }).catch((e) => setError(e.message));
+    setChangingTest(false);
+    void load();
+  };
   const copy = async (n: NewsItem) => {
+    try {
+      const created = await api<NewsItem>(`/news/${n.id}/duplicate`, 'POST');
+      toast('Копия создана');
+      window.location.hash = `#/admin/news/${created.id}`;
+      return;
+    } catch (e) {
+      // an older backend has no duplicate route: make the copy by hand
+      if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) { setError((e as Error).message); return; }
+    }
     await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast('Копия сохранена как черновик')).catch((e) => setError(e.message));
+    void load();
+  };
+  const reschedule = async (n: NewsItem, day: Date) => {
+    const base = n.scheduledAt ? new Date(n.scheduledAt) : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12, 0);
+    const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), base.getHours(), base.getMinutes()).getTime();
+    if (at <= Date.now()) { toast('Нельзя назначить время в прошлом', 'err'); return; }
+    await api(`/news/${n.id}/schedule`, 'PATCH', { scheduledAt: at })
+      .then(() => toast(`Перенесено на ${fmtDateTime(at)}`))
+      .catch((e) => setError(e.message));
     void load();
   };
   const remove = async (n: NewsItem) => {
@@ -106,6 +139,32 @@ function NewsList() {
         )}
       </div>
 
+      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+        <div className="min-w-0">
+          <div className="text-sm font-extrabold text-mute">Тестовый канал</div>
+          <div className="font-black">
+            {settings?.testChannelId ? (settings.testChannelName ? `# ${settings.testChannelName}${settings.testGuildName ? ` · ${settings.testGuildName}` : ''}` : `Канал ${settings.testChannelId}`) : 'не выбран'}
+          </div>
+          <div className="text-xs font-semibold text-mute">Сюда уходит «Отправить тест» из редактора.</div>
+        </div>
+        <span className="flex gap-2">
+          {settings?.testChannelId && <button className="btn btn-soft btn-sm" onClick={() => void setTestChannel('')}>Сбросить</button>}
+          <button className="btn btn-soft btn-sm" onClick={() => setChangingTest((v) => !v)} aria-expanded={changingTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать канал'}</button>
+        </span>
+        {changingTest && (
+          <div className="w-full">
+            <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} />
+          </div>
+        )}
+      </div>
+
+      <div className="seg" role="group" aria-label="Вид списка">
+        <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => pickView('list')}>Список</button>
+        <button type="button" className="seg-item" aria-pressed={view === 'calendar'} onClick={() => pickView('calendar')}>Календарь</button>
+      </div>
+
+      {view === 'calendar' && items.length > 0 && <NewsCalendar items={items} onMove={(n, day) => void reschedule(n, day)} />}
+
       {loaded && items.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
@@ -118,7 +177,7 @@ function NewsList() {
         </div>
       )}
 
-      <div className="fade-in grid gap-4 md:grid-cols-2">
+      <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
         {items.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
@@ -135,10 +194,11 @@ function NewsList() {
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
+                <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <span className="ml-auto flex items-center gap-1.5">
-                  <button type="button" className="row-act" title="Сделать копию" aria-label="Сделать копию" onClick={() => void copy(n)}><IconCopyPlus /></button>
+                  <button type="button" className="row-act" title="Дублировать" aria-label="Дублировать" onClick={() => void copy(n)}><IconCopyPlus /></button>
                   <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(n)}><IconTrash /></button>
                 </span>
               </div>

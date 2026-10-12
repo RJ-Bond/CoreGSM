@@ -252,10 +252,63 @@ export interface NewsEmbed {
   timestamp?: boolean;
 }
 
+export type Embed = NewsEmbed;
+
 export interface NewsPayload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
   embed?: NewsEmbed;
+  /** further embeds of the same message (Discord allows 10 in total with `embed`) */
+  extraEmbeds?: Embed[];
+  /** live status block: up to 5 servers, refreshed by the bot when the message is sent */
+  statusServerIds?: number[];
+}
+
+/** GET /news/variables */
+export interface NewsVariable {
+  token: string;
+  description: string;
+}
+
+/** GET /news/:id/versions */
+export interface NewsVersion {
+  id: number | string;
+  ts: number;
+  actor: string;
+  note?: string | null;
+}
+
+/** GET /news/:id/versions/:vid */
+export interface NewsVersionFull {
+  id: number | string;
+  ts: number;
+  actor: string;
+  payload: NewsPayload;
+}
+
+/** GET /news/:id/history */
+export interface NewsHistoryEntry {
+  ts: number;
+  actor: string;
+  action: string;
+}
+
+/** GET /news/autosave?key= (null / empty when there is nothing) */
+export interface NewsAutosave {
+  payload?: NewsPayload | null;
+  channelId?: string | null;
+  ts?: number | null;
+  updatedAt?: number | null;
+}
+
+/** POST /news/test, then poll GET /news/test/:id */
+export interface NewsTestResult {
+  ok: boolean;
+  testId: number | string;
+}
+export interface NewsTestStatus {
+  status: 'pending' | 'sent' | 'error';
+  error?: string | null;
 }
 
 export type NewsStatus = 'draft' | 'scheduled' | 'queued' | 'sending' | 'sent' | 'error' | 'edit_queued' | 'delete_queued';
@@ -283,6 +336,10 @@ export interface NewsSettings {
   channelId: string | null;
   channelName?: string | null;
   guildName?: string | null;
+  /** where "Отправить тест" posts */
+  testChannelId?: string | null;
+  testChannelName?: string | null;
+  testGuildName?: string | null;
 }
 
 // ---------- accounts and access ----------

@@ -35,10 +35,36 @@ try {
 } catch {
   /* column already exists */
 }
+try {
+  // 1 = a test send (never shown in lists, cleaned up after an hour)
+  db.exec('ALTER TABLE news ADD COLUMN test INTEGER NOT NULL DEFAULT 0');
+} catch {
+  /* column already exists */
+}
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  news_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_news_versions_news ON news_versions (news_id, id);
+CREATE TABLE IF NOT EXISTS news_autosave (
+  user_key TEXT NOT NULL,
+  key TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_key, key)
+);
+`);
 
 interface NewsRow {
   repeat: string;
   id: number;
+  test?: number;
   status: string;
   channel_id: string;
   payload: string;
@@ -83,8 +109,13 @@ const payloadSchema = z.object({
   content: z.string().max(2000, 'Сообщение над embed: не более 2000 символов').default(''),
   mention: z.enum(['none', 'here', 'everyone']).default('none'),
   embed: embedSchema.optional(),
+  // more embeds in the same message (Discord: 10 embeds in total)
+  extraEmbeds: z.array(embedSchema).max(9, 'Дополнительных embed не больше 9').optional(),
+  // live status cards of these servers are appended to the message at send time
+  statusServerIds: z.array(z.number().int().positive()).max(5, 'Статусов серверов не больше 5').optional(),
 });
 
+type EmbedIn = z.infer<typeof embedSchema>;
 export type NewsPayload = z.infer<typeof payloadSchema>;
 
 const bodySchema = z.object({
@@ -97,22 +128,41 @@ const bodySchema = z.object({
 });
 
 /** Drops empty strings, so "no title" is really absent. */
-function tidy(p: NewsPayload): NewsPayload {
-  const e = p.embed;
-  if (!e) return { ...p, embed: undefined };
+function tidyEmbed(e: EmbedIn | undefined): EmbedIn | undefined {
+  if (!e) return undefined;
   const out = { ...e };
   for (const k of ['title', 'url', 'description', 'thumbnailUrl'] as const) if (!out[k]?.trim()) delete out[k];
   if (out.author && !out.author.name.trim()) delete out.author;
-  else if (out.author && !out.author.iconUrl) delete out.author.iconUrl;
+  else if (out.author && !out.author.iconUrl) out.author = { name: out.author.name };
   if (out.footer && !out.footer.text.trim()) delete out.footer;
   if (out.image && !out.image.url && !out.image.upload) delete out.image;
-  else if (out.image && !out.image.url) delete out.image.url;
+  else if (out.image && !out.image.url) out.image = { upload: out.image.upload };
   if (!out.fields?.length) delete out.fields;
   const hasEmbed = Object.keys(out).some((k) => k !== 'color' && k !== 'timestamp') || (out.timestamp && Object.keys(out).length > 1);
-  return { ...p, embed: hasEmbed ? out : undefined };
+  return hasEmbed ? out : undefined;
 }
 
-function embedLength(e: NonNullable<NewsPayload['embed']>): number {
+function tidy(p: NewsPayload): NewsPayload {
+  const extra = (p.extraEmbeds ?? []).map(tidyEmbed).filter((e): e is EmbedIn => !!e);
+  const ids = [...new Set(p.statusServerIds ?? [])];
+  return {
+    ...p,
+    embed: tidyEmbed(p.embed),
+    extraEmbeds: extra.length ? extra : undefined,
+    statusServerIds: ids.length ? ids : undefined,
+  };
+}
+
+const allEmbeds = (p: NewsPayload): EmbedIn[] => [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])];
+
+interface PlainEmbed {
+  title?: string;
+  description?: string;
+  author?: { name: string };
+  footer?: { text: string };
+  fields?: { name: string; value: string }[];
+}
+function embedLength(e: PlainEmbed): number {
   return (
     (e.title?.length ?? 0) +
     (e.description?.length ?? 0) +
@@ -124,8 +174,11 @@ function embedLength(e: NonNullable<NewsPayload['embed']>): number {
 
 /** Returns an error message when the payload cannot be posted, otherwise null. */
 function check(p: NewsPayload): string | null {
-  if (!p.content.trim() && !p.embed) return 'Напишите текст или заполните embed: пустое сообщение отправить нельзя';
-  if (p.embed && embedLength(p.embed) > 6000) return 'Embed длиннее 6000 символов (лимит Discord): сократите текст';
+  const embeds = allEmbeds(p);
+  if (!p.content.trim() && !embeds.length && !p.statusServerIds?.length) return 'Напишите текст или заполните embed: пустое сообщение отправить нельзя';
+  if (embeds.length > 10) return 'В сообщении не больше 10 embed';
+  for (const e of embeds) if (embedLength(e) > 6000) return 'Embed длиннее 6000 символов (лимит Discord): сократите текст';
+  if (embeds.reduce((n, e) => n + embedLength(e), 0) > 6000) return 'Все embed вместе длиннее 6000 символов (лимит Discord): сократите текст';
   return null;
 }
 
@@ -143,6 +196,26 @@ function nextOccurrence(from: number, repeat: string, now: number): number {
   return d.getTime();
 }
 
+export interface NewsServerInfo {
+  id: number;
+  name: string;
+  players: number;
+  maxPlayers: number;
+  online: boolean;
+  address: string;
+  map: string | null;
+  ping: number | null;
+}
+export interface StatusEmbed {
+  title?: string;
+  description?: string;
+  author?: { name: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string; icon_url?: string };
+}
+
+const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
 type ChannelInfo = (id: string) => { channelName: string | null; guildName: string | null; guildId: string | null };
 
 export function registerNews(deps: {
@@ -154,8 +227,136 @@ export function registerNews(deps: {
   channelInfo: ChannelInfo;
   /** the signed-in user is an administrator or a moderator */
   isStaff: (req: Request) => boolean;
+  /** every server with its current status (for variables) */
+  servers: () => NewsServerInfo[];
+  /** the status card of a server (the one the bot posts), or null */
+  statusEmbed: (serverId: number) => StatusEmbed | null;
 }) {
-  const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin } = deps;
+  const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
+  const actorOf = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '—';
+  const userKeyOf = (req: Request) => {
+    const u = (req as Request & { user?: { id?: number; username?: string } }).user;
+    return String(u?.id ?? u?.username ?? 'anon');
+  };
+
+  // ---------- version history ----------
+  const insertVersion = db.prepare('INSERT INTO news_versions (news_id, ts, actor, payload, note) VALUES (?, ?, ?, ?, ?)');
+  function addVersion(newsId: number, payloadJson: string, actor: string, note: string) {
+    insertVersion.run(newsId, Date.now(), actor, payloadJson, note);
+    db.prepare(
+      'DELETE FROM news_versions WHERE news_id = ? AND id NOT IN (SELECT id FROM news_versions WHERE news_id = ? ORDER BY id DESC LIMIT 30)',
+    ).run(newsId, newsId);
+  }
+
+  // ---------- variables ----------
+  const TZ = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+  const SERVER_FIELDS: [string, string][] = [
+    ['name', 'название'],
+    ['players', 'игроков сейчас'],
+    ['max', 'максимум игроков'],
+    ['online', 'состояние (онлайн/офлайн)'],
+    ['address', 'адрес'],
+    ['map', 'текущая карта'],
+    ['ping', 'пинг, мс'],
+  ];
+  function variableList() {
+    const out: { token: string; description: string }[] = [
+      { token: '{players}', description: 'Всего игроков онлайн на всех серверах' },
+      { token: '{online}', description: 'Сколько серверов сейчас онлайн' },
+      { token: '{servers}', description: 'Сколько всего серверов' },
+      { token: '{date}', description: 'Текущая дата (по часовому поясу панели)' },
+      { token: '{time}', description: 'Текущее время (по часовому поясу панели)' },
+    ];
+    for (const s of servers()) for (const [f, d] of SERVER_FIELDS) out.push({ token: `{server.${s.id}.${f}}`, description: `${s.name}: ${d}` });
+    return out;
+  }
+  function makeResolver() {
+    const list = servers();
+    const byId = new Map(list.map((s) => [s.id, s]));
+    const tz = TZ();
+    const now = new Date();
+    const fmt = (o: Intl.DateTimeFormatOptions) => {
+      try {
+        return now.toLocaleString('ru-RU', { ...o, timeZone: tz });
+      } catch {
+        return now.toLocaleString('ru-RU', o);
+      }
+    };
+    const lookup = (key: string): string | null => {
+      switch (key) {
+        case 'players':
+          return String(list.filter((s) => s.online).reduce((n, s) => n + s.players, 0));
+        case 'online':
+          return String(list.filter((s) => s.online).length);
+        case 'servers':
+          return String(list.length);
+        case 'date':
+          return fmt({ day: '2-digit', month: '2-digit', year: 'numeric' });
+        case 'time':
+          return fmt({ hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+      const m = /^server\.(\d+)\.(name|players|max|online|address|map|ping)$/.exec(key);
+      if (!m) return null;
+      const s = byId.get(Number(m[1]));
+      if (!s) return null;
+      switch (m[2]) {
+        case 'name':
+          return s.name;
+        case 'players':
+          return String(s.online ? s.players : 0);
+        case 'max':
+          return String(s.maxPlayers);
+        case 'online':
+          return s.online ? 'онлайн' : 'офлайн';
+        case 'address':
+          return s.address;
+        case 'map':
+          return s.map || '—';
+        default:
+          return s.ping != null ? String(s.ping) : '—';
+      }
+    };
+    return (text: string) => text.replace(/\{([A-Za-z0-9_.]+)\}/g, (all, k: string) => lookup(k) ?? all);
+  }
+
+  /** the payload as it goes to Discord: variables substituted, status cards appended */
+  function resolvePayload(p: NewsPayload, test: boolean) {
+    const r = makeResolver();
+    const embed = (e: EmbedIn): EmbedIn => ({
+      ...e,
+      ...(e.title ? { title: cut(r(e.title), 256) } : {}),
+      ...(e.description ? { description: cut(r(e.description), 4096) } : {}),
+      ...(e.author ? { author: { ...e.author, name: cut(r(e.author.name), 256) } } : {}),
+      ...(e.footer ? { footer: { text: cut(r(e.footer.text), 2048) } } : {}),
+      ...(e.fields ? { fields: e.fields.map((f) => ({ ...f, name: cut(r(f.name), 256), value: cut(r(f.value), 1024) })) } : {}),
+    });
+    let content = cut(r(p.content ?? ''), 2000);
+    let mention = p.mention;
+    if (test) {
+      mention = 'none';
+      content = cut(`[ТЕСТ]${content.trim() ? ` ${content}` : ''}`, 2000);
+    }
+    const out: NewsPayload = { content, mention, ...(p.embed ? { embed: embed(p.embed) } : {}) };
+    if (p.extraEmbeds?.length) out.extraEmbeds = p.extraEmbeds.map(embed);
+    // status cards: they never push the message over 10 embeds or 6000 characters
+    const statusEmbeds: StatusEmbed[] = [];
+    const used = allEmbeds(out);
+    let room = 10 - used.length;
+    let len = used.reduce((n, e) => n + embedLength(e), 0);
+    for (const id of p.statusServerIds ?? []) {
+      if (room <= 0) break;
+      const e = statusEmbed(id);
+      if (!e) continue;
+      const clean: StatusEmbed = { ...e };
+      delete clean.footer;
+      const l = embedLength(clean);
+      if (len + l > 6000) continue;
+      len += l;
+      room--;
+      statusEmbeds.push(clean);
+    }
+    return { payload: out, statusEmbeds };
+  }
   const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res)).catch(next);
   };
@@ -185,13 +386,86 @@ export function registerNews(deps: {
   // ---------- default news channel ----------
   app.get('/api/news/settings', staff, (_req, res) => {
     const channelId = getSetting('news_channel_id');
-    res.json({ channelId, ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }) });
+    const testChannelId = getSetting('news_test_channel_id') ?? '';
+    const tc = testChannelId ? channelInfo(testChannelId) : null;
+    res.json({
+      channelId,
+      ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }),
+      testChannelId,
+      testChannelName: tc?.channelName ?? null,
+      testGuildName: tc?.guildName ?? null,
+    });
   });
   app.put('/api/news/settings', staff, (req, res) => {
-    const b = z.object({ channelId: z.string().regex(/^\d{15,25}$/).nullable() }).safeParse(req.body);
+    const b = z
+      .object({
+        channelId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
+        testChannelId: z.union([z.string().regex(/^\d{15,25}$/), z.literal('')]).optional(),
+      })
+      .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
-    setSetting('news_channel_id', b.data.channelId);
-    res.json({ channelId: b.data.channelId });
+    if (b.data.channelId !== undefined) setSetting('news_channel_id', b.data.channelId);
+    if (b.data.testChannelId !== undefined) setSetting('news_test_channel_id', b.data.testChannelId || null);
+    res.json({ channelId: getSetting('news_channel_id'), testChannelId: getSetting('news_test_channel_id') ?? '' });
+  });
+
+  // ---------- variables, test send, autosave (fixed paths: must come before /api/news/:id) ----------
+  app.get('/api/news/variables', staff, (_req, res) => {
+    res.json(variableList());
+  });
+
+  app.post('/api/news/test', staff, (req, res) => {
+    const b = z
+      .object({ payload: payloadSchema, channelId: z.string().regex(/^\d{15,25}$/, 'Неверный канал').optional() })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const payload = tidy(b.data.payload);
+    const bad = check(payload);
+    if (bad) return res.status(400).json({ error: bad });
+    const channelId = b.data.channelId || getSetting('news_test_channel_id');
+    if (!channelId) return res.status(400).json({ error: 'Не задан тестовый канал: выберите его в настройках новостей' });
+    const now = Date.now();
+    const info = db
+      .prepare("INSERT INTO news (status, channel_id, payload, test, created_at, updated_at) VALUES ('queued', ?, ?, 1, ?, ?)")
+      .run(channelId, JSON.stringify(payload), now, now);
+    res.json({ ok: true, testId: Number(info.lastInsertRowid) });
+  });
+
+  // the outcome of a test send (the bot picks it up within a few seconds)
+  app.get('/api/news/test/:id', staff, (req, res) => {
+    const r = db.prepare('SELECT status, error FROM news WHERE id = ? AND test = 1').get(Number(req.params.id)) as { status: string; error: string | null } | undefined;
+    if (!r) return res.status(404).json({ error: 'Тест не найден' });
+    res.json({ status: r.status === 'test_sent' ? 'sent' : r.status === 'test_error' ? 'error' : 'pending', error: r.error });
+  });
+
+  const autosaveKey = z.string().min(1).max(40).regex(/^[A-Za-z0-9_-]+$/);
+  app.put('/api/news/autosave', staff, (req, res) => {
+    const b = z.object({ key: autosaveKey, payload: z.record(z.string(), z.unknown()) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неверные данные черновика' });
+    const json = JSON.stringify(b.data.payload);
+    if (json.length > 400_000) return res.status(413).json({ error: 'Черновик слишком большой' });
+    const now = Date.now();
+    db.prepare(
+      'INSERT INTO news_autosave (user_key, key, payload, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_key, key) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at',
+    ).run(userKeyOf(req), b.data.key, json, now);
+    // forget abandoned drafts after 30 days
+    db.prepare('DELETE FROM news_autosave WHERE updated_at < ?').run(now - 30 * 86400_000);
+    res.json({ ok: true, updatedAt: now });
+  });
+  app.get('/api/news/autosave', staff, (req, res) => {
+    const k = autosaveKey.safeParse(req.query.key);
+    if (!k.success) return res.status(400).json({ error: 'Укажите key' });
+    const r = db.prepare('SELECT payload, updated_at FROM news_autosave WHERE user_key = ? AND key = ?').get(userKeyOf(req), k.data) as
+      | { payload: string; updated_at: number }
+      | undefined;
+    if (!r) return res.json({ payload: null, updatedAt: null });
+    res.json({ payload: JSON.parse(r.payload), updatedAt: r.updated_at });
+  });
+  app.delete('/api/news/autosave', staff, (req, res) => {
+    const k = autosaveKey.safeParse(req.query.key ?? req.body?.key);
+    if (!k.success) return res.status(400).json({ error: 'Укажите key' });
+    db.prepare('DELETE FROM news_autosave WHERE user_key = ? AND key = ?').run(userKeyOf(req), k.data);
+    res.json({ ok: true });
   });
 
   // ---------- images (uploaded in the editor, attached by the bot) ----------
@@ -227,13 +501,13 @@ export function registerNews(deps: {
   };
 
   app.get('/api/news', viewer, (req, res) => {
-    const rows = db.prepare('SELECT * FROM news ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
+    const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
     if (isAdmin(req)) return res.json(rows.map(serialize));
     res.json(rows.filter((r) => r.status === 'sent' || r.status === 'edit_queued').map(publicNews));
   });
 
   app.get('/api/news/:id', viewer, (req, res) => {
-    const r = db.prepare('SELECT * FROM news WHERE id = ?').get(Number(req.params.id)) as NewsRow | undefined;
+    const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
     if (!r || (!isAdmin(req) && r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
     res.json(isAdmin(req) ? serialize(r) : publicNews(r));
   });
@@ -260,6 +534,7 @@ export function registerNews(deps: {
       const info = db
         .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now);
+      addVersion(Number(info.lastInsertRowid), JSON.stringify(payload), actorOf(req), 'Создано');
       res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
     }),
   );
@@ -294,7 +569,105 @@ export function registerNews(deps: {
         id,
       );
     }
+    const posted = old.status === 'sent' || old.status === 'edit_queued';
+    addVersion(id, JSON.stringify(payload), actorOf(req), posted ? 'Изменено после публикации' : 'Сохранено');
     res.json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow));
+  });
+
+  // ---------- versions, history, duplicate, reschedule ----------
+  const loadItem = (id: number) => db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(id) as NewsRow | undefined;
+
+  app.get('/api/news/:id/versions', staff, (req, res) => {
+    const id = Number(req.params.id);
+    if (!loadItem(id)) return res.status(404).json({ error: 'Новость не найдена' });
+    const rows = db.prepare('SELECT id, ts, actor, note FROM news_versions WHERE news_id = ? ORDER BY id DESC').all(id);
+    res.json(rows);
+  });
+
+  app.get('/api/news/:id/versions/:vid', staff, (req, res) => {
+    const r = db
+      .prepare('SELECT id, ts, actor, payload, note FROM news_versions WHERE id = ? AND news_id = ?')
+      .get(Number(req.params.vid), Number(req.params.id)) as { id: number; ts: number; actor: string; payload: string; note: string } | undefined;
+    if (!r) return res.status(404).json({ error: 'Версия не найдена' });
+    res.json({ id: r.id, ts: r.ts, actor: r.actor, note: r.note, payload: JSON.parse(r.payload) });
+  });
+
+  app.post('/api/news/:id/versions/:vid/restore', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const v = db
+      .prepare('SELECT id, payload FROM news_versions WHERE id = ? AND news_id = ?')
+      .get(Number(req.params.vid), id) as { id: number; payload: string } | undefined;
+    if (!v) return res.status(404).json({ error: 'Версия не найдена' });
+    if (['sending', 'delete_queued'].includes(item.status)) return res.status(409).json({ error: 'Новость сейчас отправляется, подождите несколько секунд' });
+    const parsed = payloadSchema.safeParse(JSON.parse(v.payload));
+    if (!parsed.success) return res.status(400).json({ error: 'Эту версию нельзя восстановить: ' + (parsed.error.issues[0]?.message ?? 'неверные данные') });
+    const payload = tidy(parsed.data);
+    const posted = item.status === 'sent' || item.status === 'edit_queued';
+    if (posted) {
+      const bad = check(payload);
+      if (bad) return res.status(400).json({ error: bad });
+      db.prepare("UPDATE news SET payload = ?, status = 'edit_queued', error = NULL, updated_at = ? WHERE id = ?").run(JSON.stringify(payload), Date.now(), id);
+    } else {
+      db.prepare('UPDATE news SET payload = ?, error = NULL, updated_at = ? WHERE id = ?').run(JSON.stringify(payload), Date.now(), id);
+    }
+    addVersion(id, JSON.stringify(payload), actorOf(req), `Восстановлено из версии #${v.id}`);
+    res.json(serialize(loadItem(id)!));
+  });
+
+  app.get('/api/news/:id/history', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const out: { ts: number; actor: string; action: string }[] = [];
+    for (const v of db.prepare('SELECT ts, actor, note FROM news_versions WHERE news_id = ?').all(id) as { ts: number; actor: string; note: string }[]) {
+      out.push({ ts: v.ts, actor: v.actor, action: v.note || 'Сохранено' });
+    }
+    // audit entries about this item that are not already a saved version
+    const audit = db
+      .prepare("SELECT ts, actor, action FROM audit WHERE detail = ? AND action IN ('Новость отправлена в Discord', 'Изменено время публикации новости', 'Создана копия новости')")
+      .all(`#${id}`) as { ts: number; actor: string; action: string }[];
+    out.push(...audit);
+    if (item.sent_at) out.push({ ts: item.sent_at, actor: 'бот', action: 'Опубликовано в Discord' });
+    out.sort((a, b) => b.ts - a.ts);
+    res.json(out.slice(0, 200));
+  });
+
+  app.post('/api/news/:id/duplicate', staff, (req, res) => {
+    const src = loadItem(Number(req.params.id));
+    if (!src) return res.status(404).json({ error: 'Новость не найдена' });
+    const p = JSON.parse(src.payload) as NewsPayload;
+    const SUFFIX = ' (копия)';
+    if (p.embed?.title?.trim()) p.embed.title = cut(p.embed.title, 256 - SUFFIX.length) + SUFFIX;
+    else if (p.content.trim()) p.content = cut(p.content, 2000 - SUFFIX.length) + SUFFIX;
+    else if (p.embed?.description?.trim()) p.embed.description = cut(p.embed.description, 4096 - SUFFIX.length) + SUFFIX;
+    const now = Date.now();
+    const json = JSON.stringify(p);
+    const info = db
+      .prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('draft', ?, ?, NULL, 'none', ?, ?)")
+      .run(src.channel_id, json, now, now);
+    addVersion(Number(info.lastInsertRowid), json, actorOf(req), `Копия новости #${src.id}`);
+    res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
+  });
+
+  app.patch('/api/news/:id/schedule', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const b = z.object({ scheduledAt: z.number().int().nullable() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Укажите время публикации или null' });
+    if (!['draft', 'scheduled'].includes(item.status)) return res.status(409).json({ error: 'Время можно менять только у черновика или запланированной новости' });
+    const now = Date.now();
+    if (b.data.scheduledAt === null) {
+      db.prepare("UPDATE news SET status = 'draft', scheduled_at = NULL, repeat = 'none', error = NULL, updated_at = ? WHERE id = ?").run(now, id);
+    } else {
+      if (b.data.scheduledAt <= now) return res.status(400).json({ error: 'Укажите время публикации в будущем' });
+      const bad = check(JSON.parse(item.payload) as NewsPayload);
+      if (bad) return res.status(400).json({ error: bad });
+      db.prepare("UPDATE news SET status = 'scheduled', scheduled_at = ?, error = NULL, updated_at = ? WHERE id = ?").run(b.data.scheduledAt, now, id);
+    }
+    res.json(serialize(loadItem(id)!));
   });
 
   // publish a draft / scheduled / failed item right now
@@ -325,6 +698,8 @@ export function registerNews(deps: {
   // ---------- internal: the bot ----------
   app.get('/internal/news/pending', internal, (_req, res) => {
     const now = Date.now();
+    // test sends are throw-away: forget the old ones
+    db.prepare('DELETE FROM news WHERE test = 1 AND updated_at < ?').run(now - 3600_000);
     const rows = db
       .prepare(
         `SELECT * FROM news WHERE status IN ('queued','edit_queued','delete_queued')
@@ -337,7 +712,11 @@ export function registerNews(deps: {
       const action = r.status === 'edit_queued' ? 'edit' : r.status === 'delete_queued' ? 'delete' : 'send';
       // claim sends so a slow bot cannot post the same news twice
       if (action === 'send') claim.run(now, r.id);
-      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: JSON.parse(r.payload) as NewsPayload };
+      const stored = JSON.parse(r.payload) as NewsPayload;
+      if (action === 'delete') return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: stored, statusEmbeds: [], test: false };
+      // variables are substituted and status cards built right now, at send time
+      const { payload, statusEmbeds } = resolvePayload(stored, !!r.test);
+      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test };
     });
     res.json(out);
   });
@@ -355,6 +734,13 @@ export function registerNews(deps: {
     const now = Date.now();
     if (b.data.status === 'deleted') {
       db.prepare('DELETE FROM news WHERE id = ?').run(id);
+    } else if (db.prepare('SELECT 1 FROM news WHERE id = ? AND test = 1').get(id)) {
+      db.prepare('UPDATE news SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(
+        b.data.status === 'sent' ? 'test_sent' : 'test_error',
+        b.data.status === 'sent' ? null : (b.data.error ?? 'Ошибка отправки'),
+        now,
+        id,
+      );
     } else if (b.data.status === 'sent') {
       const prev = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
       // the first successful post of a repeating item schedules the next one

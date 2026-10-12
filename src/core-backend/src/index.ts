@@ -1557,7 +1557,26 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   res.json({ ok: true });
 });
 
-registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
+registerNews({
+  app,
+  staff,
+  viewer,
+  internal,
+  channelInfo,
+  isStaff,
+  servers: () =>
+    (db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[]).map(serialize).map((s) => ({
+      id: s.id,
+      name: s.name,
+      players: s.players,
+      maxPlayers: s.maxPlayers,
+      online: s.online,
+      address: s.address,
+      map: s.map,
+      ping: s.ping,
+    })),
+  statusEmbed: (id) => embedFor(id, 60),
+});
 registerAlerts({ app, admin, internal, channelInfo });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin });
