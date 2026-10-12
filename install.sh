@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="21dcbaf43d4f"
+COREGSM_BUILD="cdb884dba1bc"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19641,6 +19641,23 @@ html[data-flat='trans'] *, html[data-flat='trans'] *::before, html[data-flat='tr
 .tile-hover:hover, .tile-hover:active { transform: none; }
 .depth-l1, .depth-l2 { translate: none !important; transition: none !important; }
 .depth::before { display: none; }
+
+/* bisect by transitioned property: /?flat=tx (no transform), to (no opacity), tc (no colours), ts (no shadow/filter), tw (no size/layout) */
+html[data-flat='tx'] *, html[data-flat='tx'] *::before, html[data-flat='tx'] *::after {
+  transition-property: color, background-color, border-color, outline-color, fill, stroke, text-decoration-color, opacity, box-shadow, filter, backdrop-filter, width, height, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path !important;
+}
+html[data-flat='to'] *, html[data-flat='to'] *::before, html[data-flat='to'] *::after {
+  transition-property: color, background-color, border-color, outline-color, fill, stroke, text-decoration-color, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path !important;
+}
+html[data-flat='tc'] *, html[data-flat='tc'] *::before, html[data-flat='tc'] *::after {
+  transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path !important;
+}
+html[data-flat='ts'] *, html[data-flat='ts'] *::before, html[data-flat='ts'] *::after {
+  transition-property: color, background-color, border-color, outline-color, fill, stroke, text-decoration-color, opacity, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path !important;
+}
+html[data-flat='tw'] *, html[data-flat='tw'] *::before, html[data-flat='tw'] *::after {
+  transition-property: color, background-color, border-color, outline-color, fill, stroke, text-decoration-color, opacity, box-shadow, filter, backdrop-filter, transform, translate, scale, rotate !important;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
