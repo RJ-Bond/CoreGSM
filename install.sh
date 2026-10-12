@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6fe6f729b31b"
+COREGSM_BUILD="c27765e07d9f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -763,6 +763,8 @@ export async function encryptFile(src: string, dst: string, pass: string): Promi
     out.on('finish', res);
     out.on('error', rej);
   });
+  // a failure before `await done` must not become an unhandled rejection
+  done.catch(() => undefined);
   out.write(header);
   for await (const chunk of fs.createReadStream(src)) {
     const c = cipher.update(chunk as Buffer);
@@ -795,6 +797,8 @@ export async function decryptFile(src: string, dst: string, pass: string): Promi
     out.on('finish', res);
     out.on('error', rej);
   });
+  // a failure before `await done` must not become an unhandled rejection
+  done.catch(() => undefined);
   try {
     if (size - 16 > HEADER_LEN) {
       for await (const chunk of fs.createReadStream(src, { start: HEADER_LEN, end: size - 17 })) {
@@ -7270,16 +7274,17 @@ export default function Tour() {
   const { me, isAdmin } = useAuth();
   const username = me?.username ?? '';
   const [open, setOpen] = useState(false);
+  const [offer, setOffer] = useState(false);
 
-  // first sign-in: wait a moment so the page settles
+  // first sign-in: only OFFER the tour (a small card in the corner); it never dims the page on its own
   useEffect(() => {
-    if (!isAdmin || !username || seen(username)) { setOpen(false); return; }
-    const t = window.setTimeout(() => setOpen(true), 1200);
+    if (!isAdmin || !username || seen(username)) { setOffer(false); return; }
+    const t = window.setTimeout(() => setOffer(true), 2500);
     return () => window.clearTimeout(t);
   }, [isAdmin, username]);
 
   useEffect(() => {
-    const again = () => { if (isAdmin && username) setOpen(true); };
+    const again = () => { if (isAdmin && username) { setOffer(false); setOpen(true); } };
     window.addEventListener(RESTART, again);
     return () => window.removeEventListener(RESTART, again);
   }, [isAdmin, username]);
@@ -7289,8 +7294,21 @@ export default function Tour() {
     setOpen(false);
   }, [username]);
 
-  if (!open || !isAdmin) return null;
-  return <TourOverlay onClose={close} />;
+  if (!isAdmin) return null;
+  if (open) return <TourOverlay onClose={close} />;
+  if (!offer) return null;
+  return (
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel fixed bottom-24 right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] space-y-3 p-4 shadow-soft md:bottom-6">
+      <div>
+        <div className="font-black">Впервые в Админке?</div>
+        <p className="text-sm font-semibold text-mute">Покажу за минуту, с чего начать: сервер, бот, канал, новости.</p>
+      </div>
+      <div className="flex gap-2">
+        <button className="btn btn-sm" onClick={() => { setOffer(false); setOpen(true); }}>Показать</button>
+        <button className="btn btn-soft btn-sm" onClick={() => { setOffer(false); if (username) markSeen(username); }}>Не нужно</button>
+      </div>
+    </div>
+  );
 }
 
 const findAnchor = (step: Step): HTMLElement | null => {
@@ -7961,7 +7979,9 @@ __COREGSM_EOF__
   background: rgb(var(--brand)); color: #fff; box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
 }
 .skip-link:focus { transform: none; }
-main:focus { outline: none; }
+/* <main> gets focus programmatically on every route change: no ring around the whole page */
+main:focus,
+main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #0000; }
 
 /* a value that just changed: short glow */
 @keyframes num-bump {
