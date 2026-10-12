@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
 import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { Button, ErrorLine, Field, SplitButton, Switch, toast } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, PageHead, SplitButton, Switch, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 
 // ---------- draft <-> payload ----------
@@ -370,10 +370,13 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   return (
     <div className="space-y-5">
       <a href="#/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
-      <div>
-        <h1 className="text-3xl font-black tracking-tight">{id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}</h1>
-        {isSent && <p className="mt-0.5 font-semibold text-mute">Сообщение в Discord будет отредактировано, новое отправлено не будет.</p>}
-      </div>
+      <PageHead
+        icon={<IconNews />}
+        title={id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}
+        subtitle={isSent ? 'Сообщение в Discord будет отредактировано, новое отправлено не будет.' : undefined}
+        hint="Заполните канал и текст, проверьте предпросмотр справа и нажмите «Опубликовать сейчас». Можно запланировать или сохранить как черновик."
+        help={<p>Кнопки отправки находятся справа от формы (на телефоне под ней). Слова ДАТА и ВРЕМЯ в шаблонах замените на свои. Чтобы упоминание @everyone сработало, у бота должно быть соответствующее право в канале.</p>}
+      />
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
         <div className="space-y-5">
@@ -381,6 +384,12 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <Field label="Канал">
               {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
             </Field>
+            {!isSent && noChannel && (
+              <p className="-mt-1 text-sm font-semibold text-mute">
+                Канал не выбран. Задайте канал по умолчанию, и он будет подставляться в каждую новую новость:{' '}
+                <GoLink href="#/admin/news">Выбрать канал по умолчанию</GoLink>
+              </p>
+            )}
             {!isSent && (
               <label className="flex items-center gap-3 text-sm font-bold text-mute">
                 <Switch checked={makeDefault} onChange={setMakeDefault} /> Сделать каналом новостей по умолчанию

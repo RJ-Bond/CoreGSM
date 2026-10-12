@@ -445,7 +445,8 @@ function updateFile(name: string): string {
 }
 
 function updatePayload() {
-  let job: { state: string; message: string; time: number; rollback_available?: boolean } | null = null;
+  // progress: 0..100 written by the manager/installer while an update runs (absent in older managers)
+  let job: { state: string; message: string; time: number; rollback_available?: boolean; progress?: number } | null = null;
   try {
     job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
   } catch {
@@ -1306,6 +1307,8 @@ app.get('/api/status', viewer, (req, res) => {
 // ---------- discord bindings ----------
 const bindingSchema = z.object({
   serverId: z.number().int(),
+  // more servers in the same message (Discord allows up to 10 embeds in one message)
+  extraServerIds: z.array(z.number().int()).max(9).optional(),
   channelId: z.string().regex(/^\d{15,25}$/, 'ID канала — число из 15–25 цифр'),
   intervalSec: z.number().int().min(30).max(3600).default(60),
   enabled: z.boolean().default(true),
@@ -1344,11 +1347,36 @@ app.get('/api/discord/channels', staff, (_req, res) => {
   res.json(botGuilds);
 });
 
+/** the extra servers of a binding (ids that still exist, without the main one and without duplicates) */
+function extraIds(b: BindingRow): number[] {
+  try {
+    const raw = JSON.parse(b.extra_ids || '[]') as unknown;
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<number>([b.server_id]);
+    const out: number[] = [];
+    for (const v of raw) {
+      const n = Number(v);
+      if (!Number.isInteger(n) || seen.has(n)) continue;
+      if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)) continue;
+      seen.add(n);
+      out.push(n);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+const cleanExtra = (main: number, ids: number[] | undefined): number[] =>
+  [...new Set(ids ?? [])].filter((n) => n !== main && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)).slice(0, 9);
+
 const serializeBinding = (b: BindingRow) => ({
   channelName: channelInfo(b.channel_id).channelName,
   guildName: channelInfo(b.channel_id).guildName,
   id: b.id,
   serverId: b.server_id,
+  // every server shown in the message: the main one first
+  serverIds: [b.server_id, ...extraIds(b)],
   channelId: b.channel_id,
   messageId: b.message_id,
   intervalSec: b.interval_sec,
@@ -1389,8 +1417,8 @@ app.post('/api/bindings', admin, (req, res) => {
     return res.status(400).json({ error: 'Сервер не найден' });
   }
   const info = db
-    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style) VALUES (?, ?, ?, ?, ?)')
-    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed');
+    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, extra_ids) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed', JSON.stringify(cleanExtra(b.data.serverId, b.data.extraServerIds)));
   res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
 });
 
@@ -1402,9 +1430,11 @@ app.put('/api/bindings/:id', admin, (req, res) => {
   if (!old) return res.status(404).json({ error: 'Не найдено' });
   // moving to another channel/server means a new message must be posted
   const resetMsg = old.channel_id !== b.data.channelId || old.server_id !== b.data.serverId;
+  // omitted = keep the current extra servers (a pause/resume from the list does not send them)
+  const extra = b.data.extraServerIds === undefined ? extraIds(old) : cleanExtra(b.data.serverId, b.data.extraServerIds);
   db.prepare(
-    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
-  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, resetMsg ? 1 : 0, id);
+    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, extra_ids=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
+  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, JSON.stringify(extra), resetMsg ? 1 : 0, id);
   res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
 });
 

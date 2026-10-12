@@ -60,7 +60,38 @@ logf() { printf '%s\n' "$*" | sed -E 's/\x1b\[[0-9;]*m//g; s#(://)[^/@[:space:]]
 
 STEP=0
 TOTAL_STEPS=12
-step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; logf "[${STEP}/${TOTAL_STEPS}] $*"; }
+# Live progress for the panel's update bar: only while the manager runs the installer (COREGSM_FROM_MANAGER=1).
+# Writes percent and "what is happening now" into status.json; the manager adds its own phases before (up to 20 %)
+# and after (health check, 97-100 %).
+progress() { # progress PERCENT "message"
+  [ "${COREGSM_FROM_MANAGER:-0}" = 1 ] && [ -d "$APP_DIR/update" ] || return 0
+  local msg rb=false; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+  if declare -F rollback_available >/dev/null && rollback_available; then rb=true; fi
+  printf '{"state":"running","message":"%s","time":%s000,"rollback_available":%s,"progress":%s}\n' "$msg" "$(date +%s)" "$rb" "$1" > "$APP_DIR/update/status.json.tmp" 2>/dev/null \
+    && mv -f "$APP_DIR/update/status.json.tmp" "$APP_DIR/update/status.json" 2>/dev/null || true
+  chmod 644 "$APP_DIR/update/status.json" 2>/dev/null || true
+}
+step_pct() { # the share of the whole update that each installer step has reached when it starts
+  case "$*" in
+    "Проверка окружения"*) echo 22 ;;
+    "Прокси"*) echo 24 ;;
+    "Обновление системы"*) echo 26 ;;
+    "Установка curl"*) echo 28 ;;
+    "Установка Docker"*) echo 30 ;;
+    "Настройка файрвола"*|"Настройка"*) echo 32 ;;
+    "Создание файлов проекта"*) echo 36 ;;
+    "Генерация секретов"*) echo 40 ;;
+    "Сборка образов"*) echo 44 ;;
+    "SSL-сертификат"*|"Выпуск SSL"*) echo 82 ;;
+    "Запуск контейнеров"*) echo 88 ;;
+    *) echo "" ;;
+  esac
+}
+step()  {
+  STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; logf "[${STEP}/${TOTAL_STEPS}] $*"
+  local p; p="$(step_pct "$*")"
+  [ -z "$p" ] || progress "$p" "$*"
+}
 info()  { [ "$QUIET_OK" = 1 ] || echo -e "  ${CYAN}>${NC} $*"; logf "  > $*"; }
 ok()    { [ "$QUIET_OK" = 1 ] || echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
 done_line() { echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
@@ -614,7 +645,21 @@ build_images() {
   step "Сборка образов"
   cd "$APP_DIR"
   if stack_running; then info "Панель продолжает работать на прежней версии, пока идёт сборка."; fi
-  run "Сборка образов (3-8 минут)" docker compose build
+  # the build is the longest part and prints nothing useful: creep the bar from 44 % towards 80 % with the time
+  local parent=$$ tick=0
+  (
+    t=0
+    while sleep 6 && kill -0 "$parent" 2>/dev/null; do
+      t=$((t + 6))
+      p=$((44 + 36 * t / (t + 240)))
+      progress "$p" "Сборка образов: $((t / 60)) мин $((t % 60)) с"
+    done
+  ) &
+  tick=$!
+  run "Сборка образов (3-8 минут)" docker compose build || { kill "$tick" 2>/dev/null; return 1; }
+  kill "$tick" 2>/dev/null
+  wait "$tick" 2>/dev/null || true
+  progress 80 "Образы собраны"
   ok "Образы собраны"
 }
 
@@ -631,6 +676,7 @@ launch() {
   info "Жду готовности панели…"
   local i
   for i in $(seq 1 60); do
+    progress $((88 + i * 8 / 60)) "Запускаю контейнеры, жду ответа панели (${i}/60)"
     if curl -fsk --noproxy "*" --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
       ok "Панель отвечает"
       PANEL_OK=1

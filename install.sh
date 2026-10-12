@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0687c4394158"
+COREGSM_BUILD="99033d07e72b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -60,7 +60,38 @@ logf() { printf '%s\n' "$*" | sed -E 's/\x1b\[[0-9;]*m//g; s#(://)[^/@[:space:]]
 
 STEP=0
 TOTAL_STEPS=12
-step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; logf "[${STEP}/${TOTAL_STEPS}] $*"; }
+# Live progress for the panel's update bar: only while the manager runs the installer (COREGSM_FROM_MANAGER=1).
+# Writes percent and "what is happening now" into status.json; the manager adds its own phases before (up to 20 %)
+# and after (health check, 97-100 %).
+progress() { # progress PERCENT "message"
+  [ "${COREGSM_FROM_MANAGER:-0}" = 1 ] && [ -d "$APP_DIR/update" ] || return 0
+  local msg rb=false; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+  if declare -F rollback_available >/dev/null && rollback_available; then rb=true; fi
+  printf '{"state":"running","message":"%s","time":%s000,"rollback_available":%s,"progress":%s}\n' "$msg" "$(date +%s)" "$rb" "$1" > "$APP_DIR/update/status.json.tmp" 2>/dev/null \
+    && mv -f "$APP_DIR/update/status.json.tmp" "$APP_DIR/update/status.json" 2>/dev/null || true
+  chmod 644 "$APP_DIR/update/status.json" 2>/dev/null || true
+}
+step_pct() { # the share of the whole update that each installer step has reached when it starts
+  case "$*" in
+    "Проверка окружения"*) echo 22 ;;
+    "Прокси"*) echo 24 ;;
+    "Обновление системы"*) echo 26 ;;
+    "Установка curl"*) echo 28 ;;
+    "Установка Docker"*) echo 30 ;;
+    "Настройка файрвола"*|"Настройка"*) echo 32 ;;
+    "Создание файлов проекта"*) echo 36 ;;
+    "Генерация секретов"*) echo 40 ;;
+    "Сборка образов"*) echo 44 ;;
+    "SSL-сертификат"*|"Выпуск SSL"*) echo 82 ;;
+    "Запуск контейнеров"*) echo 88 ;;
+    *) echo "" ;;
+  esac
+}
+step()  {
+  STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; logf "[${STEP}/${TOTAL_STEPS}] $*"
+  local p; p="$(step_pct "$*")"
+  [ -z "$p" ] || progress "$p" "$*"
+}
 info()  { [ "$QUIET_OK" = 1 ] || echo -e "  ${CYAN}>${NC} $*"; logf "  > $*"; }
 ok()    { [ "$QUIET_OK" = 1 ] || echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
 done_line() { echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
@@ -2092,6 +2123,13 @@ try {
   /* column already exists */
 }
 
+// one Discord message may show several servers (up to 10 embeds): the extra server ids
+try {
+  db.exec("ALTER TABLE bindings ADD COLUMN extra_ids TEXT NOT NULL DEFAULT '[]'");
+} catch {
+  /* column already exists */
+}
+
 // older databases: country override (ISO code, '' = detect automatically)
 try {
   db.exec("ALTER TABLE servers ADD COLUMN country TEXT NOT NULL DEFAULT ''");
@@ -2159,6 +2197,8 @@ export interface BindingRow {
   last_error: string | null;
   /** how the message looks in Discord: embed (default), card (PNG) or both */
   style: string;
+  /** more servers shown in the same message (JSON array of server ids; the main one is server_id) */
+  extra_ids: string;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -3113,7 +3153,8 @@ function updateFile(name: string): string {
 }
 
 function updatePayload() {
-  let job: { state: string; message: string; time: number; rollback_available?: boolean } | null = null;
+  // progress: 0..100 written by the manager/installer while an update runs (absent in older managers)
+  let job: { state: string; message: string; time: number; rollback_available?: boolean; progress?: number } | null = null;
   try {
     job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
   } catch {
@@ -3974,6 +4015,8 @@ app.get('/api/status', viewer, (req, res) => {
 // ---------- discord bindings ----------
 const bindingSchema = z.object({
   serverId: z.number().int(),
+  // more servers in the same message (Discord allows up to 10 embeds in one message)
+  extraServerIds: z.array(z.number().int()).max(9).optional(),
   channelId: z.string().regex(/^\d{15,25}$/, 'ID канала — число из 15–25 цифр'),
   intervalSec: z.number().int().min(30).max(3600).default(60),
   enabled: z.boolean().default(true),
@@ -4012,11 +4055,36 @@ app.get('/api/discord/channels', staff, (_req, res) => {
   res.json(botGuilds);
 });
 
+/** the extra servers of a binding (ids that still exist, without the main one and without duplicates) */
+function extraIds(b: BindingRow): number[] {
+  try {
+    const raw = JSON.parse(b.extra_ids || '[]') as unknown;
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<number>([b.server_id]);
+    const out: number[] = [];
+    for (const v of raw) {
+      const n = Number(v);
+      if (!Number.isInteger(n) || seen.has(n)) continue;
+      if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)) continue;
+      seen.add(n);
+      out.push(n);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+const cleanExtra = (main: number, ids: number[] | undefined): number[] =>
+  [...new Set(ids ?? [])].filter((n) => n !== main && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)).slice(0, 9);
+
 const serializeBinding = (b: BindingRow) => ({
   channelName: channelInfo(b.channel_id).channelName,
   guildName: channelInfo(b.channel_id).guildName,
   id: b.id,
   serverId: b.server_id,
+  // every server shown in the message: the main one first
+  serverIds: [b.server_id, ...extraIds(b)],
   channelId: b.channel_id,
   messageId: b.message_id,
   intervalSec: b.interval_sec,
@@ -4057,8 +4125,8 @@ app.post('/api/bindings', admin, (req, res) => {
     return res.status(400).json({ error: 'Сервер не найден' });
   }
   const info = db
-    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style) VALUES (?, ?, ?, ?, ?)')
-    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed');
+    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, extra_ids) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed', JSON.stringify(cleanExtra(b.data.serverId, b.data.extraServerIds)));
   res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
 });
 
@@ -4070,9 +4138,11 @@ app.put('/api/bindings/:id', admin, (req, res) => {
   if (!old) return res.status(404).json({ error: 'Не найдено' });
   // moving to another channel/server means a new message must be posted
   const resetMsg = old.channel_id !== b.data.channelId || old.server_id !== b.data.serverId;
+  // omitted = keep the current extra servers (a pause/resume from the list does not send them)
+  const extra = b.data.extraServerIds === undefined ? extraIds(old) : cleanExtra(b.data.serverId, b.data.extraServerIds);
   db.prepare(
-    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
-  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, resetMsg ? 1 : 0, id);
+    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, extra_ids=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
+  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, JSON.stringify(extra), resetMsg ? 1 : 0, id);
   res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
 });
 
@@ -5048,6 +5118,8 @@ type DiscordClient = InstanceType<typeof Client>;
 interface Binding {
   id: number;
   serverId: number;
+  /** every server shown in this message (the main one first); one embed per server */
+  serverIds?: number[];
   serverName: string;
   channelId: string;
   messageId: string | null;
@@ -5259,27 +5331,60 @@ async function applyConfig(): Promise<void> {
 }
 
 /** Builds what a binding's message looks like (embed and card attachment). */
+/** characters Discord counts towards the 6000 limit of one message (title, description, fields, footer) */
+function embedChars(e: { title?: string; description?: string; fields?: { name: string; value: string }[]; footer?: { text: string }; author?: { name: string } }): number {
+  return (e.title?.length ?? 0) + (e.description?.length ?? 0) + (e.footer?.text.length ?? 0) + (e.author?.name.length ?? 0) + (e.fields ?? []).reduce((n, f) => n + f.name.length + f.value.length, 0);
+}
+
 async function buildPayload(b: Binding) {
   const style = b.style ?? 'embed';
+  // one message may show up to 10 servers (a Discord limit): the main server first
+  const ids = [...new Set([b.serverId, ...(b.serverIds ?? [])])].slice(0, 10);
+  const multi = ids.length > 1;
 
-  // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
-  let embed: InstanceType<typeof EmbedBuilder>;
-  if (style === 'card') {
-    embed = new EmbedBuilder().setColor(0x5a4bd1).setTimestamp();
-  } else {
-    const r = await backend(`/internal/servers/${b.serverId}/embed?interval=${b.intervalSec}`);
-    if (!r.ok) throw new Error(`embed HTTP ${r.status}`);
-    embed = new EmbedBuilder((await r.json()) as ConstructorParameters<typeof EmbedBuilder>[0]);
-  }
-
+  type Raw = ConstructorParameters<typeof EmbedBuilder>[0] & { title?: string; description?: string; fields?: { name: string; value: string; inline?: boolean }[]; footer?: { text: string; icon_url?: string } };
+  const raws: Raw[] = [];
   const files: InstanceType<typeof AttachmentBuilder>[] = [];
-  if (style !== 'embed') {
-    const img = await backend(`/internal/card/${b.serverId}.png`);
-    if (!img.ok) throw new Error(`card HTTP ${img.status}`);
-    files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name: 'card.png' }));
-    embed.setImage('attachment://card.png');
+
+  for (const [i, id] of ids.entries()) {
+    // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
+    let raw: Raw;
+    if (style === 'card') {
+      raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() } as Raw;
+    } else {
+      const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}`);
+      if (!r.ok) {
+        // a deleted server must not break the whole message
+        if (multi && r.status === 404) continue;
+        throw new Error(`embed HTTP ${r.status}`);
+      }
+      raw = (await r.json()) as Raw;
+    }
+    if (style !== 'embed') {
+      const img = await backend(`/internal/card/${id}.png`);
+      if (!img.ok) {
+        if (multi && img.status === 404) continue;
+        throw new Error(`card HTTP ${img.status}`);
+      }
+      const name = multi ? `card-${i}.png` : 'card.png';
+      files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name }));
+      (raw as { image?: { url: string } }).image = { url: `attachment://${name}` };
+    }
+    raws.push(raw);
   }
-  return { embeds: [embed], files, components: [] };
+  if (raws.length === 0) throw new Error('Нет ни одного сервера для сообщения');
+
+  if (multi) {
+    // one footer for the whole block (on the last embed); the 6000-character limit of a message: when it is
+    // exceeded drop the player lists first, from the last server backwards, then the extra fields
+    raws.forEach((r, i) => { if (i < raws.length - 1) delete r.footer; });
+    const total = () => raws.reduce((n, r) => n + embedChars(r), 0);
+    for (let i = raws.length - 1; i >= 0 && total() > 5800; i--) {
+      const f = raws[i].fields;
+      if (f && f.length > 6) raws[i].fields = f.slice(0, 6);
+    }
+  }
+  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components: [] };
 }
 
 async function update(c: DiscordClient, b: Binding): Promise<void> {
@@ -12874,6 +12979,7 @@ const PAGES: PageDef[] = [
 ];
 
 const ADMIN_TITLES: Record<string, string> = {
+  start: 'Начало работы',
   servers: 'Серверы',
   discord: 'Discord',
   news: 'Новости',
@@ -13113,7 +13219,7 @@ export default function App() {
         : page === 'profile'
         ? 'Профиль'
         : page === 'admin'
-          ? `Админка · ${ADMIN_TITLES[adminSection] ?? ADMIN_TITLES.servers}`
+          ? (ADMIN_TITLES[adminSection] ? `Админка · ${ADMIN_TITLES[adminSection]}` : 'Админка')
           : PAGES.find((p) => p.id === page)?.label ?? '';
   useEffect(() => {
     document.title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
@@ -13357,6 +13463,8 @@ export interface Server {
 export interface Binding {
   id: number;
   serverId: number;
+  /** every server shown in the message: the main one first, then the extras */
+  serverIds: number[];
   channelId: string;
   /** resolved by the bot when it can see the channel */
   channelName: string | null;
@@ -13443,7 +13551,7 @@ export interface UpdateInfo {
   /** a previous version and a database copy exist, so the update can be undone */
   canRollback: boolean;
   pending: boolean;
-  job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
+  job: { state: 'running' | 'done' | 'error'; message: string; time: number; /** 0..100, absent on older managers */ progress?: number } | null;
 }
 
 export interface ChangelogItem {
@@ -13999,7 +14107,7 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
     <div className="space-y-2">
       <input id={id} className="input font-mono" value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder="ID канала, например 123456789012345678" inputMode="numeric" />
       <p className="text-sm font-semibold text-mute">
-        {guilds && guilds.length === 0 ? 'Бот пока не видит каналов (его нужно пригласить на сервер Discord). ' : ''}
+        {guilds && guilds.length === 0 ? <>Бот пока не видит каналов (его нужно пригласить на сервер Discord): <a href="#/admin/discord" className="font-extrabold text-link hover:underline">проверить бота →</a>{' '}</> : ''}
         Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».
       </p>
       <div className="flex gap-4 text-sm font-extrabold">
@@ -14017,7 +14125,7 @@ import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
-import { ADMIN_SECTIONS } from '../pages/Admin';
+import { ADMIN_LINKS, ADMIN_SECTIONS } from '../pages/adminNav';
 import { GameAvatar, IconNews, IconServers, toast, useDensity } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
@@ -14033,7 +14141,12 @@ interface Item {
   icon: ReactNode;
   /** lower-case text the query is matched against */
   hay: string;
+  /** found only by typing: not listed while the query is empty */
+  searchOnly?: boolean;
 }
+
+/** lower case, «ё» as «е»: a query matches either way */
+const norm = (t: string) => t.toLowerCase().replace(/ё/g, 'е');
 
 const IconPulse = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -14053,8 +14166,8 @@ const IconDensity = () => (
   </svg>
 );
 
-const sectionItem = (key: string, label: string, hint: string, href: string, icon: ReactNode): Item => ({
-  key, group: 'Разделы', label, hint, href, icon, hay: `${label} ${hint}`.toLowerCase(),
+const sectionItem = (key: string, label: string, hint: string, href: string, icon: ReactNode, keywords = '', searchOnly = false): Item => ({
+  key, group: 'Разделы', label, hint, href, icon, hay: norm(`${label} ${hint} ${keywords}`), searchOnly,
 });
 
 /**
@@ -14093,7 +14206,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         hint: `${gameLabel(s.game)} · ${s.address}`,
         href: `#/servers/${s.id}`,
         icon: <GameAvatar game={s.game} size={32} />,
-        hay: `${s.name} ${gameLabel(s.game)} ${s.address}`.toLowerCase(),
+        hay: norm(`${s.name} ${gameLabel(s.game)} ${s.address}`),
       });
     }
     out.push(
@@ -14103,7 +14216,12 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     );
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
-      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, 'Админка', `#/admin/${sec.id}`, sec.icon()));
+      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `#/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
+      if (isAdmin) {
+        ADMIN_LINKS.forEach((l, i) => out.push(sectionItem(`l-${i}`, l.label, `Админка · ${l.hint}`, l.href, l.icon(), `${l.keywords} админка`, true)));
+      } else {
+        out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '#/admin/news/new', <IconNews />, 'новость объявление', true));
+      }
     }
     if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
     const compact = density === 'compact';
@@ -14115,14 +14233,14 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       href: '',
       run: () => { setDensity(compact ? 'normal' : 'compact'); toast(compact ? 'Плотность: обычная' : 'Плотность: компактная'); },
       icon: <IconDensity />,
-      hay: 'сменить плотность компактная обычная вид отступы density',
+      hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
   }, [servers, isStaff, isAdmin, me, density]);
 
   const results = useMemo(() => {
-    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items;
+    const words = norm(q).split(/\s+/).filter(Boolean);
+    const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items.filter((it) => !it.searchOnly);
     const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
     const secs = hit.filter((i) => i.group === 'Разделы');
     const acts = hit.filter((i) => i.group === 'Действия');
@@ -14249,6 +14367,153 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         </div>
         <p className="sr-only" role="status">{results.length ? `Найдено: ${results.length}` : 'Ничего не найдено'}</p>
       </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/GamePicker.tsx" << '__COREGSM_EOF__'
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { GAMES } from '../games';
+import { GameAvatar } from '../ui';
+
+const CUSTOM = '__custom';
+
+/**
+ * A game chooser with the game icons (a native <select> cannot draw them). It opens inline, so it is never
+ * clipped by a dialog: a search field, a scrollable list of games with their icons and an «Другая…» entry.
+ * Keyboard: ↑ ↓ Home End move, Enter picks, Esc closes; typing filters the list.
+ */
+export default function GamePicker({
+  value,
+  custom,
+  onPick,
+  id,
+  autoFocus,
+}: {
+  /** current game id */
+  value: string;
+  /** true when the «Другая» entry is active */
+  custom: boolean;
+  onPick: (id: string) => void;
+  id?: string;
+  autoFocus?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [active, setActive] = useState(0);
+  const btn = useRef<HTMLButtonElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const uid = useId();
+
+  const needle = q.trim().toLowerCase();
+  const items = useMemo(() => {
+    const games = GAMES.filter((g) => !needle || g.label.toLowerCase().includes(needle) || g.id.includes(needle));
+    return [...games.map((g) => ({ id: g.id, label: g.label })), ...(needle && !'другая'.includes(needle) && !'custom'.includes(needle) ? [] : [{ id: CUSTOM, label: 'Другая игра (ввести GameDig ID)…' }])];
+  }, [needle]);
+
+  const current = custom ? null : GAMES.find((g) => g.id === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const idx = Math.max(0, items.findIndex((i) => i.id === (custom ? CUSTOM : value)));
+    setActive(idx);
+    search.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => { setActive(0); }, [needle]);
+
+  useEffect(() => {
+    if (!open) return;
+    list.current?.querySelector<HTMLElement>(`[data-i="${active}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [active, open]);
+
+  const close = (refocus = true) => {
+    setOpen(false);
+    setQ('');
+    if (refocus) btn.current?.focus();
+  };
+  const pick = (gid: string) => {
+    onPick(gid);
+    close();
+  };
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(items.length - 1, a + 1)); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); return; }
+    if (e.key === 'Home' && !q) { e.preventDefault(); setActive(0); return; }
+    if (e.key === 'End' && !q) { e.preventDefault(); setActive(items.length - 1); return; }
+    if (e.key === 'Enter') { e.preventDefault(); const it = items[active]; if (it) pick(it.id); }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        ref={btn}
+        id={id}
+        type="button"
+        className="input flex items-center gap-3 text-left"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={`${uid}-list`}
+        autoFocus={autoFocus}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => { if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !open) { e.preventDefault(); setOpen(true); } }}
+      >
+        {current ? <GameAvatar game={current.id} size={30} /> : <span aria-hidden className="grid h-[30px] w-[30px] place-items-center rounded-[9px] bg-soft text-sm font-black text-mute">?</span>}
+        <span className="min-w-0 flex-1 truncate font-bold">{current ? current.label : 'Другая игра (GameDig ID)'}</span>
+        <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-mute transition ${open ? 'rotate-180' : ''}`}><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+
+      {open && (
+        <div className="mt-2 overflow-hidden rounded-2xl border-2 border-line bg-card shadow-soft" onKeyDown={onKey}>
+          <div className="border-b border-line p-2">
+            <input
+              ref={search}
+              className="input !rounded-xl !py-2"
+              type="search"
+              placeholder="Найти игру…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              role="combobox"
+              aria-expanded
+              aria-controls={`${uid}-list`}
+              aria-activedescendant={items[active] ? `${uid}-opt-${active}` : undefined}
+              aria-label="Поиск игры"
+            />
+          </div>
+          <ul ref={list} id={`${uid}-list`} role="listbox" aria-label="Игры" className="max-h-64 overflow-y-auto p-1.5">
+            {items.length === 0 && <li className="px-3 py-3 text-sm font-semibold text-mute">Ничего не найдено</li>}
+            {items.map((it, i) => {
+              const selected = it.id === (custom ? CUSTOM : value);
+              return (
+                <li
+                  key={it.id}
+                  id={`${uid}-opt-${i}`}
+                  data-i={i}
+                  role="option"
+                  aria-selected={selected}
+                  onMouseEnter={() => setActive(i)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pick(it.id)}
+                  className={`flex cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2 font-bold transition-colors max-sm:min-h-[48px] ${i === active ? 'bg-soft' : ''} ${selected ? 'text-link' : ''}`}
+                >
+                  {it.id === CUSTOM ? (
+                    <span aria-hidden className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] bg-soft text-lg font-black text-mute">+</span>
+                  ) : (
+                    <GameAvatar game={it.id} size={34} />
+                  )}
+                  <span className="min-w-0 flex-1 truncate">{it.label}</span>
+                  {selected && <span aria-hidden className="text-link">✓</span>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -14736,13 +15001,13 @@ const SETTINGS_NAV = 'nav[aria-label="Разделы настроек"]';
 const STEPS: Step[] = [
   {
     title: 'Добавьте игровой сервер',
-    text: 'Добро пожаловать! Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
+    text: 'Добро пожаловать! Прогресс всегда виден в «Админка → Начало работы». Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
     route: '#/admin/servers',
     anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="#/admin/servers"]`],
   },
   {
     title: 'Подключите Discord-бота',
-    text: 'В «Настройки → Discord-бот» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
+    text: 'В «Настройки → Бот и Discord» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
     route: '#/admin/settings/bot',
     anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="#/admin/settings/bot"]`],
   },
@@ -17178,6 +17443,23 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 .chip-filter:hover { color: rgb(var(--ink)); }
 .chip-filter.on { color: rgb(var(--ink)); background: rgb(var(--seg-on)); box-shadow: 0 0 0 1px rgb(var(--line)), 0 2px 6px rgba(40, 50, 110, 0.1); }
 @media (max-width: 639px) { .chip-filter { min-height: 44px; } }
+
+/* determinate update progress: the fill width is --p, no sliding */
+.update-progress.det > i { animation: none; transform: none; width: var(--p, 0%); min-width: 6px; transition: width .6s cubic-bezier(.2, .8, .2, 1); }
+@media (prefers-reduced-motion: reduce) { .update-progress.det > i { transition: none; } }
+
+/* hint strip under page titles */
+.hint-strip { display: flex; align-items: flex-start; gap: 10px; border-radius: 16px; padding: 10px 14px; font-size: 14px; font-weight: 600; line-height: 1.5; color: rgb(var(--ink)); background: rgb(var(--brand) / .07); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .15); }
+.hint-ico { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 9999px; font-size: 12px; font-weight: 900; font-style: italic; font-family: Georgia, serif; color: rgb(var(--link)); background: rgb(var(--brand) / .16); }
+.hint-more { display: inline; font-weight: 800; color: rgb(var(--link)); border-radius: 6px; text-decoration: underline; text-underline-offset: 3px; padding: 0 2px; }
+.hint-more:hover { text-decoration-thickness: 2px; }
+.hint-help { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgb(var(--brand) / .18); color: rgb(var(--mute)); }
+.hint-help p + p { margin-top: 6px; }
+.hint-help ol, .hint-help ul { margin: 4px 0 0 1.1rem; list-style: decimal; }
+.hint-help ul { list-style: disc; }
+
+/* admin sidebar groups */
+.adm-group-title { padding: 10px 14px 4px; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: rgb(var(--mute)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -17207,53 +17489,24 @@ if ('serviceWorker' in navigator) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type CertInfo, type Server, type ServerInput } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconRefresh, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
-import AlertsPage, { IconBell } from './Alerts';
+import { Empty, ErrorLine, GameAvatar, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
+import AdminStart, { AdminHome } from './AdminStart';
+import AlertsPage from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import JournalPage from './Journal';
 import SettingsPage, { UsersTab } from './Settings';
+
+export { ADMIN_SECTIONS };
 import SystemPage from './System';
-
-const IconUsers = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-    <circle cx="9" cy="7" r="4" />
-    <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-  </svg>
-);
-
-const IconJournal = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-  </svg>
-);
-const IconSystem = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-  </svg>
-);
-
-interface Section { id: string; label: string; icon: () => ReactNode }
-
-export const ADMIN_SECTIONS: Section[] = [
-  { id: 'servers', label: 'Серверы', icon: IconServers },
-  { id: 'discord', label: 'Discord', icon: IconDiscord },
-  { id: 'news', label: 'Новости', icon: IconNews },
-  { id: 'alerts', label: 'Оповещения', icon: IconBell },
-  { id: 'cards', label: 'Карточки', icon: IconCards },
-  { id: 'users', label: 'Пользователи', icon: IconUsers },
-  { id: 'journal', label: 'Журнал', icon: IconJournal },
-  { id: 'system', label: 'Система', icon: IconSystem },
-  { id: 'settings', label: 'Настройки', icon: IconSettings },
-];
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
@@ -17261,39 +17514,63 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const [section, ...rest] = sub.split('/');
   // a moderator sees only the news section; everything else is for administrators
   const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
-  const current = sections.some((s) => s.id === section) ? section : sections[0].id;
+  const known = sections.some((s) => s.id === section);
+  // bare #/admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
+  const home = isAdmin && !known;
+  const current = known ? section : sections[0].id;
   // the sub-path belongs to the section that was asked for, not to the fallback
   const tail = current === section ? rest.join('/') : '';
+  const link = (s: AdminSection) => (
+    <a
+      key={s.id}
+      href={`#/admin/${s.id}`}
+      aria-current={current === s.id ? 'page' : undefined}
+      className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+    >
+      {s.icon()}
+      {s.label}
+      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
+    </a>
+  );
+  const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[13.5rem_minmax(0,1fr)]">
-      <nav className="tile flex gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:flex-col md:self-start md:overflow-visible md:p-2.5" aria-label="Разделы админки">
-        <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
-        {sections.map((s) => (
-          <a
-            key={s.id}
-            href={`#/admin/${s.id}`}
-            aria-current={current === s.id ? 'page' : undefined}
-            className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
-          >
-            {s.icon()}
-            {s.label}
-            {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
-          </a>
-        ))}
+    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
+      <nav className="tile flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
+        {isAdmin ? (
+          <>
+            {link(START_SECTION)}
+            {ADMIN_GROUPS.map((g, gi) => (
+              <div key={g.title} className="contents md:block">
+                {divider}
+                <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
+                <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
+                  {g.sections.map(link)}
+                </div>
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
+            {sections.map(link)}
+          </>
+        )}
       </nav>
       <div className="min-w-0 space-y-5">
         {isAdmin && updateAvailable && current !== 'settings' && <UpdateBanner />}
         {isAdmin && <CertWarning />}
-        {current === 'servers' && <ServersManage />}
-        {current === 'discord' && <DiscordPage />}
-        {current === 'news' && <NewsPage sub={tail} />}
-        {current === 'alerts' && <AlertsPage />}
-        {current === 'cards' && <CardsPage />}
-        {current === 'users' && <UsersTab />}
-        {current === 'journal' && <JournalPage />}
-        {current === 'system' && <SystemPage />}
-        {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
+        {home && <AdminHome />}
+        {!home && current === 'start' && <AdminStart />}
+        {!home && current === 'servers' && <ServersManage sub={tail} />}
+        {!home && current === 'discord' && <DiscordPage sub={tail} />}
+        {!home && current === 'news' && <NewsPage sub={tail} />}
+        {!home && current === 'alerts' && <AlertsPage />}
+        {!home && current === 'cards' && <CardsPage />}
+        {!home && current === 'users' && <UsersTab />}
+        {!home && current === 'journal' && <JournalPage />}
+        {!home && current === 'system' && <SystemPage />}
+        {!home && current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
     </div>
   );
@@ -17357,7 +17634,7 @@ function CertWarning() {
 }
 
 /** Add, edit, delete and re-query servers. */
-function ServersManage() {
+function ServersManage({ sub }: { sub: string }) {
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
@@ -17370,6 +17647,20 @@ function ServersManage() {
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
+
+  // #/admin/servers/new opens the «add» form (links from the start page and Ctrl+K)
+  const openedFor = useRef('');
+  useEffect(() => {
+    if (sub === 'new' && openedFor.current !== sub) {
+      openedFor.current = sub;
+      setEditing({ data: emptyServer });
+    }
+    if (sub !== 'new') openedFor.current = '';
+  }, [sub]);
+  const closeForm = () => {
+    setEditing(null);
+    if (sub === 'new') window.location.hash = '#/admin/servers';
+  };
 
   const remove = async (s: Server) => {
     if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
@@ -17385,8 +17676,14 @@ function ServersManage() {
 
   return (
     <div className="space-y-5">
-      <PageHead title="Серверы" subtitle="Добавление и настройка игровых серверов" icon={<IconServers />}>
-        <button className="btn" data-magnetic onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+      <PageHead
+        title="Серверы"
+        subtitle="Добавление и настройка игровых серверов"
+        icon={<IconServers />}
+        hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
+        help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
+      >
+        <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -17416,15 +17713,16 @@ function ServersManage() {
             <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
-            <div className="ml-auto flex items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
+            <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
+              <a className="btn btn-soft btn-sm" href={`#/admin/discord/new/${s.id}`}>Привязать к Discord</a>
               <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
                 <IconRefresh spinning={busyId === s.id} />
               </button>
               <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                <IconEdit />
               </button>
               <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></svg>
+                <IconTrash />
               </button>
             </div>
           </div>
@@ -17437,8 +17735,8 @@ function ServersManage() {
           id={editing.id}
           coverUrl={editing.cover}
           onCoverChanged={() => void load()}
-          onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); toast('Сервер сохранён'); void load(); }}
+          onClose={closeForm}
+          onSaved={() => { closeForm(); toast('Сервер сохранён'); void load(); }}
         />
       )}
     </div>
@@ -17446,12 +17744,330 @@ function ServersManage() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/AdminStart.tsx" << '__COREGSM_EOF__'
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { api, type BotStatus, type SettingsInfo } from '../api';
+import { useAuth } from '../auth';
+import { PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
+import { ADMIN_GROUPS, START_SECTION } from './adminNav';
+import { downloadFile } from './Backups';
+
+type StepId = 'server' | 'bot' | 'channel' | 'news' | 'brand';
+type StepState = 'done' | 'todo' | 'unknown';
+
+interface StepView {
+  id: StepId;
+  short: string;
+  title: string;
+  why: string;
+  href: string;
+  cta: string;
+  state: StepState;
+  note?: string;
+}
+
+const skipKey = (u: string) => `coregsm_start_skipped_${u}`;
+const readSkipped = (u: string): StepId[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(skipKey(u)) ?? '[]') as unknown;
+    return Array.isArray(v) ? (v.filter((x) => typeof x === 'string') as StepId[]) : [];
+  } catch {
+    return [];
+  }
+};
+const writeSkipped = (u: string, list: StepId[]) => {
+  try { localStorage.setItem(skipKey(u), JSON.stringify(list)); } catch { /* not remembered */ }
+};
+
+interface Raw {
+  servers: number | null;
+  settings: SettingsInfo | null;
+  bot: BotStatus | null;
+  bindings: number | null;
+  news: number | null;
+}
+
+const len = (v: unknown) => (Array.isArray(v) ? v.length : null);
+
+/** Reads the real state of the panel and turns it into the checklist. A failing request only marks its step «неизвестно». */
+function useStartSteps() {
+  const { me, access } = useAuth();
+  const username = me?.username ?? '';
+  const [raw, setRaw] = useState<Raw | null>(null);
+  const [skipped, setSkipped] = useState<StepId[]>(() => readSkipped(username));
+
+  usePoll(async () => {
+    const [s, st, b, bi, n] = await Promise.allSettled([
+      api<unknown[]>('/servers'),
+      api<SettingsInfo>('/settings'),
+      api<BotStatus>('/bot/status'),
+      api<unknown[]>('/bindings'),
+      api<unknown[]>('/news'),
+    ]);
+    setRaw({
+      servers: s.status === 'fulfilled' ? len(s.value) : null,
+      settings: st.status === 'fulfilled' ? st.value : null,
+      bot: b.status === 'fulfilled' ? b.value : null,
+      bindings: bi.status === 'fulfilled' ? len(bi.value) : null,
+      news: n.status === 'fulfilled' ? len(n.value) : null,
+    });
+  }, 15_000);
+
+  const brand = access.brand;
+  const brandDone = brand.name.trim().toLowerCase() !== 'coregsm' || brand.color.toLowerCase() !== '#4f46e5' || brand.hasLogo || !!brand.color2 || !!brand.preset;
+
+  const steps = useMemo<StepView[] | null>(() => {
+    if (!raw) return null;
+    const st = (n: number | null): StepState => (n === null ? 'unknown' : n > 0 ? 'done' : 'todo');
+    let bot: StepState = 'unknown';
+    let botNote: string | undefined;
+    if (raw.settings) {
+      if (!raw.settings.discordTokenSet) bot = 'todo';
+      else if (!raw.bot) bot = 'done';
+      else if (raw.bot.state === 'online') bot = 'done';
+      else {
+        bot = 'todo';
+        botNote = raw.bot.state === 'error' && raw.bot.error ? `Токен сохранён, но бот не подключился: ${raw.bot.error}` : 'Токен сохранён, бот ещё подключается. Если так долго, проверьте токен.';
+      }
+    }
+    return [
+      { id: 'server', short: 'сервер', title: 'Добавьте игровой сервер', why: 'Без сервера панели нечего показывать: онлайн, карту и пинг она берёт у вашего игрового сервера.', href: '#/admin/servers/new', cta: 'Добавить сервер', state: st(raw.servers) },
+      { id: 'bot', short: 'бот', title: 'Подключите Discord-бота', why: 'Бот публикует состояние серверов и новости в Discord. Ему нужен токен из Discord Developer Portal.', href: '#/admin/settings/bot', cta: 'Указать токен', state: bot, note: botNote },
+      { id: 'channel', short: 'канал', title: 'Привяжите канал для сообщений', why: 'Привязка говорит боту, в какой канал писать. Он отправит одно сообщение и будет обновлять его само.', href: '#/admin/discord', cta: 'Привязать канал', state: st(raw.bindings) },
+      { id: 'news', short: 'новость', title: 'Напишите первую новость', why: 'Новости видят и игроки в панели, и участники в Discord: так удобно сообщать о вайпах и работах.', href: '#/admin/news/new', cta: 'Написать новость', state: st(raw.news) },
+      { id: 'brand', short: 'оформление', title: 'Настройте оформление', why: 'Название, цвет и логотип делают панель вашей: их видят посетители и участники Discord.', href: '#/admin/settings/brand', cta: 'Настроить', state: brandDone ? 'done' : 'todo' },
+    ];
+  }, [raw, brandDone]);
+
+  const skip = (id: StepId) => setSkipped((cur) => { const n = cur.includes(id) ? cur : [...cur, id]; writeSkipped(username, n); return n; });
+  const unskip = (id: StepId) => setSkipped((cur) => { const n = cur.filter((x) => x !== id); writeSkipped(username, n); return n; });
+
+  const doneCount = steps ? steps.filter((s) => s.state === 'done').length : 0;
+  // «resolved»: finished or consciously skipped: the start page then stops being the default
+  const resolved = steps ? steps.every((s) => s.state === 'done' || skipped.includes(s.id)) : false;
+  return { loading: steps === null, steps: steps ?? [], skipped, skip, unskip, doneCount, total: 5, resolved };
+}
+
+/** `#/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
+export function AdminHome() {
+  const s = useStartSteps();
+  useEffect(() => {
+    if (s.loading) return;
+    const target = s.resolved ? '#/admin/servers' : '#/admin/start';
+    window.location.replace(`${window.location.pathname}${window.location.search}${target}`);
+  }, [s.loading, s.resolved]);
+  return <StartSkeleton />;
+}
+
+function StartSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
+      <div className="skeleton h-14 w-72 rounded-2xl" />
+      <div className="skeleton tile h-28" />
+      {[0, 1, 2].map((i) => <div key={i} className="skeleton tile h-24" />)}
+    </div>
+  );
+}
+
+const Check = ({ size = 22 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M5 12.5l4.5 4.5L19 7.5" />
+  </svg>
+);
+
+function Ring({ done, total }: { done: number; total: number }) {
+  const r = 30;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="relative grid h-[76px] w-[76px] shrink-0 place-items-center" aria-hidden>
+      <svg width="76" height="76" viewBox="0 0 76 76" className="-rotate-90">
+        <circle cx="38" cy="38" r={r} fill="none" stroke="rgb(var(--soft))" strokeWidth="8" />
+        <circle
+          cx="38" cy="38" r={r} fill="none" stroke="rgb(var(--brand))" strokeWidth="8" strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={c * (1 - done / total)}
+          style={{ transition: 'stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1)' }}
+          className="motion-reduce:!transition-none"
+        />
+      </svg>
+      <span className="absolute text-lg font-black tabular-nums">{done}/{total}</span>
+    </div>
+  );
+}
+
+export default function AdminStart() {
+  const { me } = useAuth();
+  const s = useStartSteps();
+  const [busy, setBusy] = useState(false);
+
+  const firstTodo = s.steps.find((x) => x.state !== 'done' && !s.skipped.includes(x.id));
+  const allDone = !s.loading && s.doneCount === s.total;
+  const left = s.steps.filter((x) => x.state !== 'done');
+
+  const backup = async () => {
+    setBusy(true);
+    try {
+      await downloadFile('/backup', 'coregsm-backup.tar.gz');
+      toast('Копия скачана');
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const quick: { key: string; label: string; text: string; icon: ReactNode; href?: string; onClick?: () => void }[] = [
+    { key: 'server', label: 'Добавить сервер', text: 'Игра, адрес и порт', icon: <IconServers />, href: '#/admin/servers/new' },
+    { key: 'news', label: 'Написать новость', text: 'С шаблоном и предпросмотром', icon: <IconNews />, href: '#/admin/news/new' },
+    { key: 'backup', label: busy ? 'Готовлю копию…' : 'Скачать копию', text: 'Все данные одним файлом', icon: <IconDownload />, onClick: () => void backup() },
+    { key: 'system', label: 'Проверить систему', text: 'Диск, бот, сертификат', icon: <IconSystem />, href: '#/admin/system' },
+    { key: 'player', label: 'Открыть панель как игрок', text: 'Так её видят посетители', icon: <IconStart />, href: '#/servers' },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconStart />}
+        title="Начало работы"
+        subtitle={me ? `Здравствуйте, ${me.username}! Пять шагов, и панель готова` : 'Пять шагов, и панель готова'}
+        hint="Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели."
+        help={<p>Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.</p>}
+      />
+
+      {s.loading ? (
+        <StartSkeleton />
+      ) : (
+        <>
+          {allDone ? (
+            <div className="tile fade-in flex flex-wrap items-center gap-4 p-5" role="status">
+              <span className="pop grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-okbg text-ok"><Check size={30} /></span>
+              <div className="min-w-0 flex-1 basis-60">
+                <h2 className="text-xl font-extrabold leading-tight">Завершено: всё настроено</h2>
+                <p className="font-semibold text-mute">Панель работает сама: бот обновляет сообщения, оповещения следят за серверами. Вернуться сюда можно из меню слева.</p>
+              </div>
+              <a className="btn" href="#/admin/servers">Перейти к серверам</a>
+            </div>
+          ) : (
+            <div className="tile flex flex-wrap items-center gap-4 p-5">
+              <Ring done={s.doneCount} total={s.total} />
+              <div className="min-w-0 flex-1 basis-60">
+                <h2 className="text-xl font-extrabold leading-tight">{s.doneCount} из {s.total} шагов выполнено</h2>
+                <p className="font-semibold text-mute">
+                  {left.length > 0 ? `Осталось: ${left.map((x) => x.short).join(', ')}.` : ''}
+                </p>
+              </div>
+              {firstTodo && <a className="btn" href={firstTodo.href}>Продолжить: {firstTodo.cta.toLowerCase()}</a>}
+            </div>
+          )}
+
+          <ol className="space-y-3" aria-label="Шаги настройки">
+            {s.steps.map((st, i) => {
+              const skipped = s.skipped.includes(st.id) && st.state !== 'done';
+              const current = firstTodo?.id === st.id;
+              return (
+                <li key={st.id} className={`tile flex flex-wrap items-center gap-x-4 gap-y-3 p-4 sm:p-5 ${current ? 'ring-2 ring-brand/50' : ''}`}>
+                  <span
+                    className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-xl font-black ${
+                      st.state === 'done' ? 'bg-okbg text-ok' : st.state === 'unknown' || skipped ? 'bg-soft text-mute' : 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop'
+                    }`}
+                    aria-hidden
+                  >
+                    {st.state === 'done' ? <Check /> : st.state === 'unknown' ? '?' : i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1 basis-60">
+                    <h3 className="flex flex-wrap items-center gap-2 font-extrabold leading-tight">
+                      <span>{st.title}</span>
+                      {st.state === 'done' && <span className="pill pill-ok">ГОТОВО</span>}
+                      {st.state === 'unknown' && <span className="pill pill-mute">НЕ УДАЛОСЬ ПРОВЕРИТЬ</span>}
+                      {skipped && <span className="pill pill-mute">ПРОПУЩЕНО</span>}
+                    </h3>
+                    <p className="text-sm font-semibold text-mute">{st.why}</p>
+                    {st.note && st.state !== 'done' && <p className="mt-1 text-sm font-bold text-warn">{st.note}</p>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
+                    <a className={`btn ${current || st.state === 'unknown' ? '' : 'btn-soft'} ${st.state === 'done' ? 'btn-sm' : ''}`} href={st.href}>
+                      {st.state === 'done' ? 'Открыть' : st.cta}
+                    </a>
+                    {st.state !== 'done' && !skipped && (
+                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px]" onClick={() => s.skip(st.id)}>
+                        Пропустить
+                      </button>
+                    )}
+                    {skipped && (
+                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-link hover:underline max-sm:min-h-[44px]" onClick={() => s.unskip(st.id)}>
+                        Вернуть шаг
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </>
+      )}
+
+      <section aria-labelledby="start-quick">
+        <h2 id="start-quick" className="mb-3 text-lg font-black">Быстрые действия</h2>
+        <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3">
+          {quick.map((q) => {
+            const inner = (
+              <>
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-soft text-link">{q.icon}</span>
+                <span className="min-w-0">
+                  <span className="block font-extrabold leading-tight">{q.label}</span>
+                  <span className="block text-sm font-semibold text-mute">{q.text}</span>
+                </span>
+              </>
+            );
+            const cls = 'tile tile-hover flex items-center gap-3 p-3.5 text-left';
+            return q.href ? (
+              <a key={q.key} className={cls} href={q.href}>{inner}</a>
+            ) : (
+              <button key={q.key} type="button" className={cls} onClick={q.onClick} disabled={busy}>{inner}</button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section aria-labelledby="start-map" className="tile p-5 sm:p-6">
+        <h2 id="start-map" className="text-lg font-black">Где что находится</h2>
+        <p className="mb-4 font-semibold text-mute">Меню слева разделено на четыре группы. Вот зачем нужен каждый раздел.</p>
+        <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
+          {ADMIN_GROUPS.map((g, gi) => (
+            <div key={g.title}>
+              <div className="adm-group-title !px-0">{g.title}</div>
+              <ul className="space-y-1">
+                {gi === 0 && <MapRow id={START_SECTION.id} label={START_SECTION.label} desc={START_SECTION.desc} icon={START_SECTION.icon()} />}
+                {g.sections.map((sec) => <MapRow key={sec.id} id={sec.id} label={sec.label} desc={sec.desc} icon={sec.icon()} />)}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MapRow({ id, label, desc, icon }: { id: string; label: string; desc: string; icon: ReactNode }) {
+  return (
+    <li>
+      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-2xl px-2 py-2 transition hover:bg-soft">
+        <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-soft text-link">{icon}</span>
+        <span className="min-w-0">
+          <span className="block font-extrabold leading-tight">{label}</span>
+          <span className="block text-sm font-semibold text-mute">{desc}</span>
+        </span>
+      </a>
+    </li>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Alerts.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
-import { api } from '../api';
+import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
-import { ErrorLine, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { ErrorLine, GoLink, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -17481,8 +18097,12 @@ export default function AlertsPage() {
   const [info, setInfo] = useState<AlertsInfo | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [tokenSet, setTokenSet] = useState<boolean | null>(null);
 
-  const load = () => api<AlertsInfo>('/alerts').then((a) => { setInfo(a); setError(''); }).catch((e: Error) => setError(e.message));
+  const load = () => {
+    api<SettingsInfo>('/settings').then((s) => setTokenSet(s.discordTokenSet)).catch(() => undefined);
+    return api<AlertsInfo>('/alerts').then((a) => { setInfo(a); setError(''); }).catch((e: Error) => setError(e.message));
+  };
   usePoll(load, 10_000);
 
   const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention'>>, done?: string) => {
@@ -17496,8 +18116,21 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconBell />} title="Оповещения" subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся" />
+      <PageHead
+        icon={<IconBell />}
+        title="Оповещения"
+        subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся"
+        hint="Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся."
+        help={<p>Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.</p>}
+      >
+        <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>Отправить тестовое сообщение</button>
+      </PageHead>
       <ErrorLine text={error} />
+      {tokenSet === false && (
+        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
+          Оповещения не дойдут: у бота нет токена, он не подключён к Discord.
+        </Notice>
+      )}
 
       {info && (
         <div className="panel space-y-5 p-6">
@@ -17513,7 +18146,7 @@ export default function AlertsPage() {
             <span className="label">Канал для оповещений</span>
             <div className="flex flex-wrap items-center gap-3">
               <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : `Канал ${info.channelId}`) : 'не выбран'}</span>
-              <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)}>{info.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{info.channelId ? 'Изменить' : 'Выбрать канал'}</button>
             </div>
             {changing && (
               <div className="mt-3">
@@ -17541,9 +18174,6 @@ export default function AlertsPage() {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button className="btn btn-soft" onClick={() => void test()} disabled={!info.channelId}>Отправить тестовое сообщение</button>
-          </div>
         </div>
       )}
 
@@ -17581,7 +18211,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { Button, ErrorLine, Field, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -17589,7 +18219,7 @@ export const fmtSize = (n: number) =>
 const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
-async function downloadFile(path: string, fallbackName: string) {
+export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
   if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось получить копию');
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
@@ -17860,10 +18490,10 @@ export default function BackupsCard() {
                 </div>
                 <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? 'АВТО' : 'ВРУЧНУЮ'}</span>
                 {isEncrypted(b.name) && <span className="pill pill-warn">ЗАШИФРОВАНА</span>}
-                <div className="flex gap-2">
-                  <button className="btn btn-soft btn-sm" onClick={() => void download(b)} disabled={disabled}>Скачать</button>
-                  <button className="btn btn-soft btn-sm" onClick={() => void restoreStored(b)} disabled={disabled}>Восстановить</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => void remove(b)} disabled={disabled}>Удалить</button>
+                <div className="flex items-center gap-1.5" role="group" aria-label={`Действия: ${b.name}`}>
+                  <button type="button" className="row-act" title="Скачать" aria-label="Скачать" onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
+                  <button type="button" className="row-act" title="Восстановить из этой копии" aria-label="Восстановить из этой копии" onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
+                  <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
                 </div>
               </li>
             ))}
@@ -17920,8 +18550,14 @@ export default function CardsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconCards />} title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно.">
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconCards />}
+        title="Карточки"
+        subtitle="Картинки состояния серверов"
+        hint="Карточка — это картинка с онлайном сервера, которая обновляется сама. Ссылку на неё можно вставить на сайт или в чат."
+        help={<p>Ссылка открыта: картинку видят все, у кого она есть. Бот использует такие же карточки в сообщениях Discord, если выбран стиль «Картинка» (раздел «Discord»).</p>}
+      >
         <button className="btn btn-soft" onClick={refresh} aria-busy={spin || undefined}><IconRefresh spinning={spin} />Обновить</button>
       </PageHead>
       <ErrorLine text={error} />
@@ -17932,7 +18568,7 @@ export default function CardsPage() {
       )}
       {loaded && servers.length === 0 && (
         <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»: для каждого появится своя картинка.">
-          <a className="btn mt-3" href="#/admin/servers">Добавить сервер</a>
+          <a className="btn mt-3" href="#/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
       <div className="fade-in grid gap-5 xl:grid-cols-2">
@@ -17962,19 +18598,20 @@ export default function CardsPage() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Discord.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
 
 type Style = 'embed' | 'card' | 'both';
-interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean; style: Style }
+interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style }
 
-export default function DiscordPage() {
+/** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
+export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [servers, setServers] = useState<Server[]>([]);
   const [bindings, setBindings] = useState<Binding[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -17990,6 +18627,21 @@ export default function DiscordPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
+
+  // #/admin/discord/new[/<serverId>]: open the form once the servers are known
+  const openedFor = useRef('');
+  useEffect(() => {
+    if (!sub.startsWith('new')) { openedFor.current = ''; return; }
+    if (!loaded || openedFor.current === sub || servers.length === 0) return;
+    openedFor.current = sub;
+    const want = Number(sub.split('/')[1]);
+    const target = servers.find((x) => x.id === want) ?? servers[0];
+    setDraft({ serverId: target.id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' });
+  }, [sub, loaded, servers]);
+  const closeDraft = () => {
+    setDraft(null);
+    if (sub.startsWith('new')) window.location.hash = '#/admin/discord';
+  };
 
   const server = (id: number) => servers.find((s) => s.id === id);
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
@@ -18015,7 +18667,7 @@ export default function DiscordPage() {
   const pick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const toggle = async (b: Binding) => {
-    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
     load();
   };
 
@@ -18027,18 +18679,33 @@ export default function DiscordPage() {
   const allDone = steps.every((s) => s.done);
 
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconDiscord />} title="Discord" subtitle="Куда бот публикует состояние серверов">
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconDiscord />}
+        title="Discord"
+        subtitle="Куда бот публикует состояние серверов"
+        hint="Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов."
+        help={<p>Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.</p>}
+      >
         <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
+      {loaded && settings && !settings.discordTokenSet && (
+        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
+          Бот не подключён: без токена он не сможет писать в Discord.
+        </Notice>
+      )}
+      {loaded && servers.length === 0 && (
+        <Notice tone="info" action={<GoLink href="#/admin/servers/new">Добавить сервер</GoLink>}>
+          Сначала добавьте сервер: привязывать пока нечего.
+        </Notice>
+      )}
 
       <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-3">
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
-        {!settings?.discordTokenSet && <a href="#/admin/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
         {settings?.discordTokenSet && bot?.state === 'online' && typeof bot.guildCount === 'number' && (
           <span className="text-sm font-bold text-mute">
             Серверов Discord: {bot.guildCount}
@@ -18069,7 +18736,7 @@ export default function DiscordPage() {
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
-            : <a className="btn mt-3" href="#/admin/servers">Сначала добавьте сервер</a>}
+            : <a className="btn mt-3" href="#/admin/servers/new">Сначала добавьте сервер</a>}
         </Empty>
       )}
 
@@ -18108,7 +18775,23 @@ export default function DiscordPage() {
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
 
+              {(b.serverIds ?? []).length > 1 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">
+                  <span className="flex -space-x-2">
+                    {(b.serverIds ?? []).slice(0, 5).map((id) => {
+                      const x = server(id);
+                      return x ? <span key={id} className="rounded-xl ring-2 ring-[rgb(var(--soft))]" title={x.name}><GameAvatar game={x.game} size={28} /></span> : null;
+                    })}
+                  </span>
+                  <span className="min-w-0 text-sm font-extrabold text-mute">
+                    {(b.serverIds ?? []).length} {plural((b.serverIds ?? []).length, ['сервер', 'сервера', 'серверов'])} в одном сообщении
+                  </span>
+                </div>
+              )}
               {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
+              {b.style !== 'card' && (b.serverIds ?? []).length > 1 && (
+                <p className="-mt-1 text-sm font-semibold text-mute">В предпросмотре показан первый сервер, остальные идут следом в том же сообщении.</p>
+              )}
               {b.style !== 'embed' && (
                 <img
                   src={`/api/card/${b.serverId}.png?v=${s?.updatedAt ?? 0}`}
@@ -18123,22 +18806,41 @@ export default function DiscordPage() {
                 <span>Каждые {b.intervalSec} с</span>
                 <span>Обновлено: {ago(b.lastUpdate)}</span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button className="btn btn-soft btn-sm" onClick={() => toggle(b)}>{b.enabled ? 'Пауза' : 'Включить'}</button>
-                <button className="btn btn-soft btn-sm" onClick={() => setDraft({ id: b.id, serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>Изменить</button>
-                <button className="btn btn-danger btn-sm" onClick={() => remove(b)}>Удалить</button>
+              <div className="flex items-center justify-end gap-1.5" role="group" aria-label="Действия с привязкой">
+                <button type="button" className="row-act" title={b.enabled ? 'Поставить на паузу' : 'Включить'} aria-label={b.enabled ? 'Поставить на паузу' : 'Включить'} onClick={() => void toggle(b)}>
+                  {b.enabled ? <IconPause /> : <IconPlay />}
+                </button>
+                <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>
+                  <IconEdit />
+                </button>
+                <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(b)}>
+                  <IconTrash />
+                </button>
               </div>
             </div>
           );
         })}
       </div>
 
-      {draft && <BindingForm servers={servers} initial={draft} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); toast('Привязка сохранена'); load(); }} />}
+      {draft && (
+        <BindingForm
+          servers={servers}
+          initial={draft}
+          onClose={closeDraft}
+          onSaved={(url) => {
+            const first = bindings.length === 0 && !draft.id;
+            closeDraft();
+            if (first && url) toast('Привязка сохранена. Бот отправит сообщение в течение минуты', 'ok', undefined, { label: 'Открыть канал в Discord', href: url });
+            else toast('Привязка сохранена');
+            void load();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]; initial: Draft; onClose: () => void; onSaved: () => void }) {
+function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]; initial: Draft; onClose: () => void; onSaved: (channelUrl?: string) => void }) {
   const [f, setF] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -18167,6 +18869,8 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
   useEffect(() => { void loadChannels(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = async () => { setRefreshing(true); await loadChannels(); setRefreshing(false); };
 
+  const extras = (f.extraServerIds ?? []).filter((x) => x !== f.serverId && servers.some((s) => s.id === x));
+  const others = servers.filter((s) => s.id !== f.serverId);
   const hasList = !!guilds && guilds.length > 0;
   const guild = guilds?.find((g) => g.id === guildId);
 
@@ -18175,10 +18879,13 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
     if (!/^\d{15,25}$/.test(f.channelId)) return setError('Выберите канал из списка или введите его ID');
     setBusy(true);
     setError('');
-    const { id, ...body } = f;
+    const { id, ...rest } = f;
+    const body = { ...rest, extraServerIds: extras };
     try {
       await api(id ? `/bindings/${id}` : '/bindings', id ? 'PUT' : 'POST', body);
-      onSaved();
+      // a link to the channel is known only when it was picked from the bot's own list (then the Discord server id is known)
+      const picked = !manual && guild?.channels.some((c) => c.id === f.channelId);
+      onSaved(picked && guild ? `https://discord.com/channels/${guild.id}/${f.channelId}` : undefined);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -18189,10 +18896,35 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
     <Modal title={f.id ? 'Изменить привязку' : 'Новая привязка'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
         <Field label="Сервер">
-          <select id="bind-server" className="input" value={f.serverId} onChange={(e) => setF({ ...f, serverId: Number(e.target.value) })}>
+          <select id="bind-server" className="input" value={f.serverId} onChange={(e) => setF({ ...f, serverId: Number(e.target.value), extraServerIds: extras.filter((x) => x !== Number(e.target.value)) })}>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
+        {others.length > 0 && (
+          <fieldset className="space-y-2">
+            <legend className="label">Показать в этом же сообщении ещё серверы</legend>
+            <div className="max-h-48 space-y-1 overflow-y-auto rounded-2xl bg-soft p-2">
+              {others.map((s) => {
+                const on = extras.includes(s.id);
+                const full = !on && extras.length >= 9;
+                return (
+                  <label key={s.id} className={`flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-card ${full ? 'opacity-50' : ''}`}>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 shrink-0 accent-brand"
+                      checked={on}
+                      disabled={full}
+                      onChange={(e) => setF({ ...f, extraServerIds: e.target.checked ? [...extras, s.id] : extras.filter((x) => x !== s.id) })}
+                    />
+                    <GameAvatar game={s.game} size={28} />
+                    <span className="min-w-0 flex-1 truncate font-bold">{s.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="text-sm font-semibold text-mute">Все выбранные серверы будут в одном сообщении. Максимум 10.</p>
+          </fieldset>
+        )}
 
         {hasList && !manual ? (
           <>
@@ -18365,7 +19097,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
-import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, usePoll } from '../ui';
+import { Empty, ErrorLine, IconJournal, PageHead, fmtDateTime, usePoll } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -18381,9 +19113,15 @@ export default function JournalPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconNews />} title="Журнал" subtitle="Кто и что менял в панели" />
+      <PageHead
+        icon={<IconJournal />}
+        title="Журнал"
+        subtitle="Кто и что менял в панели"
+        hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
+        help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
+      />
       <ErrorLine text={error} />
-      <input className="input max-w-sm" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
+      <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
       {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
       {shown.length > 0 && (
         <ul className="panel divide-y divide-line overflow-hidden">
@@ -18570,7 +19308,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
+import { Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, fmtDateTime, toast, usePoll } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -18639,9 +19377,15 @@ function NewsList() {
   };
 
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
-        <a className="btn" href="#/admin/news/new" data-magnetic>+ Написать новость</a>
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconNews />}
+        title="Новости"
+        subtitle="Публикации от имени бота в Discord"
+        hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
+        help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
+      >
+        <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -18657,7 +19401,7 @@ function NewsList() {
             {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}` : `Канал ${settings.channelId}`) : 'не выбран'}
           </div>
         </div>
-        <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+        <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
         {changing && (
           <div className="w-full">
             <ChannelPicker id="news-default-channel" value={settings?.channelId ?? ''} onChange={(v) => void setChannel(v)} />
@@ -18696,8 +19440,10 @@ function NewsList() {
                 <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
-                <button className="btn btn-soft btn-sm" onClick={() => copy(n)}>Копия</button>
-                <button className="btn btn-danger btn-sm" onClick={() => remove(n)}>Удалить</button>
+                <span className="ml-auto flex items-center gap-1.5">
+                  <button type="button" className="row-act" title="Сделать копию" aria-label="Сделать копию" onClick={() => void copy(n)}><IconCopyPlus /></button>
+                  <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(n)}><IconTrash /></button>
+                </span>
               </div>
             </article>
           );
@@ -18722,7 +19468,7 @@ export function NewsFeed() {
   usePoll(() => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true)), 30_000);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
       <ErrorLine text={error} />
       {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
@@ -18749,7 +19495,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
 import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { Button, ErrorLine, Field, SplitButton, Switch, toast } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, PageHead, SplitButton, Switch, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 
 // ---------- draft <-> payload ----------
@@ -19117,10 +19863,13 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   return (
     <div className="space-y-5">
       <a href="#/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
-      <div>
-        <h1 className="text-3xl font-black tracking-tight">{id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}</h1>
-        {isSent && <p className="mt-0.5 font-semibold text-mute">Сообщение в Discord будет отредактировано, новое отправлено не будет.</p>}
-      </div>
+      <PageHead
+        icon={<IconNews />}
+        title={id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}
+        subtitle={isSent ? 'Сообщение в Discord будет отредактировано, новое отправлено не будет.' : undefined}
+        hint="Заполните канал и текст, проверьте предпросмотр справа и нажмите «Опубликовать сейчас». Можно запланировать или сохранить как черновик."
+        help={<p>Кнопки отправки находятся справа от формы (на телефоне под ней). Слова ДАТА и ВРЕМЯ в шаблонах замените на свои. Чтобы упоминание @everyone сработало, у бота должно быть соответствующее право в канале.</p>}
+      />
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
         <div className="space-y-5">
@@ -19128,6 +19877,12 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <Field label="Канал">
               {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
             </Field>
+            {!isSent && noChannel && (
+              <p className="-mt-1 text-sm font-semibold text-mute">
+                Канал не выбран. Задайте канал по умолчанию, и он будет подставляться в каждую новую новость:{' '}
+                <GoLink href="#/admin/news">Выбрать канал по умолчанию</GoLink>
+              </p>
+            )}
             {!isSent && (
               <label className="flex items-center gap-3 text-sm font-bold text-mute">
                 <Switch checked={makeDefault} onChange={setMakeDefault} /> Сделать каналом новостей по умолчанию
@@ -20277,6 +21032,7 @@ __COREGSM_EOF__
 import { useState, type FormEvent } from 'react';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
+import GamePicker from '../components/GamePicker';
 import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
 
@@ -20370,12 +21126,10 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   return (
     <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
-        <Field label="Игра">
-          <select id="srv-game" className="input" value={custom ? '__custom' : f.game} onChange={(e) => pickGame(e.target.value)} autoFocus>
-            {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
-            <option value="__custom">Другая (ввести GameDig ID)…</option>
-          </select>
-        </Field>
+        <div>
+          <span className="label">Игра</span>
+          <GamePicker id="srv-game" value={f.game} custom={custom} onPick={pickGame} autoFocus />
+        </div>
         {custom && (
           <Field label="GameDig ID">
             <input id="srv-gameid" className="input" value={f.game} onChange={(e) => change({ game: e.target.value.trim() })} placeholder="например, arma3" required pattern="[A-Za-z0-9_]+" />
@@ -20834,13 +21588,15 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { WHITE, brandVars, parseTriplet, triplet, type RGB } from '../colors';
 import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { useAuth } from '../auth';
 import { Switch as ToggleSwitch } from '../components/Switch';
-import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
+import { CopyButton, ErrorLine, Field, GoLink, IconKey, IconSettings, IconTrash, IconUsers, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
+import BackupsCard from './Backups';
+import { SETTINGS_TABS } from './adminNav';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -20925,7 +21681,7 @@ function BrandCard() {
   const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
 
   return (
-    <form onSubmit={save} className="panel space-y-5 p-6">
+    <form onSubmit={save} className="panel space-y-5 p-6" data-tour="brand">
       <div>
         <h2 className="text-lg font-black">Оформление</h2>
         <p className="font-semibold text-mute">Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord.</p>
@@ -20990,19 +21746,44 @@ function BrandCard() {
   );
 }
 
-const TABS = [
-  { id: 'bot', label: 'Discord-бот' },
-  { id: 'brand', label: 'Оформление' },
-  { id: 'security', label: 'Безопасность' },
-  { id: 'updates', label: 'Обновления' },
-] as const;
+// the ids stay the canonical hashes (#/admin/settings/bot|brand|security|updates); only the labels are friendlier
+const TABS = SETTINGS_TABS;
+
+const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
+  bot: {
+    hint: 'Здесь вы подключаете Discord-бота: он публикует сообщения и новости. Токен берётся в Discord Developer Portal.',
+    help: (
+      <>
+        <p>Как получить токен:</p>
+        <ol>
+          <li>Откройте discord.com/developers, раздел Applications, и создайте приложение.</li>
+          <li>На вкладке Bot нажмите Reset Token и скопируйте токен.</li>
+          <li>Вставьте его ниже и сохраните, затем нажмите «Пригласить бота на сервер».</li>
+        </ol>
+        <p>Прокси нужен только если Discord недоступен с вашего сервера.</p>
+      </>
+    ),
+  },
+  brand: {
+    hint: 'Название, цвет и логотип сообщества: их видят все посетители панели и участники в подвале сообщений Discord.',
+    help: <p>Готовые темы меняют цвета всей панели сразу. Пока вы не нажали «Сохранить», изменения видны только вам как предпросмотр.</p>,
+  },
+  security: {
+    hint: 'Пароль администратора и сведения о доступе: кто может входить в панель и регистрироваться.',
+    help: <p>Пароль нужно менять, если им делились. Переключатели регистрации и правила сообщества находятся в разделе «Пользователи».</p>,
+  },
+  updates: {
+    hint: 'Установка новых версий панели и резервные копии данных. Перед обновлением сохраняется копия базы, поэтому его можно откатить.',
+    help: <p>Копия содержит серверы, привязки, пользователей, новости и токен бота, поэтому храните файлы бережно. Автоматические копии включаются расписанием ниже.</p>,
+  },
+};
 
 export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
   const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, оформление, безопасность и обновления" />
-      <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
+    <div className="space-y-5">
+      <PageHead key={tab} icon={<IconSettings />} title="Настройки" subtitle="Бот, оформление, безопасность, обновления и копии" hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />
+      <nav className="flex w-full max-w-2xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
             key={t.id}
@@ -21021,12 +21802,26 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         {tab === 'security' && (
           <>
             <PasswordCard />
+            <div className="panel space-y-3 p-6">
+              <h2 className="text-lg font-black">Вход и доступ</h2>
+              <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
+              <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
+              <div className="flex flex-wrap gap-x-5 gap-y-1">
+                <GoLink href="#/admin/users">Пользователи и доступ</GoLink>
+                <GoLink href="#/profile">Мои сеансы в профиле</GoLink>
+              </div>
+            </div>
             <p className="font-semibold text-mute">
               Домен и порты задаются при установке и хранятся в <span className="font-mono text-sm text-ink">/app/.env</span>. Изменить их можно командой <span className="font-mono text-sm text-ink">sudo coregsm</span> на сервере (пункт «Домен и прокси»).
             </p>
           </>
         )}
-        {tab === 'updates' && <UpdateCard />}
+        {tab === 'updates' && (
+          <>
+            <UpdateCard />
+            <BackupsCard />
+          </>
+        )}
       </div>
     </div>
   );
@@ -21099,13 +21894,14 @@ function BotCard() {
   return (
     <form onSubmit={save} className="panel space-y-3.5 p-6">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-black">Discord-бот</h2>
+        <h2 className="text-lg font-black">Бот и вход через Discord</h2>
         <BotPill status={status} tokenSet={tokenSet} />
       </div>
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
       )}
 
+      <div data-tour="bot-token">
       <Field label="Токен бота">
         <input
           id="set-token"
@@ -21117,6 +21913,7 @@ function BotCard() {
           placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
         />
       </Field>
+      </div>
       {tokenSet && (
         <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
       )}
@@ -21249,26 +22046,40 @@ function UpdateCard() {
       .catch((e: Error) => setLogError(e.message));
   }, []);
 
+  // percent of the running job: only grows while the same job runs (never goes backwards between polls)
+  const [pct, setPct] = useState<number | null>(null);
+  const pctJob = useRef<number | null>(null);
+  const [finished, setFinished] = useState<'update' | 'rollback' | null>(null);
+  const running = !!waiting || info?.job?.state === 'running';
+
   usePoll(() => {
     api<UpdateInfo>('/update/status')
       .then((r) => {
         setOffline(false);
         setInfo(r);
-        if (!waiting || !r.job || r.job.time === waiting.baseTime) return;
-        if (r.job.state === 'done') {
+        const j = r.job;
+        const current = !!j && (j.state === 'running' || (!!waiting && j.time !== waiting.baseTime));
+        if (j && current && typeof j.progress === 'number') {
+          const p = Math.max(0, Math.min(100, Math.round(j.progress)));
+          if (pctJob.current !== j.time) { pctJob.current = j.time; setPct(p); } else setPct((c) => Math.max(c ?? 0, p));
+        }
+        if (!waiting || !j || j.time === waiting.baseTime) return;
+        if (j.state === 'done') {
+          setFinished(waiting.kind);
+          setPct(100);
           setWaiting(null);
           // new frontend files are served now: reload to pick them up
           setTimeout(() => window.location.reload(), 1500);
-        } else if (r.job.state === 'error') {
+        } else if (j.state === 'error') {
           setWaiting(null);
-          setError(r.job.message);
+          setError(j.message);
         }
       })
       .catch(() => {
         // the backend restarts during an update
-        if (waiting) setOffline(true);
+        if (waiting || info?.job?.state === 'running') setOffline(true);
       });
-  }, waiting ? 3_000 : 30_000);
+  }, running && !finished ? 2_000 : 30_000);
 
   const check = async () => {
     setBusy(true);
@@ -21289,6 +22100,8 @@ function UpdateCard() {
     try {
       const r = await api<UpdateInfo>('/update/apply', 'POST');
       setInfo(r);
+      setPct(null);
+      setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
     } catch (e) {
       setError((e as Error).message);
@@ -21310,6 +22123,8 @@ function UpdateCard() {
     try {
       const r = await api<UpdateInfo>('/update/rollback', 'POST');
       setInfo(r);
+      setPct(null);
+      setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
       setError((e as Error).message);
@@ -21318,14 +22133,13 @@ function UpdateCard() {
     }
   };
 
-  const running = !!waiting || info?.job?.state === 'running';
-  const rollingBack = waiting?.kind === 'rollback';
+  const rollingBack = (waiting?.kind ?? finished) === 'rollback';
   // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
   const [dismissed, setDismissed] = useState<number>(readDismissed);
   const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
-  const state: 'running' | 'available' | 'latest' | 'unknown' = running ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
+  const state: 'running' | 'available' | 'latest' | 'unknown' = running || finished ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
   const lastChecked = info?.checkedAt ?? null;
 
   return (
@@ -21365,7 +22179,7 @@ function UpdateCard() {
             </h2>
             <p className={`mt-1 font-semibold ${state === 'available' || state === 'running' ? 'text-white/90' : 'text-mute'}`}>
               {state === 'running'
-                ? (offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
+                ? (finished ? 'Готово! Панель обновится сама' : offline ? 'Панель перезапускается…' : info?.job?.state === 'running' && info.job.message ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
                 : state === 'available'
                   ? 'Новая сборка уже в репозитории. Данные и настройки сохранятся, панель будет недоступна 1-3 минуты.'
                   : state === 'latest'
@@ -21387,7 +22201,26 @@ function UpdateCard() {
           </div>
         </div>
 
-        {state === 'running' && <div className="update-progress relative mt-5" aria-hidden><i /></div>}
+        {state === 'running' && (
+          <div className="relative mt-5 flex items-center gap-3">
+            <div
+              className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
+              role="progressbar"
+              aria-label={rollingBack ? 'Ход отката' : 'Ход обновления'}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct ?? undefined}
+            >
+              <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
+            </div>
+            {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
+            {finished && (
+              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
           {state === 'available' && (
@@ -21522,7 +22355,17 @@ export function UsersTab() {
   const pendingUsers = users.filter((u) => u.status === 'pending');
 
   return (
-    <>
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconUsers />}
+        title="Пользователи"
+        subtitle="Аккаунты, роли, регистрация и правила"
+        hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
+        help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
+      >
+        <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
+      </PageHead>
+
       <div className="panel space-y-4 p-6">
         <h2 className="text-lg font-black">Кто видит панель</h2>
         {access && (
@@ -21588,13 +22431,14 @@ export function UsersTab() {
                 <option value="moderator">Модератор</option>
                 <option value="admin">Администратор</option>
               </select>
-              <button className="btn btn-soft btn-sm" onClick={() => void resetPassword(u)}>Пароль</button>
-              <button className="btn btn-danger btn-sm" onClick={() => void remove(u)} disabled={u.username === me?.username}>Удалить</button>
+              <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
+              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
             </li>
           ))}
         </ul>
+        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="#/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
       </div>
-    </>
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -21852,8 +22696,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/System.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api, type CertInfo } from '../api';
-import { ErrorLine, IconSettings, PageHead, ago, fmtDateTime, plural, usePoll } from '../ui';
-import BackupsCard from './Backups';
+import { ErrorLine, GoLink, IconSystem, PageHead, ago, fmtDateTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -21883,7 +22726,7 @@ const certTile = (c: CertInfo): [string, string, string | undefined, string | un
   return ['Сертификат HTTPS', value, note, tone];
 };
 
-/** Health, diagnostics and backups. */
+/** Health, diagnostics and the certificate; the backups live under Settings → «Обновления и копии». */
 export default function SystemPage() {
   const [h, setH] = useState<Health | null>(null);
   const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
@@ -21915,7 +22758,15 @@ export default function SystemPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconSettings />} title="Система" subtitle="Состояние панели, диагностика и резервные копии" />
+      <PageHead
+        icon={<IconSystem />}
+        title="Система"
+        subtitle="Состояние панели и диагностика"
+        hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
+        help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
+      >
+        <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+      </PageHead>
       <ErrorLine text={error} />
 
       {h ? (
@@ -21933,13 +22784,11 @@ export default function SystemPage() {
       )}
 
       <div className="panel space-y-4 p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-black">Диагностика</h2>
-            <p className="font-semibold text-mute">Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.</p>
-          </div>
-          <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+        <div>
+          <h2 className="text-lg font-black">Диагностика</h2>
+          <p className="font-semibold text-mute">Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.</p>
         </div>
+        {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}
         {checks && (
           <>
             <ul className="divide-y divide-line rounded-2xl border border-line">
@@ -21958,10 +22807,89 @@ export default function SystemPage() {
         )}
       </div>
 
-      <BackupsCard />
+      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-5">
+        <div className="min-w-0">
+          <h2 className="text-lg font-black">Резервные копии</h2>
+          <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
+        </div>
+        <GoLink href="#/admin/settings/updates">Обновления и копии</GoLink>
+      </div>
     </div>
   );
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+import { IconCards, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
+import { IconBell } from './Alerts';
+
+/** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
+export interface AdminSection {
+  id: string;
+  label: string;
+  icon: () => ReactNode;
+  /** one line: what this section is for (the «Где что находится» map) */
+  desc: string;
+  /** extra words Ctrl+K matches */
+  keywords: string;
+}
+
+export const START_SECTION: AdminSection = {
+  id: 'start',
+  label: 'Начало работы',
+  icon: IconStart,
+  desc: 'Пошаговый список: что настроить в первую очередь.',
+  keywords: 'старт начало первые шаги чек-лист помощь с чего начать новичок',
+};
+
+const S = {
+  servers: { id: 'servers', label: 'Серверы', icon: IconServers, desc: 'Игровые серверы: добавить, изменить адрес, удалить.', keywords: 'игра адрес порт добавить сервер опрос' },
+  discord: { id: 'discord', label: 'Discord', icon: IconDiscord, desc: 'В какой канал бот публикует карточку сервера.', keywords: 'привязка канал бот сообщение embed' },
+  news: { id: 'news', label: 'Новости', icon: IconNews, desc: 'Написать объявление и отправить его в Discord.', keywords: 'новость объявление публикация вайп шаблон запланировать' },
+  alerts: { id: 'alerts', label: 'Оповещения', icon: IconBell, desc: 'Сообщение в Discord, если игровой сервер упал или вернулся.', keywords: 'упал недоступен уведомление падение упоминание here everyone' },
+  cards: { id: 'cards', label: 'Карточки', icon: IconCards, desc: 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.', keywords: 'картинка баннер ссылка png' },
+  users: { id: 'users', label: 'Пользователи', icon: IconUsers, desc: 'Аккаунты, роли, регистрация и правила сообщества.', keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
+  journal: { id: 'journal', label: 'Журнал', icon: IconJournal, desc: 'Кто и что менял в панели, с датой и временем.', keywords: 'аудит история действия изменения кто менял лог' },
+  system: { id: 'system', label: 'Система', icon: IconSystem, desc: 'Здоровье панели: версия, диск, бот, сертификат, диагностика.', keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
+  settings: { id: 'settings', label: 'Настройки', icon: IconSettings, desc: 'Токен бота, оформление, пароль, обновления и резервные копии.', keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
+} satisfies Record<string, AdminSection>;
+
+export interface AdminGroup { title: string; sections: AdminSection[] }
+
+export const ADMIN_GROUPS: AdminGroup[] = [
+  { title: 'Основное', sections: [S.servers, S.discord, S.news] },
+  { title: 'Мониторинг', sections: [S.alerts, S.cards] },
+  { title: 'Люди', sections: [S.users, S.journal] },
+  { title: 'Система', sections: [S.system, S.settings] },
+];
+
+/** every section in the order of the sidebar, «Начало работы» first */
+export const ADMIN_SECTIONS: AdminSection[] = [START_SECTION, ...ADMIN_GROUPS.flatMap((g) => g.sections)];
+
+export const SETTINGS_TABS = [
+  { id: 'bot', label: 'Бот и Discord', keywords: 'токен бот прокси proxy вход через discord client secret redirect oauth пригласить' },
+  { id: 'brand', label: 'Оформление', keywords: 'название цвет логотип тема пресет брендинг внешний вид' },
+  { id: 'security', label: 'Безопасность', keywords: 'пароль сеансы сессии вход домен порты' },
+  { id: 'updates', label: 'Обновления и копии', keywords: 'обновление обновить версия откат резервная копия бэкап backup восстановить скачать расписание шифрование' },
+] as const;
+
+export interface AdminLink { label: string; hint: string; href: string; keywords: string; icon: () => ReactNode }
+
+/** deeper places found only by searching (Ctrl+K) */
+export const ADMIN_LINKS: AdminLink[] = [
+  ...SETTINGS_TABS.map((t) => ({ label: `Настройки: ${t.label}`, hint: 'Настройки', href: `#/admin/settings/${t.id}`, keywords: t.keywords, icon: IconSettings })),
+  { label: 'Резервные копии', hint: 'Настройки · Обновления и копии', href: '#/admin/settings/updates', keywords: 'резервная копия бэкап backup восстановить скачать расписание', icon: IconSettings },
+  { label: 'Откат обновления', hint: 'Настройки · Обновления и копии', href: '#/admin/settings/updates', keywords: 'откатить вернуть предыдущую версию rollback', icon: IconSettings },
+  { label: 'Токен Discord-бота', hint: 'Настройки · Бот и Discord', href: '#/admin/settings/bot', keywords: 'токен прокси proxy бот developer portal', icon: IconSettings },
+  { label: 'Пароль администратора', hint: 'Настройки · Безопасность', href: '#/admin/settings/security', keywords: 'сменить пароль безопасность', icon: IconSettings },
+  { label: 'Сертификат HTTPS', hint: 'Система', href: '#/admin/system', keywords: 'ssl срок сертификат истекает домен', icon: IconSystem },
+  { label: 'Диагностика', hint: 'Система', href: '#/admin/system', keywords: 'проверка здоровье состояние', icon: IconSystem },
+  { label: 'Роли и доступ', hint: 'Пользователи', href: '#/admin/users', keywords: 'роли модератор администратор регистрация правила заявки публичная панель', icon: IconUsers },
+  { label: 'Написать новость', hint: 'Новости', href: '#/admin/news/new', keywords: 'новость объявление шаблон опубликовать запланировать', icon: IconNews },
+  { label: 'Привязать канал Discord', hint: 'Discord', href: '#/admin/discord/new', keywords: 'привязка канал сообщение бот', icon: IconDiscord },
+  { label: 'Добавить сервер', hint: 'Серверы', href: '#/admin/servers/new', keywords: 'новый игровой сервер игра адрес', icon: IconServers },
+];
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
@@ -22525,17 +23453,65 @@ export function SmoothArea({
   );
 }
 
-export function PageHead({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon?: ReactNode; children?: ReactNode }) {
+/**
+ * Page title row: icon, title, subtitle and the page actions on the right (one primary action, the rest soft).
+ * `hint`: one sentence under the title (what this page is and why); `help`: longer text behind a «Подробнее» disclosure.
+ */
+export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const helpId = useId();
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-3.5">
-        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
-        <div className="min-w-0">
-          <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
-          {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3.5">
+          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
+            {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+          </div>
         </div>
+        {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
       </div>
-      <div className="flex flex-wrap gap-2">{children}</div>
+      {(hint || help) && (
+        <div className="hint-strip">
+          <span aria-hidden className="hint-ico">i</span>
+          <div className="min-w-0 flex-1">
+            <p>
+              {hint}
+              {help && (
+                <>
+                  {hint ? ' ' : ''}
+                  <button type="button" className="hint-more" aria-expanded={open} aria-controls={helpId} onClick={() => setOpen((v) => !v)}>
+                    {open ? 'Скрыть' : 'Подробнее'}
+                  </button>
+                </>
+              )}
+            </p>
+            {help && open && <div id={helpId} className="hint-help">{help}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** a link with the arrow used for "go to that section" hints */
+export function GoLink({ href, children, className = '' }: { href: string; children: ReactNode; className?: string }) {
+  return (
+    <a href={href} className={`inline-flex items-center gap-1 font-extrabold text-link hover:underline ${className}`}>
+      {children}
+      <span aria-hidden>→</span>
+    </a>
+  );
+}
+
+/** a coloured strip with a message and an optional action (usually a GoLink) */
+export function Notice({ tone = 'warn', children, action, role }: { tone?: 'warn' | 'info' | 'bad'; children: ReactNode; action?: ReactNode; role?: 'status' | 'alert' }) {
+  const cls = tone === 'bad' ? 'bg-badbg text-bad' : tone === 'info' ? 'bg-soft text-ink' : 'bg-warnbg text-warn';
+  return (
+    <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-2xl px-4 py-2.5 text-sm font-bold ${cls}`} role={role ?? (tone === 'bad' ? 'alert' : 'status')}>
+      <span className="min-w-0 flex-1 basis-60">{children}</span>
+      {action && <span className="shrink-0 [&_a]:text-current [&_a]:underline">{action}</span>}
     </div>
   );
 }
@@ -22674,18 +23650,18 @@ export function Wordmark({ className = '' }: { className?: string }) {
 
 // ---------- toasts: short confirmations that do not interrupt ----------
 type ToastKind = 'ok' | 'err' | 'info';
-interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean }
+interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: { label: string; href: string } }
 let toasts: ToastItem[] = [];
 let toastSeq = 0;
 const toastListeners = new Set<(t: ToastItem[]) => void>();
 const emitToasts = () => toastListeners.forEach((l) => l(toasts));
 
 /** `ms`: how long it stays; errors stay longer (8 s) by default. Every toast can also be dismissed by hand. */
-export function toast(text: string, kind: ToastKind = 'ok', ms?: number) {
-  const t = { id: ++toastSeq, text, kind };
+export function toast(text: string, kind: ToastKind = 'ok', ms?: number, action?: { label: string; href: string }) {
+  const t: ToastItem = { id: ++toastSeq, text, kind, action };
   toasts = [...toasts, t].slice(-4);
   emitToasts();
-  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : 3500));
+  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : action ? 8000 : 3500));
 }
 
 export function dismissToast(id: number) {
@@ -22715,6 +23691,7 @@ export function Toaster() {
     <div key={t.id} className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
       <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
+      {t.action && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
       <button
         type="button"
         onClick={() => dismissToast(t.id)}
@@ -23036,6 +24013,30 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
     </div>
   );
 }
+
+// ---------- small action icons (18 px) shared by the admin pages ----------
+const I18 = ({ children }: { children: ReactNode }) => <Icon size={18}>{children}</Icon>;
+export const IconEdit = () => <I18><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></I18>;
+export const IconTrash = () => <I18><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></I18>;
+export const IconPause = () => <I18><path d="M8 5v14M16 5v14" /></I18>;
+export const IconPlay = () => <I18><path d="M7 4.5v15l12-7.5z" /></I18>;
+export const IconKey = () => <I18><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M16 7l3 3" /></I18>;
+export const IconDownload = () => <I18><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></I18>;
+export const IconRestore = () => <I18><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" /><path d="M12 8v4l3 2" /></I18>;
+export const IconCopyPlus = () => <I18><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></I18>;
+export const IconLinkOut = () => <I18><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></I18>;
+export const IconUsers = () => (
+  <Icon size={22}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></Icon>
+);
+export const IconJournal = () => (
+  <Icon size={22}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></Icon>
+);
+export const IconSystem = () => (
+  <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>
+);
+export const IconStart = () => (
+  <Icon size={22}><path d="M5 21V4M5 4h11l-2 4 2 4H5" /></Icon>
+);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/useMotion.ts" << '__COREGSM_EOF__'
@@ -23753,7 +24754,21 @@ build_images() {
   step "Сборка образов"
   cd "$APP_DIR"
   if stack_running; then info "Панель продолжает работать на прежней версии, пока идёт сборка."; fi
-  run "Сборка образов (3-8 минут)" docker compose build
+  # the build is the longest part and prints nothing useful: creep the bar from 44 % towards 80 % with the time
+  local parent=$$ tick=0
+  (
+    t=0
+    while sleep 6 && kill -0 "$parent" 2>/dev/null; do
+      t=$((t + 6))
+      p=$((44 + 36 * t / (t + 240)))
+      progress "$p" "Сборка образов: $((t / 60)) мин $((t % 60)) с"
+    done
+  ) &
+  tick=$!
+  run "Сборка образов (3-8 минут)" docker compose build || { kill "$tick" 2>/dev/null; return 1; }
+  kill "$tick" 2>/dev/null
+  wait "$tick" 2>/dev/null || true
+  progress 80 "Образы собраны"
   ok "Образы собраны"
 }
 
@@ -23770,6 +24785,7 @@ launch() {
   info "Жду готовности панели…"
   local i
   for i in $(seq 1 60); do
+    progress $((88 + i * 8 / 60)) "Запускаю контейнеры, жду ответа панели (${i}/60)"
     if curl -fsk --noproxy "*" --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
       ok "Панель отвечает"
       PANEL_OK=1
@@ -24380,12 +25396,15 @@ rollback_available() {
   docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE '^coregsm-.*:prev$'
 }
 
-# status.json: {"state":"running|done|error","message":"...","time":<ms>,"rollback_available":true|false}
-status_file() { # status_file STATE MESSAGE  (the panel shows this)
-  local msg rb=false; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+# status.json: {"state":"running|done|error","message":"...","time":<ms>,"rollback_available":true|false,"progress":0..100}
+# "progress" is optional: the panel draws a determinate bar from it and shows "message" as what happens right now.
+status_file() { # status_file STATE MESSAGE [PERCENT]  (the panel shows this)
+  local msg rb=false prog=""; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
   rollback_available && rb=true
+  [ -n "${3:-}" ] && prog=",\"progress\":$3"
+  [ "$1" = done ] && prog=',"progress":100'
   mkdir -p "$UPD"
-  printf '{"state":"%s","message":"%s","time":%s000,"rollback_available":%s}\n' "$1" "$msg" "$(date +%s)" "$rb" > "$UPD/status.json.tmp"
+  printf '{"state":"%s","message":"%s","time":%s000,"rollback_available":%s%s}\n' "$1" "$msg" "$(date +%s)" "$rb" "$prog" > "$UPD/status.json.tmp"
   mv -f "$UPD/status.json.tmp" "$UPD/status.json"; chmod 644 "$UPD/status.json"
 }
 
@@ -24424,7 +25443,7 @@ rollback_apply() {
   done
   local pre; pre="$(cat "$PREV/pre_backup" 2>/dev/null)"
   if [ -n "$pre" ] && [ -f "$pre" ]; then
-    status_file running "Откат к предыдущей версии: восстанавливаю базу данных…"
+    status_file running "Откат к предыдущей версии: восстанавливаю базу данных…" 35
     local tmp; tmp="$(mktemp -d)"
     tar xzf "$pre" -C "$tmp" ./coregsm.db 2>/dev/null || tar xzf "$pre" -C "$tmp" 2>/dev/null
     if [ ! -f "$tmp/coregsm.db" ]; then
@@ -24437,7 +25456,7 @@ rollback_apply() {
   else
     warn "Копия базы перед обновлением не найдена: база не изменена"
   fi
-  status_file running "Откат к предыдущей версии: запускаю прежние контейнеры…"
+  status_file running "Откат к предыдущей версии: запускаю прежние контейнеры…" 70
   dc up -d --no-build >/dev/null 2>&1
   if ! healthy 90; then RB_ERR="прежняя версия не отвечает после запуска"; return 1; fi
   # the snapshot is used up: rolling back twice would only bring the old database back again
@@ -24470,7 +25489,7 @@ rollback_flow() {
     warn "База данных вернётся к состоянию перед обновлением: изменения после него будут потеряны."
     ask_yn "Откатить?" || { dim "Отменено"; return 0; }
   fi
-  status_file running "Откат к предыдущей версии…"
+  status_file running "Откат к предыдущей версии…" 8
   : > "$LOG"
   rollback_apply >> "$LOG" 2>&1; local rc=$?
   [ "$ask" = 1 ] && sed 's/\x1b\[[0-9;]*m//g' "$LOG"
@@ -24540,18 +25559,19 @@ cmd_update() {
     ask_yn "Обновить сейчас?" || { dim "Отменено"; return 0; }
   fi
 
-  status_file running "Скачиваю версию ${latest:0:7}"
+  status_file running "Скачиваю версию ${latest:0:7}" 6
   local tmp; tmp="$(download_installer "$R_SHA")" || { fail "Контрольная сумма install.sh не совпала с version.txt. Подождите пару минут (кэш GitHub) и повторите"; return 1; }
   ok "Файл проверен (sha256)"
 
-  status_file running "Сохраняю копию и образы для отката"
+  status_file running "Сохраняю копию и образы для отката" 12
   spin "Копия данных и образов для отката" snapshot_create
 
-  status_file running "Устанавливаю версию ${latest:0:7}: сборка и перезапуск контейнеров"
+  status_file running "Устанавливаю версию ${latest:0:7}: подготовка" 20
   : > "$LOG"
   run_installer "$tmp" 2>&1 | tee -a "$LOG"; local rc="${PIPESTATUS[0]}"
   rm -f "$tmp"
 
+  [ "$rc" -eq 0 ] && status_file running "Проверяю, что панель работает" 97
   if [ "$rc" -eq 0 ] && healthy 120; then
     # the new build id is stamped only now, after the health check
     env_set APP_VERSION "$latest"

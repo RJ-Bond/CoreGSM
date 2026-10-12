@@ -5,7 +5,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
+import { Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, fmtDateTime, toast, usePoll } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -74,9 +74,15 @@ function NewsList() {
   };
 
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
-        <a className="btn" href="#/admin/news/new" data-magnetic>+ Написать новость</a>
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconNews />}
+        title="Новости"
+        subtitle="Публикации от имени бота в Discord"
+        hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
+        help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
+      >
+        <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -92,7 +98,7 @@ function NewsList() {
             {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}` : `Канал ${settings.channelId}`) : 'не выбран'}
           </div>
         </div>
-        <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+        <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
         {changing && (
           <div className="w-full">
             <ChannelPicker id="news-default-channel" value={settings?.channelId ?? ''} onChange={(v) => void setChannel(v)} />
@@ -131,8 +137,10 @@ function NewsList() {
                 <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
-                <button className="btn btn-soft btn-sm" onClick={() => copy(n)}>Копия</button>
-                <button className="btn btn-danger btn-sm" onClick={() => remove(n)}>Удалить</button>
+                <span className="ml-auto flex items-center gap-1.5">
+                  <button type="button" className="row-act" title="Сделать копию" aria-label="Сделать копию" onClick={() => void copy(n)}><IconCopyPlus /></button>
+                  <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(n)}><IconTrash /></button>
+                </span>
               </div>
             </article>
           );
@@ -157,7 +165,7 @@ export function NewsFeed() {
   usePoll(() => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true)), 30_000);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
       <ErrorLine text={error} />
       {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}

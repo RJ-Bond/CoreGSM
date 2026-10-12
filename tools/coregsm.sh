@@ -544,12 +544,15 @@ rollback_available() {
   docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE '^coregsm-.*:prev$'
 }
 
-# status.json: {"state":"running|done|error","message":"...","time":<ms>,"rollback_available":true|false}
-status_file() { # status_file STATE MESSAGE  (the panel shows this)
-  local msg rb=false; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+# status.json: {"state":"running|done|error","message":"...","time":<ms>,"rollback_available":true|false,"progress":0..100}
+# "progress" is optional: the panel draws a determinate bar from it and shows "message" as what happens right now.
+status_file() { # status_file STATE MESSAGE [PERCENT]  (the panel shows this)
+  local msg rb=false prog=""; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
   rollback_available && rb=true
+  [ -n "${3:-}" ] && prog=",\"progress\":$3"
+  [ "$1" = done ] && prog=',"progress":100'
   mkdir -p "$UPD"
-  printf '{"state":"%s","message":"%s","time":%s000,"rollback_available":%s}\n' "$1" "$msg" "$(date +%s)" "$rb" > "$UPD/status.json.tmp"
+  printf '{"state":"%s","message":"%s","time":%s000,"rollback_available":%s%s}\n' "$1" "$msg" "$(date +%s)" "$rb" "$prog" > "$UPD/status.json.tmp"
   mv -f "$UPD/status.json.tmp" "$UPD/status.json"; chmod 644 "$UPD/status.json"
 }
 
@@ -588,7 +591,7 @@ rollback_apply() {
   done
   local pre; pre="$(cat "$PREV/pre_backup" 2>/dev/null)"
   if [ -n "$pre" ] && [ -f "$pre" ]; then
-    status_file running "Откат к предыдущей версии: восстанавливаю базу данных…"
+    status_file running "Откат к предыдущей версии: восстанавливаю базу данных…" 35
     local tmp; tmp="$(mktemp -d)"
     tar xzf "$pre" -C "$tmp" ./coregsm.db 2>/dev/null || tar xzf "$pre" -C "$tmp" 2>/dev/null
     if [ ! -f "$tmp/coregsm.db" ]; then
@@ -601,7 +604,7 @@ rollback_apply() {
   else
     warn "Копия базы перед обновлением не найдена: база не изменена"
   fi
-  status_file running "Откат к предыдущей версии: запускаю прежние контейнеры…"
+  status_file running "Откат к предыдущей версии: запускаю прежние контейнеры…" 70
   dc up -d --no-build >/dev/null 2>&1
   if ! healthy 90; then RB_ERR="прежняя версия не отвечает после запуска"; return 1; fi
   # the snapshot is used up: rolling back twice would only bring the old database back again
@@ -634,7 +637,7 @@ rollback_flow() {
     warn "База данных вернётся к состоянию перед обновлением: изменения после него будут потеряны."
     ask_yn "Откатить?" || { dim "Отменено"; return 0; }
   fi
-  status_file running "Откат к предыдущей версии…"
+  status_file running "Откат к предыдущей версии…" 8
   : > "$LOG"
   rollback_apply >> "$LOG" 2>&1; local rc=$?
   [ "$ask" = 1 ] && sed 's/\x1b\[[0-9;]*m//g' "$LOG"
@@ -704,18 +707,19 @@ cmd_update() {
     ask_yn "Обновить сейчас?" || { dim "Отменено"; return 0; }
   fi
 
-  status_file running "Скачиваю версию ${latest:0:7}"
+  status_file running "Скачиваю версию ${latest:0:7}" 6
   local tmp; tmp="$(download_installer "$R_SHA")" || { fail "Контрольная сумма install.sh не совпала с version.txt. Подождите пару минут (кэш GitHub) и повторите"; return 1; }
   ok "Файл проверен (sha256)"
 
-  status_file running "Сохраняю копию и образы для отката"
+  status_file running "Сохраняю копию и образы для отката" 12
   spin "Копия данных и образов для отката" snapshot_create
 
-  status_file running "Устанавливаю версию ${latest:0:7}: сборка и перезапуск контейнеров"
+  status_file running "Устанавливаю версию ${latest:0:7}: подготовка" 20
   : > "$LOG"
   run_installer "$tmp" 2>&1 | tee -a "$LOG"; local rc="${PIPESTATUS[0]}"
   rm -f "$tmp"
 
+  [ "$rc" -eq 0 ] && status_file running "Проверяю, что панель работает" 97
   if [ "$rc" -eq 0 ] && healthy 120; then
     # the new build id is stamped only now, after the health check
     env_set APP_VERSION "$latest"

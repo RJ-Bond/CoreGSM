@@ -195,6 +195,13 @@ try {
   /* column already exists */
 }
 
+// one Discord message may show several servers (up to 10 embeds): the extra server ids
+try {
+  db.exec("ALTER TABLE bindings ADD COLUMN extra_ids TEXT NOT NULL DEFAULT '[]'");
+} catch {
+  /* column already exists */
+}
+
 // older databases: country override (ISO code, '' = detect automatically)
 try {
   db.exec("ALTER TABLE servers ADD COLUMN country TEXT NOT NULL DEFAULT ''");
@@ -262,4 +269,6 @@ export interface BindingRow {
   last_error: string | null;
   /** how the message looks in Discord: embed (default), card (PNG) or both */
   style: string;
+  /** more servers shown in the same message (JSON array of server ids; the main one is server_id) */
+  extra_ids: string;
 }

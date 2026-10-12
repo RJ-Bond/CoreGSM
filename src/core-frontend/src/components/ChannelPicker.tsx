@@ -66,7 +66,7 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
     <div className="space-y-2">
       <input id={id} className="input font-mono" value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder="ID канала, например 123456789012345678" inputMode="numeric" />
       <p className="text-sm font-semibold text-mute">
-        {guilds && guilds.length === 0 ? 'Бот пока не видит каналов (его нужно пригласить на сервер Discord). ' : ''}
+        {guilds && guilds.length === 0 ? <>Бот пока не видит каналов (его нужно пригласить на сервер Discord): <a href="#/admin/discord" className="font-extrabold text-link hover:underline">проверить бота →</a>{' '}</> : ''}
         Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».
       </p>
       <div className="flex gap-4 text-sm font-extrabold">

@@ -16,6 +16,8 @@ type DiscordClient = InstanceType<typeof Client>;
 interface Binding {
   id: number;
   serverId: number;
+  /** every server shown in this message (the main one first); one embed per server */
+  serverIds?: number[];
   serverName: string;
   channelId: string;
   messageId: string | null;
@@ -227,27 +229,60 @@ async function applyConfig(): Promise<void> {
 }
 
 /** Builds what a binding's message looks like (embed and card attachment). */
+/** characters Discord counts towards the 6000 limit of one message (title, description, fields, footer) */
+function embedChars(e: { title?: string; description?: string; fields?: { name: string; value: string }[]; footer?: { text: string }; author?: { name: string } }): number {
+  return (e.title?.length ?? 0) + (e.description?.length ?? 0) + (e.footer?.text.length ?? 0) + (e.author?.name.length ?? 0) + (e.fields ?? []).reduce((n, f) => n + f.name.length + f.value.length, 0);
+}
+
 async function buildPayload(b: Binding) {
   const style = b.style ?? 'embed';
+  // one message may show up to 10 servers (a Discord limit): the main server first
+  const ids = [...new Set([b.serverId, ...(b.serverIds ?? [])])].slice(0, 10);
+  const multi = ids.length > 1;
 
-  // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
-  let embed: InstanceType<typeof EmbedBuilder>;
-  if (style === 'card') {
-    embed = new EmbedBuilder().setColor(0x5a4bd1).setTimestamp();
-  } else {
-    const r = await backend(`/internal/servers/${b.serverId}/embed?interval=${b.intervalSec}`);
-    if (!r.ok) throw new Error(`embed HTTP ${r.status}`);
-    embed = new EmbedBuilder((await r.json()) as ConstructorParameters<typeof EmbedBuilder>[0]);
-  }
-
+  type Raw = ConstructorParameters<typeof EmbedBuilder>[0] & { title?: string; description?: string; fields?: { name: string; value: string; inline?: boolean }[]; footer?: { text: string; icon_url?: string } };
+  const raws: Raw[] = [];
   const files: InstanceType<typeof AttachmentBuilder>[] = [];
-  if (style !== 'embed') {
-    const img = await backend(`/internal/card/${b.serverId}.png`);
-    if (!img.ok) throw new Error(`card HTTP ${img.status}`);
-    files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name: 'card.png' }));
-    embed.setImage('attachment://card.png');
+
+  for (const [i, id] of ids.entries()) {
+    // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
+    let raw: Raw;
+    if (style === 'card') {
+      raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() } as Raw;
+    } else {
+      const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}`);
+      if (!r.ok) {
+        // a deleted server must not break the whole message
+        if (multi && r.status === 404) continue;
+        throw new Error(`embed HTTP ${r.status}`);
+      }
+      raw = (await r.json()) as Raw;
+    }
+    if (style !== 'embed') {
+      const img = await backend(`/internal/card/${id}.png`);
+      if (!img.ok) {
+        if (multi && img.status === 404) continue;
+        throw new Error(`card HTTP ${img.status}`);
+      }
+      const name = multi ? `card-${i}.png` : 'card.png';
+      files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name }));
+      (raw as { image?: { url: string } }).image = { url: `attachment://${name}` };
+    }
+    raws.push(raw);
   }
-  return { embeds: [embed], files, components: [] };
+  if (raws.length === 0) throw new Error('Нет ни одного сервера для сообщения');
+
+  if (multi) {
+    // one footer for the whole block (on the last embed); the 6000-character limit of a message: when it is
+    // exceeded drop the player lists first, from the last server backwards, then the extra fields
+    raws.forEach((r, i) => { if (i < raws.length - 1) delete r.footer; });
+    const total = () => raws.reduce((n, r) => n + embedChars(r), 0);
+    for (let i = raws.length - 1; i >= 0 && total() > 5800; i--) {
+      const f = raws[i].fields;
+      if (f && f.length > 6) raws[i].fields = f.slice(0, 6);
+    }
+  }
+  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components: [] };
 }
 
 async function update(c: DiscordClient, b: Binding): Promise<void> {

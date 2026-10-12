@@ -1,50 +1,21 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type CertInfo, type Server, type ServerInput } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconRefresh, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
-import AlertsPage, { IconBell } from './Alerts';
+import { Empty, ErrorLine, GameAvatar, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
+import AdminStart, { AdminHome } from './AdminStart';
+import AlertsPage from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import JournalPage from './Journal';
 import SettingsPage, { UsersTab } from './Settings';
+
+export { ADMIN_SECTIONS };
 import SystemPage from './System';
-
-const IconUsers = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-    <circle cx="9" cy="7" r="4" />
-    <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-  </svg>
-);
-
-const IconJournal = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-  </svg>
-);
-const IconSystem = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-  </svg>
-);
-
-interface Section { id: string; label: string; icon: () => ReactNode }
-
-export const ADMIN_SECTIONS: Section[] = [
-  { id: 'servers', label: 'Серверы', icon: IconServers },
-  { id: 'discord', label: 'Discord', icon: IconDiscord },
-  { id: 'news', label: 'Новости', icon: IconNews },
-  { id: 'alerts', label: 'Оповещения', icon: IconBell },
-  { id: 'cards', label: 'Карточки', icon: IconCards },
-  { id: 'users', label: 'Пользователи', icon: IconUsers },
-  { id: 'journal', label: 'Журнал', icon: IconJournal },
-  { id: 'system', label: 'Система', icon: IconSystem },
-  { id: 'settings', label: 'Настройки', icon: IconSettings },
-];
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
@@ -52,39 +23,63 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const [section, ...rest] = sub.split('/');
   // a moderator sees only the news section; everything else is for administrators
   const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
-  const current = sections.some((s) => s.id === section) ? section : sections[0].id;
+  const known = sections.some((s) => s.id === section);
+  // bare #/admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
+  const home = isAdmin && !known;
+  const current = known ? section : sections[0].id;
   // the sub-path belongs to the section that was asked for, not to the fallback
   const tail = current === section ? rest.join('/') : '';
+  const link = (s: AdminSection) => (
+    <a
+      key={s.id}
+      href={`#/admin/${s.id}`}
+      aria-current={current === s.id ? 'page' : undefined}
+      className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+    >
+      {s.icon()}
+      {s.label}
+      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
+    </a>
+  );
+  const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[13.5rem_minmax(0,1fr)]">
-      <nav className="tile flex gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:flex-col md:self-start md:overflow-visible md:p-2.5" aria-label="Разделы админки">
-        <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
-        {sections.map((s) => (
-          <a
-            key={s.id}
-            href={`#/admin/${s.id}`}
-            aria-current={current === s.id ? 'page' : undefined}
-            className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
-          >
-            {s.icon()}
-            {s.label}
-            {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
-          </a>
-        ))}
+    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
+      <nav className="tile flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
+        {isAdmin ? (
+          <>
+            {link(START_SECTION)}
+            {ADMIN_GROUPS.map((g, gi) => (
+              <div key={g.title} className="contents md:block">
+                {divider}
+                <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
+                <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
+                  {g.sections.map(link)}
+                </div>
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
+            {sections.map(link)}
+          </>
+        )}
       </nav>
       <div className="min-w-0 space-y-5">
         {isAdmin && updateAvailable && current !== 'settings' && <UpdateBanner />}
         {isAdmin && <CertWarning />}
-        {current === 'servers' && <ServersManage />}
-        {current === 'discord' && <DiscordPage />}
-        {current === 'news' && <NewsPage sub={tail} />}
-        {current === 'alerts' && <AlertsPage />}
-        {current === 'cards' && <CardsPage />}
-        {current === 'users' && <UsersTab />}
-        {current === 'journal' && <JournalPage />}
-        {current === 'system' && <SystemPage />}
-        {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
+        {home && <AdminHome />}
+        {!home && current === 'start' && <AdminStart />}
+        {!home && current === 'servers' && <ServersManage sub={tail} />}
+        {!home && current === 'discord' && <DiscordPage sub={tail} />}
+        {!home && current === 'news' && <NewsPage sub={tail} />}
+        {!home && current === 'alerts' && <AlertsPage />}
+        {!home && current === 'cards' && <CardsPage />}
+        {!home && current === 'users' && <UsersTab />}
+        {!home && current === 'journal' && <JournalPage />}
+        {!home && current === 'system' && <SystemPage />}
+        {!home && current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
     </div>
   );
@@ -148,7 +143,7 @@ function CertWarning() {
 }
 
 /** Add, edit, delete and re-query servers. */
-function ServersManage() {
+function ServersManage({ sub }: { sub: string }) {
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
@@ -161,6 +156,20 @@ function ServersManage() {
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
+
+  // #/admin/servers/new opens the «add» form (links from the start page and Ctrl+K)
+  const openedFor = useRef('');
+  useEffect(() => {
+    if (sub === 'new' && openedFor.current !== sub) {
+      openedFor.current = sub;
+      setEditing({ data: emptyServer });
+    }
+    if (sub !== 'new') openedFor.current = '';
+  }, [sub]);
+  const closeForm = () => {
+    setEditing(null);
+    if (sub === 'new') window.location.hash = '#/admin/servers';
+  };
 
   const remove = async (s: Server) => {
     if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
@@ -176,8 +185,14 @@ function ServersManage() {
 
   return (
     <div className="space-y-5">
-      <PageHead title="Серверы" subtitle="Добавление и настройка игровых серверов" icon={<IconServers />}>
-        <button className="btn" data-magnetic onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+      <PageHead
+        title="Серверы"
+        subtitle="Добавление и настройка игровых серверов"
+        icon={<IconServers />}
+        hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
+        help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
+      >
+        <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -207,15 +222,16 @@ function ServersManage() {
             <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
-            <div className="ml-auto flex items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
+            <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
+              <a className="btn btn-soft btn-sm" href={`#/admin/discord/new/${s.id}`}>Привязать к Discord</a>
               <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
                 <IconRefresh spinning={busyId === s.id} />
               </button>
               <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                <IconEdit />
               </button>
               <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></svg>
+                <IconTrash />
               </button>
             </div>
           </div>
@@ -228,8 +244,8 @@ function ServersManage() {
           id={editing.id}
           coverUrl={editing.cover}
           onCoverChanged={() => void load()}
-          onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); toast('Сервер сохранён'); void load(); }}
+          onClose={closeForm}
+          onSaved={() => { closeForm(); toast('Сервер сохранён'); void load(); }}
         />
       )}
     </div>
