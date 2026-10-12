@@ -10,7 +10,7 @@ FILES="$(mktemp)"
 trap 'rm -f "$GEN" "$FILES"' EXIT
 
 find src -type f \
-    -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.*/*' -not -name 'package-lock.json' \
+    -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.*/*' -not -name 'package-lock.json' \n    -not -path '*/data/*' -not -name '*.db' -not -name '*.db-*' -not -name '*.log' \
   | LC_ALL=C sort > "$FILES"
 
 # Build id: hash of everything that ends up inside install.sh. Same sources -> same id.
