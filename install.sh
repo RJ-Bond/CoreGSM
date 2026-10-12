@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d4464251f0f0"
+COREGSM_BUILD="33a99ce4ce9c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8012,7 +8012,6 @@ import { useAuth } from './auth';
 import { api } from './api';
 import { GAME_IMAGE, gameAbbr, gameColor } from './games';
 import { gameIconPath } from './gameIcons';
-import { AuthArt } from './components/Illustrations';
 
 export function usePoll(fn: () => void, ms: number) {
   const ref = useRef(fn);
@@ -8415,29 +8414,12 @@ export function Toaster() {
   );
 }
 
-// ---------- sign-in / first-run shell: a brand panel next to the form ----------
+// ---------- sign-in / first-run shell: one centred card on the plain page background ----------
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <div className="grid min-h-full md:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-      <aside className="relative hidden flex-col justify-between overflow-hidden p-10 text-white md:flex" style={{ background: 'linear-gradient(150deg, #6a5cf0 0%, #4a3cb8 55%, #2a2070 100%)' }}>
-        <div className="flex items-center gap-3 text-2xl font-black tracking-tight">
-          <Logo size={40} />
-          {useAuth().access.brand.name}
-        </div>
-        <div className="space-y-6">
-          <div className="flex justify-center"><AuthArt /></div>
-          <div className="space-y-3">
-            <h2 className="text-3xl font-black leading-tight">Игровые серверы под присмотром</h2>
-            <ul className="space-y-2 text-[15px] font-semibold text-white/85">
-              <li className="flex gap-2.5"><span aria-hidden>✓</span>Онлайн, пинг и история игроков в одном месте</li>
-              <li className="flex gap-2.5"><span aria-hidden>✓</span>Красивые сообщения в Discord, которые обновляются сами</li>
-              <li className="flex gap-2.5"><span aria-hidden>✓</span>Новости и объявления от имени бота</li>
-            </ul>
-          </div>
-        </div>
-        <div className="text-sm font-bold text-white/60">Self-hosted · открытый исходный код</div>
-      </aside>
-      <div className="flex items-center justify-center p-4 sm:p-8">{children}</div>
+    <div className="relative flex min-h-screen items-center justify-center p-4 sm:p-8">
+      <div className="absolute right-4 top-4"><ThemeToggle /></div>
+      {children}
     </div>
   );
 }
