@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d371e439866a"
+COREGSM_BUILD="014a296a9c03"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -9626,7 +9626,7 @@ export default function App() {
   }
 
   const dot = (
-    <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление">
+    <span className="update-dot ml-1.5 align-middle" title="Доступно обновление">
       <span className="sr-only">(доступно обновление)</span>
     </span>
   );
@@ -9732,7 +9732,7 @@ export default function App() {
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {p.label}
                     {p.id === 'admin' && updateAvailable && (
-                      <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn"><span className="sr-only">Доступно обновление</span></span>
+                      <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">Доступно обновление</span></span>
                     )}
                   </a>
                 </li>
@@ -12441,6 +12441,44 @@ body nav.glass.fixed { view-transition-name: app-nav; }
   .burst { display: none; }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 }
+
+/* ---------- updates tab ---------- */
+.update-hero { background: linear-gradient(135deg, #f59e0b 0%, #ea580c 55%, #be185d 120%); box-shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 22px 44px -18px rgba(234, 88, 12, .55); }
+.update-hero-run { background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2, var(--brand)))); box-shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 22px 44px -18px rgb(var(--brand) / .55); }
+.update-bob { animation: update-bob 1.6s ease-in-out infinite; }
+@keyframes update-bob { 0%, 100% { transform: translateY(2px); } 50% { transform: translateY(-3px); } }
+.update-progress { height: 8px; border-radius: 9999px; background: rgb(255 255 255 / .25); overflow: hidden; }
+.update-progress > i { display: block; height: 100%; width: 38%; border-radius: inherit; background: #fff; animation: update-slide 1.3s ease-in-out infinite; }
+@keyframes update-slide { from { transform: translateX(-110%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) { .update-bob, .update-progress > i { animation: none; } .update-progress > i { width: 100%; } }
+
+/* status capsule on covers and gradients */
+.pill-glass { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px 4px 9px; border-radius: 9999px; font-size: 12.5px; font-weight: 800; line-height: 1.2; color: #fff; background: rgb(12 14 26 / .46); -webkit-backdrop-filter: blur(10px) saturate(1.3); backdrop-filter: blur(10px) saturate(1.3); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .22); white-space: nowrap; }
+.pill-glass::before { content: ''; width: 8px; height: 8px; border-radius: 9999px; background: var(--dot); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot) 30%, transparent); }
+.pill-glass-ok { --dot: #4ade80; }
+.pill-glass-lag { --dot: #fbbf24; }
+.pill-glass-bad { --dot: #f87171; }
+.pill-glass-mute { --dot: #cbd5e1; }
+.pill-glass-ok::before { animation: glass-dot 2.2s ease-in-out infinite; }
+@keyframes glass-dot { 0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot) 28%, transparent); } 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--dot) 8%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .pill-glass-ok::before { animation: none; } }
+
+/* update marker: a pulsing amber dot */
+.update-dot { position: relative; display: inline-block; width: 10px; height: 10px; border-radius: 9999px; background: #f59e0b; box-shadow: 0 0 0 2px rgb(255 255 255 / .85); flex: none; }
+.update-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #f59e0b; animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+:root[data-theme='dark'] .update-dot { box-shadow: 0 0 0 2px rgb(var(--card)); }
+@media (prefers-reduced-motion: reduce) { .update-dot::after { animation: none; } }
+/* ghost buttons on the update hero: light glass instead of dark */
+.update-hero .btn-ghost-on-grad { background: rgb(255 255 255 / .2); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .38); }
+.update-hero .btn-ghost-on-grad:hover { filter: none; background: rgb(255 255 255 / .3); }
+
+/* compact icon actions in admin rows */
+.row-act { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: rgb(var(--soft)); color: rgb(var(--mute)); transition: background-color .15s ease, color .15s ease, transform .15s ease; }
+.row-act:hover { background: rgb(var(--brand) / .12); color: rgb(var(--link)); }
+.row-act:active { transform: scale(.94); }
+.row-act:disabled { opacity: .55; pointer-events: none; }
+.row-act-danger:hover { background: rgb(var(--bad) / .14); color: rgb(var(--bad)); }
+@media (max-width: 639px) { .row-act { width: 44px; height: 44px; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -12541,11 +12579,12 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           >
             {s.icon()}
             {s.label}
-            {s.id === 'settings' && updateAvailable && <span className="h-2 w-2 rounded-full bg-warn" title="Доступно обновление" />}
+            {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
           </a>
         ))}
       </nav>
       <div className="min-w-0 space-y-5">
+        {isAdmin && updateAvailable && current !== 'settings' && <UpdateBanner />}
         {isAdmin && <CertWarning />}
         {current === 'servers' && <ServersManage />}
         {current === 'discord' && <DiscordPage />}
@@ -12557,6 +12596,27 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'system' && <SystemPage />}
         {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
+    </div>
+  );
+}
+
+/** A banner at the top of the admin area while a new version is waiting. */
+function UpdateBanner() {
+  const [latest, setLatest] = useState<string | null>(null);
+  useEffect(() => {
+    api<{ latest: string | null }>('/update/status').then((r) => setLatest(r.latest)).catch(() => undefined);
+  }, []);
+  return (
+    <div className="update-hero relative flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden rounded-[22px] px-5 py-3.5 text-white" role="status">
+      <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/15" />
+      <span aria-hidden className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20">
+        <svg className="update-bob" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+      </span>
+      <div className="relative min-w-0 flex-1">
+        <div className="font-extrabold leading-tight">Доступно обновление панели</div>
+        <div className="text-sm font-semibold text-white/90">Новая сборка {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ''} готова к установке.</div>
+      </div>
+      <a href="#/admin/settings/updates" className="btn-on-grad relative">Обновить</a>
     </div>
   );
 }
@@ -12657,10 +12717,16 @@ function ServersManage() {
             <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
-            <div className="flex gap-2">
-              <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}><IconRefresh spinning={busyId === s.id} />Опросить</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>Изменить</button>
-              <button className="btn btn-danger btn-sm" onClick={() => void remove(s)}>Удалить</button>
+            <div className="ml-auto flex items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
+              <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
+                <IconRefresh spinning={busyId === s.id} />
+              </button>
+              <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+              </button>
+              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></svg>
+              </button>
             </div>
           </div>
         ))}
@@ -15378,7 +15444,7 @@ function ServerDetailView({ id }: { id: number }) {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+            <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
             <CopyButton text={s.address} label="Скопировать адрес" tone="grad" />
             <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>
               {shared ? <IconCheckMark /> : <IconShare />}
@@ -15699,8 +15765,7 @@ export default function ServersPage({ sub }: { sub: string }) {
 function greeting(name: string): string {
   const h = new Date().getHours();
   const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
-  const first = name.trim().split(/\s+/)[0] || name;
-  return `${hello}, ${first}`;
+  return `${hello}, ${name.trim() || name}`;
 }
 
 function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: string; onClick: () => void; className?: string }) {
@@ -15958,7 +16023,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
         </div>
       </div>
@@ -16002,7 +16067,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true }) }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
-          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
         </div>
       </div>
@@ -16221,7 +16286,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
           >
             {t.label}
-            {t.id === 'updates' && updateAvailable && <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />}
+            {t.id === 'updates' && updateAvailable && <span className="update-dot ml-1.5 align-middle" title="Доступно обновление" />}
           </a>
         ))}
       </nav>
@@ -16535,54 +16600,116 @@ function UpdateCard() {
   const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
+  const state: 'running' | 'available' | 'latest' | 'unknown' = running ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
+  const lastChecked = info?.checkedAt ?? null;
+
   return (
     <div className="space-y-5">
-      <div className="panel space-y-3.5 p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-black">Обновления</h2>
-          {running ? <span className="pill pill-warn">{rollingBack ? 'ОТКАТ' : 'ОБНОВЛЕНИЕ'}</span>
-            : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
-            : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
-            : <span className="pill pill-mute">ПРОВЕРКА</span>}
+      <section
+        aria-live="polite"
+        className={`relative overflow-hidden rounded-[26px] p-6 sm:p-7 ${
+          state === 'available'
+            ? 'update-hero text-white'
+            : state === 'running'
+              ? 'update-hero update-hero-run text-white'
+              : 'panel'
+        }`}
+      >
+        {(state === 'available' || state === 'running') && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
+        <div className="relative flex flex-wrap items-start gap-4">
+          <span
+            aria-hidden
+            className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${
+              state === 'available' || state === 'running' ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
+            }`}
+          >
+            {state === 'latest' ? (
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+            ) : state === 'running' ? (
+              <svg className="animate-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.55" /></svg>
+            ) : (
+              <svg className={state === 'available' ? 'update-bob' : ''} width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+            )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>
+              {state === 'running' ? (rollingBack ? 'Откат к предыдущей версии' : 'Идёт обновление')
+                : state === 'available' ? 'Доступно обновление'
+                : state === 'latest' ? 'Установлена последняя версия'
+                : 'Проверка обновлений'}
+            </h2>
+            <p className={`mt-1 font-semibold ${state === 'available' || state === 'running' ? 'text-white/90' : 'text-mute'}`}>
+              {state === 'running'
+                ? (offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
+                : state === 'available'
+                  ? 'Новая сборка уже в репозитории. Данные и настройки сохранятся, панель будет недоступна 1-3 минуты.'
+                  : state === 'latest'
+                    ? `Всё свежее${lastChecked ? `, проверено ${ago(lastChecked)}` : ''}.`
+                    : 'Узнаём, есть ли новая версия…'}
+            </p>
+
+            <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
+              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' || state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={state === 'available' || state === 'running' ? 'text-white/85' : 'text-mute'}>Установлена</dt>
+                <dd className="font-mono">{short(info?.current ?? null)}</dd>
+              </div>
+              {state === 'available' && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
+              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={state === 'available' ? 'text-mute' : state === 'running' ? 'text-white/85' : 'text-mute'}>В репозитории</dt>
+                <dd className="font-mono">{short(info?.latest ?? null)}</dd>
+              </div>
+            </dl>
+          </div>
         </div>
 
-        <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
-          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
-          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
-        </dl>
+        {state === 'running' && <div className="update-progress relative mt-5" aria-hidden><i /></div>}
 
-        {running && (
-          <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
-            {offline
-              ? (rollingBack ? 'Панель перезапускается после отката… страница обновится сама.' : 'Панель перезапускается… страница обновится сама.')
-              : info?.job?.state === 'running' ? info.job.message
-              : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…'}
+        <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
+          {state === 'available' && (
+            <>
+              <button className="btn-on-grad min-h-[46px] px-6 text-base shadow-pop" onClick={apply} disabled={busy || running || !info?.canApply}>
+                {busy ? 'Отправляю…' : 'Обновить сейчас'}
+              </button>
+              <a className="btn btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
+            </>
+          )}
+          {(state === 'latest' || state === 'unknown') && (
+            <button className="btn" onClick={check} disabled={busy || running}>{busy ? 'Проверяю…' : 'Проверить обновления'}</button>
+          )}
+          {state === 'available' && (
+            <button className="btn btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
+          )}
+          {info?.canRollback && state !== 'running' && (
+            <button className={`btn ${state === 'available' ? 'btn-ghost-on-grad' : 'btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
+          )}
+        </div>
+
+        {state === 'available' && info && !info.canApply && (
+          <p className="relative mt-3 rounded-2xl bg-black/15 px-4 py-2.5 text-sm font-bold">
+            Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.
           </p>
         )}
+        {state !== 'available' && info && !info.canApply && state !== 'running' && (
+          <p className="relative mt-3 text-sm font-semibold text-mute">Кнопка обновления недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>
+        )}
         {stuck && (
-          <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+          <p className="relative mt-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
             Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или {rollingBack ? 'выполните откат вручную' : <>обновите командой <span className="font-mono">sudo coregsm update</span></>}.
           </p>
         )}
-        {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
+        {info?.error && !running && <p className="relative mt-3 text-sm font-semibold text-mute">{info.error}</p>}
         {showOldFailure && info?.job && (
-          <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+          <div className="relative mt-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
             <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
             <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
           </div>
         )}
-        <ErrorLine text={error} />
+        <div className="relative"><ErrorLine text={error} /></div>
+      </section>
 
-        <div className="flex flex-wrap gap-2">
-          <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
-          {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
-          {info?.canRollback && <button className="btn btn-soft" onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей версии</button>}
-        </div>
-        {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
-      </div>
-
-      <div className="panel space-y-3 p-6">
+      <div id="update-changes" className="panel scroll-mt-24 space-y-3 p-6">
         <h2 className="text-lg font-black">Что нового</h2>
+
         {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
         {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
         {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">Список изменений пуст.</p>}
@@ -17486,7 +17613,13 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   );
 }
 
-export function StatusPill({ online, known, lag }: { online: boolean; known: boolean; lag?: boolean }) {
+/** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
+export function StatusPill({ online, known, lag, glass = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean }) {
+  if (glass) {
+    const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
+    const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
+    return <span className={`pill-glass pill-glass-${kind}`}>{text}</span>;
+  }
   if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
   if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
   return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;

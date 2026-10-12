@@ -69,11 +69,12 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           >
             {s.icon()}
             {s.label}
-            {s.id === 'settings' && updateAvailable && <span className="h-2 w-2 rounded-full bg-warn" title="Доступно обновление" />}
+            {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
           </a>
         ))}
       </nav>
       <div className="min-w-0 space-y-5">
+        {isAdmin && updateAvailable && current !== 'settings' && <UpdateBanner />}
         {isAdmin && <CertWarning />}
         {current === 'servers' && <ServersManage />}
         {current === 'discord' && <DiscordPage />}
@@ -85,6 +86,27 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'system' && <SystemPage />}
         {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
+    </div>
+  );
+}
+
+/** A banner at the top of the admin area while a new version is waiting. */
+function UpdateBanner() {
+  const [latest, setLatest] = useState<string | null>(null);
+  useEffect(() => {
+    api<{ latest: string | null }>('/update/status').then((r) => setLatest(r.latest)).catch(() => undefined);
+  }, []);
+  return (
+    <div className="update-hero relative flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden rounded-[22px] px-5 py-3.5 text-white" role="status">
+      <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/15" />
+      <span aria-hidden className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20">
+        <svg className="update-bob" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+      </span>
+      <div className="relative min-w-0 flex-1">
+        <div className="font-extrabold leading-tight">Доступно обновление панели</div>
+        <div className="text-sm font-semibold text-white/90">Новая сборка {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ''} готова к установке.</div>
+      </div>
+      <a href="#/admin/settings/updates" className="btn-on-grad relative">Обновить</a>
     </div>
   );
 }
@@ -185,10 +207,16 @@ function ServersManage() {
             <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
-            <div className="flex gap-2">
-              <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}><IconRefresh spinning={busyId === s.id} />Опросить</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>Изменить</button>
-              <button className="btn btn-danger btn-sm" onClick={() => void remove(s)}>Удалить</button>
+            <div className="ml-auto flex items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
+              <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
+                <IconRefresh spinning={busyId === s.id} />
+              </button>
+              <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+              </button>
+              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></svg>
+              </button>
             </div>
           </div>
         ))}
