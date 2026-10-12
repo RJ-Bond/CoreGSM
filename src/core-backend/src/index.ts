@@ -96,22 +96,53 @@ const wrap =
 // ---------- auth ----------
 type Role = 'admin' | 'player';
 interface AuthedRequest extends Request {
-  user?: { id: number; username: string; role: Role };
+  user?: { id: number; username: string; role: Role; sid?: string };
 }
 
 /** The signed-in user (checked against the database, so a deleted or demoted account loses access at once). */
-function loadUser(req: Request): { id: number; username: string; role: Role } | null {
-  const h = req.headers.authorization ?? '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : '';
+function userFromToken(token: string): { id: number; username: string; role: Role; sid: string } | null {
   if (!token) return null;
   try {
-    const p = jwt.verify(token, JWT_SECRET) as { sub: string };
-    const u = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
-    return u ?? null;
+    const p = jwt.verify(token, JWT_SECRET) as { sub: string; sid?: string };
+    // a token without a session id predates sessions: sign in again
+    if (!p.sid) return null;
+    const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
+    if (!u) return null;
+    // an ended session (revoked from the profile) stops working at once
+    if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
+    const now = Date.now();
+    if (now - (lastSeen.get(p.sid) ?? 0) > 60_000) {
+      lastSeen.set(p.sid, now);
+      db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
+    }
+    return { ...u, sid: p.sid };
   } catch {
     return null;
   }
 }
+const lastSeen = new Map<string, number>();
+
+function loadUser(req: Request) {
+  const h = req.headers.authorization ?? '';
+  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '');
+}
+
+/** "Chrome · Windows" from a User-Agent string */
+function uaLabel(ua: string | undefined): string {
+  const s = ua ?? '';
+  const browser = /Edg\//.test(s) ? 'Edge' : /OPR\/|Opera/.test(s) ? 'Opera' : /Firefox\//.test(s) ? 'Firefox' : /Chrome\//.test(s) ? 'Chrome' : /Safari\//.test(s) ? 'Safari' : 'Браузер';
+  const os = /Windows/.test(s) ? 'Windows' : /Android/.test(s) ? 'Android' : /iPhone|iPad|iOS/.test(s) ? 'iOS' : /Mac OS X|Macintosh/.test(s) ? 'macOS' : /Linux/.test(s) ? 'Linux' : '';
+  return os ? `${browser} · ${os}` : browser;
+}
+
+/** Starts a session and returns the signed token for it. */
+function issueToken(u: { id: number; username: string }, req: Request): string {
+  const sid = crypto.randomBytes(12).toString('hex');
+  const now = Date.now();
+  db.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, ip, ua) VALUES (?, ?, ?, ?, ?, ?)').run(sid, u.id, now, now, (req.ip ?? '').slice(0, 64), uaLabel(req.headers['user-agent']));
+  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
+}
+setInterval(() => db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - 8 * 24 * 3600 * 1000), 3600_000).unref();
 
 const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
 const flag = (key: string, fallback: boolean) => {
@@ -144,6 +175,10 @@ function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   next();
 }
 
+const LOCK_AFTER = 5;
+const fails = new Map<string, { n: number; until: number }>();
+setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
+
 const attempts = new Map<string, { n: number; reset: number }>();
 function loginLimiter(req: Request, res: Response, next: NextFunction) {
   const key = req.ip ?? 'x';
@@ -168,14 +203,29 @@ app.post(
   wrap(async (req, res) => {
     const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
-    const u = db.prepare('SELECT * FROM users WHERE username = ?').get(body.data.username) as
-      | { id: number; username: string; password_hash: string; role: Role }
+    // lock out after repeated wrong passwords for the same login from the same address
+    const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
+    const lock = fails.get(key);
+    if (lock && lock.until > Date.now()) {
+      const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
+      return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
+    }
+    const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
+      | { id: number; username: string; password_hash: string; role: Role; status: string }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi');
-    if (!u || !ok) return res.status(401).json({ error: 'Неверный логин или пароль' });
+    if (!u || !ok) {
+      const f = fails.get(key) ?? { n: 0, until: 0 };
+      f.n++;
+      if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
+      fails.set(key, f);
+      const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
+      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
+    }
+    fails.delete(key);
+    if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
     attempts.delete(req.ip ?? 'x');
-    const token = jwt.sign({ username: u.username }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
-    res.json({ token, username: u.username, role: u.role });
+    res.json({ token: issueToken(u, req), username: u.username, role: u.role });
   }),
 );
 
@@ -225,24 +275,27 @@ app.post(
     }
     attempts.delete(req.ip ?? 'x');
     console.log(`setup completed, admin "${b.data.username}" created`);
-    const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(userId), expiresIn: '7d' });
+    const token = issueToken({ id: userId, username: b.data.username }, req);
     res.status(201).json({ token, username: b.data.username, role: 'admin' });
   }),
 );
 
 // ---------- bot settings (token, proxy) ----------
-function settingsPayload() {
+function settingsPayload(req?: Request) {
   const tok = getSetting('discord_token');
   const proxy = getSetting('proxy_url');
   return {
     discordTokenSet: !!tok,
     discordTokenHint: tok ? `…${tok.slice(-4)}` : null,
     proxyUrl: proxy ? maskProxy(proxy) : null,
+    discordSecretSet: !!getSetting('discord_client_secret'),
+    discordClientId: botStatus.clientId ?? clientIdFromToken(tok),
+    discordRedirect: req ? `${req.protocol}://${req.get('host')}/api/auth/discord/callback` : '',
   };
 }
 
-app.get('/api/settings', admin, (_req, res) => {
-  res.json(settingsPayload());
+app.get('/api/settings', admin, (req, res) => {
+  res.json(settingsPayload(req));
 });
 
 // undefined = keep, empty string = clear
@@ -250,6 +303,7 @@ const settingsSchema = z.object({
   discordToken: z.string().trim().max(200).optional(),
   proxyUrl: z.string().trim().max(300).optional(),
   proxyType: z.enum(['socks5', 'http']).optional(),
+  discordClientSecret: z.string().trim().max(200).optional(),
 });
 
 app.put('/api/settings', admin, (req, res) => {
@@ -259,7 +313,8 @@ app.put('/api/settings', admin, (req, res) => {
   if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
   if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
   if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
-  res.json(settingsPayload());
+  if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);
+  res.json(settingsPayload(req));
 });
 
 let botStatus: {
@@ -410,17 +465,39 @@ function rememberPublicBase(req: Request) {
   if (getSetting('public_base') !== base) setSetting('public_base', base);
 }
 
+const registrationMode = (): 'open' | 'approval' => (getSetting('registration_mode') === 'approval' ? 'approval' : 'open');
+const rulesText = () => getSetting('rules_text') ?? '';
+const discordLoginReady = () => !!getSetting('discord_client_secret') && !!(botStatus.clientId ?? clientIdFromToken(getSetting('discord_token')));
+const accessPayload = () => ({
+  publicPanel: publicPanel(),
+  registration: registrationOpen(),
+  registrationMode: registrationMode(),
+  rules: rulesText(),
+  discordLogin: discordLoginReady(),
+  brand: brand(),
+});
+
 app.get('/api/access', (req, res) => {
   rememberPublicBase(req);
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
+  res.json(accessPayload());
 });
 app.put('/api/access', admin, (req, res) => {
-  const b = z.object({ publicPanel: z.boolean().optional(), registration: z.boolean().optional() }).safeParse(req.body);
+  const b = z
+    .object({
+      publicPanel: z.boolean().optional(),
+      registration: z.boolean().optional(),
+      registrationMode: z.enum(['open', 'approval']).optional(),
+      rules: z.string().max(5000).optional(),
+    })
+    .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
   if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
+  if (b.data.registrationMode !== undefined) setSetting('registration_mode', b.data.registrationMode);
+  if (b.data.rules !== undefined) setSetting('rules_text', b.data.rules.trim());
+  res.json(accessPayload());
 });
+
 // ---------- branding: community name, accent colour and logo ----------
 const LOGO_PATH = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'brand-logo');
 const LOGO_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
@@ -485,6 +562,14 @@ app.get('/api/manifest.json', (_req, res) => {
 
 // ---------- registration of players ----------
 const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
+
+app.get('/api/auth/check', (req, res) => {
+  const name = String(req.query.username ?? '').trim();
+  const valid = USERNAME_RE.test(name);
+  const available = valid && !db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase());
+  res.json({ valid, available });
+});
+
 app.post(
   '/api/auth/register',
   loginLimiter,
@@ -495,17 +580,22 @@ app.post(
       .object({
         username: z.string().trim().regex(USERNAME_RE, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
         password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256),
+        acceptRules: z.boolean().optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
-    if (db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE').get(b.data.username)) {
+    if (rulesText() && !b.data.acceptRules) return res.status(400).json({ error: 'Нужно согласиться с правилами сообщества' });
+    if (db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(b.data.username.toLowerCase())) {
       return res.status(409).json({ error: 'Этот логин уже занят' });
     }
     const hash = await bcrypt.hash(b.data.password, 12);
+    const pending = registrationMode() === 'approval';
     try {
-      const id = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'player', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
-      const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(id), expiresIn: '7d' });
-      res.status(201).json({ token, username: b.data.username, role: 'player' });
+      const id = Number(
+        db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
+      );
+      if (pending) return res.status(202).json({ pending: true });
+      res.status(201).json({ token: issueToken({ id, username: b.data.username }, req), username: b.data.username, role: 'player' });
     } catch {
       res.status(409).json({ error: 'Этот логин уже занят' });
     }
@@ -513,11 +603,24 @@ app.post(
 );
 
 // ---------- user management (administrators) ----------
-const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get() as { n: number }).n;
+const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 app.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, created_at FROM users ORDER BY id').all() as { id: number; username: string; role: Role; created_at: number | null }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at })));
+  const rows = db.prepare('SELECT id, username, role, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+    id: number;
+    username: string;
+    role: Role;
+    created_at: number | null;
+    status: string;
+    discord_name: string | null;
+  }[];
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
+});
+
+app.post('/api/users/:id/approve', admin, (req, res) => {
+  const r = db.prepare("UPDATE users SET status = 'active' WHERE id = ? AND status = 'pending'").run(Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Заявка не найдена' });
+  res.json({ ok: true });
 });
 
 app.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
@@ -537,8 +640,10 @@ app.put(
   wrap(async (req, res) => {
     const b = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Пароль должен быть не короче 8 символов' });
-    const r = db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), Number(req.params.id));
+    const id = Number(req.params.id);
+    const r = db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), id);
     if (!r.changes) return res.status(404).json({ error: 'Пользователь не найден' });
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     res.json({ ok: true });
   }),
 );
@@ -546,9 +651,9 @@ app.put(
 app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
-  const u = db.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: Role } | undefined;
+  const u = db.prepare('SELECT role, status FROM users WHERE id = ?').get(id) as { role: Role; status: string } | undefined;
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
-  if (u.role === 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
+  if (u.role === 'admin' && u.status === 'active' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
   res.json({ ok: true });
 });
@@ -569,22 +674,141 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
+// ---------- the signed-in user: profile, password, sessions, Discord account ----------
+interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null }
+const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
-  res.json({ username: req.user!.username, role: req.user!.role });
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+  res.json({ username: u.username, role: u.role, avatarUrl: avatarUrl(u), discordName: u.discord_name, hasPassword: !u.no_password });
 });
 
 app.post(
   '/api/auth/password',
   auth,
   wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ current: z.string(), next: z.string().min(8).max(256) }).safeParse(req.body);
+    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
-    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as { password_hash: string };
-    if (!(await bcrypt.compare(body.data.current, u.password_hash))) {
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    // an account created through Discord has no password yet: no current one to check
+    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
       return res.status(403).json({ error: 'Текущий пароль неверен' });
     }
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(body.data.next, 12), req.user!.id);
+    db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(bcrypt.hashSync(body.data.next, 12), req.user!.id);
+    // other devices have to sign in again with the new password
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
     res.json({ ok: true });
+  }),
+);
+
+app.get('/api/sessions', auth, (req: AuthedRequest, res) => {
+  const cur = (req.user as { sid?: string }).sid;
+  const rows = db.prepare('SELECT id, created_at, last_seen, ip, ua FROM sessions WHERE user_id = ? ORDER BY last_seen DESC').all(req.user!.id) as {
+    id: string;
+    created_at: number;
+    last_seen: number;
+    ip: string;
+    ua: string;
+  }[];
+  res.json(rows.map((s) => ({ id: s.id, createdAt: s.created_at, lastSeen: s.last_seen, ip: s.ip, ua: s.ua, current: s.id === cur })));
+});
+app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
+  const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
+  res.json({ ok: true, revoked: r.changes });
+});
+app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
+  const r = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user!.id);
+  if (!r.changes) return res.status(404).json({ error: 'Сеанс не найден' });
+  res.json({ ok: true });
+});
+
+app.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
+  const u = db.prepare('SELECT no_password FROM users WHERE id = ?').get(req.user!.id) as { no_password: number };
+  if (u.no_password) return res.status(409).json({ error: 'Сначала задайте пароль в профиле: иначе войти будет нечем' });
+  db.prepare('UPDATE users SET discord_id = NULL, discord_name = NULL, discord_avatar = NULL WHERE id = ?').run(req.user!.id);
+  res.json({ ok: true });
+});
+
+// ---------- sign in with Discord (OAuth2, identify scope) ----------
+const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
+const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
+const redirectUri = (req: Request) => `${baseOf(req)}/api/auth/discord/callback`;
+const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
+const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
+
+app.get('/api/auth/discord/start', (req, res) => {
+  const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
+  if (!clientId || !getSetting('discord_client_secret')) return failTo(res, 'Вход через Discord не настроен администратором');
+  const mode = req.query.mode === 'link' ? 'link' : 'login';
+  let userId = 0;
+  if (mode === 'link') {
+    const u = userFromToken(String(req.query.t ?? ''));
+    if (!u) return failTo(res, 'Сначала войдите в панель, затем привяжите Discord');
+    userId = u.id;
+  }
+  for (const [k, v] of oauthStates) if (v.exp < Date.now()) oauthStates.delete(k);
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, { mode, userId, exp: Date.now() + 10 * 60_000 });
+  const q = new URLSearchParams({ client_id: clientId, response_type: 'code', scope: 'identify', redirect_uri: redirectUri(req), state, prompt: 'none' });
+  res.redirect(302, `https://discord.com/oauth2/authorize?${q.toString()}`);
+});
+
+app.get(
+  '/api/auth/discord/callback',
+  wrap(async (req, res) => {
+    const st = oauthStates.get(String(req.query.state ?? ''));
+    oauthStates.delete(String(req.query.state ?? ''));
+    if (!st || st.exp < Date.now()) return failTo(res, 'Сессия входа через Discord устарела, попробуйте ещё раз');
+    if (req.query.error || !req.query.code) return failTo(res, 'Вход через Discord отменён');
+    const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
+    const secret = getSetting('discord_client_secret');
+    if (!clientId || !secret) return failTo(res, 'Вход через Discord не настроен администратором');
+
+    let me: { id: string; username: string; global_name?: string | null; avatar?: string | null };
+    try {
+      const tr = await fetch('https://discord.com/api/v10/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: clientId, client_secret: secret, grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri(req) }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!tr.ok) return failTo(res, 'Discord отклонил вход. Проверьте Client Secret и Redirect URI в настройках');
+      const tok = (await tr.json()) as { access_token: string };
+      const mr = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` }, signal: AbortSignal.timeout(10_000) });
+      if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
+      me = (await mr.json()) as typeof me;
+    } catch {
+      return failTo(res, 'Не удалось связаться с Discord');
+    }
+    const dname = me.global_name || me.username;
+    const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
+
+    if (st.mode === 'link') {
+      if (owner && owner.id !== st.userId) return toHash(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
+      db.prepare('UPDATE users SET discord_id = ?, discord_name = ?, discord_avatar = ? WHERE id = ?').run(me.id, dname, me.avatar ?? null, st.userId);
+      return toHash(res, 'profile');
+    }
+
+    if (owner) {
+      db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
+      if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
+      return toHash(res, `auth/${issueToken(owner, req)}`);
+    }
+
+    // first sign-in with this Discord account: register it (when registration is open)
+    if (!registrationOpen()) return failTo(res, 'Регистрация закрыта администратором');
+    let base = dname.replace(/[^\p{L}\p{N}_.\- ]/gu, '').replace(/ +/g, ' ').trim().slice(0, 28);
+    if (base.length < 3) base = `player${me.id.slice(-4)}`;
+    let name = base;
+    for (let i = 2; db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase()); i++) name = `${base.slice(0, 28)} ${i}`.slice(0, 32);
+    const pending = registrationMode() === 'approval';
+    const id = Number(
+      db
+        .prepare("INSERT INTO users (username, password_hash, role, created_at, status, discord_id, discord_name, discord_avatar, no_password) VALUES (?, ?, 'player', ?, ?, ?, ?, ?, 1)")
+        .run(name, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), pending ? 'pending' : 'active', me.id, dname, me.avatar ?? null).lastInsertRowid,
+    );
+    if (pending) return failTo(res, 'Заявка отправлена. Дождитесь одобрения администратора');
+    toHash(res, `auth/${issueToken({ id, username: name }, req)}`);
   }),
 );
 

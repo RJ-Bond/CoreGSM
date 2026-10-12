@@ -8,7 +8,7 @@ import ServersPage from './pages/Servers';
 import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
-import { IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, useHash } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, useHash } from './ui';
 
 interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
 
@@ -19,7 +19,7 @@ const PAGES: PageDef[] = [
   { id: 'admin', label: 'Админка', icon: IconSettings, admin: true },
 ];
 
-const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
 
 /** brand colour, name and tab colour; recomputed when the theme flips */
 function useBrand(b: Access['brand']) {
@@ -66,6 +66,13 @@ export default function App() {
     setBoot({ ready: true, needsSetup: setup.needed, me, access });
   }, []);
 
+  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>)
+  useEffect(() => {
+    if (rawPage !== 'auth' || !sub) return;
+    setToken(sub);
+    window.location.hash = '#/servers';
+    void load();
+  }, [rawPage, sub, load]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     // a rejected token (expired, account removed) comes back as this event
@@ -108,11 +115,21 @@ export default function App() {
 
   // sign-in / registration screens: for a closed panel they are the only thing a guest sees
   const wantsRegister = rawPage === 'register';
-  if (!me && (!access.publicPanel || rawPage === 'login' || wantsRegister)) {
+  if (!me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || wantsRegister)) {
     const done = () => { window.location.hash = '#/servers'; void load(); };
+    const mode = wantsRegister && access.registration ? 'register' : 'login';
+    // after a failed Discord sign-in the backend sends #/login/<message>
+    let notice = '';
+    if (rawPage === 'login' && sub) {
+      try { notice = decodeURIComponent(sub); } catch { notice = sub; }
+    }
     return (
       <AuthContext.Provider value={ctx}>
-        {wantsRegister && access.registration ? <Register onDone={done} /> : <Login onDone={done} />}
+        <AuthShell>
+          <AuthCard mode={mode}>
+            {mode === 'register' ? <Register onDone={done} /> : <Login onDone={done} notice={notice} />}
+          </AuthCard>
+        </AuthShell>
         <Toaster />
       </AuthContext.Provider>
     );
@@ -156,7 +173,7 @@ export default function App() {
                   className={`flex max-w-[11rem] items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3.5 font-extrabold shadow-pop transition ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
                   title="Профиль"
                 >
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-soft text-sm font-black text-link">{me.username.slice(0, 1).toUpperCase()}</span>
+                  <UserAvatar name={me.username} url={me.avatarUrl} size={28} className="!rounded-full" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
                 <button onClick={logout} className="rounded-full bg-card px-4 py-2 font-extrabold text-mute shadow-pop hover:text-bad">Выйти</button>

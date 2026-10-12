@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="33a99ce4ce9c"
+COREGSM_BUILD="37b49496a569"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -818,6 +818,8 @@ if (fs.existsSync(pending)) {
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+// SQLite lower()/NOCASE only fold ASCII: logins in any alphabet are compared with this
+db.function('ulower', { deterministic: true }, (s) => String(s).toLowerCase());
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -894,6 +896,33 @@ try {
 } catch {
   /* column already exists */
 }
+
+// accounts: approval status, linked Discord account, sessions
+for (const ddl of [
+  "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+  'ALTER TABLE users ADD COLUMN discord_id TEXT',
+  'ALTER TABLE users ADD COLUMN discord_name TEXT',
+  'ALTER TABLE users ADD COLUMN discord_avatar TEXT',
+  'ALTER TABLE users ADD COLUMN no_password INTEGER NOT NULL DEFAULT 0',
+]) {
+  try {
+    db.exec(ddl);
+  } catch {
+    /* column already exists */
+  }
+}
+db.exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_discord ON users(discord_id) WHERE discord_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  ip TEXT NOT NULL DEFAULT '',
+  ua TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+`);
 
 // older databases: new columns are added once
 try {
@@ -1434,22 +1463,53 @@ const wrap =
 // ---------- auth ----------
 type Role = 'admin' | 'player';
 interface AuthedRequest extends Request {
-  user?: { id: number; username: string; role: Role };
+  user?: { id: number; username: string; role: Role; sid?: string };
 }
 
 /** The signed-in user (checked against the database, so a deleted or demoted account loses access at once). */
-function loadUser(req: Request): { id: number; username: string; role: Role } | null {
-  const h = req.headers.authorization ?? '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : '';
+function userFromToken(token: string): { id: number; username: string; role: Role; sid: string } | null {
   if (!token) return null;
   try {
-    const p = jwt.verify(token, JWT_SECRET) as { sub: string };
-    const u = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
-    return u ?? null;
+    const p = jwt.verify(token, JWT_SECRET) as { sub: string; sid?: string };
+    // a token without a session id predates sessions: sign in again
+    if (!p.sid) return null;
+    const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
+    if (!u) return null;
+    // an ended session (revoked from the profile) stops working at once
+    if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
+    const now = Date.now();
+    if (now - (lastSeen.get(p.sid) ?? 0) > 60_000) {
+      lastSeen.set(p.sid, now);
+      db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
+    }
+    return { ...u, sid: p.sid };
   } catch {
     return null;
   }
 }
+const lastSeen = new Map<string, number>();
+
+function loadUser(req: Request) {
+  const h = req.headers.authorization ?? '';
+  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '');
+}
+
+/** "Chrome · Windows" from a User-Agent string */
+function uaLabel(ua: string | undefined): string {
+  const s = ua ?? '';
+  const browser = /Edg\//.test(s) ? 'Edge' : /OPR\/|Opera/.test(s) ? 'Opera' : /Firefox\//.test(s) ? 'Firefox' : /Chrome\//.test(s) ? 'Chrome' : /Safari\//.test(s) ? 'Safari' : 'Браузер';
+  const os = /Windows/.test(s) ? 'Windows' : /Android/.test(s) ? 'Android' : /iPhone|iPad|iOS/.test(s) ? 'iOS' : /Mac OS X|Macintosh/.test(s) ? 'macOS' : /Linux/.test(s) ? 'Linux' : '';
+  return os ? `${browser} · ${os}` : browser;
+}
+
+/** Starts a session and returns the signed token for it. */
+function issueToken(u: { id: number; username: string }, req: Request): string {
+  const sid = crypto.randomBytes(12).toString('hex');
+  const now = Date.now();
+  db.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, ip, ua) VALUES (?, ?, ?, ?, ?, ?)').run(sid, u.id, now, now, (req.ip ?? '').slice(0, 64), uaLabel(req.headers['user-agent']));
+  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
+}
+setInterval(() => db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - 8 * 24 * 3600 * 1000), 3600_000).unref();
 
 const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
 const flag = (key: string, fallback: boolean) => {
@@ -1482,6 +1542,10 @@ function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   next();
 }
 
+const LOCK_AFTER = 5;
+const fails = new Map<string, { n: number; until: number }>();
+setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
+
 const attempts = new Map<string, { n: number; reset: number }>();
 function loginLimiter(req: Request, res: Response, next: NextFunction) {
   const key = req.ip ?? 'x';
@@ -1506,14 +1570,29 @@ app.post(
   wrap(async (req, res) => {
     const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
-    const u = db.prepare('SELECT * FROM users WHERE username = ?').get(body.data.username) as
-      | { id: number; username: string; password_hash: string; role: Role }
+    // lock out after repeated wrong passwords for the same login from the same address
+    const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
+    const lock = fails.get(key);
+    if (lock && lock.until > Date.now()) {
+      const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
+      return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
+    }
+    const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
+      | { id: number; username: string; password_hash: string; role: Role; status: string }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi');
-    if (!u || !ok) return res.status(401).json({ error: 'Неверный логин или пароль' });
+    if (!u || !ok) {
+      const f = fails.get(key) ?? { n: 0, until: 0 };
+      f.n++;
+      if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
+      fails.set(key, f);
+      const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
+      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
+    }
+    fails.delete(key);
+    if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
     attempts.delete(req.ip ?? 'x');
-    const token = jwt.sign({ username: u.username }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
-    res.json({ token, username: u.username, role: u.role });
+    res.json({ token: issueToken(u, req), username: u.username, role: u.role });
   }),
 );
 
@@ -1563,24 +1642,27 @@ app.post(
     }
     attempts.delete(req.ip ?? 'x');
     console.log(`setup completed, admin "${b.data.username}" created`);
-    const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(userId), expiresIn: '7d' });
+    const token = issueToken({ id: userId, username: b.data.username }, req);
     res.status(201).json({ token, username: b.data.username, role: 'admin' });
   }),
 );
 
 // ---------- bot settings (token, proxy) ----------
-function settingsPayload() {
+function settingsPayload(req?: Request) {
   const tok = getSetting('discord_token');
   const proxy = getSetting('proxy_url');
   return {
     discordTokenSet: !!tok,
     discordTokenHint: tok ? `…${tok.slice(-4)}` : null,
     proxyUrl: proxy ? maskProxy(proxy) : null,
+    discordSecretSet: !!getSetting('discord_client_secret'),
+    discordClientId: botStatus.clientId ?? clientIdFromToken(tok),
+    discordRedirect: req ? `${req.protocol}://${req.get('host')}/api/auth/discord/callback` : '',
   };
 }
 
-app.get('/api/settings', admin, (_req, res) => {
-  res.json(settingsPayload());
+app.get('/api/settings', admin, (req, res) => {
+  res.json(settingsPayload(req));
 });
 
 // undefined = keep, empty string = clear
@@ -1588,6 +1670,7 @@ const settingsSchema = z.object({
   discordToken: z.string().trim().max(200).optional(),
   proxyUrl: z.string().trim().max(300).optional(),
   proxyType: z.enum(['socks5', 'http']).optional(),
+  discordClientSecret: z.string().trim().max(200).optional(),
 });
 
 app.put('/api/settings', admin, (req, res) => {
@@ -1597,7 +1680,8 @@ app.put('/api/settings', admin, (req, res) => {
   if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
   if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
   if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
-  res.json(settingsPayload());
+  if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);
+  res.json(settingsPayload(req));
 });
 
 let botStatus: {
@@ -1748,17 +1832,39 @@ function rememberPublicBase(req: Request) {
   if (getSetting('public_base') !== base) setSetting('public_base', base);
 }
 
+const registrationMode = (): 'open' | 'approval' => (getSetting('registration_mode') === 'approval' ? 'approval' : 'open');
+const rulesText = () => getSetting('rules_text') ?? '';
+const discordLoginReady = () => !!getSetting('discord_client_secret') && !!(botStatus.clientId ?? clientIdFromToken(getSetting('discord_token')));
+const accessPayload = () => ({
+  publicPanel: publicPanel(),
+  registration: registrationOpen(),
+  registrationMode: registrationMode(),
+  rules: rulesText(),
+  discordLogin: discordLoginReady(),
+  brand: brand(),
+});
+
 app.get('/api/access', (req, res) => {
   rememberPublicBase(req);
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
+  res.json(accessPayload());
 });
 app.put('/api/access', admin, (req, res) => {
-  const b = z.object({ publicPanel: z.boolean().optional(), registration: z.boolean().optional() }).safeParse(req.body);
+  const b = z
+    .object({
+      publicPanel: z.boolean().optional(),
+      registration: z.boolean().optional(),
+      registrationMode: z.enum(['open', 'approval']).optional(),
+      rules: z.string().max(5000).optional(),
+    })
+    .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
   if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
-  res.json({ publicPanel: publicPanel(), registration: registrationOpen(), brand: brand() });
+  if (b.data.registrationMode !== undefined) setSetting('registration_mode', b.data.registrationMode);
+  if (b.data.rules !== undefined) setSetting('rules_text', b.data.rules.trim());
+  res.json(accessPayload());
 });
+
 // ---------- branding: community name, accent colour and logo ----------
 const LOGO_PATH = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'brand-logo');
 const LOGO_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
@@ -1823,6 +1929,14 @@ app.get('/api/manifest.json', (_req, res) => {
 
 // ---------- registration of players ----------
 const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
+
+app.get('/api/auth/check', (req, res) => {
+  const name = String(req.query.username ?? '').trim();
+  const valid = USERNAME_RE.test(name);
+  const available = valid && !db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase());
+  res.json({ valid, available });
+});
+
 app.post(
   '/api/auth/register',
   loginLimiter,
@@ -1833,17 +1947,22 @@ app.post(
       .object({
         username: z.string().trim().regex(USERNAME_RE, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
         password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256),
+        acceptRules: z.boolean().optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
-    if (db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE').get(b.data.username)) {
+    if (rulesText() && !b.data.acceptRules) return res.status(400).json({ error: 'Нужно согласиться с правилами сообщества' });
+    if (db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(b.data.username.toLowerCase())) {
       return res.status(409).json({ error: 'Этот логин уже занят' });
     }
     const hash = await bcrypt.hash(b.data.password, 12);
+    const pending = registrationMode() === 'approval';
     try {
-      const id = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'player', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
-      const token = jwt.sign({ username: b.data.username }, JWT_SECRET, { subject: String(id), expiresIn: '7d' });
-      res.status(201).json({ token, username: b.data.username, role: 'player' });
+      const id = Number(
+        db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
+      );
+      if (pending) return res.status(202).json({ pending: true });
+      res.status(201).json({ token: issueToken({ id, username: b.data.username }, req), username: b.data.username, role: 'player' });
     } catch {
       res.status(409).json({ error: 'Этот логин уже занят' });
     }
@@ -1851,11 +1970,24 @@ app.post(
 );
 
 // ---------- user management (administrators) ----------
-const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get() as { n: number }).n;
+const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 app.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, created_at FROM users ORDER BY id').all() as { id: number; username: string; role: Role; created_at: number | null }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at })));
+  const rows = db.prepare('SELECT id, username, role, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+    id: number;
+    username: string;
+    role: Role;
+    created_at: number | null;
+    status: string;
+    discord_name: string | null;
+  }[];
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
+});
+
+app.post('/api/users/:id/approve', admin, (req, res) => {
+  const r = db.prepare("UPDATE users SET status = 'active' WHERE id = ? AND status = 'pending'").run(Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Заявка не найдена' });
+  res.json({ ok: true });
 });
 
 app.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
@@ -1875,8 +2007,10 @@ app.put(
   wrap(async (req, res) => {
     const b = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Пароль должен быть не короче 8 символов' });
-    const r = db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), Number(req.params.id));
+    const id = Number(req.params.id);
+    const r = db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), id);
     if (!r.changes) return res.status(404).json({ error: 'Пользователь не найден' });
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     res.json({ ok: true });
   }),
 );
@@ -1884,9 +2018,9 @@ app.put(
 app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
-  const u = db.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: Role } | undefined;
+  const u = db.prepare('SELECT role, status FROM users WHERE id = ?').get(id) as { role: Role; status: string } | undefined;
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
-  if (u.role === 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
+  if (u.role === 'admin' && u.status === 'active' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
   res.json({ ok: true });
 });
@@ -1907,22 +2041,141 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
+// ---------- the signed-in user: profile, password, sessions, Discord account ----------
+interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null }
+const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
-  res.json({ username: req.user!.username, role: req.user!.role });
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+  res.json({ username: u.username, role: u.role, avatarUrl: avatarUrl(u), discordName: u.discord_name, hasPassword: !u.no_password });
 });
 
 app.post(
   '/api/auth/password',
   auth,
   wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ current: z.string(), next: z.string().min(8).max(256) }).safeParse(req.body);
+    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
-    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as { password_hash: string };
-    if (!(await bcrypt.compare(body.data.current, u.password_hash))) {
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    // an account created through Discord has no password yet: no current one to check
+    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
       return res.status(403).json({ error: 'Текущий пароль неверен' });
     }
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(body.data.next, 12), req.user!.id);
+    db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(bcrypt.hashSync(body.data.next, 12), req.user!.id);
+    // other devices have to sign in again with the new password
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
     res.json({ ok: true });
+  }),
+);
+
+app.get('/api/sessions', auth, (req: AuthedRequest, res) => {
+  const cur = (req.user as { sid?: string }).sid;
+  const rows = db.prepare('SELECT id, created_at, last_seen, ip, ua FROM sessions WHERE user_id = ? ORDER BY last_seen DESC').all(req.user!.id) as {
+    id: string;
+    created_at: number;
+    last_seen: number;
+    ip: string;
+    ua: string;
+  }[];
+  res.json(rows.map((s) => ({ id: s.id, createdAt: s.created_at, lastSeen: s.last_seen, ip: s.ip, ua: s.ua, current: s.id === cur })));
+});
+app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
+  const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
+  res.json({ ok: true, revoked: r.changes });
+});
+app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
+  const r = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user!.id);
+  if (!r.changes) return res.status(404).json({ error: 'Сеанс не найден' });
+  res.json({ ok: true });
+});
+
+app.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
+  const u = db.prepare('SELECT no_password FROM users WHERE id = ?').get(req.user!.id) as { no_password: number };
+  if (u.no_password) return res.status(409).json({ error: 'Сначала задайте пароль в профиле: иначе войти будет нечем' });
+  db.prepare('UPDATE users SET discord_id = NULL, discord_name = NULL, discord_avatar = NULL WHERE id = ?').run(req.user!.id);
+  res.json({ ok: true });
+});
+
+// ---------- sign in with Discord (OAuth2, identify scope) ----------
+const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
+const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
+const redirectUri = (req: Request) => `${baseOf(req)}/api/auth/discord/callback`;
+const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
+const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
+
+app.get('/api/auth/discord/start', (req, res) => {
+  const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
+  if (!clientId || !getSetting('discord_client_secret')) return failTo(res, 'Вход через Discord не настроен администратором');
+  const mode = req.query.mode === 'link' ? 'link' : 'login';
+  let userId = 0;
+  if (mode === 'link') {
+    const u = userFromToken(String(req.query.t ?? ''));
+    if (!u) return failTo(res, 'Сначала войдите в панель, затем привяжите Discord');
+    userId = u.id;
+  }
+  for (const [k, v] of oauthStates) if (v.exp < Date.now()) oauthStates.delete(k);
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, { mode, userId, exp: Date.now() + 10 * 60_000 });
+  const q = new URLSearchParams({ client_id: clientId, response_type: 'code', scope: 'identify', redirect_uri: redirectUri(req), state, prompt: 'none' });
+  res.redirect(302, `https://discord.com/oauth2/authorize?${q.toString()}`);
+});
+
+app.get(
+  '/api/auth/discord/callback',
+  wrap(async (req, res) => {
+    const st = oauthStates.get(String(req.query.state ?? ''));
+    oauthStates.delete(String(req.query.state ?? ''));
+    if (!st || st.exp < Date.now()) return failTo(res, 'Сессия входа через Discord устарела, попробуйте ещё раз');
+    if (req.query.error || !req.query.code) return failTo(res, 'Вход через Discord отменён');
+    const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
+    const secret = getSetting('discord_client_secret');
+    if (!clientId || !secret) return failTo(res, 'Вход через Discord не настроен администратором');
+
+    let me: { id: string; username: string; global_name?: string | null; avatar?: string | null };
+    try {
+      const tr = await fetch('https://discord.com/api/v10/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: clientId, client_secret: secret, grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri(req) }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!tr.ok) return failTo(res, 'Discord отклонил вход. Проверьте Client Secret и Redirect URI в настройках');
+      const tok = (await tr.json()) as { access_token: string };
+      const mr = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` }, signal: AbortSignal.timeout(10_000) });
+      if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
+      me = (await mr.json()) as typeof me;
+    } catch {
+      return failTo(res, 'Не удалось связаться с Discord');
+    }
+    const dname = me.global_name || me.username;
+    const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
+
+    if (st.mode === 'link') {
+      if (owner && owner.id !== st.userId) return toHash(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
+      db.prepare('UPDATE users SET discord_id = ?, discord_name = ?, discord_avatar = ? WHERE id = ?').run(me.id, dname, me.avatar ?? null, st.userId);
+      return toHash(res, 'profile');
+    }
+
+    if (owner) {
+      db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
+      if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
+      return toHash(res, `auth/${issueToken(owner, req)}`);
+    }
+
+    // first sign-in with this Discord account: register it (when registration is open)
+    if (!registrationOpen()) return failTo(res, 'Регистрация закрыта администратором');
+    let base = dname.replace(/[^\p{L}\p{N}_.\- ]/gu, '').replace(/ +/g, ' ').trim().slice(0, 28);
+    if (base.length < 3) base = `player${me.id.slice(-4)}`;
+    let name = base;
+    for (let i = 2; db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase()); i++) name = `${base.slice(0, 28)} ${i}`.slice(0, 32);
+    const pending = registrationMode() === 'approval';
+    const id = Number(
+      db
+        .prepare("INSERT INTO users (username, password_hash, role, created_at, status, discord_id, discord_name, discord_avatar, no_password) VALUES (?, ?, 'player', ?, ?, ?, ?, ?, 1)")
+        .run(name, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), pending ? 'pending' : 'active', me.id, dname, me.avatar ?? null).lastInsertRowid,
+    );
+    if (pending) return failTo(res, 'Заявка отправлена. Дождитесь одобрения администратора');
+    toHash(res, `auth/${issueToken({ id, username: name }, req)}`);
   }),
 );
 
@@ -2750,6 +3003,8 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
   { m: 'POST', re: /^\/api\/auth\/register$/, label: 'Регистрация', anon: true },
   { m: 'POST', re: /^\/api\/auth\/password$/, label: 'Смена пароля' },
+  { m: 'POST', re: /^\/api\/users\/(\d+)\/approve$/, label: 'Одобрена заявка на регистрацию', pre: userName },
+  { m: 'POST', re: /^\/api\/sessions\/revoke-others$/, label: 'Завершены остальные сеансы' },
 ];
 
 /** records every successful change made through the panel; must be installed before the routes */
@@ -4244,7 +4499,7 @@ import ServersPage from './pages/Servers';
 import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
-import { IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, useHash } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, useHash } from './ui';
 
 interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
 
@@ -4255,7 +4510,7 @@ const PAGES: PageDef[] = [
   { id: 'admin', label: 'Админка', icon: IconSettings, admin: true },
 ];
 
-const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
 
 /** brand colour, name and tab colour; recomputed when the theme flips */
 function useBrand(b: Access['brand']) {
@@ -4302,6 +4557,13 @@ export default function App() {
     setBoot({ ready: true, needsSetup: setup.needed, me, access });
   }, []);
 
+  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>)
+  useEffect(() => {
+    if (rawPage !== 'auth' || !sub) return;
+    setToken(sub);
+    window.location.hash = '#/servers';
+    void load();
+  }, [rawPage, sub, load]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     // a rejected token (expired, account removed) comes back as this event
@@ -4344,11 +4606,21 @@ export default function App() {
 
   // sign-in / registration screens: for a closed panel they are the only thing a guest sees
   const wantsRegister = rawPage === 'register';
-  if (!me && (!access.publicPanel || rawPage === 'login' || wantsRegister)) {
+  if (!me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || wantsRegister)) {
     const done = () => { window.location.hash = '#/servers'; void load(); };
+    const mode = wantsRegister && access.registration ? 'register' : 'login';
+    // after a failed Discord sign-in the backend sends #/login/<message>
+    let notice = '';
+    if (rawPage === 'login' && sub) {
+      try { notice = decodeURIComponent(sub); } catch { notice = sub; }
+    }
     return (
       <AuthContext.Provider value={ctx}>
-        {wantsRegister && access.registration ? <Register onDone={done} /> : <Login onDone={done} />}
+        <AuthShell>
+          <AuthCard mode={mode}>
+            {mode === 'register' ? <Register onDone={done} /> : <Login onDone={done} notice={notice} />}
+          </AuthCard>
+        </AuthShell>
         <Toaster />
       </AuthContext.Provider>
     );
@@ -4392,7 +4664,7 @@ export default function App() {
                   className={`flex max-w-[11rem] items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3.5 font-extrabold shadow-pop transition ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
                   title="Профиль"
                 >
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-soft text-sm font-black text-link">{me.username.slice(0, 1).toUpperCase()}</span>
+                  <UserAvatar name={me.username} url={me.avatarUrl} size={28} className="!rounded-full" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
                 <button onClick={logout} className="rounded-full bg-card px-4 py-2 font-extrabold text-mute shadow-pop hover:text-bad">Выйти</button>
@@ -4515,7 +4787,17 @@ export interface ServerInput {
   displayAddress: string;
 }
 
-export class ApiError extends Error {}
+/** an error answer from the API; `data` is the whole JSON body (retryAfter, attemptsLeft, pending ...) */
+export class ApiError extends Error {
+  status: number;
+  data: Record<string, unknown>;
+  constructor(message: string, status = 0, data: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+  }
+}
 
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const res = await fetch('/api' + path, {
@@ -4531,7 +4813,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     setToken('');
     window.dispatchEvent(new Event('coregsm:logout'));
   }
-  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`);
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`, res.status, data as Record<string, unknown>);
   return data as T;
 }
 
@@ -4539,6 +4821,10 @@ export interface SettingsInfo {
   discordTokenSet: boolean;
   discordTokenHint: string | null;
   proxyUrl: string | null;
+  /** "Вход через Discord" (OAuth2) */
+  discordSecretSet?: boolean;
+  discordClientId?: string | null;
+  discordRedirect?: string;
 }
 
 export interface BotStatus {
@@ -4641,6 +4927,19 @@ export interface NewsSettings {
 export interface Me {
   username: string;
   role: 'admin' | 'player';
+  /** Discord CDN url */
+  avatarUrl: string | null;
+  discordName: string | null;
+  hasPassword: boolean;
+}
+
+export interface Session {
+  id: string | number;
+  createdAt: number;
+  lastSeen: number;
+  ip: string;
+  ua: string;
+  current: boolean;
 }
 
 export interface Brand {
@@ -4656,6 +4955,12 @@ export interface Access {
   publicPanel: boolean;
   /** players may create accounts */
   registration: boolean;
+  /** open: account at once; approval: an administrator must approve it */
+  registrationMode: 'open' | 'approval';
+  /** community rules ('' = none) */
+  rules: string;
+  /** "Войти через Discord" is configured */
+  discordLogin: boolean;
 }
 
 export interface UserRow {
@@ -4663,6 +4968,8 @@ export interface UserRow {
   username: string;
   role: 'admin' | 'player';
   createdAt: number | null;
+  status: 'active' | 'pending';
+  discordName: string | null;
 }
 
 /** what guests and players get for a posted news item */
@@ -4692,7 +4999,7 @@ export interface AuthState {
 export const AuthContext = createContext<AuthState>({
   me: null,
   isAdmin: false,
-  access: { publicPanel: true, registration: true, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } },
+  access: { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } },
   reload: async () => undefined,
   logout: () => undefined,
 });
@@ -5179,6 +5486,62 @@ __COREGSM_EOF__
 }
 .pill.live::before { animation: live-ring 2.2s ease-out infinite; }
 @media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
+
+.input[aria-invalid='true'] { border-color: rgb(var(--bad)); }
+
+/* ---------- sign-in screens ---------- */
+:root { --auth-glow: 0.14; }
+:root[data-theme='dark'] { --auth-glow: 0.28; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --auth-glow: 0.28; } }
+
+/* soft brand-coloured light behind the card */
+.auth-glow {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(42rem 32rem at 50% 42%, rgb(var(--brand) / var(--auth-glow)), transparent 70%),
+    radial-gradient(26rem 22rem at 12% 8%, rgb(var(--brand) / calc(var(--auth-glow) * 0.55)), transparent 70%),
+    radial-gradient(28rem 24rem at 92% 96%, rgb(var(--brand) / calc(var(--auth-glow) * 0.55)), transparent 70%);
+  animation: auth-glow 9s ease-in-out infinite alternate;
+}
+@keyframes auth-glow { from { opacity: .75; } to { opacity: 1; } }
+
+.auth-float {
+  position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s);
+  color: rgb(var(--brand)); opacity: .12; pointer-events: none;
+  transform: rotate(var(--r));
+  animation: auth-float var(--d) ease-in-out infinite alternate;
+}
+:root[data-theme='dark'] .auth-float { opacity: .16; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .auth-float { opacity: .16; } }
+@keyframes auth-float {
+  from { transform: translate3d(0, 0, 0) rotate(var(--r)); }
+  to { transform: translate3d(16px, -30px, 0) rotate(calc(var(--r) + 14deg)); }
+}
+
+.auth-card {
+  border-color: rgb(var(--brand) / calc(var(--auth-glow) * 1.1));
+  box-shadow: 0 28px 60px -28px rgb(var(--brand) / calc(var(--auth-glow) * 2.2)), 0 2px 8px rgb(0 0 0 / 0.06);
+  animation: auth-card-in .45s cubic-bezier(.2, .8, .2, 1) both;
+}
+:root[data-theme='dark'] .auth-card { box-shadow: 0 28px 70px -24px rgb(var(--brand) / 0.5), 0 2px 10px rgb(0 0 0 / 0.5); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .auth-card { box-shadow: 0 28px 70px -24px rgb(var(--brand) / 0.5), 0 2px 10px rgb(0 0 0 / 0.5); } }
+@keyframes auth-card-in { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
+
+.auth-swap { animation: auth-swap .3s ease-out both; }
+@keyframes auth-swap { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.shake { animation: auth-shake .42s cubic-bezier(.36, .07, .19, .97) both; }
+@keyframes auth-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(3px); }
+  30%, 50%, 70% { transform: translateX(-6px); }
+  40%, 60% { transform: translateX(6px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-glow, .auth-float, .auth-card, .auth-swap, .shake { animation: none; }
+  .animate-spin { animation-duration: 2s; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -5837,55 +6200,162 @@ export default function JournalPage() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Login.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
-import { api, setToken } from '../api';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { AuthShell, ErrorLine, Field, Logo, Wordmark } from '../ui';
+import { DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, Spinner, useShake } from '../ui';
 
-export default function Login({ onDone }: { onDone: () => void }) {
+const NAME_KEY = 'coregsm_login_name';
+const readName = () => {
+  try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; }
+};
+const writeName = (v: string) => {
+  try { v ? localStorage.setItem(NAME_KEY, v) : localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
+};
+
+const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+/** the sign-in form; the card around it (brand, tabs) is AuthCard */
+export default function Login({ onDone, notice }: { onDone: () => void; notice?: string }) {
   const { access } = useAuth();
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(readName);
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(() => readName() !== '');
+  const [userErr, setUserErr] = useState('');
+  const [passErr, setPassErr] = useState('');
   const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [lockUntil, setLockUntil] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const userRef = useRef<HTMLInputElement>(null);
+  const passRef = useRef<HTMLInputElement>(null);
+  const [shakeCls, shake] = useShake();
+
+  // focus the first empty field
+  useEffect(() => { (username ? passRef : userRef).current?.focus(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // lockout countdown
+  useEffect(() => {
+    if (!lockUntil) return;
+    setNow(Date.now());
+    const t = setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      if (n >= lockUntil) {
+        setLockUntil(0);
+        setTimeout(() => passRef.current?.focus(), 0);
+      }
+    }, 250);
+    return () => clearInterval(t);
+  }, [lockUntil]);
+
+  const left = lockUntil ? Math.max(0, Math.ceil((lockUntil - now) / 1000)) : 0;
+  const locked = left > 0;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy || locked) return;
+    setUserErr(''); setPassErr(''); setError(''); setPending(false);
+    const name = username.trim();
+    if (!name || !password) {
+      if (!name) setUserErr('Введите логин');
+      if (!password) setPassErr('Введите пароль');
+      (name ? passRef : userRef).current?.focus();
+      shake();
+      return;
+    }
     setBusy(true);
-    setError('');
     try {
-      const r = await api<{ token: string }>('/auth/login', 'POST', { username, password });
+      const r = await api<{ token: string }>('/auth/login', 'POST', { username: name, password });
+      writeName(remember ? name : '');
       setToken(r.token);
       onDone();
     } catch (err) {
-      setError((err as Error).message);
+      const status = err instanceof ApiError ? err.status : 0;
+      const data = err instanceof ApiError ? err.data : {};
+      if (status === 429) {
+        const sec = Math.max(1, Number(data.retryAfter) || 60);
+        setLockUntil(Date.now() + sec * 1000);
+        setNow(Date.now());
+      } else if (status === 403 && data.pending) {
+        setPending(true);
+      } else if (status === 401) {
+        const n = typeof data.attemptsLeft === 'number' ? data.attemptsLeft : null;
+        setPassErr(`${(err as Error).message}${n !== null ? `. Осталось попыток: ${n}` : ''}`);
+        passRef.current?.focus();
+        passRef.current?.select();
+      } else {
+        setError((err as Error).message);
+      }
+      shake();
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <AuthShell>
-      <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
-        <div>
-          <div className="mb-1"><Logo size={48} /></div>
-          <Wordmark className="text-3xl" />
-          <div className="font-semibold text-mute">Вход в аккаунт</div>
-        </div>
-        <Field label="Логин">
-          <input id="login-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus />
-        </Field>
-        <Field label="Пароль">
-          <input id="login-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-        </Field>
-        <ErrorLine text={error} />
-        <button className="btn w-full" disabled={busy || !username || !password}>{busy ? 'Проверяю…' : 'Войти'}</button>
-        <div className="space-y-1.5 text-center text-sm font-bold text-mute">
-          {access.registration && <p>Нет аккаунта? <a href="#/register" className="text-link hover:underline">Зарегистрироваться</a></p>}
-          {access.publicPanel && <p><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>}
-        </div>
-      </form>
-    </AuthShell>
+    <form onSubmit={submit} noValidate className={`space-y-4 ${shakeCls}`}>
+      {notice && <ErrorLine text={notice} />}
+      {pending && (
+        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
+          Ваша заявка ещё не одобрена. Дождитесь решения администратора, затем войдите снова.
+        </p>
+      )}
+      {locked && (
+        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status" aria-live="off">
+          Слишком много попыток. Повторите через {clock(left)}
+        </p>
+      )}
+
+      <div>
+        <label htmlFor="login-user" className="label">Логин</label>
+        <input
+          id="login-user"
+          ref={userRef}
+          className="input"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !password) { e.preventDefault(); passRef.current?.focus(); } }}
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          disabled={locked}
+          aria-invalid={userErr ? true : undefined}
+          aria-describedby={userErr ? 'login-user-err' : undefined}
+        />
+        <FieldError id="login-user-err" text={userErr} />
+      </div>
+
+      <PasswordField
+        id="login-pass"
+        ref={passRef}
+        label="Пароль"
+        value={password}
+        onChange={setPassword}
+        autoComplete="current-password"
+        error={passErr}
+        disabled={locked}
+      />
+
+      <label className="flex cursor-pointer items-center gap-2.5 text-sm font-bold text-mute">
+        <input type="checkbox" className="h-4 w-4 accent-brand" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+        Запомнить меня (только логин)
+      </label>
+
+      <ErrorLine text={error} />
+      <button className="btn w-full" disabled={busy || locked}>
+        {busy && <Spinner />}
+        {busy ? 'Проверяю…' : 'Войти'}
+      </button>
+
+      {access.discordLogin && (
+        <>
+          <OrDivider />
+          <DiscordButton label="Войти через Discord" href="/api/auth/discord/start?mode=login" />
+        </>
+      )}
+    </form>
   );
 }
 __COREGSM_EOF__
@@ -6533,17 +7003,33 @@ export default function NewsEditor({ id }: { id: number | null }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Profile.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState, type FormEvent } from 'react';
-import { api, type Server } from '../api';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { api, getToken, type Server, type Session } from '../api';
 import { useAuth } from '../auth';
-import { ErrorLine, Field, GameAvatar, IconServers, PageHead, StatusPill, toast } from '../ui';
+import { ago, ErrorLine, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast } from '../ui';
 
-/** The signed-in user's own page: account, password and favourite servers. */
+/** "Chrome · Windows" from a User-Agent string */
+function deviceName(ua: string): string {
+  if (!ua) return 'Неизвестное устройство';
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /OPR\/|Opera/.test(ua) ? 'Opera'
+    : /YaBrowser/.test(ua) ? 'Яндекс Браузер'
+    : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\/|CriOS/.test(ua) ? 'Chrome'
+    : /Safari\//.test(ua) ? 'Safari'
+    : '';
+  const os = /Windows/.test(ua) ? 'Windows'
+    : /Android/.test(ua) ? 'Android'
+    : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+    : /Mac OS X|Macintosh/.test(ua) ? 'macOS'
+    : /Linux/.test(ua) ? 'Linux'
+    : '';
+  return [browser, os].filter(Boolean).join(' · ') || ua.slice(0, 40);
+}
+
+/** The signed-in user's own page: account, password, Discord, sessions and favourite servers. */
 export default function ProfilePage() {
-  const { me, isAdmin, logout } = useAuth();
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [error, setError] = useState('');
+  const { me, isAdmin, logout, reload } = useAuth();
   const [favs, setFavs] = useState<Server[] | null>(null);
 
   useEffect(() => {
@@ -6554,44 +7040,26 @@ export default function ProfilePage() {
 
   if (!me) return null;
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError('');
-    try {
-      await api('/auth/password', 'POST', { current, next });
-      toast('Пароль изменён');
-      setCurrent('');
-      setNext('');
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
   return (
     <div className="space-y-6">
-      <PageHead title="Профиль" subtitle="Ваш аккаунт и избранные серверы" icon={<IconServers />} />
+      <PageHead title="Профиль" subtitle="Ваш аккаунт, безопасность и избранные серверы" icon={<IconServers />} />
 
       <div className="grid items-start gap-5 md:grid-cols-2">
-        <div className="panel flex items-center gap-4 p-5 md:col-span-2">
-          <span className="grid h-16 w-16 shrink-0 place-items-center rounded-3xl bg-brand text-3xl font-black text-white">{me.username.slice(0, 1).toUpperCase()}</span>
+        <div className="panel flex flex-wrap items-center gap-4 p-5 md:col-span-2">
+          <UserAvatar name={me.username} url={me.avatarUrl} size={64} tone="brand" className="!rounded-3xl" />
           <div className="min-w-0 flex-1">
             <div className="truncate text-2xl font-black">{me.username}</div>
-            <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{isAdmin ? 'АДМИНИСТРАТОР' : 'ИГРОК'}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{isAdmin ? 'АДМИНИСТРАТОР' : 'ИГРОК'}</span>
+              {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}
+            </div>
           </div>
           <button className="btn btn-soft" onClick={logout}>Выйти</button>
         </div>
 
-        <form onSubmit={submit} className="panel space-y-3.5 p-6">
-          <h2 className="text-lg font-black">Смена пароля</h2>
-          <Field label="Текущий пароль">
-            <input id="pf-current" className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required />
-          </Field>
-          <Field label="Новый пароль (от 8 символов)">
-            <input id="pf-next" className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" minLength={8} required />
-          </Field>
-          <ErrorLine text={error} />
-          <button className="btn">Сохранить пароль</button>
-        </form>
+        <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
+        <DiscordCard onChanged={reload} />
+        <SessionsCard />
 
         <div className="panel space-y-3 p-6">
           <h2 className="text-lg font-black">Избранные серверы</h2>
@@ -6609,68 +7077,375 @@ export default function ProfilePage() {
     </div>
   );
 }
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-frontend/src/pages"
-  cat > "$APP_DIR/core-frontend/src/pages/Register.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
-import { api, setToken } from '../api';
-import { useAuth } from '../auth';
-import { AuthShell, ErrorLine, Field, Logo, Wordmark, toast } from '../ui';
 
-// same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
-const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
-
-export default function Register({ onDone }: { onDone: () => void }) {
-  const { access } = useAuth();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [repeat, setRepeat] = useState('');
+function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChanged: () => Promise<void> }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [curErr, setCurErr] = useState('');
+  const [nextErr, setNextErr] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const curRef = useRef<HTMLInputElement>(null);
+  const nextRef = useRef<HTMLInputElement>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    setError('');
-    if (!LOGIN_RE.test(username.trim())) return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -');
-    if (password.length < 8) return setError('Пароль должен быть не короче 8 символов');
-    if (password !== repeat) return setError('Пароли не совпадают');
+    setCurErr(''); setNextErr(''); setError('');
+    if (hasPassword && !current) { setCurErr('Введите текущий пароль'); curRef.current?.focus(); return; }
+    if (next.length < 8) { setNextErr('Пароль должен быть не короче 8 символов'); nextRef.current?.focus(); return; }
     setBusy(true);
     try {
-      const r = await api<{ token: string }>('/auth/register', 'POST', { username: username.trim(), password });
-      setToken(r.token);
-      toast('Аккаунт создан. Добро пожаловать!');
-      onDone();
+      await api('/auth/password', 'POST', hasPassword ? { current, next } : { next });
+      toast(hasPassword ? 'Пароль изменён' : 'Пароль задан');
+      setCurrent('');
+      setNext('');
+      await onChanged();
     } catch (err) {
       setError((err as Error).message);
+    } finally {
       setBusy(false);
     }
   };
 
   return (
-    <AuthShell>
-      <form onSubmit={submit} className="pop panel w-full max-w-sm space-y-4 p-7">
+    <form onSubmit={submit} noValidate className="panel space-y-3.5 p-6">
+      <h2 className="text-lg font-black">{hasPassword ? 'Смена пароля' : 'Задать пароль'}</h2>
+      {!hasPassword && <p className="font-semibold text-mute">Сейчас вы входите только через Discord. Пароль позволит входить и по логину.</p>}
+      {hasPassword && (
+        <PasswordField id="pf-current" ref={curRef} label="Текущий пароль" value={current} onChange={setCurrent} autoComplete="current-password" error={curErr} />
+      )}
+      <PasswordField id="pf-next" ref={nextRef} label="Новый пароль (от 8 символов)" value={next} onChange={setNext} autoComplete="new-password" error={nextErr}>
+        <PasswordStrength password={next} />
+      </PasswordField>
+      <ErrorLine text={error} />
+      <button className="btn" disabled={busy}>{hasPassword ? 'Сохранить пароль' : 'Задать пароль'}</button>
+    </form>
+  );
+}
+
+function DiscordCard({ onChanged }: { onChanged: () => Promise<void> }) {
+  const { me, access } = useAuth();
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!me) return null;
+
+  const unlink = async () => {
+    if (!window.confirm('Отвязать Discord от аккаунта?')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api('/me/discord', 'DELETE');
+      toast('Discord отвязан');
+      await onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const link = () => { window.location.href = `/api/auth/discord/start?mode=link&t=${encodeURIComponent(getToken())}`; };
+
+  return (
+    <div className="panel space-y-3.5 p-6">
+      <h2 className="text-lg font-black">Discord</h2>
+      {me.discordName ? (
+        <>
+          <div className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+            <UserAvatar name={me.discordName} url={me.avatarUrl} size={40} tone="brand" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-extrabold">{me.discordName}</div>
+              <div className="text-sm font-semibold text-mute">Аккаунт привязан</div>
+            </div>
+            <button className="btn btn-danger btn-sm" onClick={() => void unlink()} disabled={busy}>Отвязать</button>
+          </div>
+          <ErrorLine text={error} />
+        </>
+      ) : (
+        <>
+          <p className="font-semibold text-mute">
+            {access.discordLogin ? 'Привяжите Discord, чтобы входить в одно касание и видеть свой аватар.' : 'Вход через Discord пока не настроен администратором.'}
+          </p>
+          <button className="btn" onClick={link} disabled={!access.discordLogin}>Привязать Discord</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SessionsCard() {
+  const [list, setList] = useState<Session[] | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    api<Session[]>('/sessions').then(setList).catch((e: Error) => { setList([]); setError(e.message); });
+  }, []);
+  useEffect(load, [load]);
+
+  const end = async (s: Session) => {
+    setError('');
+    await api(`/sessions/${s.id}`, 'DELETE').then(() => toast('Сеанс завершён')).catch((e: Error) => setError(e.message));
+    load();
+  };
+  const endOthers = async () => {
+    if (!window.confirm('Завершить все сеансы, кроме этого?')) return;
+    setBusy(true);
+    setError('');
+    await api<{ revoked: number }>('/sessions/revoke-others', 'POST')
+      .then((r) => toast(`Завершено сеансов: ${r.revoked}`))
+      .catch((e: Error) => setError(e.message));
+    setBusy(false);
+    load();
+  };
+
+  const others = list?.filter((s) => !s.current).length ?? 0;
+
+  return (
+    <div className="panel space-y-3 p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-black">Сеансы</h2>
+        {others > 0 && <button className="btn btn-soft btn-sm" onClick={() => void endOthers()} disabled={busy}>Завершить все остальные</button>}
+      </div>
+      {list === null && <div className="skeleton h-16 rounded-2xl bg-soft" />}
+      <ul className="space-y-2">
+        {list?.map((s) => (
+          <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-2xl bg-soft px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-extrabold">{deviceName(s.ua)}</span>
+                {s.current && <span className="pill pill-ok">ЭТО УСТРОЙСТВО</span>}
+              </div>
+              <div className="truncate text-sm font-semibold text-mute">
+                {s.ip || 'IP неизвестен'} · {s.current ? 'сейчас' : ago(s.lastSeen)}
+              </div>
+            </div>
+            {!s.current && <button className="btn btn-danger btn-sm" onClick={() => void end(s)}>Завершить</button>}
+          </li>
+        ))}
+      </ul>
+      <FieldError id="sessions-err" text={error} />
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Register.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { api, ApiError, setToken } from '../api';
+import { useAuth } from '../auth';
+import { DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, Spinner, toast, useShake } from '../ui';
+
+// same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
+const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
+const LOGIN_RULE = 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -';
+
+type Avail = 'idle' | 'checking' | 'free' | 'taken' | 'invalid';
+
+/** the registration form; the card around it (brand, tabs) is AuthCard */
+export default function Register({ onDone }: { onDone: () => void }) {
+  const { access } = useAuth();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [accept, setAccept] = useState(false);
+  const [showRules, setShowRules] = useState(false);
+  const [avail, setAvail] = useState<Avail>('idle');
+  const [errs, setErrs] = useState<{ user?: string; pass?: string; repeat?: string; accept?: string }>({});
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState('');
+  const userRef = useRef<HTMLInputElement>(null);
+  const passRef = useRef<HTMLInputElement>(null);
+  const repRef = useRef<HTMLInputElement>(null);
+  const acceptRef = useRef<HTMLInputElement>(null);
+  const [shakeCls, shake] = useShake();
+  const hasRules = access.rules.trim() !== '';
+
+  useEffect(() => { userRef.current?.focus(); }, []);
+
+  // live availability: debounced, and an answer for an older name is ignored
+  useEffect(() => {
+    const name = username.trim();
+    if (!name) { setAvail('idle'); return; }
+    if (!LOGIN_RE.test(name)) { setAvail('invalid'); return; }
+    setAvail('checking');
+    let stale = false;
+    const t = setTimeout(() => {
+      api<{ valid: boolean; available: boolean }>(`/auth/check?username=${encodeURIComponent(name)}`)
+        .then((r) => { if (!stale) setAvail(!r.valid ? 'invalid' : r.available ? 'free' : 'taken'); })
+        .catch(() => { if (!stale) setAvail('idle'); });
+    }, 400);
+    return () => { stale = true; clearTimeout(t); };
+  }, [username]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setError('');
+    const name = username.trim();
+    const next: typeof errs = {};
+    if (!LOGIN_RE.test(name)) next.user = LOGIN_RULE;
+    else if (avail === 'taken') next.user = 'Этот логин уже занят';
+    if (password.length < 8) next.pass = 'Пароль должен быть не короче 8 символов';
+    if (password !== repeat) next.repeat = 'Пароли не совпадают';
+    if (hasRules && !accept) next.accept = 'Нужно согласиться с правилами';
+    setErrs(next);
+    if (Object.keys(next).length) {
+      (next.user ? userRef : next.pass ? passRef : next.repeat ? repRef : acceptRef).current?.focus();
+      shake();
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api<{ token?: string; pending?: boolean }>('/auth/register', 'POST', {
+        username: name,
+        password,
+        ...(hasRules ? { acceptRules: true } : {}),
+      });
+      if (r.token) {
+        setToken(r.token);
+        toast('Аккаунт создан. Добро пожаловать!');
+        onDone();
+      } else {
+        setSent(name);
+      }
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : 0;
+      if (status === 409) {
+        setErrs({ user: (err as Error).message });
+        setAvail('taken');
+        userRef.current?.focus();
+      } else {
+        setError((err as Error).message);
+      }
+      shake();
+      setBusy(false);
+    }
+  };
+
+  if (sent) {
+    return (
+      <div className="space-y-4 text-center">
+        <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-okbg text-2xl font-black text-ok" aria-hidden>✓</span>
         <div>
-          <div className="mb-1"><Logo size={48} /></div>
-          <Wordmark className="text-3xl" />
-          <div className="font-semibold text-mute">Регистрация игрока</div>
+          <h2 className="text-xl font-black">Заявка отправлена</h2>
+          <p className="mt-1 font-semibold text-mute">
+            Дождитесь одобрения администратора. Когда заявку одобрят, вы сможете войти под логином «{sent}».
+          </p>
         </div>
-        <Field label="Логин">
-          <input id="reg-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus placeholder="например, Иван Петров" />
-        </Field>
-        <Field label="Пароль (от 8 символов)">
-          <input id="reg-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" minLength={8} />
-        </Field>
-        <Field label="Повторите пароль">
-          <input id="reg-pass2" className="input" type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} autoComplete="new-password" />
-        </Field>
-        <ErrorLine text={error} />
-        <button className="btn w-full" disabled={busy || !username || !password}>{busy ? 'Создаю…' : 'Создать аккаунт'}</button>
-        <div className="space-y-1.5 text-center text-sm font-bold text-mute">
-          <p>Уже есть аккаунт? <a href="#/login" className="text-link hover:underline">Войти</a></p>
-          {access.publicPanel && <p><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>}
+        <a href="#/login" className="btn w-full">Ко входу</a>
+      </div>
+    );
+  }
+
+  const availText: Record<Avail, { t: string; cls: string }> = {
+    idle: { t: '', cls: '' },
+    checking: { t: 'Проверяю…', cls: 'text-mute' },
+    free: { t: 'Логин свободен', cls: 'text-ok' },
+    taken: { t: 'Логин занят', cls: 'text-bad' },
+    invalid: { t: 'Недопустимый логин', cls: 'text-bad' },
+  };
+  const av = availText[avail];
+
+  return (
+    <form onSubmit={submit} noValidate className={`space-y-4 ${shakeCls}`}>
+      {access.registrationMode === 'approval' && (
+        <p className="rounded-2xl bg-soft px-4 py-2.5 text-sm font-bold text-mute">Регистрация по заявке: аккаунт заработает после одобрения администратором.</p>
+      )}
+
+      <div>
+        <label htmlFor="reg-user" className="label">Логин</label>
+        <input
+          id="reg-user"
+          ref={userRef}
+          className="input"
+          value={username}
+          onChange={(e) => { setUsername(e.target.value); setErrs((x) => ({ ...x, user: undefined })); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); passRef.current?.focus(); } }}
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          placeholder="например, Иван Петров"
+          aria-invalid={errs.user || avail === 'taken' || avail === 'invalid' ? true : undefined}
+          aria-describedby="reg-user-err reg-user-avail"
+        />
+        <FieldError id="reg-user-err" text={errs.user} />
+        <p id="reg-user-avail" aria-live="polite" className={`mt-1.5 text-sm font-bold ${av.cls}`}>
+          {!errs.user && av.t}
+          {!errs.user && avail === 'invalid' && <span className="font-semibold text-mute">. 3-32 символа: буквы, цифры, пробел, _ . -</span>}
+        </p>
+      </div>
+
+      <PasswordField
+        id="reg-pass"
+        ref={passRef}
+        label="Пароль (от 8 символов)"
+        value={password}
+        onChange={(v) => { setPassword(v); setErrs((x) => ({ ...x, pass: undefined })); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); repRef.current?.focus(); } }}
+        autoComplete="new-password"
+        error={errs.pass}
+      >
+        <PasswordStrength password={password} />
+      </PasswordField>
+
+      <PasswordField
+        id="reg-pass2"
+        ref={repRef}
+        label="Повторите пароль"
+        value={repeat}
+        onChange={(v) => { setRepeat(v); setErrs((x) => ({ ...x, repeat: undefined })); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && hasRules && !accept) { e.preventDefault(); acceptRef.current?.focus(); } }}
+        autoComplete="new-password"
+        error={errs.repeat}
+      />
+
+      {hasRules && (
+        <div>
+          <label className="flex cursor-pointer items-start gap-2.5 text-sm font-bold">
+            <input
+              ref={acceptRef}
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 shrink-0 accent-brand"
+              checked={accept}
+              onChange={(e) => { setAccept(e.target.checked); setErrs((x) => ({ ...x, accept: undefined })); }}
+              aria-invalid={errs.accept ? true : undefined}
+              aria-describedby={errs.accept ? 'reg-accept-err' : undefined}
+              required
+            />
+            <span>Я согласен(на) с правилами сообщества</span>
+          </label>
+          <FieldError id="reg-accept-err" text={errs.accept} />
+          <button
+            type="button"
+            className="mt-1.5 text-sm font-extrabold text-link hover:underline"
+            aria-expanded={showRules}
+            aria-controls="reg-rules"
+            onClick={() => setShowRules((v) => !v)}
+          >
+            {showRules ? 'Скрыть правила' : 'Показать правила'}
+          </button>
+          {showRules && (
+            <div id="reg-rules" className="pop mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-2xl bg-soft px-4 py-3 text-sm font-semibold">
+              {access.rules}
+            </div>
+          )}
         </div>
-      </form>
-    </AuthShell>
+      )}
+
+      <ErrorLine text={error} />
+      <button className="btn w-full" disabled={busy}>
+        {busy && <Spinner />}
+        {busy ? 'Создаю…' : access.registrationMode === 'approval' ? 'Отправить заявку' : 'Создать аккаунт'}
+      </button>
+
+      {access.discordLogin && (
+        <>
+          <OrDivider />
+          <DiscordButton label="Войти через Discord" href="/api/auth/discord/start?mode=login" />
+        </>
+      )}
+    </form>
   );
 }
 __COREGSM_EOF__
@@ -7262,7 +8037,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
-import { ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
+import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -7391,6 +8166,7 @@ function BotCard() {
   const [proxy, setProxy] = useState('');
   const [proxyType, setProxyType] = useState<ProxyType>('socks5');
   const [clearProxy, setClearProxy] = useState(false);
+  const [secret, setSecret] = useState('');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -7406,13 +8182,15 @@ function BotCard() {
     setError('');
     setSaved(false);
     try {
-      const body: { discordToken?: string; proxyUrl?: string; proxyType?: ProxyType } = {};
+      const body: { discordToken?: string; discordClientSecret?: string; proxyUrl?: string; proxyType?: ProxyType } = {};
       if (token.trim()) body.discordToken = token.trim();
+      if (secret.trim()) body.discordClientSecret = secret.trim();
       if (clearProxy) body.proxyUrl = '';
       else if (proxy.trim()) { body.proxyUrl = proxy.trim(); body.proxyType = proxyType; }
       const r = await api<SettingsInfo>('/settings', 'PUT', body);
       setInfo(r);
       setTokenValue('');
+      setSecret('');
       setProxy('');
       setClearProxy(false);
       setSaved(true);
@@ -7433,7 +8211,17 @@ function BotCard() {
     }
   };
 
+  const removeSecret = async () => {
+    if (!window.confirm('Удалить Client Secret? Вход через Discord перестанет работать.')) return;
+    try {
+      setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   const tokenSet = !!info?.discordTokenSet;
+  const secretSet = !!info?.discordSecretSet;
 
   return (
     <form onSubmit={save} className="panel space-y-3.5 p-6">
@@ -7479,6 +8267,39 @@ function BotCard() {
       )}
       <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
 
+      <div className="space-y-3 rounded-2xl bg-soft p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-black">Вход через Discord</h3>
+          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? 'ВКЛЮЧЁН' : 'НЕ НАСТРОЕН'}</span>
+        </div>
+        <Field label="Client Secret">
+          <input
+            id="set-secret"
+            className="input font-mono"
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            autoComplete="off"
+            placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
+          />
+        </Field>
+        {secretSet && (
+          <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={() => void removeSecret()}>Удалить Client Secret</button>
+        )}
+        {info?.discordRedirect && (
+          <div>
+            <label htmlFor="set-redirect" className="label">Redirect URI</label>
+            <div className="flex gap-2">
+              <input id="set-redirect" className="input font-mono" readOnly value={info.discordRedirect} onFocus={(e) => e.currentTarget.select()} />
+              <CopyButton text={info.discordRedirect} className="shrink-0" />
+            </div>
+          </div>
+        )}
+        <p className="text-sm font-semibold text-mute">
+          Добавьте этот адрес в Developer Portal: OAuth2 → Redirects. Client Secret скопируйте на той же странице OAuth2.
+        </p>
+      </div>
+
       <ErrorLine text={error} />
       {tokenSet && status?.inviteUrl && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
@@ -7487,7 +8308,7 @@ function BotCard() {
         </div>
       )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
-      <button className="btn" disabled={busy || (!token.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
+      <button className="btn" disabled={busy || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
     </form>
   );
 }
@@ -7661,15 +8482,30 @@ export function UsersTab() {
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState('');
+  const [rules, setRules] = useState('');
 
   const load = () => {
-    api<Access>('/access').then(setAccess).catch((e) => setError(e.message));
+    api<Access>('/access').then((a) => { setAccess(a); setRules(a.rules ?? ''); }).catch((e) => setError(e.message));
     api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
   };
   useEffect(load, []);
 
   const save = async (patch: Partial<Access>) => {
     await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast('Сохранено'); }).catch((e) => setError(e.message));
+  };
+  const approve = async (u: UserRow) => {
+    await api(`/users/${u.id}/approve`, 'POST').then(() => toast(`«${u.username}» одобрен`)).catch((e) => setError(e.message));
+    load();
+  };
+  const reject = async (u: UserRow) => {
+    if (!window.confirm(`Отклонить заявку «${u.username}»?`)) return;
+    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
+    load();
+  };
+  const saveRules = async () => {
+    await api<Access>('/access', 'PUT', { rules: rules.trim() })
+      .then((a) => { setAccess(a); setRules(a.rules ?? ''); void reload(); toast(rules.trim() ? 'Правила сохранены' : 'Правила убраны'); })
+      .catch((e) => setError(e.message));
   };
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
@@ -7686,6 +8522,8 @@ export function UsersTab() {
     load();
   };
 
+  const pendingUsers = users.filter((u) => u.status === 'pending');
+
   return (
     <>
       <div className="panel space-y-4 p-6">
@@ -7694,10 +8532,42 @@ export function UsersTab() {
           <>
             <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
             <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
+            <div className="pl-8">
+              <label htmlFor="reg-mode" className="label">Режим регистрации</label>
+              <select id="reg-mode" className="input !w-auto max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
+                <option value="open">Открытая: сразу</option>
+                <option value="approval">По заявке: после одобрения администратором</option>
+              </select>
+            </div>
           </>
         )}
         <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы, писать новости и менять настройки могут администраторы.</p>
       </div>
+
+      <div className="panel space-y-3 p-6">
+        <h2 className="text-lg font-black">Правила сообщества</h2>
+        <p className="font-semibold text-mute">Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было.</p>
+        <textarea id="rules" className="input min-h-32" rows={6} maxLength={5000} value={rules} onChange={(e) => setRules(e.target.value)} aria-label="Правила сообщества" placeholder="1. Уважайте других игроков…" />
+        <div className="flex items-center justify-between gap-3">
+          <button className="btn" onClick={() => void saveRules()} disabled={!access || rules.trim() === (access.rules ?? '').trim()}>Сохранить</button>
+          <span className="text-sm font-semibold text-mute">{rules.length} / 5000</span>
+        </div>
+      </div>
+
+      {pendingUsers.length > 0 && (
+        <div className="panel space-y-3 p-6">
+          <h2 className="text-lg font-black">Заявки на регистрацию</h2>
+          <ul className="divide-y divide-line">
+            {pendingUsers.map((u) => (
+              <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.discordName ? ` · Discord: ${u.discordName}` : ''}</span>
+                <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
+                <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="panel space-y-3 p-6">
         <h2 className="text-lg font-black">Пользователи</h2>
@@ -7705,7 +8575,11 @@ export function UsersTab() {
         <ul className="divide-y divide-line">
           {users.map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-              <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.username === me?.username ? ' (вы)' : ''}</span>
+              <span className="min-w-0 flex-1 truncate font-bold">
+                {u.username}{u.username === me?.username ? ' (вы)' : ''}
+                {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
+              </span>
+              {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
                 <option value="player">Игрок</option>
                 <option value="admin">Администратор</option>
@@ -7724,7 +8598,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Setup.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { AuthShell, ErrorLine, Field, Logo, ProxyField, Wordmark, type ProxyType } from '../ui';
+import { AuthBrand, AuthShell, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -7741,13 +8615,14 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   const [proxyType, setProxyType] = useState<ProxyType>('socks5');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [shakeCls, shake] = useShake();
 
   const next = (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!LOGIN_RE.test(username.trim())) return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -');
-    if (password.length < 10) return setError('Пароль должен быть не короче 10 символов');
-    if (password !== repeat) return setError('Пароли не совпадают');
+    if (!LOGIN_RE.test(username.trim())) { shake(); return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'); }
+    if (password.length < 10) { shake(); return setError('Пароль должен быть не короче 10 символов'); }
+    if (password !== repeat) { shake(); return setError('Пароли не совпадают'); }
     setStep(1);
   };
 
@@ -7775,10 +8650,8 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
   return (
     <AuthShell>
-      <div className="pop panel w-full max-w-md p-7">
-        <div className="mb-2"><Logo size={48} /></div>
-        <Wordmark className="mb-1 block text-3xl" />
-        <p className="mb-5 font-semibold text-mute">Первоначальная настройка панели</p>
+      <div className={`auth-card w-full max-w-md rounded-3xl border bg-card/90 p-6 backdrop-blur sm:p-7 ${shakeCls}`}>
+        <AuthBrand subtitle="Первоначальная настройка панели" />
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
           {STEPS.map((s, i) => (
@@ -7803,12 +8676,10 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             <Field label="Логин администратора">
               <input id="setup-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="username" />
             </Field>
-            <Field label="Пароль (от 10 символов)">
-              <input id="setup-pass" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={10} autoComplete="new-password" />
-            </Field>
-            <Field label="Повторите пароль">
-              <input id="setup-pass2" className="input" type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} required autoComplete="new-password" />
-            </Field>
+            <PasswordField id="setup-pass" label="Пароль (от 10 символов)" value={password} onChange={setPassword} autoComplete="new-password">
+              <PasswordStrength password={password} />
+            </PasswordField>
+            <PasswordField id="setup-pass2" label="Повторите пароль" value={repeat} onChange={setRepeat} autoComplete="new-password" />
             <ErrorLine text={error} />
             <button className="btn w-full">Далее</button>
           </form>
@@ -8007,11 +8878,11 @@ export default function SystemPage() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useAuth } from './auth';
 import { api } from './api';
 import { GAME_IMAGE, gameAbbr, gameColor } from './games';
-import { gameIconPath } from './gameIcons';
+import { gameIconPath, ICON_PATHS } from './gameIcons';
 
 export function usePoll(fn: () => void, ms: number) {
   const ref = useRef(fn);
@@ -8414,12 +9285,279 @@ export function Toaster() {
   );
 }
 
-// ---------- sign-in / first-run shell: one centred card on the plain page background ----------
+// ---------- sign-in / first-run: glow, floating pictograms, one centred card ----------
+const FLOATERS: { icon: string; x: string; y: string; s: string; r: string; d: string }[] = [
+  { icon: 'cube', x: '6%', y: '12%', s: '54px', r: '-12deg', d: '19s' },
+  { icon: 'crosshair', x: '82%', y: '9%', s: '62px', r: '8deg', d: '23s' },
+  { icon: 'axe', x: '90%', y: '48%', s: '48px', r: '20deg', d: '17s' },
+  { icon: 'shield', x: '4%', y: '58%', s: '58px', r: '-6deg', d: '21s' },
+  { icon: 'sword', x: '15%', y: '84%', s: '50px', r: '14deg', d: '25s' },
+  { icon: 'headset', x: '74%', y: '82%', s: '56px', r: '-10deg', d: '20s' },
+  { icon: 'skull', x: '46%', y: '4%', s: '44px', r: '6deg', d: '24s' },
+  { icon: 'paw', x: '58%', y: '90%', s: '46px', r: '-16deg', d: '18s' },
+  { icon: 'car', x: '30%', y: '26%', s: '40px', r: '10deg', d: '22s' },
+  { icon: 'leaf', x: '68%', y: '30%', s: '40px', r: '-8deg', d: '26s' },
+];
+
+function AuthDecor() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div className="auth-glow" />
+      {FLOATERS.map((f) => (
+        <svg
+          key={f.icon}
+          className="auth-float"
+          style={{ '--x': f.x, '--y': f.y, '--s': f.s, '--r': f.r, '--d': f.d } as CSSProperties}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d={ICON_PATHS[f.icon]} />
+        </svg>
+      ))}
+    </div>
+  );
+}
+
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center p-4 sm:p-8">
-      <div className="absolute right-4 top-4"><ThemeToggle /></div>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden p-4 sm:p-8">
+      <AuthDecor />
+      <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
+      <div className="relative z-[1] flex w-full justify-center">{children}</div>
+    </div>
+  );
+}
+
+/** the community logo and name, big */
+export function AuthBrand({ subtitle }: { subtitle?: string }) {
+  return (
+    <div className="mb-5 flex flex-col items-center text-center">
+      <Logo size={64} />
+      <Wordmark className="mt-2 text-3xl" />
+      {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+    </div>
+  );
+}
+
+/** card with the brand block and the Вход / Регистрация switch; the content swaps with an animation */
+export function AuthCard({ mode, children }: { mode: 'login' | 'register'; children: ReactNode }) {
+  const { access } = useAuth();
+  const tabs = [
+    { id: 'login', label: 'Вход' },
+    { id: 'register', label: 'Регистрация' },
+  ] as const;
+  return (
+    <div className="auth-card w-full max-w-sm rounded-3xl border bg-card/90 p-6 backdrop-blur sm:p-7">
+      <AuthBrand subtitle={mode === 'login' ? 'Войдите в свой аккаунт' : 'Создайте аккаунт игрока'} />
+      {access.registration && (
+        <nav className="mb-5 flex gap-1 rounded-full bg-soft p-1" aria-label="Вход или регистрация">
+          {tabs.map((t) => (
+            <a
+              key={t.id}
+              href={`#/${t.id}`}
+              aria-current={mode === t.id ? 'page' : undefined}
+              className={`flex-1 rounded-full px-3 py-1.5 text-center font-extrabold transition ${mode === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+            >
+              {t.label}
+            </a>
+          ))}
+        </nav>
+      )}
+      <div key={mode} className="auth-swap">{children}</div>
+      {access.publicPanel && (
+        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>
+      )}
+    </div>
+  );
+}
+
+/** returns a class to put on an element and a function that plays the shake once */
+export function useShake(): [string, () => void] {
+  const [on, setOn] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const shake = () => {
+    setOn(false);
+    window.clearTimeout(timer.current);
+    // next frame: lets the class be removed first so that the animation restarts
+    requestAnimationFrame(() => {
+      setOn(true);
+      timer.current = window.setTimeout(() => setOn(false), 480);
+    });
+  };
+  return [on ? 'shake' : '', shake];
+}
+
+export function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity=".25" strokeWidth="3" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function FieldError({ id, text }: { id: string; text?: string }) {
+  return text ? <p id={id} className="mt-1.5 text-sm font-bold text-bad" role="alert">{text}</p> : null;
+}
+
+const IconEye = () => (
+  <Icon size={20}><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></Icon>
+);
+const IconEyeOff = () => (
+  <Icon size={20}><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.4 4.5-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /></Icon>
+);
+
+/** password input with a show/hide button, a Caps Lock warning and an inline error */
+export const PasswordField = forwardRef<
+  HTMLInputElement,
+  {
+    id: string;
+    label: string;
+    value: string;
+    onChange: (v: string) => void;
+    autoComplete: string;
+    error?: string;
+    hint?: string;
+    placeholder?: string;
+    disabled?: boolean;
+    autoFocus?: boolean;
+    onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void;
+    children?: ReactNode;
+  }
+>(function PasswordField({ id, label, value, onChange, autoComplete, error, hint, placeholder, disabled, autoFocus, onKeyDown, children }, ref) {
+  const [shown, setShown] = useState(false);
+  const [caps, setCaps] = useState(false);
+  const describedBy = [error ? `${id}-err` : '', caps ? `${id}-caps` : '', hint ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
+  const track = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    // getModifierState is missing for some synthetic/IME events
+    if (typeof e.getModifierState === 'function') setCaps(e.getModifierState('CapsLock'));
+  };
+  return (
+    <div>
+      <label htmlFor={id} className="label">{label}</label>
+      <div className="relative">
+        <input
+          id={id}
+          ref={ref}
+          className="input !pr-11"
+          type={shown ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => { track(e); onKeyDown?.(e); }}
+          onKeyUp={track}
+          onBlur={() => setCaps(false)}
+          autoComplete={autoComplete}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoFocus={autoFocus}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+          autoCapitalize="none"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink"
+          onClick={() => setShown((v) => !v)}
+          aria-label={shown ? 'Скрыть пароль' : 'Показать пароль'}
+          aria-pressed={shown}
+          title={shown ? 'Скрыть пароль' : 'Показать пароль'}
+        >
+          {shown ? <IconEyeOff /> : <IconEye />}
+        </button>
+      </div>
+      {caps && <p id={`${id}-caps`} className="mt-1.5 text-sm font-bold text-warn">Включён Caps Lock</p>}
+      <FieldError id={`${id}-err`} text={error} />
+      {hint && !error && <p id={`${id}-hint`} className="mt-1.5 text-sm font-semibold text-mute">{hint}</p>}
       {children}
+    </div>
+  );
+});
+
+/** 0..4; a short password never scores above 1 */
+export function passwordScore(p: string): number {
+  if (!p) return 0;
+  if (p.length < 8) return 1;
+  const classes = [/\p{Ll}/u, /\p{Lu}/u, /\d/, /[^\p{L}\d]/u].filter((r) => r.test(p)).length;
+  let s = 1;
+  if (p.length >= 12) s++;
+  if (classes >= 2) s++;
+  if (classes >= 3 && p.length >= 10) s++;
+  return Math.min(4, s);
+}
+
+const STRENGTH = [
+  { label: '', cls: 'bg-soft' },
+  { label: 'Слабый', cls: 'bg-bad' },
+  { label: 'Средний', cls: 'bg-warn' },
+  { label: 'Хороший', cls: 'bg-ok' },
+  { label: 'Отличный', cls: 'bg-ok' },
+];
+
+export function PasswordStrength({ password }: { password: string }) {
+  if (!password) return null;
+  const score = passwordScore(password);
+  const st = STRENGTH[score];
+  return (
+    <div className="mt-2 flex items-center gap-2" aria-live="polite">
+      <div className="flex flex-1 gap-1" aria-hidden>
+        {[1, 2, 3, 4].map((i) => (
+          <span key={i} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= score ? st.cls : 'bg-soft'}`} />
+        ))}
+      </div>
+      <span className="w-20 text-right text-sm font-extrabold text-mute">{st.label}</span>
+    </div>
+  );
+}
+
+/** avatar from Discord, or the first letter when there is none (or the image failed to load) */
+export function UserAvatar({ name, url, size = 28, tone = 'soft', className = '' }: { name: string; url?: string | null; size?: number; tone?: 'soft' | 'brand'; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+  if (url && !failed) {
+    return <img src={url} width={size} height={size} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(true)} className={`shrink-0 rounded-[30%] object-cover ${className}`} style={{ width: size, height: size }} />;
+  }
+  return (
+    <span
+      aria-hidden
+      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : 'bg-soft text-link'} ${className}`}
+      style={{ width: size, height: size, fontSize: size * 0.48 }}
+    >
+      {name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+const IconDiscordLogo = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+    <path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 2.9c-.2.4-.5.9-.6 1.3a18.3 18.3 0 0 0-5.5 0c-.2-.4-.4-.9-.6-1.3A19.7 19.7 0 0 0 3.8 4.4C.5 9 -.3 13.600.1 18.100a19.900 19.900 0 0 0 6 3c.5-.6.9-1.300 1.200-2-.7-.2-1.300-.5-1.900-.9l.4-.3a14.200 14.200 0 0 0 12.100 0l.4.3c-.6.4-1.200.7-1.900.9.4.7.8 1.400 1.200 2a19.900 19.900 0 0 0 6-3c.5-5.200-.8-9.700-3.500-13.700zM8 15.300c-1.200 0-2.200-1.100-2.200-2.400S6.800 10.500 8 10.500s2.200 1.100 2.200 2.400-1 2.400-2.200 2.400zm8 0c-1.200 0-2.200-1.100-2.200-2.400s1-2.400 2.200-2.400 2.200 1.100 2.200 2.400-1 2.400-2.200 2.400z" />
+  </svg>
+);
+
+/** full-page redirect to Discord; the backend returns to the panel afterwards */
+export function DiscordButton({ label, href, className = '' }: { label: string; href: string; className?: string }) {
+  return (
+    <a
+      href={href}
+      className={`inline-flex w-full items-center justify-center gap-2.5 rounded-full bg-[#5865f2] px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-[#4752c4] active:scale-[.98] ${className}`}
+    >
+      <IconDiscordLogo />
+      {label}
+    </a>
+  );
+}
+
+export function OrDivider() {
+  return (
+    <div className="my-4 flex items-center gap-3 text-sm font-bold text-mute" aria-hidden>
+      <span className="h-px flex-1 bg-line" />
+      или
+      <span className="h-px flex-1 bg-line" />
     </div>
   );
 }
