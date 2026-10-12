@@ -320,7 +320,7 @@ function ServerDetailView({ id }: { id: number }) {
 
       <article
         className="depth relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
-        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true, game: s.game }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
         {...depth}
       >
         <span aria-hidden className="depth-l1 pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />

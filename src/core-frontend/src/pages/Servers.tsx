@@ -257,7 +257,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
   return (
     <article
       className="depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
-      style={{ ...stagger(idx), background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
+      style={{ ...stagger(idx), background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
       onClick={onOpen}
       {...depth}
     >
@@ -319,7 +319,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
   return (
     <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
       {flash && <span className="flash-ring" aria-hidden />}
-      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true }) }}>
+      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }) }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
