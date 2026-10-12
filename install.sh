@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="05c11741210b"
+COREGSM_BUILD="34dd06fa046f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19617,6 +19617,20 @@ html[data-flat='shadow'] *, html[data-flat='shadow'] *::before, html[data-flat='
 html[data-flat='all'] *, html[data-flat='all'] *::before, html[data-flat='all'] *::after { box-shadow: none !important; text-shadow: none !important; }
 html[data-flat='filter'] *, html[data-flat='filter'] *::before, html[data-flat='filter'] *::after,
 html[data-flat='all'] *, html[data-flat='all'] *::before, html[data-flat='all'] *::after { filter: none !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; mask: none !important; -webkit-mask: none !important; clip-path: none !important; }
+
+/* ---------- black-square fix, round 3 (the square is gone with animations off, so it is a compositor layer) ----------
+   - entrance animations used fill-mode "both": a finished animation with a forwards fill keeps its element on its own
+     compositor layer for good (every tile, every chart); "backwards" only applies the start state during the delay.
+   - decorative endless loops (pings, rings, floats, glows) each keep a layer alive; they are static now. Spinners,
+     skeletons and the update progress stay. */
+.tile-in, .pop, .fade-in, .chart-reveal, .roll-d.new { animation-fill-mode: backwards; }
+.pill.live::before, .live-dot::after, .update-dot::after, .pill-glass-ok::before, .update-bob,
+.art-float, .art-float-2, .art-twinkle, .art-blink, .art-wobble, .art-spin, .auth-glow, .auth-float { animation: none !important; }
+
+/* finer bisect switches: /?flat=enter (entrance animations), /?flat=trans (transitions), /?flat=loop (endless loops) */
+html[data-flat='enter'] .tile-in, html[data-flat='enter'] .pop, html[data-flat='enter'] .fade-in, html[data-flat='enter'] .chart-reveal,
+html[data-flat='enter'] .roll-d.new, html[data-flat='enter'] .toast-in { animation: none !important; }
+html[data-flat='trans'] *, html[data-flat='trans'] *::before, html[data-flat='trans'] *::after { transition: none !important; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
