@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="34dd06fa046f"
+COREGSM_BUILD="21dcbaf43d4f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19631,6 +19631,16 @@ html[data-flat='all'] *, html[data-flat='all'] *::before, html[data-flat='all'] 
 html[data-flat='enter'] .tile-in, html[data-flat='enter'] .pop, html[data-flat='enter'] .fade-in, html[data-flat='enter'] .chart-reveal,
 html[data-flat='enter'] .roll-d.new, html[data-flat='enter'] .toast-in { animation: none !important; }
 html[data-flat='trans'] *, html[data-flat='trans'] *::before, html[data-flat='trans'] *::after { transition: none !important; }
+
+/* ---------- black-square fix, round 4 ----------
+   Only transitions made it appear. When the window is re-shown (tab switch, PrintScreen, Chrome's occlusion tracking)
+   the browser re-applies :hover under the cursor, and the server card under it ran a transform/translate transition:
+   a big rounded overflow-hidden card was promoted to a compositor layer for a moment and could be drawn black.
+   Cards now change only their shadow on hover (no transform), and the pointer parallax layers are static. */
+.tile-hover { transition: box-shadow .18s ease; }
+.tile-hover:hover, .tile-hover:active { transform: none; }
+.depth-l1, .depth-l2 { translate: none !important; transition: none !important; }
+.depth::before { display: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
