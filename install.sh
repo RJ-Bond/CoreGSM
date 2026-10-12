@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="965840247469"
+COREGSM_BUILD="7b41ac6dfdf2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6713,8 +6713,8 @@ export interface UpdateInfo {
 export interface ChangelogItem {
   sha: string;
   title: string;
-  /** ISO date */
-  date: string;
+  /** commit time, ms (older servers may send an ISO string) */
+  date: number | string | null;
   url: string;
 }
 
@@ -8592,7 +8592,9 @@ export default function BackupsCard() {
     if (file.name.endsWith('.enc')) {
       const p = await askPassphrase(file.name);
       if (p == null) return;
-      headers['x-backup-passphrase'] = p;
+      // headers are Latin-1: send the passphrase percent-encoded
+      headers['x-backup-passphrase'] = encodeURIComponent(p);
+      headers['x-backup-passphrase-encoding'] = 'uri';
     }
     setRestoring(true);
     setError('');
@@ -11750,7 +11752,7 @@ function UpdateCard() {
               <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
                 <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 break-words font-bold hover:text-link">{c.title}</a>
                 <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
-                <span className="text-sm font-semibold text-mute">{ago(Date.parse(c.date) || null)}</span>
+                <span className="text-sm font-semibold text-mute">{ago(typeof c.date === 'number' ? c.date : Date.parse(String(c.date)) || null)}</span>
               </li>
             ))}
           </ul>
