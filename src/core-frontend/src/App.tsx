@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
+import { BLACK, WHITE, contrast, ensureContrast, mix, parseHex, parseTriplet, triplet, type RGB } from './colors';
+import Tour from './components/Tour';
+import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Setup from './pages/Setup';
@@ -8,7 +11,14 @@ import ServersPage from './pages/Servers';
 import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, useHash } from './ui';
+import StatusPage from './pages/Status';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, parseHash, toast, useHash } from './ui';
+
+const IconStatus = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </svg>
+);
 
 interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
 
@@ -16,41 +26,85 @@ interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: bo
 const PAGES: PageDef[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
   { id: 'news', label: 'Новости', icon: IconNews },
+  { id: 'status', label: 'Статус', icon: IconStatus },
   { id: 'admin', label: 'Админка', icon: IconSettings, admin: true },
 ];
 
-const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+const ADMIN_TITLES: Record<string, string> = {
+  servers: 'Серверы',
+  discord: 'Discord',
+  news: 'Новости',
+  alerts: 'Оповещения',
+  cards: 'Карточки',
+  users: 'Пользователи',
+  journal: 'Журнал',
+  system: 'Система',
+  settings: 'Настройки',
+};
 
-/** brand colour, name and tab colour; recomputed when the theme flips */
+const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+const DEFAULT_BRAND: RGB = [79, 70, 229];
+
+const isDarkNow = (root: HTMLElement) =>
+  root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+/**
+ * Brand colour, name and tab colour; recomputed when the theme flips.
+ * Safeguards: white text on filled buttons keeps >= 4.5:1 (the fill is darkened, hue kept); brand-coloured text (--link)
+ * keeps >= 4.5:1 on the card and soft surfaces of the current theme (darkened in light, lightened in dark).
+ */
 function useBrand(b: Access['brand']) {
   useEffect(() => {
     const root = document.documentElement;
     const apply = () => {
-      const hex = b.color.replace('#', '');
-      const [r, g, bl] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
-      const dark = root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      const mix = (c: number, t: number, k: number) => Math.round(c + (t - c) * k);
-      const hover = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.2) : mix(c, 0, 0.15))).join(' ');
-      const link = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.45) : c)).join(' ');
-      root.style.setProperty('--brand', `${r} ${g} ${bl}`);
-      root.style.setProperty('--brand-hover', hover);
-      root.style.setProperty('--link', link);
+      const base = parseHex(b.color) ?? DEFAULT_BRAND;
+      const dark = isDarkNow(root);
+      const style = getComputedStyle(root);
+      const surface = (name: string, fallback: RGB) => parseTriplet(style.getPropertyValue(`--${name}`)) ?? fallback;
+      const card = surface('card', dark ? [23, 24, 29] : WHITE);
+      const soft = surface('soft', dark ? [33, 34, 41] : [238, 240, 244]);
+
+      // filled buttons: white text must stay readable
+      const fill = contrast(base, WHITE) >= 4.5 ? base : ensureContrast(base, [WHITE], 4.5, 'darken');
+      // hover is always a bit darker, so white text keeps its contrast
+      const hover = mix(fill, BLACK, 0.14);
+      // brand-coloured text and focus rings
+      const link = dark
+        ? ensureContrast(mix(base, WHITE, 0.45), [card, soft], 4.5, 'lighten')
+        : ensureContrast(base, [card, soft], 4.5, 'darken');
+
+      root.style.setProperty('--brand', triplet(fill));
+      root.style.setProperty('--brand-hover', triplet(hover));
+      root.style.setProperty('--link', triplet(link));
     };
     apply();
     const mo = new MutationObserver(apply);
     mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
-    document.title = b.name;
+    // "as in the system" theme: follow the OS switching while the page is open
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener?.('change', apply);
     document.querySelector('meta[name=theme-color]')?.setAttribute('content', b.color);
-    return () => mo.disconnect();
-  }, [b.color, b.name]);
+    return () => {
+      mo.disconnect();
+      mq.removeEventListener?.('change', apply);
+    };
+  }, [b.color]);
 }
 
-interface Boot { ready: boolean; needsSetup: boolean; me: Me | null; access: Access }
+interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
+
+const IconLogout = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+  </svg>
+);
 
 export default function App() {
   const { page: rawPage, sub } = useHash();
-  const [boot, setBoot] = useState<Boot>({ ready: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
+  const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [authing, setAuthing] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
 
   // who is signed in, what is open to guests, and whether the first-run wizard is still pending
   const load = useCallback(async () => {
@@ -59,26 +113,93 @@ export default function App() {
       api<{ needed: boolean }>('/setup/status').catch(() => ({ needed: false })),
     ]);
     let me: Me | null = null;
+    let offline = false;
     if (getToken()) {
-      me = await api<Me>('/me').catch(() => null);
-      if (!me) setToken('');
+      try {
+        me = await api<Me>('/me');
+      } catch (e) {
+        // only a rejected token ends the session; a network error or a 5xx must not log anyone out
+        if (e instanceof ApiError && e.status === 401) setToken('');
+        else offline = true;
+      }
     }
-    setBoot({ ready: true, needsSetup: setup.needed, me, access });
+    setBoot((prev) => {
+      if (offline) return prev.ready && prev.me ? prev : { ...prev, ready: true, offline: true };
+      return { ready: true, offline: false, needsSetup: setup.needed, me, access };
+    });
   }, []);
 
-  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>)
+  const meRef = useRef<Me | null>(null);
+  const accessRef = useRef<Access>(DEFAULT_ACCESS);
+  meRef.current = boot.me;
+  accessRef.current = boot.access;
+  const loggingOut = useRef(false);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // while the server is unreachable at start, try again by itself
+  useEffect(() => {
+    if (!boot.offline) return;
+    const t = setInterval(() => void load(), 10_000);
+    return () => clearInterval(t);
+  }, [boot.offline, load]);
+
+  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>).
+  // The token leaves the address bar at once (no history entry), is checked with /me and only then kept.
+  const pendingJwt = useRef('');
   useEffect(() => {
     if (rawPage !== 'auth' || !sub) return;
-    setToken(sub);
-    window.location.hash = '#/servers';
-    void load();
-  }, [rawPage, sub, load]);
-  useEffect(() => { void load(); }, [load]);
+    pendingJwt.current = sub;
+    setAuthing(true);
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/servers`);
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  }, [rawPage, sub]);
   useEffect(() => {
-    // a rejected token (expired, account removed) comes back as this event
-    const out = () => void load();
+    if (!boot.ready || !authing) return;
+    const jwt = pendingJwt.current;
+    pendingJwt.current = '';
+    if (!jwt) { setAuthing(false); return; }
+    // already signed in: the link is ignored
+    if (boot.me) { setAuthing(false); return; }
+    void (async () => {
+      let ok = false;
+      try {
+        ok = (await fetch('/api/me', { headers: { Authorization: `Bearer ${jwt}` } })).ok;
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        setToken(jwt);
+        await load();
+      } else {
+        toast('Не удалось войти через Discord. Попробуйте ещё раз', 'err');
+        window.location.hash = '#/login';
+      }
+      setAuthing(false);
+    })();
+  }, [boot.ready, boot.me, authing, load]);
+
+  useEffect(() => {
+    // a rejected token (expired, account removed) comes back as this event; several requests may report it at once
+    let timer = 0;
+    const out = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        // nobody was signed in, we signed out ourselves, or a new sign-in has already happened: nothing to do
+        if (!meRef.current || loggingOut.current || getToken()) return;
+        toast('Сеанс завершён, войдите снова', 'info');
+        setBoot((p) => ({ ...p, me: null }));
+        const { page } = parseHash();
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status');
+        if (!publicRoute) window.location.hash = '#/login';
+        void load();
+      }, 300);
+    };
     window.addEventListener('coregsm:logout', out);
-    return () => window.removeEventListener('coregsm:logout', out);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('coregsm:logout', out);
+    };
   }, [load]);
 
   const { me, access } = boot;
@@ -86,38 +207,100 @@ export default function App() {
 
   useEffect(() => {
     if (!isAdmin) return;
-    const check = () => api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
-    void check();
+    const check = () => {
+      if (document.hidden) return;
+      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
+    };
+    check();
     const t = setInterval(check, 30 * 60_000);
     return () => clearInterval(t);
   }, [isAdmin]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    if (loggingOut.current) return;
+    loggingOut.current = true;
+    try {
+      // ends the session on the server too; a failure (404, no connection) must not keep the user signed in
+      await api('/sessions/current', 'DELETE');
+    } catch {
+      /* ignore */
+    }
     setToken('');
     window.location.hash = '#/servers';
-    void load();
+    await load();
+    loggingOut.current = false;
   }, [load]);
 
   useBrand(access.brand);
 
-  const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, access, reload: load, logout }), [me, isAdmin, access, load, logout]);
+  const isStaff = isAdmin || me?.role === 'moderator';
+  const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, isStaff, access, reload: load, logout }), [me, isAdmin, isStaff, access, load, logout]);
 
-  if (!boot.ready) return <div className="grid min-h-full place-items-center text-2xl"><Wordmark /></div>;
+  // ---- document title and focus follow the route ----
+  const visible = PAGES.filter((p) => !p.admin || isStaff);
+  const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
+  const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const adminSection = sub.split('/')[0];
+  const sectionTitle = boot.needsSetup
+    ? 'Первый запуск'
+    : showAuth
+      ? rawPage === 'register' && access.registration ? 'Регистрация' : 'Вход'
+      : page === 'profile'
+        ? 'Профиль'
+        : page === 'admin'
+          ? `Админка · ${ADMIN_TITLES[adminSection] ?? ADMIN_TITLES.servers}`
+          : PAGES.find((p) => p.id === page)?.label ?? '';
+  useEffect(() => {
+    document.title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
+  }, [boot.ready, sectionTitle, access.brand.name]);
+
+  const routeKey = `${page}/${page === 'servers' || page === 'admin' ? adminSection : ''}`;
+  const firstRoute = useRef(true);
+  useEffect(() => {
+    if (!boot.ready) return;
+    if (firstRoute.current) { firstRoute.current = false; return; }
+    window.scrollTo(0, 0);
+    // a dialog (the tour, a confirmation) keeps the focus it has
+    if (document.querySelector('[aria-modal="true"]')) return;
+    mainRef.current?.focus({ preventScroll: true });
+  }, [routeKey, boot.ready]);
+
+  if (!boot.ready || authing) {
+    return (
+      <div className="grid min-h-[100dvh] place-items-center text-2xl" role="status" aria-label="Загрузка">
+        <Wordmark />
+      </div>
+    );
+  }
+
+  if (boot.offline) {
+    return (
+      <div className="grid min-h-[100dvh] place-items-center p-6">
+        <div className="panel w-full max-w-sm space-y-4 p-6 text-center">
+          <Wordmark className="text-2xl" />
+          <p className="text-lg font-black" role="alert">Нет связи с сервером</p>
+          <p className="font-semibold text-mute">Вы остаётесь в аккаунте. Проверьте подключение: мы попробуем ещё раз автоматически.</p>
+          <button className="btn w-full" onClick={() => void load()}>Повторить</button>
+        </div>
+        <Toaster />
+      </div>
+    );
+  }
 
   if (boot.needsSetup) {
     return (
       <AuthContext.Provider value={ctx}>
         <Setup onDone={() => void load()} />
         <Toaster />
+        <ConfirmHost />
       </AuthContext.Provider>
     );
   }
 
   // sign-in / registration screens: for a closed panel they are the only thing a guest sees
-  const wantsRegister = rawPage === 'register';
-  if (!me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || wantsRegister)) {
+  if (showAuth) {
     const done = () => { window.location.hash = '#/servers'; void load(); };
-    const mode = wantsRegister && access.registration ? 'register' : 'login';
+    const mode = rawPage === 'register' && access.registration ? 'register' : 'login';
     // after a failed Discord sign-in the backend sends #/login/<message>
     let notice = '';
     if (rawPage === 'login' && sub) {
@@ -131,21 +314,31 @@ export default function App() {
           </AuthCard>
         </AuthShell>
         <Toaster />
+        <ConfirmHost />
       </AuthContext.Provider>
     );
   }
 
-  const visible = PAGES.filter((p) => !p.admin || isAdmin);
-  const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
-  const dot = <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />;
+  const dot = (
+    <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление">
+      <span className="sr-only">(доступно обновление)</span>
+    </span>
+  );
 
   return (
     <AuthContext.Provider value={ctx}>
-      <div className="mx-auto min-h-full max-w-6xl px-4 pb-28 pt-5 sm:px-6 md:pb-16">
-        <header className="mb-6 flex items-center gap-x-4 md:mb-8">
-          <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight">
-            <Logo size={34} />
-            <Wordmark />
+      <a
+        href="#/servers"
+        className="skip-link"
+        onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}
+      >
+        Перейти к содержимому
+      </a>
+      <div className="mx-auto min-h-full max-w-6xl px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-5 sm:px-6 md:pb-16">
+        <header className="mb-6 flex items-center gap-x-3 md:mb-8 md:gap-x-4">
+          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-2xl font-black tracking-tight max-md:flex-1">
+            <Logo size={34} alt="" />
+            <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
@@ -163,38 +356,50 @@ export default function App() {
               </a>
             ))}
           </nav>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 md:ml-auto">
             <ThemeToggle />
             {me ? (
               <>
                 <a
                   href="#/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex max-w-[11rem] items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3.5 font-extrabold shadow-pop transition ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
-                  title="Профиль"
+                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold shadow-pop transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1.5 sm:pl-1.5 sm:pr-3.5 ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
+                  title={`Профиль: ${me.username}`}
+                  aria-label={`Профиль: ${me.username}`}
                 >
                   <UserAvatar name={me.username} url={me.avatarUrl} size={28} className="!rounded-full" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
-                <button onClick={logout} className="rounded-full bg-card px-4 py-2 font-extrabold text-mute shadow-pop hover:text-bad">Выйти</button>
+                <button
+                  onClick={() => void logout()}
+                  className="grid place-items-center rounded-full bg-card font-extrabold text-mute shadow-pop transition hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-4 sm:py-2"
+                  aria-label="Выйти"
+                  title="Выйти"
+                >
+                  <span className="sm:hidden"><IconLogout /></span>
+                  <span className="hidden sm:inline">Выйти</span>
+                </button>
               </>
             ) : (
               <>
-                <a href="#/login" className="rounded-full bg-card px-4 py-2 font-extrabold text-ink shadow-pop hover:text-link">Войти</a>
+                <a href="#/login" className="inline-flex items-center rounded-full bg-card px-4 py-2 font-extrabold text-ink shadow-pop hover:text-link max-sm:min-h-[44px]">Войти</a>
                 {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">Регистрация</a>}
               </>
             )}
           </div>
         </header>
 
-        <main key={page} className="pop min-w-0">
+        <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
           {page === 'servers' && <ServersPage sub={sub} />}
           {page === 'news' && <NewsFeed />}
+          {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
         </main>
 
         <Toaster />
+        <ConfirmHost />
+        {isAdmin && <Tour />}
 
         <nav
           className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card/95 backdrop-blur md:hidden"
@@ -209,19 +414,21 @@ export default function App() {
                   <a
                     href={`#/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`relative flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
                     {p.label}
-                    {p.id === 'admin' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
+                    {p.id === 'admin' && updateAvailable && (
+                      <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn"><span className="sr-only">Доступно обновление</span></span>
+                    )}
                   </a>
                 </li>
               );
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '#/register' : '#/login'} className="flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold text-link">
-                  <span className="grid h-8 w-14 place-items-center rounded-full bg-soft text-lg">→</span>
+                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold text-link">
+                  <span className="grid h-8 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   Войти
                 </a>
               </li>

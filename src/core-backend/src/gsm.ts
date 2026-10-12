@@ -58,7 +58,7 @@ export async function queryServer(s: ServerRow): Promise<QueryResult> {
       map: clean(r.map),
       version: clean(typeof rawVersion === 'string' ? rawVersion : null),
       ping: typeof r.ping === 'number' ? Math.round(r.ping) : null,
-      playerNames: names.slice(0, 50),
+      playerNames: names.slice(0, 200),
       error: null,
     };
   } catch (e) {
@@ -84,7 +84,35 @@ ON CONFLICT(server_id) DO UPDATE SET
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
   error=excluded.error, updated_at=excluded.updated_at
 `);
-const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players) VALUES (?, ?, ?, ?)');
+const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping) VALUES (?, ?, ?, ?, ?)');
+
+/**
+ * Keeps player_now in step with the latest poll: names that left are removed, new ones get since = now.
+ * A failed/offline poll clears the server's rows. Names are capped at 200.
+ */
+export function syncPlayersNow(serverId: number, names: string[], online: boolean, now: number): void {
+  db.transaction(() => {
+    if (!online) {
+      db.prepare('DELETE FROM player_now WHERE server_id = ?').run(serverId);
+      return;
+    }
+    const current = new Set(names.slice(0, 200));
+    const have = db.prepare('SELECT name FROM player_now WHERE server_id = ?').all(serverId) as { name: string }[];
+    const del = db.prepare('DELETE FROM player_now WHERE server_id = ? AND name = ?');
+    for (const h of have) if (!current.has(h.name)) del.run(serverId, h.name);
+    const ins = db.prepare('INSERT OR IGNORE INTO player_now (server_id, name, since) VALUES (?, ?, ?)');
+    for (const n of current) ins.run(serverId, n, now);
+  })();
+}
+
+/** Daily counters for the status page (UTC day). */
+export function recordUptime(serverId: number, online: boolean, players: number, ts: number): void {
+  const day = new Date(ts).toISOString().slice(0, 10);
+  db.prepare(
+    `INSERT INTO uptime_daily (server_id, day, up, total, peak) VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(server_id, day) DO UPDATE SET up = up + excluded.up, total = total + 1, peak = MAX(peak, excluded.peak)`,
+  ).run(serverId, day, online ? 1 : 0, online ? Math.max(0, players) : 0);
+}
 
 export async function refreshServer(s: ServerRow): Promise<void> {
   const r = await queryServer(s);
@@ -101,11 +129,17 @@ export async function refreshServer(s: ServerRow): Promise<void> {
     map: r.map,
     version: r.version,
     ping: r.ping,
-    names: JSON.stringify(r.playerNames),
+    names: JSON.stringify(r.playerNames.slice(0, 50)),
     error: r.error,
     ts,
   });
-  addHistory.run(s.id, ts, r.online ? 1 : 0, r.players);
+  addHistory.run(s.id, ts, r.online ? 1 : 0, r.players, r.ping);
+  try {
+    syncPlayersNow(s.id, r.playerNames, r.online, ts);
+    recordUptime(s.id, r.online, r.players, ts);
+  } catch (e) {
+    console.error('player/uptime bookkeeping failed', (e as Error).message);
+  }
   try {
     trackAlerts(s.id, r.online, r.error);
   } catch (e) {
@@ -122,6 +156,7 @@ export async function pollAll(): Promise<void> {
     const servers = db.prepare('SELECT * FROM servers').all() as ServerRow[];
     await Promise.allSettled(servers.map(refreshServer));
     db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 7 * 24 * 3600 * 1000);
+    db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
   } finally {
     running = false;
   }

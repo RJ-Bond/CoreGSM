@@ -27,9 +27,16 @@ if [ -t 1 ]; then
 else
   RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; BOLD=''; DIM=''; NC=''
 fi
+# set by issue_certificate / launch
+CERT_MODE=""; CERT_CHANGED=0; CERT_ISSUED=0; PANEL_OK=0
 
 LOGFILE="${COREGSM_LOG:-/var/log/coregsm-install.log}"
 mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
+# the log may contain proxy addresses: readable by root only, credentials are masked (see redact_log)
+{ touch "$LOGFILE" && chmod 600 "$LOGFILE"; } 2>/dev/null || true
+redact_log() { sed -i -E 's#(://)[^/@[:space:]]+@#\1***@#g' "$LOGFILE" 2>/dev/null || true; }
+trap redact_log EXIT
+APT_OPTS=(-o DPkg::Lock::Timeout=300)
 IS_TTY=0; [ -t 1 ] && IS_TTY=1
 # started by "coregsm update": print only the steps and their results
 QUIET_OK="${COREGSM_FROM_MANAGER:-0}"
@@ -37,10 +44,10 @@ QUIET_OK="${COREGSM_FROM_MANAGER:-0}"
 VERBOSE="${COREGSM_VERBOSE:-0}"
 
 # everything that is shown also goes to the log, without colour codes
-logf() { printf '%s\n' "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOGFILE" 2>/dev/null || true; }
+logf() { printf '%s\n' "$*" | sed -E 's/\x1b\[[0-9;]*m//g; s#(://)[^/@[:space:]]+@#\1***@#g' >> "$LOGFILE" 2>/dev/null || true; }
 
 STEP=0
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; logf "[${STEP}/${TOTAL_STEPS}] $*"; }
 info()  { [ "$QUIET_OK" = 1 ] || echo -e "  ${CYAN}>${NC} $*"; logf "  > $*"; }
 ok()    { [ "$QUIET_OK" = 1 ] || echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
@@ -56,7 +63,7 @@ _run() {
   local msg="$1"; shift
   local t0=$SECONDS rc=0 pid i=0
   local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-  printf '\n### %s: %s\n' "$msg" "$*" >> "$LOGFILE" 2>/dev/null || true
+  printf '\n### %s: %s\n' "$msg" "$*" | sed -E 's#(://)[^/@[:space:]]+@#\1***@#g' >> "$LOGFILE" 2>/dev/null || true
   if [ "$VERBOSE" = 1 ]; then
     echo -e "  ${CYAN}›${NC} $msg"
     set +e; "$@" 2>&1 | tee -a "$LOGFILE"; rc=${PIPESTATUS[0]}; set -e
@@ -73,6 +80,7 @@ _run() {
     echo "  … $msg"
     "$@" >> "$LOGFILE" 2>&1 || rc=$?
   fi
+  redact_log
   if [ "$rc" -eq 0 ]; then
     done_line "$msg ${DIM}($((SECONDS - t0)) с)${NC}"
     return 0
@@ -133,6 +141,29 @@ gen_secret() { # gen_secret LENGTH  -> alphanumeric
 env_get() { # env_get KEY  -> value from existing .env (empty if none)
   [ -f "$APP_DIR/.env" ] || return 0
   grep -E "^$1=" "$APP_DIR/.env" | tail -n1 | cut -d= -f2- || true
+}
+
+env_set() { # env_set KEY VALUE  -> replaces or appends the line in .env, keeping everything else (and the file mode)
+  local f="$APP_DIR/.env" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp)"
+  if grep -qE "^$1=" "$f"; then
+    K="$1" V="$2" awk 'BEGIN{k=ENVIRON["K"]; v=ENVIRON["V"]} index($0, k "=") == 1 {print k "=" v; next} {print}' "$f" > "$tmp"
+  else
+    { cat "$f"; printf '%s=%s\n' "$1" "$2"; } > "$tmp"
+  fi
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
+}
+
+# Is a CoreGSM stack running right now? (then an update must not stop it)
+stack_running() {
+  [ -f "$APP_DIR/docker-compose.yml" ] || return 1
+  (cd "$APP_DIR" && docker compose ps --status running -q 2>/dev/null | grep -q .)
+}
+service_running() { # service_running NAME
+  [ -f "$APP_DIR/docker-compose.yml" ] || return 1
+  (cd "$APP_DIR" && docker compose ps --status running --services 2>/dev/null | grep -qx "$1")
 }
 
 # ---------- 1. preflight ----------
@@ -210,8 +241,9 @@ setup_proxy() {
   export HTTP_PROXY="$tool_proxy" HTTPS_PROXY="$tool_proxy" ALL_PROXY="$tool_proxy"
   export no_proxy="localhost,127.0.0.1,::1" NO_PROXY="localhost,127.0.0.1,::1"
 
-  printf '%s\nAcquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$PROXY_MARK" "$tool_proxy" "$tool_proxy" \
-    > /etc/apt/apt.conf.d/99coregsm-proxy
+  ( umask 077; printf '%s\nAcquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$PROXY_MARK" "$tool_proxy" "$tool_proxy" \
+    > /etc/apt/apt.conf.d/99coregsm-proxy )
+  chmod 600 /etc/apt/apt.conf.d/99coregsm-proxy
 
   if curl -fsS --max-time 15 -o /dev/null https://download.docker.com/linux/debian/gpg; then
     ok "Прокси работает"
@@ -235,11 +267,12 @@ configure_docker_proxy() {
       "$PROXY_MARK" "$PROXY_URL" "$PROXY_URL" > "$tmp"
     mkdir -p "$dir"
     if ! cmp -s "$tmp" "$file"; then
-      install -m 0644 "$tmp" "$file"
+      install -m 0600 "$tmp" "$file"
       systemctl daemon-reload
       systemctl restart docker
       ok "Docker настроен на работу через прокси"
     fi
+    chmod 600 "$file" 2>/dev/null || true
   elif grep -qs "$PROXY_MARK" "$file"; then
     rm -f "$file"
     systemctl daemon-reload
@@ -253,19 +286,19 @@ configure_docker_proxy() {
 system_update() {
   step "Обновление системы"
   if [ "${SKIP_UPDATE:-}" = "1" ]; then
-    run "Обновление списка пакетов" apt-get update -y
+    run "Обновление списка пакетов" apt-get "${APT_OPTS[@]}" update -y
     ok "SKIP_UPDATE=1: полное обновление пропущено (список пакетов обновлён)"
     return 0
   fi
-  run "Обновление списка пакетов" apt-get update -y
-  run "Установка обновлений системы (несколько минут)" apt-get upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
+  run "Обновление списка пакетов" apt-get "${APT_OPTS[@]}" update -y
+  run "Установка обновлений системы (несколько минут)" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
   ok "Система обновлена"
 }
 
 # ---------- 3. packages ----------
 base_packages() {
   step "Установка curl, git, ufw и вспомогательных пакетов"
-  run "Установка curl, git, ufw" apt-get install -y --no-install-recommends curl git ufw ca-certificates gnupg openssl
+  run "Установка curl, git, ufw" apt-get "${APT_OPTS[@]}" install -y --no-install-recommends curl git ufw ca-certificates gnupg openssl
   ok "Базовые пакеты установлены"
 }
 
@@ -282,8 +315,8 @@ install_docker() {
   chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
-  run "Обновление списка пакетов Docker" apt-get update -y
-  run "Установка Docker Engine (1-2 минуты)" apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  run "Обновление списка пакетов Docker" apt-get "${APT_OPTS[@]}" update -y
+  run "Установка Docker Engine (1-2 минуты)" apt-get "${APT_OPTS[@]}" install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   systemctl enable --now docker
   docker compose version >/dev/null 2>&1 || die "Docker Compose не установился"
   ok "Установлено: $(docker --version)"
@@ -299,9 +332,13 @@ collect_input() {
   : "${DISCORD_TOKEN:=$(env_get DISCORD_TOKEN)}"
   : "${DOMAIN:=$(env_get DOMAIN)}"
   : "${LE_EMAIL:=$(env_get LE_EMAIL)}"
+  local prev_domain; prev_domain="$(env_get DOMAIN)"
 
   ask DOMAIN "Домен (gsm.my-domain.com) или IP сервера для локальной сети (192.168.88.152)"
   DOMAIN="$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')"
+  # the local mode chosen at the first install sticks to the same address: later updates must not
+  # try Let's Encrypt for a local name. A different address is decided afresh.
+  if [ -z "${LOCAL_MODE:-}" ] && [ "$DOMAIN" = "$prev_domain" ]; then LOCAL_MODE="$(env_get LOCAL_MODE)"; fi
 
   if [ "${LOCAL_MODE:-}" = "1" ] || is_local_host "$DOMAIN"; then
     # Local / development: Let's Encrypt cannot issue certificates for IPs and private names.
@@ -366,6 +403,16 @@ write_env() {
   SETUP_TOKEN="$(env_get SETUP_TOKEN)"; [ -n "$SETUP_TOKEN" ] || SETUP_TOKEN="$(gen_secret 16)"
   jwt="$(env_get JWT_SECRET)";          [ -n "$jwt" ]      || jwt="$(gen_secret 64)"
   internal="$(env_get INTERNAL_TOKEN)"; [ -n "$internal" ] || internal="$(gen_secret 48)"
+  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
+  # the .env is truncated by the redirection below, so everything is read from it first
+  local appver; appver="$(env_get APP_VERSION)"
+  poll="$(env_get POLL_INTERVAL_SEC)"; [ -n "$poll" ] || poll=30
+  lm=0; [ "${LOCAL_MODE:-}" = "1" ] && lm=1
+  cert_mode="$(env_get CERT_MODE)"; [ "$lm" = 1 ] && [ -z "$cert_mode" ] && cert_mode=local
+  # settings added by hand (custom variables) survive a re-run
+  if [ -f "$APP_DIR/.env" ]; then
+    extra="$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$APP_DIR/.env" | grep -Ev "^($known)=" || true)"
+  fi
   umask 077
   cat > "$APP_DIR/.env" << ENVFILE
 # Generated by CoreGSM installer. Keep this file private (chmod 600).
@@ -377,14 +424,19 @@ DISCORD_TOKEN=${DISCORD_TOKEN:-}
 PROXY_URL=${PROXY_URL:-}
 # http(s) proxy for Docker image builds and certbot renewal (SOCKS is not supported there)
 BUILD_PROXY=${BUILD_PROXY:-}
-# installed build, compared with version.txt in the repository
-APP_VERSION=${COREGSM_BUILD}
+# installed build, compared with version.txt in the repository. The new value is written only after
+# the panel has answered (see promote_version), so a failed update does not look like a finished one.
+APP_VERSION=${appver}
+# local mode (self-signed certificate, no Let's Encrypt) and the kind of the current certificate
+LOCAL_MODE=${lm}
+CERT_MODE=${cert_mode}
 # one-time code for the first-run setup wizard in the browser
 SETUP_TOKEN=${SETUP_TOKEN}
 JWT_SECRET=${jwt}
 INTERNAL_TOKEN=${internal}
-POLL_INTERVAL_SEC=30
+POLL_INTERVAL_SEC=${poll}
 ENVFILE
+  if [ -n "$extra" ]; then printf '# custom settings (kept on re-install)\n%s\n' "$extra" >> "$APP_DIR/.env"; fi
   chmod 600 "$APP_DIR/.env"
   umask 022
   ok "Секреты записаны в $APP_DIR/.env (права 600)"
@@ -397,11 +449,17 @@ issue_certificate() {
 
   if [ "${LOCAL_MODE:-}" = "1" ]; then
     step "SSL-сертификат для локального режима (самоподписанный)"
-    if [ -f "$APP_DIR/docker-compose.yml" ]; then
-      (cd "$APP_DIR" && docker compose down >/dev/null 2>&1) || true
+    # an existing self-signed certificate that is valid for more than 30 days is kept: browsers that
+    # already trusted it keep working, and nothing has to be restarted
+    if [ -f "$live/.selfsigned" ] && [ -f "$live/fullchain.pem" ] && [ -f "$live/privkey.pem" ] \
+       && openssl x509 -checkend $((30 * 86400)) -noout -in "$live/fullchain.pem" >/dev/null 2>&1; then
+      CERT_MODE="local"
+      ok "Самоподписанный сертификат ещё действует более 30 дней, оставляю прежний"
+      return 0
     fi
     rm -rf "$live"
     mkdir -p "$live"
+    CERT_CHANGED=1
     local san="DNS:${DOMAIN}"
     [[ "$DOMAIN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && san="IP:${DOMAIN}"
     openssl req -x509 -nodes -newkey rsa:2048 -days 825 -subj "/CN=${DOMAIN}" -addext "subjectAltName=${san}" \
@@ -414,28 +472,50 @@ issue_certificate() {
 
   step "Выпуск SSL-сертификата Let's Encrypt (Certbot в Docker)"
 
-  # Stop a previous stack so port 80 is free for the standalone challenge.
-  if [ -f "$APP_DIR/docker-compose.yml" ]; then
-    (cd "$APP_DIR" && docker compose down >/dev/null 2>&1) || true
-  fi
-
-  if [ -f "$live/.selfsigned" ]; then rm -rf "$live" "$conf/archive/$DOMAIN" "$conf/renewal/$DOMAIN.conf"; fi
-
-  if [ -f "$live/fullchain.pem" ]; then
+  if [ ! -f "$live/.selfsigned" ] && [ -f "$live/fullchain.pem" ]; then
     ok "Действующий сертификат для $DOMAIN уже есть, выпуск пропущен"
     CERT_MODE="letsencrypt"
     return 0
   fi
 
-  if run_soft "Выпуск сертификата Let's Encrypt" docker run --rm -p 80:80 ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
+  # A temporary self-signed certificate is replaced: it is moved aside first (nginx keeps serving it from
+  # memory) and put back if the issuance fails.
+  local aside="$conf/live/$DOMAIN.selfsigned-bak" acme=(--standalone)
+  if [ -f "$live/.selfsigned" ]; then
+    rm -rf "$aside"; mv "$live" "$aside"
+    rm -rf "$conf/archive/$DOMAIN" "$conf/renewal/$DOMAIN.conf"
+  fi
+
+  if service_running nginx-proxy; then
+    # a running panel already answers on port 80: prove the domain through its webroot, no downtime
+    acme=(--webroot -w /var/www/certbot)
+    info "Панель работает: подтверждаю домен через неё, остановка не нужна"
+  else
+    # nothing serves port 80 (fresh install or stopped stack); a crash-looping nginx must not hold it
+    if [ -f "$APP_DIR/docker-compose.yml" ]; then
+      (cd "$APP_DIR" && docker compose stop nginx-proxy >/dev/null 2>&1) || true
+    fi
+  fi
+  local pflag=()
+  if [ "${acme[0]}" = "--standalone" ]; then pflag=(-p 80:80); fi
+
+  if run_soft "Выпуск сертификата Let's Encrypt" docker run --rm ${pflag[@]+"${pflag[@]}"} ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
       -v "$conf:/etc/letsencrypt" -v "$APP_DIR/certbot/www:/var/www/certbot" \
-      certbot/certbot certonly --standalone --non-interactive --agree-tos --no-eff-email \
+      certbot/certbot certonly "${acme[@]}" --non-interactive --agree-tos --no-eff-email \
       -m "$LE_EMAIL" -d "$DOMAIN"; then
-    CERT_MODE="letsencrypt"
+    CERT_MODE="letsencrypt"; CERT_CHANGED=1; CERT_ISSUED=1
+    rm -rf "$aside"
     ok "Сертификат Let's Encrypt выпущен. Автопродление: контейнер certbot."
   else
     warn "Не удалось получить сертификат (проверьте A-запись домена и доступность порта 80)."
+    if [ -d "$aside" ]; then
+      rm -rf "$live"; mv "$aside" "$live"
+      warn "Оставляю прежний самоподписанный сертификат."
+      CERT_MODE="selfsigned"
+      return 0
+    fi
     warn "Создаю временный самоподписанный сертификат, чтобы панель всё равно запустилась."
+    CERT_CHANGED=1
     mkdir -p "$live"
     openssl req -x509 -nodes -newkey rsa:2048 -days 30 -subj "/CN=${DOMAIN}" \
       -keyout "$live/privkey.pem" -out "$live/fullchain.pem" >/dev/null 2>&1
@@ -445,20 +525,53 @@ issue_certificate() {
 }
 
 # ---------- 9. launch ----------
-launch() {
-  step "Сборка и запуск контейнеров"
+# Images are built first, while the old containers keep serving. A failed build stops the installer here
+# (die) and leaves the running version untouched.
+build_images() {
+  step "Сборка образов"
   cd "$APP_DIR"
-  run "Сборка образов и запуск контейнеров (3-8 минут)" docker compose up --build -d
+  if stack_running; then info "Панель продолжает работать на прежней версии, пока идёт сборка."; fi
+  run "Сборка образов (3-8 минут)" docker compose build
+  ok "Образы собраны"
+}
+
+# only now the containers are replaced: "up -d" recreates just the services whose image or settings changed
+# (nginx keeps running when it did not change). The build id is passed to the backend explicitly because it
+# is written to .env only after the health check.
+launch() {
+  step "Запуск контейнеров"
+  cd "$APP_DIR"
+  run "Запуск контейнеров" env APP_VERSION="$COREGSM_BUILD" docker compose up -d --remove-orphans
+  if [ "$CERT_CHANGED" = 1 ] && service_running nginx-proxy; then
+    docker compose exec -T nginx-proxy nginx -s reload >/dev/null 2>&1 || true
+  fi
   info "Жду готовности панели…"
   local i
   for i in $(seq 1 60); do
     if curl -fsk --noproxy "*" --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
       ok "Панель отвечает"
+      PANEL_OK=1
+      # the previous images are now untagged (the :prev copies for rollback stay): free the disk
+      docker image prune -f >/dev/null 2>&1 || true
       return 0
     fi
     sleep 3
   done
   warn "Панель не ответила за 3 минуты. Логи: cd $APP_DIR && docker compose logs --tail=100"
+}
+
+# Let's Encrypt: once after issuing, check that renewal works through the running panel (webroot, as the
+# certbot container does). A failure is only reported.
+verify_renewal() {
+  [ "$CERT_ISSUED" = 1 ] && [ "$PANEL_OK" = 1 ] || return 0
+  if run_soft "Проверка автопродления сертификата (certbot renew --dry-run)" \
+      docker run --rm ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
+      -v "$APP_DIR/certbot/conf:/etc/letsencrypt" -v "$APP_DIR/certbot/www:/var/www/certbot" \
+      certbot/certbot renew --dry-run --authenticator webroot --webroot-path /var/www/certbot; then
+    ok "Автопродление работает"
+  else
+    warn "Проверка автопродления не прошла: сертификат выпущен, но продлить его автоматически может не получиться. Подробности: $LOGFILE"
+  fi
 }
 
 report() {
@@ -509,7 +622,7 @@ MANAGER
 _coregsm() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "update status doctor logs start stop restart backup restore domain reset-password uninstall help" -- "$cur"))
+    COMPREPLY=($(compgen -W "update rollback status doctor logs start stop restart backup restore domain reset-password uninstall help" -- "$cur"))
   fi
 }
 complete -F _coregsm coregsm
@@ -542,7 +655,30 @@ Unit=coregsm-update.service
 [Install]
 WantedBy=multi-user.target
 UNIT
+    # daily check of the certificate expiry (warns in the log and in the journal when < 14 days are left)
+    cat > /etc/systemd/system/coregsm-health.service << UNIT
+[Unit]
+Description=CoreGSM daily health check (certificate expiry)
+
+[Service]
+Type=oneshot
+Environment=APP_DIR=${APP_DIR}
+ExecStart=/usr/local/bin/coregsm health
+UNIT
+    cat > /etc/systemd/system/coregsm-health.timer << UNIT
+[Unit]
+Description=CoreGSM daily health check
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
     systemctl daemon-reload
+    systemctl enable --now coregsm-health.timer >/dev/null 2>&1 || warn "Не удалось включить ежедневную проверку сертификата (coregsm-health.timer)"
     systemctl enable --now coregsm-update.path >/dev/null 2>&1 \
       && ok "Команда coregsm и кнопка «Обновить» в панели включены" \
       || warn "Не удалось включить systemd-юнит coregsm-update.path: кнопка в панели работать не будет, обновляйте командой sudo coregsm update"
@@ -554,11 +690,31 @@ UNIT
 
 installed_already() { [ -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/docker-compose.yml" ] && [ -x /usr/local/bin/coregsm ]; }
 
+# Rollback is possible when the previous images and the pre-update backup (taken by "coregsm update") exist.
+rollback_available() {
+  [ -f "$APP_DIR/.prev/src.tgz" ] || return 1
+  [ -f "$APP_DIR/.prev/pre_backup" ] && [ -f "$(cat "$APP_DIR/.prev/pre_backup" 2>/dev/null)" ] || return 1
+  docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE '^coregsm-.*:prev$'
+}
+
+# The new build id is stamped into .env only after the panel has answered: a failed update must not look
+# like a finished one (the next "coregsm update" would claim "up to date").
+promote_version() {
+  [ "$PANEL_OK" = 1 ] || return 0
+  env_set APP_VERSION "$COREGSM_BUILD"
+}
+
 # A finished install is a successful update: tell the panel, so an old failure is not shown any more.
+# Started by "coregsm update" the manager writes the status itself, after its own health check.
 mark_update_done() {
+  promote_version
+  [ "$PANEL_OK" = 1 ] || return 0
+  [ "${COREGSM_FROM_MANAGER:-0}" = 1 ] && return 0
   [ -d "$APP_DIR/update" ] || return 0
-  printf '{"state":"done","message":"Установлена версия %s","time":%s000}
-' "${COREGSM_BUILD:0:7}" "$(date +%s)" > "$APP_DIR/update/status.json" 2>/dev/null || true
+  local rb=false; rollback_available && rb=true
+  printf '{"state":"done","message":"Установлена версия %s","time":%s000,"rollback_available":%s}\n' \
+    "${COREGSM_BUILD:0:7}" "$(date +%s)" "$rb" > "$APP_DIR/update/status.json.tmp" 2>/dev/null \
+    && mv -f "$APP_DIR/update/status.json.tmp" "$APP_DIR/update/status.json" 2>/dev/null || true
   chmod 644 "$APP_DIR/update/status.json" 2>/dev/null || true
 }
 
@@ -603,8 +759,12 @@ HELP
   ok "Файлы проекта созданы"
   write_env
   install_manager
+  # images first (the old version keeps serving), then the certificate, then the containers are replaced
+  build_images
   issue_certificate
+  env_set CERT_MODE "$CERT_MODE"
   launch
+  verify_renewal
   mark_update_done
   report
 }

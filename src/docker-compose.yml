@@ -15,6 +15,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    init: true
     restart: unless-stopped
     logging: *logging
     env_file: .env
@@ -22,6 +23,11 @@ services:
       PORT: "3000"
       DB_PATH: /data/coregsm.db
       UPDATE_DIR: /update
+      # public address of the panel: the trusted URL and the certificate check
+      DOMAIN: ${DOMAIN}
+      # the installer passes the new build id here while it starts the containers; .env gets it only
+      # after the health check, so a failed update never looks like a finished one
+      APP_VERSION: ${APP_VERSION:-}
     volumes:
       - coregsm-data:/data
       # update requests/status exchanged with the host updater (no Docker socket is exposed)
@@ -41,6 +47,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    init: true
     restart: unless-stopped
     logging: *logging
     environment:
@@ -59,12 +66,14 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    init: true
     restart: unless-stopped
     logging: *logging
     networks: [internal]
 
   nginx-proxy:
     build: ./nginx
+    init: true
     restart: unless-stopped
     logging: *logging
     environment:
@@ -79,9 +88,17 @@ services:
       - backend
       - frontend
     networks: [internal]
+    # port 80 answers as soon as nginx runs (no dependency on the backend)
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/80' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   certbot:
     image: certbot/certbot
+    init: true
     restart: unless-stopped
     logging: *logging
     environment:

@@ -3,22 +3,41 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+export const DATA_DIR = path.dirname(dbPath);
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// a backup uploaded from the panel is put in place here, before the database is opened
-const pending = path.join(path.dirname(dbPath), 'restore-pending.db');
-if (fs.existsSync(pending)) {
+// A backup restored from the panel is staged in <DATA_DIR>/restore-pending/ (coregsm.db, news/*, brand-logo.*,
+// manifest.json) and put in place here, before the database is opened.
+const pendingDir = path.join(DATA_DIR, 'restore-pending');
+let restoredNow = false;
+if (fs.existsSync(pendingDir)) {
   try {
+    const pendingDb = path.join(pendingDir, 'coregsm.db');
+    if (!fs.existsSync(pendingDb)) throw new Error('в подготовленной копии нет базы данных');
     if (fs.existsSync(dbPath)) fs.copyFileSync(dbPath, `${dbPath}.before-restore`);
     for (const ext of ['-wal', '-shm']) {
       fs.rmSync(`${dbPath}${ext}`, { force: true });
-      fs.rmSync(`${pending}${ext}`, { force: true });
+      fs.rmSync(`${pendingDb}${ext}`, { force: true });
     }
-    fs.renameSync(pending, dbPath);
+    fs.copyFileSync(pendingDb, dbPath);
+    // files of a full archive: news pictures are added, the logo is replaced by the one in the archive (if any)
+    const full = fs.existsSync(path.join(pendingDir, 'manifest.json'));
+    const newsSrc = path.join(pendingDir, 'news');
+    if (fs.existsSync(newsSrc)) {
+      fs.mkdirSync(path.join(DATA_DIR, 'news'), { recursive: true });
+      for (const f of fs.readdirSync(newsSrc)) fs.copyFileSync(path.join(newsSrc, f), path.join(DATA_DIR, 'news', f));
+    }
+    if (full) {
+      for (const f of fs.readdirSync(DATA_DIR)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.rmSync(path.join(DATA_DIR, f), { force: true });
+      for (const f of fs.readdirSync(pendingDir)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.copyFileSync(path.join(pendingDir, f), path.join(DATA_DIR, f));
+    }
+    restoredNow = true;
     console.log('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
   } catch (e) {
     console.error('Restore failed:', (e as Error).message);
   }
+  // never retry a half-done restore on every start
+  fs.rmSync(pendingDir, { recursive: true, force: true });
 }
 
 export const db = new Database(dbPath);
@@ -128,7 +147,35 @@ CREATE TABLE IF NOT EXISTS sessions (
   ua TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_history_ts ON history(ts);
+-- who is online right now and since when (updated on every successful poll)
+CREATE TABLE IF NOT EXISTS player_now (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  since INTEGER NOT NULL,
+  PRIMARY KEY (server_id, name)
+);
+-- per UTC day: polls, polls that found the server up, peak players (status page)
+CREATE TABLE IF NOT EXISTS uptime_daily (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  up INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  peak INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (server_id, day)
+);
 `);
+try {
+  db.exec('ALTER TABLE history ADD COLUMN ping INTEGER');
+} catch {
+  /* column already exists */
+}
+// a restored database starts with nobody signed in
+if (restoredNow) {
+  db.prepare('DELETE FROM sessions').run();
+  // the restored database has no record of the restore itself
+  db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(Date.now(), 'система', 'Панель восстановлена из резервной копии', '');
+}
 
 // older databases: new columns are added once
 try {

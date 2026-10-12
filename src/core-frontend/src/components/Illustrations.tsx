@@ -98,24 +98,3 @@ export function CardsArt() {
     </Frame>
   );
 }
-
-/** The big composition on the sign-in panel: servers sending a signal. */
-export function AuthArt() {
-  return (
-    <svg viewBox="0 0 320 220" width="320" height="220" role="img" aria-label="" className="max-w-full">
-      <circle cx="160" cy="112" r="96" fill="#fff" opacity="0.07" />
-      <circle cx="160" cy="112" r="64" fill="#fff" opacity="0.08" />
-      {[44, 84, 124].map((y, i) => (
-        <g key={y} transform={`translate(${i === 1 ? 14 : 0} 0)`}>
-          <rect x="74" y={y} width="150" height="32" rx="12" fill="#fff" opacity={i === 0 ? 1 : i === 1 ? 0.88 : 0.74} />
-          <rect x="88" y={y + 13} width="62" height="6" rx="3" fill="#5a4bd1" opacity="0.35" />
-          <circle cx="198" cy={y + 16} r="5" fill={[OK, WARN, BAD][i]} />
-        </g>
-      ))}
-      <path d="M250 70q16 14 0 34M260 60q26 24 0 54" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
-      <circle cx="248" cy="87" r="5" fill="#fff" />
-      <path d="M62 52l3 7 7 3-7 3-3 7-3-7-7-3 7-3z" fill="#fff" opacity="0.6" />
-      <path d="M268 156l2.4 5.6 5.6 2.4-5.6 2.4-2.4 5.6-2.4-5.6-5.6-2.4 5.6-2.4z" fill="#fff" opacity="0.5" />
-    </svg>
-  );
-}

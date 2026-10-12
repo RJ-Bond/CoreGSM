@@ -122,8 +122,76 @@ export interface UpdateInfo {
   checkedAt: number | null;
   error: string | null;
   canApply: boolean;
+  /** a previous version and a database copy exist, so the update can be undone */
+  canRollback: boolean;
   pending: boolean;
   job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
+}
+
+export interface ChangelogItem {
+  sha: string;
+  title: string;
+  /** ISO date */
+  date: string;
+  url: string;
+}
+
+export interface Changelog {
+  items: ChangelogItem[];
+  error?: string;
+}
+
+// ---------- public status page ----------
+export interface StatusDay {
+  /** YYYY-MM-DD */
+  day: string;
+  /** null = no data */
+  pct: number | null;
+}
+
+export interface StatusServer {
+  id: number;
+  name: string;
+  game: string;
+  address: string;
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+  uptime30: number | null;
+  /** 30 entries, oldest first */
+  days: StatusDay[];
+  avgPing: number | null;
+}
+
+export interface StatusInfo {
+  updatedAt: number;
+  servers: StatusServer[];
+}
+
+// ---------- backups ----------
+export interface BackupItem {
+  name: string;
+  size: number;
+  createdAt: number;
+  kind: 'auto' | 'manual';
+}
+
+export interface BackupInfo {
+  schedule: 'off' | 'daily' | 'weekly';
+  keep: number;
+  /** masked */
+  remoteUrl: string | null;
+  encrypted: boolean;
+  items: BackupItem[];
+  lastRemote: { at: number; ok: boolean; error: string | null } | null;
+}
+
+export interface CertInfo {
+  daysLeft: number | null;
+  /** ms */
+  notAfter: number | null;
+  issuer: string | null;
+  selfSigned: boolean;
 }
 
 export interface TestResult {
@@ -144,6 +212,14 @@ export interface ServerDetails {
   points: { ts: number; players: number; online: number }[];
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   events: { ts: number; type: 'up' | 'down' }[];
+  /** players with the time they joined (empty when the game gives no names) */
+  playersNow: PlayerNow[];
+}
+
+export interface PlayerNow {
+  name: string;
+  /** ms: when the player joined */
+  since: number;
 }
 
 export interface DiscordGuild {
@@ -204,7 +280,7 @@ export interface NewsSettings {
 // ---------- accounts and access ----------
 export interface Me {
   username: string;
-  role: 'admin' | 'player';
+  role: 'admin' | 'moderator' | 'player';
   /** Discord CDN url */
   avatarUrl: string | null;
   discordName: string | null;
@@ -244,7 +320,7 @@ export interface Access {
 export interface UserRow {
   id: number;
   username: string;
-  role: 'admin' | 'player';
+  role: 'admin' | 'moderator' | 'player';
   createdAt: number | null;
   status: 'active' | 'pending';
   discordName: string | null;

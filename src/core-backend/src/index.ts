@@ -7,11 +7,14 @@ import path from 'node:path';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { queryServer, refreshServer, startPoller } from './gsm.js';
-import { renderCard, renderGameIcon } from './card.js';
+import { isKnownGame, renderCard, renderGameIcon } from './card.js';
+import { registerBackups, startBackupTimer } from './backup.js';
+import { gameLabel } from './games.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
+import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -21,10 +24,16 @@ const POLL_MS = Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000;
 // one-time code that protects the first-run setup wizard from strangers who find the panel first
 const SETUP_TOKEN = process.env.SETUP_TOKEN || crypto.randomBytes(8).toString('hex');
 
-if (JWT_SECRET.length < 16 || INTERNAL_TOKEN.length < 16) {
-  console.error('JWT_SECRET and INTERNAL_TOKEN must be set (min 16 chars)');
+if (JWT_SECRET.length < 32) {
+  console.error('JWT_SECRET must be set and at least 32 characters long (generate one with: openssl rand -hex 32)');
   process.exit(1);
 }
+if (INTERNAL_TOKEN.length < 16) {
+  console.error('INTERNAL_TOKEN must be set (min 16 chars)');
+  process.exit(1);
+}
+// a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(8).toString('hex'), 12);
 
 const needsSetup = () => !db.prepare('SELECT 1 FROM users LIMIT 1').get();
 
@@ -96,7 +105,7 @@ const wrap =
   };
 
 // ---------- auth ----------
-type Role = 'admin' | 'player';
+type Role = 'admin' | 'moderator' | 'player';
 interface AuthedRequest extends Request {
   user?: { id: number; username: string; role: Role; sid?: string };
 }
@@ -105,7 +114,7 @@ interface AuthedRequest extends Request {
 function userFromToken(token: string): { id: number; username: string; role: Role; sid: string } | null {
   if (!token) return null;
   try {
-    const p = jwt.verify(token, JWT_SECRET) as { sub: string; sid?: string };
+    const p = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub: string; sid?: string };
     // a token without a session id predates sessions: sign in again
     if (!p.sid) return null;
     const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
@@ -142,11 +151,15 @@ function issueToken(u: { id: number; username: string }, req: Request): string {
   const sid = crypto.randomBytes(12).toString('hex');
   const now = Date.now();
   db.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, ip, ua) VALUES (?, ?, ?, ?, ?, ?)').run(sid, u.id, now, now, (req.ip ?? '').slice(0, 64), uaLabel(req.headers['user-agent']));
-  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
+  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d', algorithm: 'HS256' });
 }
 setInterval(() => db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - 8 * 24 * 3600 * 1000), 3600_000).unref();
 
 const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
+const isStaff = (req: Request) => {
+  const r = (req as AuthedRequest).user?.role;
+  return r === 'admin' || r === 'moderator';
+};
 const flag = (key: string, fallback: boolean) => {
   const v = getSetting(key);
   return v === null ? fallback : v === '1';
@@ -169,6 +182,14 @@ function admin(req: AuthedRequest, res: Response, next: NextFunction) {
   req.user = u;
   next();
 }
+/** administrators and moderators (news and the Discord channel list) */
+function staff(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  if (u.role !== 'admin' && u.role !== 'moderator') return void res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
+  req.user = u;
+  next();
+}
 /** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
 function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   const u = loadUser(req);
@@ -180,6 +201,20 @@ function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
 const LOCK_AFTER = 5;
 const fails = new Map<string, { n: number; until: number }>();
 setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
+
+/** a lighter per-address limit for public lookups: `max` requests per minute */
+function rateLimit(max: number) {
+  const hits = new Map<string, { n: number; reset: number }>();
+  setInterval(() => { for (const [k, v] of hits) if (v.reset < Date.now()) hits.delete(k); }, 60_000).unref();
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = req.ip ?? 'x';
+    const now = Date.now();
+    const h = hits.get(key);
+    if (!h || h.reset <= now) hits.set(key, { n: 1, reset: now + 60_000 });
+    else if (++h.n > max) return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.' });
+    next();
+  };
+}
 
 const attempts = new Map<string, { n: number; reset: number }>();
 function loginLimiter(req: Request, res: Response, next: NextFunction) {
@@ -215,7 +250,7 @@ app.post(
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
       | { id: number; username: string; password_hash: string; role: Role; status: string }
       | undefined;
-    const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi');
+    const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
       const f = fails.get(key) ?? { n: 0, until: 0 };
       f.n++;
@@ -292,7 +327,7 @@ function settingsPayload(req?: Request) {
     proxyUrl: proxy ? maskProxy(proxy) : null,
     discordSecretSet: !!getSetting('discord_client_secret'),
     discordClientId: botStatus.clientId ?? clientIdFromToken(tok),
-    discordRedirect: req ? `${req.protocol}://${req.get('host')}/api/auth/discord/callback` : '',
+    discordRedirect: req ? `${publicBase() ?? baseOf(req)}/api/auth/discord/callback` : '',
   };
 }
 
@@ -408,7 +443,7 @@ function updateFile(name: string): string {
 }
 
 function updatePayload() {
-  let job: { state: string; message: string; time: number } | null = null;
+  let job: { state: string; message: string; time: number; rollback_available?: boolean } | null = null;
   try {
     job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
   } catch {
@@ -423,9 +458,61 @@ function updatePayload() {
     error: remote.error,
     canApply: dirOk,
     pending: dirOk && fs.existsSync(updateFile('request')),
+    // the host manager keeps the previous version and says so in status.json
+    canRollback: dirOk && job?.rollback_available === true,
     job,
   };
 }
+
+// ---- changelog: the last commits of the repository the panel updates from
+const GITHUB_API = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '');
+interface ChangelogItem { sha: string; title: string; date: number | null; url: string }
+let changelog: { at: number; items: ChangelogItem[]; error: string | null } | null = null;
+
+function commitsUrl(): string | null {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
+  return m ? `${GITHUB_API}/repos/${m[1]}/${m[2]}/commits?per_page=15&sha=${encodeURIComponent(m[3])}` : null;
+}
+
+/** first line of the message without "Co-Authored-By" trailers */
+const commitTitle = (msg: string): string =>
+  msg
+    .split(/\r?\n/)
+    .filter((l) => !/^co-authored-by:/i.test(l.trim()))[0]
+    ?.trim()
+    .slice(0, 200) ?? '';
+
+async function loadChangelog(): Promise<{ items: ChangelogItem[]; error?: string }> {
+  if (changelog && Date.now() - changelog.at < (changelog.error ? 60_000 : 10 * 60_000)) {
+    return changelog.error ? { items: changelog.items, error: changelog.error } : { items: changelog.items };
+  }
+  const url = commitsUrl();
+  try {
+    if (!url) throw new Error('адрес репозитория обновлений не распознан');
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'CoreGSM' } });
+    if (!r.ok) throw new Error(`GitHub ответил HTTP ${r.status}`);
+    const list = (await r.json()) as { sha?: string; html_url?: string; commit?: { message?: string; committer?: { date?: string }; author?: { date?: string } } }[];
+    if (!Array.isArray(list)) throw new Error('неожиданный ответ GitHub');
+    const items = list.slice(0, 15).map((c) => {
+      const d = Date.parse(c.commit?.committer?.date ?? c.commit?.author?.date ?? '');
+      return { sha: String(c.sha ?? ''), title: commitTitle(String(c.commit?.message ?? '')), date: Number.isNaN(d) ? null : d, url: String(c.html_url ?? '') };
+    });
+    changelog = { at: Date.now(), items, error: null };
+    return { items };
+  } catch (e) {
+    const error = `Не удалось получить список изменений: ${(e as Error).message}`;
+    changelog = { at: Date.now(), items: changelog?.items ?? [], error };
+    return { items: changelog.items, error };
+  }
+}
+
+app.get(
+  '/api/update/changelog',
+  admin,
+  wrap(async (_req, res) => {
+    res.json(await loadChangelog());
+  }),
+);
 
 app.get(
   '/api/update/status',
@@ -458,11 +545,38 @@ app.post('/api/update/apply', admin, (_req, res) => {
   res.status(202).json(updatePayload());
 });
 
+// same request file, different word: the host manager reads it and restores the previous version
+app.post('/api/update/rollback', admin, (_req, res) => {
+  const state = updatePayload();
+  if (!state.canApply) return res.status(503).json({ error: 'Откат из панели не настроен на сервере. Выполните: sudo coregsm rollback' });
+  if (state.job?.state === 'running') return res.status(409).json({ error: 'Сейчас выполняется обновление или откат' });
+  if (!state.canRollback) return res.status(409).json({ error: 'Откат недоступен: предыдущая версия не сохранена' });
+  if (state.pending) return res.status(409).json({ error: 'Запрос уже ожидает выполнения' });
+  try {
+    fs.writeFileSync(updateFile('request'), 'rollback');
+  } catch {
+    return res.status(500).json({ error: 'Не удалось создать запрос на откат (нет прав на папку /app/update)' });
+  }
+  console.log('rollback requested from the panel');
+  res.status(202).json(updatePayload());
+});
+
 // ---------- access: who may look at the panel, who may register ----------
-// remember the public https address the panel is opened at: Discord needs it to load the embed thumbnail
-function rememberPublicBase(req: Request) {
-  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(':')[0];
-  if (!host || host === 'localhost' || /^[\d.]+$/.test(host) || !host.includes('.')) return;
+// The public https address of the panel (Discord needs it to load embed images). Trusted sources only, in this order:
+// PUBLIC_URL, https://DOMAIN, and the address an administrator opened the panel at (saved from an authenticated request).
+// A guest's Host header is never stored: it would let anyone point the embeds at their own server.
+const isRealDomain = (d: string) => /^[a-z0-9.-]+$/i.test(d) && d.includes('.') && !/^[\d.]+$/.test(d) && d.toLowerCase() !== 'localhost';
+function publicBase(): string | null {
+  const env = (process.env.PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\/[^\s/]+$/i.test(env)) return env;
+  const d = (process.env.DOMAIN ?? '').trim();
+  if (isRealDomain(d)) return `https://${d}`;
+  return getSetting('public_base') || null;
+}
+/** called only for requests that carry a valid administrator token */
+function rememberAdminBase(req: Request) {
+  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim().split(':')[0];
+  if (!isRealDomain(host)) return;
   const base = `https://${host}`;
   if (getSetting('public_base') !== base) setSetting('public_base', base);
 }
@@ -479,8 +593,7 @@ const accessPayload = () => ({
   brand: brand(),
 });
 
-app.get('/api/access', (req, res) => {
-  rememberPublicBase(req);
+app.get('/api/access', (_req, res) => {
   res.json(accessPayload());
 });
 app.put('/api/access', admin, (req, res) => {
@@ -565,7 +678,7 @@ app.get('/api/manifest.json', (_req, res) => {
 // ---------- registration of players ----------
 const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
 
-app.get('/api/auth/check', (req, res) => {
+app.get('/api/auth/check', rateLimit(30), (req, res) => {
   const name = String(req.query.username ?? '').trim();
   const valid = USERNAME_RE.test(name);
   const available = valid && !db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase());
@@ -626,7 +739,7 @@ app.post('/api/users/:id/approve', admin, (req, res) => {
 });
 
 app.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
-  const b = z.object({ role: z.enum(['admin', 'player']) }).safeParse(req.body);
+  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']) }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
   const id = Number(req.params.id);
   const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
@@ -681,6 +794,7 @@ interface UserFull { id: number; username: string; role: Role; password_hash: st
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
+  if (req.user!.role === 'admin') rememberAdminBase(req);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
   res.json({ username: u.username, role: u.role, avatarUrl: avatarUrl(u), discordName: u.discord_name, hasPassword: !u.no_password });
 });
@@ -718,6 +832,11 @@ app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
   const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
   res.json({ ok: true, revoked: r.changes });
 });
+// logout: ends the session this very token belongs to
+app.delete('/api/sessions/current', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(req.user!.sid ?? '', req.user!.id);
+  res.json({ ok: true });
+});
 app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
   const r = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user!.id);
   if (!r.changes) return res.status(404).json({ error: 'Сеанс не найден' });
@@ -734,11 +853,11 @@ app.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
 // ---------- sign in with Discord (OAuth2, identify scope) ----------
 const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
 const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
-const redirectUri = (req: Request) => `${baseOf(req)}/api/auth/discord/callback`;
+const redirectUri = (req: Request) => `${publicBase() ?? baseOf(req)}/api/auth/discord/callback`;
 const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
 const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
 
-app.get('/api/auth/discord/start', (req, res) => {
+app.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
   const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
   if (!clientId || !getSetting('discord_client_secret')) return failTo(res, 'Вход через Discord не настроен администратором');
   const mode = req.query.mode === 'link' ? 'link' : 'login';
@@ -749,6 +868,8 @@ app.get('/api/auth/discord/start', (req, res) => {
     userId = u.id;
   }
   for (const [k, v] of oauthStates) if (v.exp < Date.now()) oauthStates.delete(k);
+  // bounded memory: the oldest pending sign-ins are dropped first
+  while (oauthStates.size >= 1000) oauthStates.delete(oauthStates.keys().next().value as string);
   const state = crypto.randomBytes(16).toString('hex');
   oauthStates.set(state, { mode, userId, exp: Date.now() + 10 * 60_000 });
   const q = new URLSearchParams({ client_id: clientId, response_type: 'code', scope: 'identify', redirect_uri: redirectUri(req), state, prompt: 'none' });
@@ -768,19 +889,19 @@ app.get(
 
     let me: { id: string; username: string; global_name?: string | null; avatar?: string | null };
     try {
-      const tr = await fetch('https://discord.com/api/v10/oauth2/token', {
+      const tr = await discordFetch('https://discord.com/api/v10/oauth2/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ client_id: clientId, client_secret: secret, grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri(req) }),
-        signal: AbortSignal.timeout(10_000),
       });
       if (!tr.ok) return failTo(res, 'Discord отклонил вход. Проверьте Client Secret и Redirect URI в настройках');
       const tok = (await tr.json()) as { access_token: string };
-      const mr = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` }, signal: AbortSignal.timeout(10_000) });
+      const mr = await discordFetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` } });
       if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
       me = (await mr.json()) as typeof me;
-    } catch {
-      return failTo(res, 'Не удалось связаться с Discord');
+    } catch (e) {
+      console.error('discord oauth request failed:', (e as Error).message);
+      return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
     }
     const dname = me.global_name || me.username;
     const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
@@ -979,9 +1100,12 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
       .all(id, since) as { ts: number; online: number }[]
   ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
 
+  const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
+
   res.json({
     server: isAdmin(req) ? server : publicServer(server),
     hours,
+    playersNow,
     points,
     stats: {
       samples: agg.samples,
@@ -1013,24 +1137,138 @@ app.get('/api/servers/:id/history', viewer, (req, res) => {
   res.json(rows);
 });
 
-// public PNG card (used by Discord bot and for sharing)
+// public PNG card (shared links, link previews). A private panel hides it unless the request carries a session token (?t=).
 app.get(
   '/api/card/:id(\\d+).png',
   wrap(async (req, res) => {
+    if (!publicPanel() && !userFromToken(String(req.query.t ?? ''))) return res.status(404).json({ error: 'Сервер не найден' });
     const buf = await renderCard(Number(req.params.id));
     if (!buf) return res.status(404).json({ error: 'Сервер не найден' });
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
   }),
 );
 
-// game pictogram for embeds (public: Discord fetches it)
+// game pictogram for embeds (public: Discord fetches it); unknown ids get the generic icon
 app.get(
   '/api/game-icon/:game.png',
   wrap(async (req, res) => {
     const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(game));
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(isKnownGame(game) ? game : ''));
   }),
 );
+
+// ---------- public server page: a link that looks good when pasted into Discord/Telegram ----------
+const esc = (v: unknown) =>
+  String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+app.get('/s/:id(\\d+)', (req, res) => {
+  res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
+  const gone = () =>
+    void res
+      .status(404)
+      .type('html')
+      .send('<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Не найдено</title></head><body style="font-family:sans-serif;padding:2rem"><h1>Страница недоступна</h1><p><a href="/">На главную</a></p></body></html>');
+  if (!publicPanel()) return gone();
+  const id = Number(req.params.id);
+  const sv = getServer(id);
+  if (!sv) return gone();
+  const base = publicBase() ?? baseOf(req);
+  const b = brand();
+  // never the internal host:port; when the server has no title the game name stands in
+  const title = sv.name === `${sv.host}:${sv.port}` ? gameLabel(sv.game) : sv.name;
+  const parts: string[] = [];
+  if (!sv.hasStatus) parts.push('Состояние неизвестно');
+  else if (!sv.online) parts.push('Сервер недоступен');
+  else {
+    parts.push(`Онлайн: ${sv.players}${sv.maxPlayers ? `/${sv.maxPlayers}` : ''}`);
+    if (sv.map) parts.push(`Карта: ${sv.map}`);
+  }
+  parts.push(`Игра: ${gameLabel(sv.game)}`);
+  const desc = parts.join(' · ');
+  const target = `/#/servers/${id}`;
+  const url = `${base}/s/${id}`;
+  const image = `${base}/api/card/${id}.png`;
+  res.type('html').send(`<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · ${esc(b.name)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta name="theme-color" content="${esc(b.color)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${esc(b.name)}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="480">
+<meta property="og:url" content="${esc(url)}">
+<meta property="og:locale" content="ru_RU">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(desc)}">
+<meta name="twitter:image" content="${esc(image)}">
+<meta http-equiv="refresh" content="0;url=${esc(target)}">
+<script>location.replace(${JSON.stringify(target).replace(/</g, '\\u003c')});</script>
+</head>
+<body>
+<p><a href="${esc(target)}">${esc(title)}</a></p>
+</body>
+</html>`);
+});
+
+// ---------- status page data ----------
+app.get('/api/status', viewer, (req, res) => {
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const list = rows.map(serialize);
+  const servers = isAdmin(req) ? list : list.map(publicServer);
+  const now = Date.now();
+  const days: string[] = [];
+  for (let i = 29; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
+  const daily = new Map<string, { up: number; total: number }>();
+  for (const r of db.prepare('SELECT server_id, day, up, total FROM uptime_daily WHERE day >= ?').all(days[0]) as { server_id: number; day: string; up: number; total: number }[]) {
+    daily.set(`${r.server_id}|${r.day}`, r);
+  }
+  const pings = new Map<number, number>();
+  for (const r of db.prepare('SELECT server_id, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY server_id').all(now - 24 * 3600_000) as { server_id: number; a: number }[]) {
+    pings.set(r.server_id, Math.round(r.a));
+  }
+  const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
+  const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+  res.json({
+    updatedAt: last ?? now,
+    servers: servers.map((sv) => {
+      let up = 0;
+      let total = 0;
+      const dd = days.map((day) => {
+        const r = daily.get(`${sv.id}|${day}`);
+        if (r) {
+          up += r.up;
+          total += r.total;
+        }
+        return { day, pct: r ? pct(r.up, r.total) : null };
+      });
+      return {
+        id: sv.id,
+        name: sv.name,
+        game: sv.game,
+        address: sv.address,
+        online: sv.online,
+        players: sv.players,
+        maxPlayers: sv.maxPlayers,
+        uptime30: pct(up, total),
+        days: dd,
+        avgPing: pings.get(sv.id) ?? null,
+      };
+    }),
+  });
+});
 
 // ---------- discord bindings ----------
 const bindingSchema = z.object({
@@ -1069,7 +1307,7 @@ function channelInfo(channelId: string): { channelName: string | null; guildName
   return { channelName: null, guildName: null, guildId: null };
 }
 
-app.get('/api/discord/channels', admin, (_req, res) => {
+app.get('/api/discord/channels', staff, (_req, res) => {
   res.json(botGuilds);
 });
 
@@ -1095,7 +1333,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ?')
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
-  const base = getSetting('public_base');
+  const base = publicBase();
   return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
@@ -1155,6 +1393,29 @@ app.get('/internal/servers/:id/embed', internal, (req, res) => {
   res.json(e);
 });
 
+// the same PNG card, for the bot (works while the panel is private)
+app.get(
+  '/internal/card/:id(\\d+).png',
+  internal,
+  wrap(async (req, res) => {
+    const buf = await renderCard(Number(req.params.id));
+    if (!buf) return res.status(404).json({ error: 'not found' });
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
+  }),
+);
+
+// "Refresh" button on the Discord message: query the game server right now
+app.post(
+  '/internal/servers/:id/refresh',
+  internal,
+  wrap(async (req, res) => {
+    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
+    if (!row) return res.status(404).json({ error: 'not found' });
+    await refreshServer(row);
+    res.json({ ok: true });
+  }),
+);
+
 app.get('/internal/config', internal, (_req, res) => {
   res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
 });
@@ -1200,6 +1461,28 @@ app.get('/internal/bindings', internal, (_req, res) => {
   res.json(rows.map((r) => ({ ...serializeBinding(r), serverName: r.server_name })));
 });
 
+const bindingForBot = (id: number) => {
+  const r = db
+    .prepare(`SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.id = ?`)
+    .get(id) as (BindingRow & { server_name: string }) | undefined;
+  return r ? { ...serializeBinding(r), serverName: r.server_name } : null;
+};
+
+// one binding, enabled or not (the buttons on the Discord message work for paused ones too)
+app.get('/internal/bindings/:id', internal, (req, res) => {
+  const b = bindingForBot(Number(req.params.id));
+  if (!b) return res.status(404).json({ error: 'not found' });
+  res.json(b);
+});
+for (const [action, enabled] of [['pause', 0], ['resume', 1]] as const) {
+  app.post(`/internal/bindings/:id/${action}`, internal, (req, res) => {
+    const id = Number(req.params.id);
+    const r = db.prepare('UPDATE bindings SET enabled = ? WHERE id = ?').run(enabled, id);
+    if (!r.changes) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true, binding: bindingForBot(id) });
+  });
+}
+
 app.patch('/internal/bindings/:id', internal, (req, res) => {
   const b = z
     .object({ messageId: z.string().nullable().optional(), error: z.string().max(300).nullable().optional() })
@@ -1211,12 +1494,17 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   res.json({ ok: true });
 });
 
-registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
+registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
 registerAlerts({ app, admin, internal, channelInfo });
-registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS });
+registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
+registerBackups({ app, admin });
 
 // ---------- errors ----------
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+  // body-parser: broken JSON / too large body are the client's mistake, not a server error
+  if (err.type === 'entity.parse.failed') return void res.status(400).json({ error: 'Некорректный JSON в запросе' });
+  if (err.type === 'entity.too.large') return void res.status(413).json({ error: 'Слишком большой запрос' });
+  if (err.type === 'request.aborted' || err.type === 'encoding.unsupported' || err.type === 'charset.unsupported') return void res.status(400).json({ error: 'Некорректный запрос' });
   console.error(err);
   res.status(500).json({ error: 'Внутренняя ошибка сервера' });
 });
@@ -1228,5 +1516,6 @@ app.listen(PORT, () => {
     if (!process.env.SETUP_TOKEN) console.log(`Setup code: ${SETUP_TOKEN}`);
   }
   startPoller(POLL_MS);
+  startBackupTimer();
 });
 

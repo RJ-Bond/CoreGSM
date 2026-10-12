@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
+import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { ErrorLine, Field, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
@@ -319,9 +320,9 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const total = embedLength(d);
   const preview = previewOf(d);
 
-  const applyTemplate = (t: (typeof TEMPLATES)[number]) => {
+  const applyTemplate = async (t: (typeof TEMPLATES)[number]) => {
     const dirty = d.title || d.description || d.content || d.fields.length;
-    if (dirty && !window.confirm('Заменить текущий текст шаблоном?')) return;
+    if (dirty && !(await confirmDialog({ title: 'Заменить текущий текст шаблоном?', text: 'Введённый текст будет потерян.', confirmLabel: 'Заменить' }))) return;
     set({ ...blank(d.channelId), ...t.apply, channelId: d.channelId });
   };
 
@@ -381,7 +382,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           {!id && (
             <Section title="Шаблон" hint="Готовая заготовка, которую можно изменить. Слова ДАТА, ВРЕМЯ и т. п. замените на свои.">
               <div className="flex flex-wrap gap-2">
-                {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => applyTemplate(t)}>{t.label}</button>)}
+                {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(t)}>{t.label}</button>)}
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => set({ ...blank(d.channelId) })}>Очистить</button>
               </div>
             </Section>

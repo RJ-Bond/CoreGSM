@@ -147,13 +147,15 @@ type ChannelInfo = (id: string) => { channelName: string | null; guildName: stri
 
 export function registerNews(deps: {
   app: express.Express;
-  admin: RequestHandler;
+  /** administrators and moderators: everything that writes news */
+  staff: RequestHandler;
   viewer: RequestHandler;
   internal: RequestHandler;
   channelInfo: ChannelInfo;
-  isAdmin: (req: Request) => boolean;
+  /** the signed-in user is an administrator or a moderator */
+  isStaff: (req: Request) => boolean;
 }) {
-  const { app, admin, viewer, internal, channelInfo, isAdmin } = deps;
+  const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin } = deps;
   const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res)).catch(next);
   };
@@ -181,11 +183,11 @@ export function registerNews(deps: {
   };
 
   // ---------- default news channel ----------
-  app.get('/api/news/settings', admin, (_req, res) => {
+  app.get('/api/news/settings', staff, (_req, res) => {
     const channelId = getSetting('news_channel_id');
     res.json({ channelId, ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }) });
   });
-  app.put('/api/news/settings', admin, (req, res) => {
+  app.put('/api/news/settings', staff, (req, res) => {
     const b = z.object({ channelId: z.string().regex(/^\d{15,25}$/).nullable() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
     setSetting('news_channel_id', b.data.channelId);
@@ -196,7 +198,7 @@ export function registerNews(deps: {
   const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
   app.post(
     '/api/news/images',
-    admin,
+    staff,
     express.raw({ type: Object.keys(EXT), limit: '8mb' }),
     (req, res) => {
       const ext = EXT[String(req.headers['content-type'] ?? '').split(';')[0]];
@@ -245,7 +247,7 @@ export function registerNews(deps: {
 
   app.post(
     '/api/news',
-    admin,
+    staff,
     wrap(async (req, res) => {
       const b = bodySchema.safeParse(req.body);
       if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
@@ -262,7 +264,7 @@ export function registerNews(deps: {
     }),
   );
 
-  app.put('/api/news/:id', admin, (req, res) => {
+  app.put('/api/news/:id', staff, (req, res) => {
     const id = Number(req.params.id);
     const old = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!old) return res.status(404).json({ error: 'Новость не найдена' });
@@ -296,7 +298,7 @@ export function registerNews(deps: {
   });
 
   // publish a draft / scheduled / failed item right now
-  app.post('/api/news/:id/publish', admin, (req, res) => {
+  app.post('/api/news/:id/publish', staff, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });
@@ -307,7 +309,7 @@ export function registerNews(deps: {
     res.json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow));
   });
 
-  app.delete('/api/news/:id', admin, (req, res) => {
+  app.delete('/api/news/:id', staff, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });

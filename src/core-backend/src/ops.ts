@@ -2,16 +2,13 @@
  * Operations for administrators: action log, bulk actions on Discord bindings,
  * system health and diagnostics, database backup and restore.
  */
-import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import Database from 'better-sqlite3';
+import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import tls from 'node:tls';
 import { z } from 'zod';
-import { db, getSetting } from './db.js';
+import { DATA_DIR, db, getSetting } from './db.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
-const DATA_DIR = path.dirname(DB_PATH);
 const startedAt = Date.now();
 
 // ---------- action log ----------
@@ -53,7 +50,12 @@ const RULES: Rule[] = [
   { m: 'PUT', re: /^\/api\/branding\/logo$/, label: 'Загружен логотип' },
   { m: 'DELETE', re: /^\/api\/branding\/logo$/, label: 'Сброшен логотип' },
   { m: 'POST', re: /^\/api\/update\/apply$/, label: 'Запущено обновление панели' },
+  { m: 'POST', re: /^\/api\/update\/rollback$/, label: 'Запущен откат панели' },
   { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
+  { m: 'PUT', re: /^\/api\/backups\/settings$/, label: 'Изменены настройки резервного копирования', detail: (r) => ['schedule', 'keep', 'remoteUrl', 'passphrase'].filter((k) => r.body?.[k] !== undefined).map((k) => (k === 'schedule' ? `расписание: ${s(r.body?.schedule, 10)}` : k === 'keep' ? `хранить: ${Number(r.body?.keep) || ''}` : k === 'remoteUrl' ? 'внешняя копия' : 'шифрование')).join(', ') },
+  { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
+  { m: 'DELETE', re: /^\/api\/backups\/([^/]+)$/, label: 'Удалена резервная копия', pre: (id) => s(id, 80) },
+  { m: 'POST', re: /^\/api\/backups\/([^/]+)\/restore$/, label: 'Восстановлена копия из архива', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
   { m: 'POST', re: /^\/api\/auth\/register$/, label: 'Регистрация', anon: true },
   { m: 'POST', re: /^\/api\/auth\/password$/, label: 'Смена пароля' },
@@ -67,8 +69,24 @@ const RULES: Rule[] = [
 export function installAudit(app: Express): void {
   const insert = db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)');
   app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
-    const url = req.originalUrl.split('?')[0];
+    // paths are matched case-insensitively and without a trailing slash (Express routes the same way)
+    const url = req.originalUrl.split('?')[0].toLowerCase().replace(/\/+$/, '');
+    if (req.method === 'GET') {
+      // downloads of backups are reads, but worth a log line
+      if (/^\/api\/backup$/.test(url) || /^\/api\/backups\/coregsm-[\w.-]+$/.test(url)) {
+        res.on('finish', () => {
+          if (res.statusCode >= 400) return;
+          try {
+            const user = (req as Request & { user?: { username: string } }).user;
+            insert.run(Date.now(), user?.username ?? '—', 'Скачана резервная копия', url === '/api/backup' ? '' : url.slice('/api/backups/'.length));
+          } catch (e) {
+            console.error('audit failed', (e as Error).message);
+          }
+        });
+      }
+      return next();
+    }
+    if (req.method === 'HEAD' || req.method === 'OPTIONS') return next();
     let match: RegExpExecArray | null = null;
     const rule = RULES.find((r) => r.m === req.method && (match = r.re.exec(url)) !== null);
     if (!rule || !match) return next();
@@ -97,9 +115,67 @@ interface Ctx {
   guildCount: () => number;
   version: string;
   pollMs: number;
+  /** trusted public base URL (https://domain) or null */
+  publicBase: () => string | null;
 }
 
-export function registerOps({ app, admin, getBot, guildCount, version, pollMs }: Ctx): void {
+interface CertInfo {
+  daysLeft: number | null;
+  notAfter: number | null;
+  issuer: string | null;
+  selfSigned: boolean;
+}
+const NO_CERT: CertInfo = { daysLeft: null, notAfter: null, issuer: null, selfSigned: false };
+let certCache: { at: number; info: CertInfo } | null = null;
+
+const dnString = (n: unknown): string => {
+  if (!n || typeof n !== 'object') return '';
+  const o = n as Record<string, string | string[]>;
+  return ['CN', 'O', 'OU', 'C'].map((k) => (o[k] ? `${k}=${Array.isArray(o[k]) ? o[k].join('+') : o[k]}` : '')).filter(Boolean).join(', ');
+};
+
+/** What the reverse proxy serves on :443 (cached for an hour). Nulls when DOMAIN is unset or the proxy does not answer. */
+export function checkCert(force = false): Promise<CertInfo> {
+  const domain = process.env.DOMAIN;
+  if (!domain) return Promise.resolve(NO_CERT);
+  if (!force && certCache && Date.now() - certCache.at < 3600_000) return Promise.resolve(certCache.info);
+  return new Promise<CertInfo>((resolve) => {
+    let done = false;
+    const finish = (info: CertInfo) => {
+      if (done) return;
+      done = true;
+      // a failed check is retried after 2 minutes, a successful one after an hour
+      certCache = { at: info.daysLeft == null ? Date.now() - 3600_000 + 120_000 : Date.now(), info };
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
+      resolve(info);
+    };
+    const sock = tls.connect({ host: process.env.CERT_CHECK_HOST || 'nginx-proxy', port: Number(process.env.CERT_CHECK_PORT) || 443, servername: domain, rejectUnauthorized: false, timeout: 4000 }, () => {
+      try {
+        const c = sock.getPeerCertificate();
+        if (!c || !c.valid_to) return finish(NO_CERT);
+        const notAfter = Date.parse(c.valid_to);
+        const issuer = dnString(c.issuer);
+        finish({
+          daysLeft: Number.isNaN(notAfter) ? null : Math.floor((notAfter - Date.now()) / 86400_000),
+          notAfter: Number.isNaN(notAfter) ? null : notAfter,
+          issuer: issuer || null,
+          selfSigned: !!issuer && issuer === dnString(c.subject),
+        });
+      } catch {
+        finish(NO_CERT);
+      }
+    });
+    sock.on('error', () => finish(NO_CERT));
+    sock.on('timeout', () => finish(NO_CERT));
+    setTimeout(() => finish(NO_CERT), 5000).unref();
+  });
+}
+
+export function registerOps({ app, admin, getBot, guildCount, version, pollMs, publicBase }: Ctx): void {
   // ----- log -----
   app.get('/api/audit', admin, (req, res) => {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
@@ -131,7 +207,8 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
   };
   const count = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
 
-  app.get('/api/system', admin, (_req, res) => {
+  app.get('/api/system', admin, async (_req, res) => {
+    const cert = await checkCert().catch(() => NO_CERT);
     const space = freeSpace();
     const dbBytes = (() => {
       try {
@@ -157,7 +234,8 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
       },
       bot: getBot(),
       guilds: guildCount(),
-      publicBase: getSetting('public_base') || null,
+      publicBase: publicBase(),
+      cert,
     });
   });
 
@@ -171,7 +249,15 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
     }
   };
 
-  app.post('/api/system/run', admin, async (_req, res) => {
+  app.post('/api/system/run', admin, async (_req, res, next) => {
+    try {
+      await runChecks(res);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  async function runChecks(res: Response): Promise<void> {
     const checks: Check[] = [];
     const add = (id: string, label: string, status: Check['status'], detail: string) => checks.push({ id, label, status, detail });
 
@@ -208,49 +294,18 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
     else if (!last || Date.now() - last > Math.max(pollMs * 5, 120_000)) add('poll', 'Опрос игровых серверов', 'fail', 'Давно не было ответов: проверьте журнал backend');
     else add('poll', 'Опрос игровых серверов', 'ok', `Последний опрос ${Math.round((Date.now() - last) / 1000)} с назад`);
 
-    const base = getSetting('public_base');
+    const base = publicBase();
     add('public', 'Публичный адрес (значки в Discord)', base ? 'ok' : 'warn', base ? base : 'Откройте панель по домену с https, и значки игр появятся в сообщениях');
 
     const [gh, ds] = await Promise.all([probe('https://api.github.com'), getSetting('proxy_url') ? Promise.resolve(true) : probe('https://discord.com/api/v10/gateway')]);
+    const cert = await checkCert().catch(() => NO_CERT);
+    if (cert.daysLeft == null) add('cert', 'Сертификат HTTPS', 'warn', 'не удалось проверить');
+    else if (cert.daysLeft < 0) add('cert', 'Сертификат HTTPS', 'fail', 'Срок действия сертификата истёк');
+    else if (cert.daysLeft <= 14) add('cert', 'Сертификат HTTPS', 'warn', `Истекает через ${cert.daysLeft} дн.${cert.selfSigned ? ' (самоподписанный)' : ''}`);
+    else add('cert', 'Сертификат HTTPS', 'ok', `Действует ещё ${cert.daysLeft} дн.${cert.selfSigned ? ' (самоподписанный)' : ''}`);
+
     add('github', 'Доступ к GitHub (обновления)', gh ? 'ok' : 'warn', gh ? 'Доступен' : 'Нет ответа: проверка обновлений не сработает');
     add('discord-net', 'Доступ к Discord', ds ? 'ok' : 'fail', getSetting('proxy_url') ? 'Работа идёт через прокси' : ds ? 'Доступен напрямую' : 'Нет ответа. Включите прокси в настройках бота');
     res.json({ at: Date.now(), checks });
-  });
-
-  // ----- backup -----
-  app.get('/api/backup', admin, async (_req, res) => {
-    const tmp = path.join(os.tmpdir(), `coregsm-backup-${Date.now()}.db`);
-    try {
-      await db.backup(tmp);
-    } catch (e) {
-      return res.status(500).json({ error: `Не удалось создать копию: ${(e as Error).message}` });
-    }
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, '0');
-    const name = `coregsm-backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.db`;
-    res.download(tmp, name, () => fs.rmSync(tmp, { force: true }));
-  });
-
-  app.post('/api/backup/restore', admin, express.raw({ type: 'application/octet-stream', limit: '300mb' }), (req, res) => {
-    const body = req.body as Buffer;
-    if (!Buffer.isBuffer(body) || body.length < 4096 || body.subarray(0, 15).toString('latin1') !== 'SQLite format 3') {
-      return res.status(400).json({ error: 'Это не файл резервной копии CoreGSM (.db)' });
-    }
-    const pending = path.join(DATA_DIR, 'restore-pending.db');
-    try {
-      fs.writeFileSync(pending, body);
-      const t = new Database(pending, { readonly: true });
-      const tables = (t.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((x) => x.name);
-      const ok = ['users', 'servers', 'settings'].every((n) => tables.includes(n)) && t.pragma('quick_check', { simple: true }) === 'ok';
-      t.close();
-      for (const ext of ['-wal', '-shm']) fs.rmSync(`${pending}${ext}`, { force: true });
-      if (!ok) throw new Error('bad');
-    } catch {
-      fs.rmSync(pending, { force: true });
-      return res.status(400).json({ error: 'Файл повреждён или это копия не от CoreGSM' });
-    }
-    // the swap happens at start-up (see db.ts); the container restarts by itself
-    res.json({ ok: true, restarting: true });
-    setTimeout(() => process.exit(0), 800);
-  });
+  }
 }

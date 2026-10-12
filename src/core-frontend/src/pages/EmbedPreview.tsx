@@ -20,7 +20,15 @@ export interface DiscordEmbed {
 const D = { bg: '#2b2d31', outer: '#313338', text: '#dbdee1', title: '#ffffff', muted: '#949ba4' };
 
 /** A Discord message as the bot would post it: optional text above and an embed below. */
+/** only http(s) links and images are rendered: `javascript:` and `data:` urls are dropped */
+const safeUrl = (u?: string | null): string | undefined => (u && /^https?:\/\//i.test(u.trim()) ? u.trim() : undefined);
+
 export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; content?: string }) {
+  const authorIcon = safeUrl(embed?.author?.icon_url);
+  const embedUrl = safeUrl(embed?.url);
+  const thumb = safeUrl(embed?.thumbnail?.url);
+  const image = safeUrl(embed?.image?.url);
+  const footerIcon = safeUrl(embed?.footer?.icon_url);
   const color = `#${(embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
   const inlineFields = embed?.fields?.filter((f) => f.inline) ?? [];
   const wideFields = embed?.fields?.filter((f) => !f.inline) ?? [];
@@ -38,18 +46,18 @@ export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; con
             <div className="min-w-0 flex-1">
               {embed.author && (
                 <div className="mb-1 flex items-center gap-2 text-[13px] font-bold" style={{ color: D.title }}>
-                  {embed.author.icon_url && <img src={embed.author.icon_url} alt="" className="h-6 w-6 rounded-full object-cover" />}
+                  {authorIcon && <img src={authorIcon} alt="" className="h-6 w-6 rounded-full object-cover" />}
                   {embed.author.name}
                 </div>
               )}
               {embed.title && (
-                <div className="mb-1 break-words text-base font-bold" style={{ color: embed.url ? '#00a8fc' : D.title }}>
-                  {embed.url ? <a href={embed.url} target="_blank" rel="noreferrer" className="hover:underline">{embed.title}</a> : embed.title}
+                <div className="mb-1 break-words text-base font-bold" style={{ color: embedUrl ? '#00a8fc' : D.title }}>
+                  {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{embed.title}</a> : embed.title}
                 </div>
               )}
               {embed.description && <div className="mb-2 text-sm"><Markdown text={embed.description} /></div>}
             </div>
-            {embed.thumbnail && <img src={embed.thumbnail.url} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />}
+            {thumb && <img src={thumb} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />}
           </div>
           {inlineFields.length > 0 && (
             <div className="mb-2 grid grid-cols-3 gap-x-3 gap-y-2">
@@ -67,10 +75,10 @@ export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; con
               <Markdown text={f.value} />
             </div>
           ))}
-          {embed.image && <img src={embed.image.url} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
+          {image && <img src={image} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
           {(embed.footer || embed.timestamp) && (
             <div className="mt-2 flex items-center gap-1.5 text-xs" style={{ color: D.muted }}>
-              {embed.footer?.icon_url && <img src={embed.footer.icon_url} alt="" className="h-5 w-5 rounded-full" />}
+              {footerIcon && <img src={footerIcon} alt="" className="h-5 w-5 rounded-full" />}
               <span>{embed.footer?.text}
               {embed.footer && embed.timestamp ? ' • ' : ''}
               {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}</span>

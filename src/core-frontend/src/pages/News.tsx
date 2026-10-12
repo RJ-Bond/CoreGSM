@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { confirmDialog } from '../confirm';
 import { api, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
@@ -32,7 +33,7 @@ function StatusPill({ n }: { n: NewsItem }) {
 /** a short plain-text teaser: markdown marks removed */
 const excerpt = (n: NewsItem) => {
   const raw = n.payload.embed?.description || n.payload.content || '';
-  return raw.replace(/^s*[-*•]s+/gm, '• ').replace(/[*_~`|>#]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 170);
+  return raw.replace(/^\s*[-*•]\s+/gm, '• ').replace(/[*_~`|>#]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 170);
 };
 
 function NewsList() {
@@ -67,7 +68,7 @@ function NewsList() {
   };
   const remove = async (n: NewsItem) => {
     const sent = n.status === 'sent';
-    if (!window.confirm(sent ? 'Удалить новость? Сообщение также будет удалено из Discord.' : 'Удалить новость?')) return;
+    if (!(await confirmDialog({ title: 'Удалить новость?', text: sent ? 'Сообщение также будет удалено из Discord.' : undefined, confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
     void load();
   };

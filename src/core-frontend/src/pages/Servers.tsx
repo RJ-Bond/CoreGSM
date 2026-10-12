@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
 import { ServersArt } from '../components/Illustrations';
-import { Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, plural, usePoll } from '../ui';
+import { AnimatedNumber, Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, usePoll } from '../ui';
 import ServerDetail from './ServerDetail';
 
 export default function ServersPage({ sub }: { sub: string }) {
@@ -52,15 +52,15 @@ function ServerList() {
 
       {servers.length > 0 && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            [plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), servers.length],
-            ['Онлайн', `${online.length} из ${servers.length}`],
-            [plural(players, ['Игрок', 'Игрока', 'Игроков']), players],
-            ['Средний пинг', avg == null ? '–' : `${avg} мс`],
-          ].map(([k, v]) => (
+          {([
+            [plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), <AnimatedNumber value={servers.length} />],
+            ['Онлайн', <><AnimatedNumber value={online.length} /> из {servers.length}</>],
+            [plural(players, ['Игрок', 'Игрока', 'Игроков']), <AnimatedNumber value={players} pulse />],
+            ['Средний пинг', avg == null ? '–' : <><AnimatedNumber value={avg} /> мс</>],
+          ] as [string, ReactNode][]).map(([k, v]) => (
             <div key={k} className="panel px-5 py-4">
               <div className="text-sm font-extrabold text-mute">{k}</div>
-              <div className="text-3xl font-black tabular-nums text-link">{v}</div>
+              <div className="text-2xl font-black tabular-nums text-link sm:text-3xl">{v}</div>
             </div>
           ))}
         </div>
@@ -68,8 +68,8 @@ function ServerList() {
 
       {servers.length > 0 && (
         <FleetBar
-          online={servers.filter((x) => x.online && !(x.ping != null && x.ping > 100)).length}
-          lag={servers.filter((x) => x.online && x.ping != null && x.ping > 100).length}
+          online={servers.filter((x) => x.online && !isLag(x)).length}
+          lag={servers.filter(isLag).length}
           offline={servers.filter((x) => x.hasStatus && !x.online).length}
         />
       )}
@@ -89,7 +89,7 @@ function ServerList() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {sorted.map((s, i) => {
           const color = gameColor(s.game);
-          const lag = s.ping != null && s.ping > 100;
+          const lag = isLag(s);
           return (
             <article
               key={s.id}
@@ -111,8 +111,9 @@ function ServerList() {
                   {me && (
                     <button
                       onClick={(e) => { e.stopPropagation(); void toggleFav(s.id); }}
-                      className={`text-xl leading-none transition hover:scale-110 ${favs.includes(s.id) ? 'text-warn' : 'text-mute'}`}
+                      className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${favs.includes(s.id) ? 'text-warn' : 'text-mute'}`}
                       title={favs.includes(s.id) ? 'Убрать из избранного' : 'В избранное'}
+                      aria-label={`В избранное: ${s.name}`}
                       aria-pressed={favs.includes(s.id)}
                     >{favs.includes(s.id) ? '★' : '☆'}</button>
                   )}
@@ -122,7 +123,7 @@ function ServerList() {
               {s.online ? (
                 <>
                   <div className="flex items-baseline gap-1.5">
-                    <span className="text-4xl font-black tabular-nums">{s.players}</span>
+                    <AnimatedNumber value={s.players} pulse className="text-4xl font-black" />
                     <span className="font-extrabold text-mute">/ {s.maxPlayers}</span>
                     <span className="ml-auto text-sm font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
                   </div>

@@ -1,17 +1,87 @@
-import { forwardRef, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useAuth } from './auth';
-import { api } from './api';
+import { getToken, type Server } from './api';
+import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
 import { GAME_IMAGE, gameAbbr, gameColor } from './games';
 import { gameIconPath, ICON_PATHS } from './gameIcons';
 
-export function usePoll(fn: () => void, ms: number) {
+/**
+ * Calls `fn` now and then every `ms` milliseconds.
+ * - nothing runs while the tab is hidden; coming back to the tab refreshes at once
+ * - a tick is skipped while the previous call (if it returns a promise) is still pending
+ * - nothing is scheduled after unmount
+ */
+export function usePoll(fn: () => unknown, ms: number) {
   const ref = useRef(fn);
   ref.current = fn;
   useEffect(() => {
-    ref.current();
-    const t = setInterval(() => ref.current(), ms);
-    return () => clearInterval(t);
+    let alive = true;
+    let pending = false;
+    const run = async () => {
+      if (!alive || pending || document.hidden) return;
+      pending = true;
+      try {
+        await ref.current();
+      } catch {
+        /* the caller shows its own errors */
+      } finally {
+        pending = false;
+      }
+    };
+    void run();
+    const t = setInterval(() => void run(), ms);
+    const onVisible = () => { if (!document.hidden) void run(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [ms]);
+}
+
+/** a server answers, but slowly (ping over 100 ms) */
+export const LAG_PING = 100;
+export const isLag = (s: Pick<Server, 'online' | 'ping'>) => s.online && s.ping != null && s.ping > LAG_PING;
+
+const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
+export function useTween(value: number, ms = 600): number {
+  const [shown, setShown] = useState(value);
+  const cur = useRef(value);
+  useEffect(() => {
+    if (cur.current === value) return;
+    if (reducedMotion()) { cur.current = value; setShown(value); return; }
+    const from = cur.current;
+    const start = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const k = Math.min(1, (now - start) / ms);
+      const eased = 1 - Math.pow(1 - k, 3);
+      cur.current = k >= 1 ? value : Math.round(from + (value - from) * eased);
+      setShown(cur.current);
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value, ms]);
+  return shown;
+}
+
+/** tabular number that tweens to new values and (optionally) flashes briefly when the value changes */
+export function AnimatedNumber({ value, className = '', pulse = false }: { value: number; className?: string; pulse?: boolean }) {
+  const shown = useTween(value);
+  const [bump, setBump] = useState(false);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    if (!pulse) return;
+    setBump(true);
+    const t = setTimeout(() => setBump(false), 950);
+    return () => clearTimeout(t);
+  }, [value, pulse]);
+  return <span aria-live="off" className={`tabular-nums ${bump ? 'num-bump' : ''} ${className}`}>{shown}</span>;
 }
 
 /** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
@@ -118,7 +188,7 @@ export function ThemeToggle() {
   return (
     <button
       type="button"
-      className="grid h-10 w-10 place-items-center rounded-full bg-card text-mute shadow-pop transition hover:text-link"
+      className="btn-icon"
       title={`Тема: ${label[theme]}. Нажмите, чтобы переключить`}
       aria-label={`Тема: ${label[theme]}. Переключить`}
       onClick={() => {
@@ -133,23 +203,34 @@ export function ThemeToggle() {
 }
 
 // ---------- building blocks ----------
+/**
+ * Dialog: a bottom sheet on phones, a centred card on larger screens.
+ * Focus moves inside and is trapped, Escape closes, focus returns to the opener, only a real click on the backdrop closes it.
+ */
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  const box = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  // keyboards: first field; touch screens: the dialog itself (no on-screen keyboard popping up)
+  useDialogFocus(box, onClose, () =>
+    window.matchMedia?.('(pointer: coarse)').matches
+      ? box.current
+      : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
+  const bd = useBackdropClose(onClose);
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" {...bd}>
       <div
+        ref={box}
         role="dialog"
-        aria-label={title}
-        className="pop panel max-h-[92vh] w-full max-w-lg overflow-auto rounded-b-none p-6 sm:rounded-b-3xl"
-        onMouseDown={(e) => e.stopPropagation()}
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="pop panel max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-3xl sm:p-6"
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-black">{title}</h2>
-          <button className="grid h-8 w-8 place-items-center rounded-full bg-soft text-mute hover:text-ink" onClick={onClose} aria-label="Закрыть">✕</button>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
+          <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label="Закрыть">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
         </div>
         {children}
       </div>
@@ -168,8 +249,8 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 export function StatusPill({ online, known, lag }: { online: boolean; known: boolean; lag?: boolean }) {
   if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
-  if (!online) return <span className="pill pill-bad">OFFLINE</span>;
-  return lag ? <span className="pill pill-warn">LAG</span> : <span className="pill pill-ok live">ONLINE</span>;
+  if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
+  return lag ? <span className="pill pill-warn">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
 }
 
 export function GameAvatar({ game, size = 44 }: { game: string; size?: number }) {
@@ -203,18 +284,69 @@ export function FillBar({ value, max, color }: { value: number; max: number; col
   );
 }
 
-/** 24h player-count sparkline. Loads its own history; shows a quiet placeholder until there are two points. */
+// history of a server is shared between remounts (list <-> details) for a couple of minutes
+const sparkCache = new Map<number, { at: number; pts: number[] }>();
+const SPARK_EVERY = 3 * 60_000;
+
+/**
+ * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
+ * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
+ */
 export function Spark({ serverId, color }: { serverId: number; color: string }) {
-  const [pts, setPts] = useState<number[]>([]);
-  usePoll(() => {
-    api<{ players: number }[]>(`/servers/${serverId}/history?hours=24`)
-      .then((rows) => {
+  const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
+
+  useEffect(() => {
+    let timer = 0;
+    let ctl: AbortController | null = null;
+    let alive = true;
+
+    const load = async () => {
+      if (!alive || document.hidden) return;
+      ctl?.abort();
+      ctl = new AbortController();
+      try {
+        const token = getToken();
+        const res = await fetch(`/api/servers/${serverId}/history?hours=24`, {
+          signal: ctl.signal,
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) return;
+        const rows = (await res.json()) as { players: number }[];
         // downsample to at most 48 points
         const step = Math.max(1, Math.ceil(rows.length / 48));
-        setPts(rows.filter((_, i) => i % step === 0).map((r) => r.players));
-      })
-      .catch(() => undefined);
-  }, 60_000);
+        const next = rows.filter((_, i) => i % step === 0).map((r) => r.players);
+        sparkCache.set(serverId, { at: Date.now(), pts: next });
+        if (alive) setPts(next);
+      } catch {
+        /* aborted or offline: keep what we have */
+      }
+    };
+    const schedule = (delay: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        await load();
+        if (alive) schedule(SPARK_EVERY);
+      }, delay);
+    };
+
+    const cached = sparkCache.get(serverId);
+    const age = cached ? Date.now() - cached.at : Infinity;
+    // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
+    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : 150 + Math.random() * 2500);
+
+    const onVisible = () => {
+      if (document.hidden) return;
+      const c = sparkCache.get(serverId);
+      if (!c || Date.now() - c.at >= SPARK_EVERY) schedule(100 + Math.random() * 1000);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      ctl?.abort();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [serverId]);
 
   if (pts.length < 2) return <div className="h-9 rounded-xl bg-soft/60" aria-hidden />;
   const w = 240, h = 36;
@@ -223,7 +355,7 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
   const d = 'M' + xy.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L');
   const last = xy[xy.length - 1];
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-9 w-full" preserveAspectRatio="none" role="img" aria-label="Игроки за 24 часа">
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-9 w-full" preserveAspectRatio="none" role="img" aria-label={`Игроков за 24 часа: от ${Math.min(...pts)} до ${max}`}>
       <path d={`${d} L${w} ${h} L0 ${h}Z`} fill={color} opacity="0.14" />
       <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       <circle cx={last[0]} cy={last[1]} r="3.5" fill={color} />
@@ -234,10 +366,10 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
 export function PageHead({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon?: ReactNode; children?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
-      <div className="flex items-center gap-3.5">
+      <div className="flex min-w-0 items-center gap-3.5">
         {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-soft text-link">{icon}</span>}
-        <div>
-          <h1 className="text-3xl font-black tracking-tight">{title}</h1>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-black tracking-tight sm:text-3xl">{title}</h1>
           {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
         </div>
       </div>
@@ -261,16 +393,19 @@ export function Empty({ title, text, art, children }: { title: string; text: str
   );
 }
 
-/** Copies text to the clipboard; falls back to a prompt where the Clipboard API is blocked. */
+/** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
 export function CopyButton({ text, label = 'Копировать', className = '' }: { text: string; label?: string; className?: string }) {
   const [done, setDone] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
       setDone(true);
-      setTimeout(() => setDone(false), 1500);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setDone(false), 1500);
     } catch {
-      window.prompt('Скопируйте:', text);
+      await promptDialog({ title: 'Скопируйте вручную', label: 'Текст', value: text, readOnly: true });
     }
   };
   return (
@@ -282,14 +417,15 @@ export function CopyButton({ text, label = 'Копировать', className = '
 }
 
 /** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
-export function Logo({ size = 32 }: { size?: number }) {
+export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
   const { brand } = useAuth().access;
   return (
     <img
       src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
       width={size}
       height={size}
-      alt={brand.name}
+      // pass alt="" when the name is written next to the logo; alone it is described by the community name
+      alt={alt ?? brand.name}
       className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
       draggable={false}
     />
@@ -376,31 +512,49 @@ let toastSeq = 0;
 const toastListeners = new Set<(t: ToastItem[]) => void>();
 const emitToasts = () => toastListeners.forEach((l) => l(toasts));
 
-export function toast(text: string, kind: ToastKind = 'ok', ms = 3500) {
+/** `ms`: how long it stays; errors stay longer (8 s) by default. Every toast can also be dismissed by hand. */
+export function toast(text: string, kind: ToastKind = 'ok', ms?: number) {
   const t = { id: ++toastSeq, text, kind };
   toasts = [...toasts, t].slice(-4);
   emitToasts();
-  setTimeout(() => {
-    toasts = toasts.filter((x) => x.id !== t.id);
-    emitToasts();
-  }, ms);
+  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : 3500));
 }
 
+export function dismissToast(id: number) {
+  if (!toasts.some((x) => x.id === id)) return;
+  toasts = toasts.filter((x) => x.id !== id);
+  emitToasts();
+}
+
+/**
+ * Two sibling live regions (never nested): errors are announced assertively (role=alert), the rest politely.
+ * They sit above the phone navigation bar and the home-indicator safe area.
+ */
 export function Toaster() {
   const [list, setList] = useState<ToastItem[]>(toasts);
   useEffect(() => {
     toastListeners.add(setList);
     return () => { toastListeners.delete(setList); };
   }, []);
-  const tone = { ok: 'bg-okbg text-ok', err: 'bg-badbg text-bad', info: 'bg-soft text-ink' } as const;
+  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-card text-ink ring-line' } as const;
+  const item = (t: ToastItem) => (
+    <div key={t.id} className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
+      <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
+      <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
+      <button
+        type="button"
+        onClick={() => dismissToast(t.id)}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full opacity-80 hover:opacity-100 max-sm:h-11 max-sm:w-11"
+        aria-label="Закрыть уведомление"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+    </div>
+  );
   return (
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-4 bottom-24 z-[70] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
-      {list.map((t) => (
-        <div key={t.id} role="status" className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl px-4 py-3 text-sm font-bold shadow-soft ring-1 ring-black/5 ${tone[t.kind]}`}>
-          <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
-          {t.text}
-        </div>
-      ))}
+    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-[90] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+      <div aria-live="polite" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind !== 'err').map(item)}</div>
+      <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
     </div>
   );
 }
@@ -444,7 +598,7 @@ function AuthDecor() {
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden p-4 sm:p-8">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden p-4 pt-20 sm:p-8">
       <AuthDecor />
       <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
       <div className="relative z-[1] flex w-full justify-center">{children}</div>
@@ -456,8 +610,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
 export function AuthBrand({ subtitle }: { subtitle?: string }) {
   return (
     <div className="mb-5 flex flex-col items-center text-center">
-      <Logo size={64} />
-      <Wordmark className="mt-2 text-3xl" />
+      <Logo size={64} alt="" />
+      <Wordmark className="mt-2 max-w-full break-words text-3xl" />
       {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
     </div>
   );
@@ -480,7 +634,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
               key={t.id}
               href={`#/${t.id}`}
               aria-current={mode === t.id ? 'page' : undefined}
-              className={`flex-1 rounded-full px-3 py-1.5 text-center font-extrabold transition ${mode === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+              className={`flex flex-1 items-center justify-center rounded-full px-3 py-1.5 text-center font-extrabold transition max-sm:min-h-[44px] ${mode === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
             >
               {t.label}
             </a>
@@ -489,7 +643,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
       )}
       <div key={mode} className="auth-swap">{children}</div>
       {access.publicPanel && (
-        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>
+        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">Продолжить без входа</a></p>
       )}
     </div>
   );
@@ -564,7 +718,7 @@ export const PasswordField = forwardRef<
         <input
           id={id}
           ref={ref}
-          className="input !pr-11"
+          className="input !pr-12 max-sm:!pr-14"
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -582,7 +736,7 @@ export const PasswordField = forwardRef<
         />
         <button
           type="button"
-          className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink"
+          className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11"
           onClick={() => setShown((v) => !v)}
           aria-label={shown ? 'Скрыть пароль' : 'Показать пароль'}
           aria-pressed={shown}
@@ -664,7 +818,7 @@ export function DiscordButton({ label, href, className = '' }: { label: string; 
   return (
     <a
       href={href}
-      className={`inline-flex w-full items-center justify-center gap-2.5 rounded-full bg-[#5865f2] px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-[#4752c4] active:scale-[.98] ${className}`}
+      className={`inline-flex w-full items-center justify-center gap-2.5 rounded-full bg-[#5865f2] px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-[#4752c4] active:scale-[.98] max-sm:min-h-[44px] ${className}`}
     >
       <IconDiscordLogo />
       {label}
