@@ -1,9 +1,11 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type PlayerNow, type ServerDetails } from '../api';
 import { useAuth } from '../auth';
 import { COUNTRIES } from '../countries';
 import { gameColor, gameGradient, gameLabel } from '../games';
-import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, smoothPath, toast, usePoll } from '../ui';
+import { coverBackground } from '../cover';
+import { AnimatedNumber, CopyButton, ErrorLine, GameAvatar, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, plural, smoothPath, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 
@@ -235,14 +237,30 @@ function ServerDetailView({ id }: { id: number }) {
     void load(hours);
   }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (missing) {
+  const depth = useDepth<HTMLElement>();
+  const [shared, setShared] = useState(false);
+  // red ring once when the server goes online -> offline while this page is open
+  const wentOffline = useFlashOnChange(data ? data.server.online || !data.server.hasStatus : true, (prev, next) => prev && !next);
+
+  if (missing) return <NotFound kind="server" />;
+  if (!data) {
+    // the same blocks as the loaded page: banner, four numbers, chart + players, log + about
     return (
-      <Empty title="Сервер не найден" text="Возможно, его удалили.">
-        <a className="btn mt-3" href="#/servers">К списку серверов</a>
-      </Empty>
+      <div className="space-y-3.5" aria-busy="true" aria-label="Загрузка">
+        <div className="skel-line skeleton ml-1 !h-5 w-32" />
+        <div className="skeleton tile h-[188px] sm:h-[176px]" />
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton tile h-[106px]" />)}
+        </div>
+        <div className="grid gap-3.5 lg:grid-cols-12">
+          <div className="skeleton tile h-[340px] lg:col-span-8" />
+          <div className="skeleton tile h-[340px] lg:col-span-4" />
+          <div className="skeleton tile h-40 lg:col-span-8" />
+          <div className="skeleton tile h-40 lg:col-span-4" />
+        </div>
+      </div>
     );
   }
-  if (!data) return <div className="skeleton tile h-64" />;
 
   const { server: s, stats, events, points } = data;
   const color = gameColor(s.game);
@@ -251,8 +269,8 @@ function ServerDetailView({ id }: { id: number }) {
   const link = connectUrl(s.game, s.address, s.port);
   // placeholder versions such as 0.0.0.1 say nothing
   const realVersion = s.version && !/^0(\.0)*(\.\d+)?$/.test(s.version.trim()) ? s.version.trim() : null;
-  const tiles: [string, string, string?][] = [
-    ['Сейчас', s.online ? `${s.players}/${s.maxPlayers}` : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
+  const tiles: [string, ReactNode, string?][] = [
+    ['Сейчас', s.online ? <><AnimatedNumber value={s.players} delta />/{s.maxPlayers}</> : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
     ['Пик игроков', stats.peakPlayers == null ? '–' : String(stats.peakPlayers), stats.peakAt ? fmtDateTime(stats.peakAt) : undefined],
     ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
     ['В среднем', stats.avgPlayers == null ? '–' : String(stats.avgPlayers), 'пока сервер онлайн'],
@@ -278,6 +296,8 @@ function ServerDetailView({ id }: { id: number }) {
     try {
       await navigator.clipboard.writeText(url);
       toast('Ссылка скопирована');
+      setShared(true);
+      window.setTimeout(() => setShared(false), 1500);
     } catch {
       toast(`Не удалось скопировать. Ссылка: ${url}`, 'err', 8000);
     }
@@ -299,12 +319,15 @@ function ServerDetailView({ id }: { id: number }) {
       <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>
 
       <article
-        className="relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
-        style={{ background: `linear-gradient(120deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+        className="depth relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
+        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+        {...depth}
       >
-        <span aria-hidden className="pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+        <span aria-hidden className="depth-l1 pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+        <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
+        {wentOffline && <span className="flash-ring" aria-hidden />}
         <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
-          <GameAvatar game={s.game} size={68} glass />
+          <GameAvatar game={s.game} size={68} glass vtId={s.id} />
           <div className="min-w-0 flex-1 basis-64">
             <h1 className="break-words text-2xl font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-bold text-white/90">
@@ -315,7 +338,10 @@ function ServerDetailView({ id }: { id: number }) {
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
             <CopyButton text={s.address} label="Скопировать адрес" tone="grad" />
-            <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>Поделиться</button>
+            <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>
+              {shared ? <IconCheckMark /> : <IconShare />}
+              Поделиться
+            </button>
             {link && <a className="btn-ghost-on-grad" href={link}>Подключиться</a>}
           </div>
         </div>
@@ -325,7 +351,7 @@ function ServerDetailView({ id }: { id: number }) {
         <div className="relative mt-4 flex flex-wrap items-center gap-2">
           {isAdmin && (
             <>
-              <button className="btn-ghost-on-grad" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
+              <button className="btn-ghost-on-grad" onClick={refresh} disabled={busy} aria-busy={busy || undefined}><IconRefresh spinning={busy} />{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
               <button className="btn-ghost-on-grad" onClick={() => setEditing(true)}>Изменить</button>
               <button className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#b42323] transition hover:bg-white/90 max-sm:min-h-[44px]" onClick={remove}>Удалить</button>
             </>
@@ -339,7 +365,7 @@ function ServerDetailView({ id }: { id: number }) {
         {tiles.map(([k, v, hint]) => (
           <div key={k} className="tile p-4 sm:p-[18px]">
             <div className="stat-k">{k}</div>
-            <div className="stat-v mt-1 truncate">{v}</div>
+            <div className={`stat-v mt-1 ${typeof v === 'string' ? 'truncate' : ''}`}>{v}</div>
             {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
           </div>
         ))}
@@ -406,6 +432,8 @@ function ServerDetailView({ id }: { id: number }) {
         <ServerForm
           initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }}
           id={s.id}
+          coverUrl={s.coverUrl}
+          onCoverChanged={() => void load()}
           onClose={() => setEditing(false)}
           onSaved={() => { setEditing(false); void load(); }}
         />

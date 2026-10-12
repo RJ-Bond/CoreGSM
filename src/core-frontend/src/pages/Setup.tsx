@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { AuthBrand, AuthShell, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
+import { AuthBrand, AuthShell, Button, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -100,7 +100,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             <div className="flex gap-2 pt-1">
               <button type="button" className="btn btn-soft" onClick={() => setStep(0)} disabled={busy}>Назад</button>
               <button type="button" className="btn btn-soft ml-auto" onClick={() => void finish(true)} disabled={busy}>Пропустить</button>
-              <button className="btn" disabled={busy}>{busy ? 'Создаю…' : 'Завершить'}</button>
+              <Button loading={busy}>{busy ? 'Создаю…' : 'Завершить'}</Button>
             </div>
           </form>
         )}

@@ -3,7 +3,7 @@ import { api, getToken, type Server, type Session } from '../api';
 import { useAuth } from '../auth';
 import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
-import { ago, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast } from '../ui';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast, useDensity, type Density } from '../ui';
 
 /** "Chrome · Windows" from a User-Agent string */
 function deviceName(ua: string): string {
@@ -57,6 +57,7 @@ export default function ProfilePage() {
         <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
         <DiscordCard onChanged={reload} />
         <SessionsCard />
+        <AppearanceCard />
 
         {isAdmin && (
           <div className="panel flex flex-wrap items-center justify-between gap-3 p-6 md:col-span-2">
@@ -80,6 +81,29 @@ export default function ProfilePage() {
             </a>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** «Внешний вид»: how dense the panel is (kept in this browser only) */
+function AppearanceCard() {
+  const [density, setDensity] = useDensity();
+  const options: [Density, string, string][] = [
+    ['normal', 'Обычная', 'Больше воздуха, крупные плитки'],
+    ['compact', 'Компактная', 'Меньше отступов: больше серверов на экране'],
+  ];
+  return (
+    <div className="panel space-y-3 p-6">
+      <h2 className="text-lg font-black">Внешний вид</h2>
+      <div>
+        <span id="density-label" className="label">Плотность</span>
+        <div className="seg" role="group" aria-labelledby="density-label">
+          {options.map(([id, label]) => (
+            <button key={id} type="button" className="seg-item" aria-pressed={density === id} onClick={() => setDensity(id)}>{label}</button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm font-semibold text-mute">{options.find((o) => o[0] === density)?.[2]}. Запоминается в этом браузере.</p>
       </div>
     </div>
   );
@@ -181,7 +205,7 @@ function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChan
         <PasswordStrength password={next} />
       </PasswordField>
       <ErrorLine text={error} />
-      <button className="btn" disabled={busy}>{hasPassword ? 'Сохранить пароль' : 'Задать пароль'}</button>
+      <Button loading={busy}>{hasPassword ? 'Сохранить пароль' : 'Задать пароль'}</Button>
     </form>
   );
 }

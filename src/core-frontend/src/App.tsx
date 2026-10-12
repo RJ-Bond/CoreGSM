@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
-import { BLACK, WHITE, contrast, ensureContrast, mix, parseHex, parseTriplet, triplet, type RGB } from './colors';
+import { WHITE, brandVars, parseTriplet, triplet, type RGB } from './colors';
 import CommandPalette from './components/CommandPalette';
+import NotFound from './components/NotFound';
 import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -44,7 +45,6 @@ const ADMIN_TITLES: Record<string, string> = {
 };
 
 const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
-const DEFAULT_BRAND: RGB = [79, 70, 229];
 
 const isDarkNow = (root: HTMLElement) =>
   root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -58,26 +58,18 @@ function useBrand(b: Access['brand']) {
   useEffect(() => {
     const root = document.documentElement;
     const apply = () => {
-      const base = parseHex(b.color) ?? DEFAULT_BRAND;
       const dark = isDarkNow(root);
       const style = getComputedStyle(root);
       const surface = (name: string, fallback: RGB) => parseTriplet(style.getPropertyValue(`--${name}`)) ?? fallback;
       const card = surface('card', dark ? [23, 24, 29] : WHITE);
       const soft = surface('soft', dark ? [33, 34, 41] : [238, 240, 244]);
 
-      // filled buttons: white text must stay readable
-      const fill = contrast(base, WHITE) >= 4.5 ? base : ensureContrast(base, [WHITE], 4.5, 'darken');
-      // hover is always a bit darker, so white text keeps its contrast
-      const hover = mix(fill, BLACK, 0.14);
-      // brand-coloured text and focus rings
-      const link = dark
-        ? ensureContrast(mix(base, WHITE, 0.45), [card, soft], 4.5, 'lighten')
-        : ensureContrast(base, [card, soft], 4.5, 'darken');
-
+      // fill: white text on buttons >= 4.5:1; hover darker; end: gradient end (second colour or a darker mix);
+      // link: brand-coloured text and focus rings (see brandVars in colors.ts)
+      const { fill, hover, end, link } = brandVars(b.color, b.color2, dark, card, soft);
       root.style.setProperty('--brand', triplet(fill));
       root.style.setProperty('--brand-hover', triplet(hover));
-      // darker end of the gradients (buttons, active nav, icon tiles); white text stays >= 4.5:1 because it only gets darker
-      root.style.setProperty('--brand-2', triplet(mix(fill, BLACK, 0.24)));
+      root.style.setProperty('--brand-2', triplet(end));
       root.style.setProperty('--link', triplet(link));
     };
     apply();
@@ -91,7 +83,7 @@ function useBrand(b: Access['brand']) {
       mo.disconnect();
       mq.removeEventListener?.('change', apply);
     };
-  }, [b.color]);
+  }, [b.color, b.color2]);
 }
 
 interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
@@ -267,13 +259,17 @@ export default function App() {
   const visible = PAGES.filter((p) => !p.admin || isStaff);
   const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
-  const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   const sectionTitle = boot.needsSetup
     ? 'Первый запуск'
     : showAuth
       ? rawPage === 'register' && access.registration ? 'Регистрация' : 'Вход'
-      : page === 'profile'
+      : page === '404'
+        ? 'Не найдено'
+        : page === 'profile'
         ? 'Профиль'
         : page === 'admin'
           ? `Админка · ${ADMIN_TITLES[adminSection] ?? ADMIN_TITLES.servers}`
@@ -428,6 +424,7 @@ export default function App() {
           {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
+          {page === '404' && <NotFound />}
         </main>
 
         <Toaster />

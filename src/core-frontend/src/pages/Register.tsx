@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, Spinner, toast, useShake } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, toast, useShake } from '../ui';
 
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
 const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
@@ -202,10 +202,9 @@ export default function Register({ onDone }: { onDone: () => void }) {
       )}
 
       <ErrorLine text={error} />
-      <button className="btn w-full" disabled={busy}>
-        {busy && <Spinner />}
+      <Button className="w-full" magnetic loading={busy}>
         {busy ? 'Создаю…' : access.registrationMode === 'approval' ? 'Отправить заявку' : 'Создать аккаунт'}
-      </button>
+      </Button>
 
       {access.discordLogin && (
         <>

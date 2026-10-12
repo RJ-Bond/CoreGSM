@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { api, type ServerInput, type TestResult } from '../api';
+import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
@@ -7,8 +7,40 @@ import { COUNTRIES } from '../countries';
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
-export default function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; id?: number; onClose: () => void; onSaved: () => void }) {
+export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onClose, onSaved }: { initial: ServerInput; id?: number; coverUrl?: string | null; onCoverChanged?: () => void; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState(initial);
+  const [cover, setCover] = useState<string | null>(coverUrl ?? null);
+  const [coverBusy, setCoverBusy] = useState(false);
+
+  const uploadCover = async (file: File) => {
+    if (!id) return;
+    setCoverBusy(true);
+    setError('');
+    try {
+      const r = await fetch(`/api/servers/${id}/cover`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      const j = (await r.json().catch(() => null)) as { coverUrl?: string; error?: string } | null;
+      if (!r.ok) throw new Error(j?.error ?? 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)');
+      setCover(j?.coverUrl ?? null);
+      onCoverChanged?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCoverBusy(false);
+    }
+  };
+  const removeCover = async () => {
+    if (!id) return;
+    setCoverBusy(true);
+    try {
+      await api(`/servers/${id}/cover`, 'DELETE');
+      setCover(null);
+      onCoverChanged?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCoverBusy(false);
+    }
+  };
   const [custom, setCustom] = useState(!GAMES.some((g) => g.id === initial.game));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -16,7 +48,7 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
   const [test, setTest] = useState<TestResult | null>(null);
 
   // "advanced" is open when it already holds something (editing)
-  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country);
+  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country || coverUrl);
 
   const pickGame = (v: string) => {
     setTest(null);
@@ -126,6 +158,22 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
             </Field>
             <p className="-mt-2 text-sm font-semibold text-mute">Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.</p>
             <p className="-mt-2 text-sm font-semibold text-mute">Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.</p>
+            <div>
+              <span className="label">Обложка</span>
+              {id ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="h-[72px] w-32 shrink-0 overflow-hidden rounded-xl border border-line bg-soft" style={cover ? { backgroundImage: `url(${cover})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined} aria-hidden />
+                  <label className="btn btn-soft btn-sm cursor-pointer">
+                    {coverBusy ? 'Загружаю…' : 'Загрузить картинку'}
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={coverBusy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadCover(file); e.target.value = ''; }} />
+                  </label>
+                  {cover && <button type="button" className="btn btn-soft btn-sm" onClick={() => void removeCover()} disabled={coverBusy}>Убрать</button>}
+                  <span className="basis-full text-sm font-semibold text-mute">PNG, JPG или WebP до 5 МБ; обрезается до 16:9. Заменяет цветную обложку карточки и шапку страницы сервера.</span>
+                </div>
+              ) : (
+                <p className="text-sm font-semibold text-mute">Картинку можно загрузить после создания сервера: откройте «Изменить».</p>
+              )}
+            </div>
           </div>
         </details>
 

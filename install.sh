@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b306399534bd"
+COREGSM_BUILD="d371e439866a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -870,7 +870,8 @@ const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
 const MAGIC = Buffer.from('CGSMENC1');
 const HEADER_LEN = 8 + 16 + 12;
 const NAME_RE = /^coregsm-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual)\.tar\.gz(\.enc)?$/;
-const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp))$/;
+const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png)$/;
+const DIR_ENTRIES = new Set(['news', 'covers', 'avatars']);
 
 /** user-facing error (message is shown in the panel) */
 export class BackupError extends Error {
@@ -1040,6 +1041,20 @@ export async function buildArchive(dest: string, passphrase: string | null): Pro
         files.push(`news/${f}`);
       }
       entries.push('news');
+    }
+    for (const [dir, re] of [
+      ['covers', /^\d{1,9}(@s)?\.jpg$/],
+      ['avatars', /^\d{1,9}\.png$/],
+    ] as const) {
+      const src = path.join(DATA_DIR, dir);
+      if (!fs.existsSync(src)) continue;
+      fs.mkdirSync(path.join(stage, dir));
+      for (const f of fs.readdirSync(src)) {
+        if (!re.test(f)) continue;
+        fs.copyFileSync(path.join(src, f), path.join(stage, dir, f));
+        files.push(`${dir}/${f}`);
+      }
+      entries.push(dir);
     }
     for (const f of fs.readdirSync(DATA_DIR)) {
       if (/^brand-logo\.(png|jpg|webp)$/.test(f)) {
@@ -1217,7 +1232,8 @@ async function unpack(file: string, stage: string): Promise<void> {
       const e = entry as { type?: string; size?: number };
       const name = p.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
       const okType = e.type === 'File' || e.type === 'Directory';
-      if (!okType || !ALLOWED_ENTRY.test(name) || (name === 'news' && e.type !== 'Directory') || (name !== 'news' && e.type === 'Directory')) {
+      const isDir = DIR_ENTRIES.has(name);
+      if (!okType || !ALLOWED_ENTRY.test(name) || (isDir && e.type !== 'Directory') || (!isDir && e.type === 'Directory')) {
         bad ??= name || p;
         return false;
       }
@@ -1779,6 +1795,98 @@ export async function renderGameIcon(game: string): Promise<Buffer> {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/covers.ts" << '__COREGSM_EOF__'
+/**
+ * Cover pictures of servers. The uploaded picture is centre-cropped to 16:9 and stored as a 1280x720 JPEG
+ * (<data dir>/covers/<server id>.jpg) plus a 640x360 variant (<server id>@s.jpg) for small tiles.
+ */
+import express, { type Express, type RequestHandler } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import skia from 'skia-canvas';
+import { db } from './db.js';
+
+const { Canvas, loadImage } = skia;
+
+const DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'covers');
+fs.mkdirSync(DIR, { recursive: true });
+
+const id9 = (id: number) => Math.trunc(id);
+const fileOf = (id: number, small = false) => path.join(DIR, `${id9(id)}${small ? '@s' : ''}.jpg`);
+
+/** "/api/covers/7.jpg?v=<mtime>" when the server has a cover, otherwise null */
+export function coverUrl(serverId: number): string | null {
+  try {
+    const st = fs.statSync(fileOf(serverId));
+    return `/api/covers/${id9(serverId)}.jpg?v=${Math.floor(st.mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+export function removeCover(serverId: number): void {
+  fs.rmSync(fileOf(serverId), { force: true });
+  fs.rmSync(fileOf(serverId, true), { force: true });
+}
+
+const TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+async function render(img: Awaited<ReturnType<typeof loadImage>>, w: number, h: number): Promise<Buffer> {
+  // centre crop to 16:9
+  let sw = img.width;
+  let sh = (img.width * 9) / 16;
+  if (sh > img.height) {
+    sh = img.height;
+    sw = (img.height * 16) / 9;
+  }
+  const canvas = new Canvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, w, h);
+  return canvas.toBuffer('jpeg', { quality: 0.82 });
+}
+
+export function registerCovers(deps: { app: Express; admin: RequestHandler }): void {
+  const { app, admin } = deps;
+
+  app.put('/api/servers/:id/cover', admin, express.raw({ type: TYPES, limit: '5mb' }), async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 5 МБ' });
+    try {
+      const img = await loadImage(body);
+      if (!img.width || !img.height || img.width > 10000 || img.height > 10000) throw new Error('size');
+      const big = await render(img, 1280, 720);
+      const small = await render(img, 640, 360);
+      fs.writeFileSync(fileOf(id), big, { mode: 0o644 });
+      fs.writeFileSync(fileOf(id, true), small, { mode: 0o644 });
+      res.json({ coverUrl: coverUrl(id) });
+    } catch {
+      res.status(400).json({ error: 'Не удалось прочитать картинку: выберите PNG, JPG или WebP' });
+    }
+  });
+
+  app.delete('/api/servers/:id/cover', admin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(404).json({ error: 'Сервер не найден' });
+    removeCover(id);
+    res.json({ ok: true, coverUrl: null });
+  });
+
+  app.get('/api/covers/:file', (req, res) => {
+    const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
+    if (!m) return res.status(404).end();
+    let f = fileOf(Number(m[1]), req.query.s === '1');
+    if (!fs.existsSync(f)) f = fileOf(Number(m[1]));
+    if (!fs.existsSync(f)) return res.status(404).end();
+    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/db.ts" << '__COREGSM_EOF__'
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
@@ -1810,6 +1918,17 @@ if (fs.existsSync(pendingDir)) {
       for (const f of fs.readdirSync(newsSrc)) fs.copyFileSync(path.join(newsSrc, f), path.join(DATA_DIR, 'news', f));
     }
     if (full) {
+      // covers and avatars: the archive's set replaces the current one (ids belong to the restored database)
+      for (const [dir, re] of [
+        ['covers', /^\d{1,9}(@s)?\.jpg$/],
+        ['avatars', /^\d{1,9}\.png$/],
+      ] as const) {
+        const src = path.join(pendingDir, dir);
+        if (!fs.existsSync(src)) continue;
+        fs.mkdirSync(path.join(DATA_DIR, dir), { recursive: true });
+        for (const f of fs.readdirSync(path.join(DATA_DIR, dir))) if (re.test(f)) fs.rmSync(path.join(DATA_DIR, dir, f), { force: true });
+        for (const f of fs.readdirSync(src)) if (re.test(f)) fs.copyFileSync(path.join(src, f), path.join(DATA_DIR, dir, f));
+      }
       for (const f of fs.readdirSync(DATA_DIR)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.rmSync(path.join(DATA_DIR, f), { force: true });
       for (const f of fs.readdirSync(pendingDir)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.copyFileSync(path.join(pendingDir, f), path.join(DATA_DIR, f));
     }
@@ -2553,6 +2672,7 @@ import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
+import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
 
@@ -3159,17 +3279,26 @@ const logoFile = () => Object.values(LOGO_TYPES).map((e) => `${LOGO_PATH}.${e}`)
 const brand = () => ({
   name: getSetting('brand_name') || 'CoreGSM',
   color: getSetting('brand_color') || '#4f46e5',
+  color2: getSetting('brand_color2') || '',
+  preset: getSetting('brand_preset') || '',
   hasLogo: !!logoFile(),
   logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
 });
 
 app.put('/api/branding', admin, (req, res) => {
   const b = z
-    .object({ name: z.string().trim().min(1).max(32), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) })
+    .object({
+      name: z.string().trim().min(1).max(32),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+      color2: z.string().regex(/^(#[0-9a-fA-F]{6})?$/).optional(),
+      preset: z.string().trim().max(24).optional(),
+    })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Название до 32 символов, цвет в виде #RRGGBB' });
   setSetting('brand_name', b.data.name);
   setSetting('brand_color', b.data.color.toLowerCase());
+  setSetting('brand_color2', (b.data.color2 ?? '').toLowerCase());
+  setSetting('brand_preset', b.data.preset ?? '');
   res.json(brand());
 });
 app.put(
@@ -3525,6 +3654,7 @@ function serialize(r: ServerJoin) {
     queryPort: r.query_port,
     displayAddress: r.display_address,
     country: r.country ?? '',
+    coverUrl: coverUrl(r.id),
     // the address shown in the panel and on cards
     address: r.display_address || `${r.host}:${r.port}`,
     hasStatus: r.has_status != null,
@@ -3590,6 +3720,7 @@ app.put(
 app.delete('/api/servers/:id', admin, (req, res) => {
   const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
+  removeCover(Number(req.params.id));
   res.json({ ok: true });
 });
 
@@ -3698,6 +3829,9 @@ app.get(
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
   }),
 );
+
+/** bump when the game icon artwork changes: Discord caches embed images by URL */
+const GAME_ICON_VERSION = 3;
 
 // game pictogram for embeds (public: Discord fetches it); unknown ids get the generic icon
 app.get(
@@ -3810,6 +3944,7 @@ app.get('/api/status', viewer, (req, res) => {
         name: sv.name,
         game: sv.game,
         address: sv.address,
+        coverUrl: sv.coverUrl,
         online: sv.online,
         players: sv.players,
         maxPlayers: sv.maxPlayers,
@@ -3885,7 +4020,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -4048,6 +4183,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
 registerAlerts({ app, admin, internal, channelInfo });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
+registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 
@@ -4490,6 +4626,8 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/servers$/, label: 'Добавлен сервер', detail: (r) => s(r.body?.name) || `${s(r.body?.host)}:${Number(r.body?.port) || ''}` },
   { m: 'PUT', re: /^\/api\/servers\/(\d+)$/, label: 'Изменён сервер', pre: serverName },
   { m: 'DELETE', re: /^\/api\/servers\/(\d+)$/, label: 'Удалён сервер', pre: serverName },
+  { m: 'PUT', re: /^\/api\/servers\/(\d+)\/cover$/, label: 'Загружена обложка сервера', pre: serverName },
+  { m: 'DELETE', re: /^\/api\/servers\/(\d+)\/cover$/, label: 'Убрана обложка сервера', pre: serverName },
   { m: 'POST', re: /^\/api\/bindings$/, label: 'Создана привязка Discord', detail: (r) => `сервер #${Number(r.body?.serverId) || '?'}` },
   { m: 'PUT', re: /^\/api\/bindings\/(\d+)$/, label: 'Изменена привязка Discord', pre: (id) => `#${id}` },
   { m: 'DELETE', re: /^\/api\/bindings\/(\d+)$/, label: 'Удалена привязка Discord', pre: (id) => `#${id}` },
@@ -9145,8 +9283,9 @@ __COREGSM_EOF__
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
-import { BLACK, WHITE, contrast, ensureContrast, mix, parseHex, parseTriplet, triplet, type RGB } from './colors';
+import { WHITE, brandVars, parseTriplet, triplet, type RGB } from './colors';
 import CommandPalette from './components/CommandPalette';
+import NotFound from './components/NotFound';
 import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -9188,7 +9327,6 @@ const ADMIN_TITLES: Record<string, string> = {
 };
 
 const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
-const DEFAULT_BRAND: RGB = [79, 70, 229];
 
 const isDarkNow = (root: HTMLElement) =>
   root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -9202,26 +9340,18 @@ function useBrand(b: Access['brand']) {
   useEffect(() => {
     const root = document.documentElement;
     const apply = () => {
-      const base = parseHex(b.color) ?? DEFAULT_BRAND;
       const dark = isDarkNow(root);
       const style = getComputedStyle(root);
       const surface = (name: string, fallback: RGB) => parseTriplet(style.getPropertyValue(`--${name}`)) ?? fallback;
       const card = surface('card', dark ? [23, 24, 29] : WHITE);
       const soft = surface('soft', dark ? [33, 34, 41] : [238, 240, 244]);
 
-      // filled buttons: white text must stay readable
-      const fill = contrast(base, WHITE) >= 4.5 ? base : ensureContrast(base, [WHITE], 4.5, 'darken');
-      // hover is always a bit darker, so white text keeps its contrast
-      const hover = mix(fill, BLACK, 0.14);
-      // brand-coloured text and focus rings
-      const link = dark
-        ? ensureContrast(mix(base, WHITE, 0.45), [card, soft], 4.5, 'lighten')
-        : ensureContrast(base, [card, soft], 4.5, 'darken');
-
+      // fill: white text on buttons >= 4.5:1; hover darker; end: gradient end (second colour or a darker mix);
+      // link: brand-coloured text and focus rings (see brandVars in colors.ts)
+      const { fill, hover, end, link } = brandVars(b.color, b.color2, dark, card, soft);
       root.style.setProperty('--brand', triplet(fill));
       root.style.setProperty('--brand-hover', triplet(hover));
-      // darker end of the gradients (buttons, active nav, icon tiles); white text stays >= 4.5:1 because it only gets darker
-      root.style.setProperty('--brand-2', triplet(mix(fill, BLACK, 0.24)));
+      root.style.setProperty('--brand-2', triplet(end));
       root.style.setProperty('--link', triplet(link));
     };
     apply();
@@ -9235,7 +9365,7 @@ function useBrand(b: Access['brand']) {
       mo.disconnect();
       mq.removeEventListener?.('change', apply);
     };
-  }, [b.color]);
+  }, [b.color, b.color2]);
 }
 
 interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
@@ -9411,13 +9541,17 @@ export default function App() {
   const visible = PAGES.filter((p) => !p.admin || isStaff);
   const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
-  const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   const sectionTitle = boot.needsSetup
     ? 'Первый запуск'
     : showAuth
       ? rawPage === 'register' && access.registration ? 'Регистрация' : 'Вход'
-      : page === 'profile'
+      : page === '404'
+        ? 'Не найдено'
+        : page === 'profile'
         ? 'Профиль'
         : page === 'admin'
           ? `Админка · ${ADMIN_TITLES[adminSection] ?? ADMIN_TITLES.servers}`
@@ -9572,6 +9706,7 @@ export default function App() {
           {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
+          {page === '404' && <NotFound />}
         </main>
 
         <Toaster />
@@ -9644,6 +9779,8 @@ export interface Server {
   displayAddress: string;
   /** country shown in Discord ('' = detected automatically) */
   country: string;
+  /** "/api/covers/<id>.jpg?v=..." when an administrator uploaded a cover picture */
+  coverUrl: string | null;
   /** the address shown in the panel and on cards */
   address: string;
   hasStatus: boolean;
@@ -9776,6 +9913,7 @@ export interface StatusServer {
   name: string;
   game: string;
   address: string;
+  coverUrl?: string | null;
   online: boolean;
   players: number;
   maxPlayers: number;
@@ -9923,6 +10061,10 @@ export interface Session {
 export interface Brand {
   name: string;
   color: string;
+  /** optional second (end) colour of the gradients; '' = derived automatically */
+  color2?: string;
+  /** id of the chosen theme preset ('' = custom colour) */
+  preset?: string;
   hasLogo: boolean;
   logoV: number;
 }
@@ -10066,6 +10208,21 @@ export const BLACK: RGB = [0, 0, 0];
 const hex = (c: RGB) => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
 
 /**
+ * CSS-variable values of the brand colour(s): `fill` (buttons, white text >= 4.5:1), `hover`, `end` (the other end
+ * of the gradients: the second colour darkened until white text reads >= 4.5:1, or a darker mix of `fill`) and `link`
+ * (brand-coloured text, >= 4.5:1 on the card and soft surfaces).
+ */
+export function brandVars(color: string, color2: string | undefined, dark: boolean, card: RGB, soft: RGB) {
+  const base = parseHex(color) ?? ([79, 70, 229] as RGB);
+  const fill = contrast(base, WHITE) >= 4.5 ? base : ensureContrast(base, [WHITE], 4.5, 'darken');
+  const hover = mix(fill, BLACK, 0.14);
+  const link = dark ? ensureContrast(mix(base, WHITE, 0.45), [card, soft], 4.5, 'lighten') : ensureContrast(base, [card, soft], 4.5, 'darken');
+  const second = color2 ? parseHex(color2) : null;
+  const end = second ? (contrast(second, WHITE) >= 4.5 ? second : ensureContrast(second, [WHITE], 4.5, 'darken')) : mix(fill, BLACK, 0.24);
+  return { fill, hover, end, link };
+}
+
+/**
  * Two-stop gradient for a tile cover from a game colour: c1 is the deeper end (white text keeps >= 4.5:1),
  * c2 a lighter, slightly warmer end (large white text keeps >= 3:1).
  */
@@ -10166,6 +10323,51 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/Button.tsx" << '__COREGSM_EOF__'
+import { forwardRef, type ButtonHTMLAttributes } from 'react';
+
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  /** busy: a spinner precedes the label, the button is disabled and announces aria-busy */
+  loading?: boolean;
+  variant?: 'primary' | 'soft' | 'danger';
+  size?: 'md' | 'sm';
+  /** leans toward a mouse pointer (key call-to-action buttons only) */
+  magnetic?: boolean;
+}
+
+export function BtnSpinner() {
+  return (
+    <svg className="btn-spin animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity=".28" strokeWidth="3" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** The panel's button: `.btn` styling plus a loading state. `type` is not forced, so a Button inside a form still submits. */
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  { loading = false, variant = 'primary', size = 'md', magnetic = false, className = '', disabled, children, ...rest },
+  ref,
+) {
+  const cls = ['btn', variant === 'soft' ? 'btn-soft' : variant === 'danger' ? 'btn-danger' : '', size === 'sm' ? 'btn-sm' : '', className]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <button
+      ref={ref}
+      className={cls}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      data-magnetic={magnetic || undefined}
+      {...rest}
+    >
+      {loading && <BtnSpinner />}
+      {children}
+    </button>
+  );
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api, type DiscordGuild } from '../api';
@@ -10254,14 +10456,18 @@ import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_SECTIONS } from '../pages/Admin';
-import { GameAvatar, IconNews, IconServers } from '../ui';
+import { GameAvatar, IconNews, IconServers, toast, useDensity } from '../ui';
+
+type Group = 'Серверы' | 'Разделы' | 'Действия';
 
 interface Item {
   key: string;
-  group: 'Серверы' | 'Разделы';
+  group: Group;
   label: string;
   hint: string;
   href: string;
+  /** an action instead of a link: runs after the palette closes */
+  run?: () => void;
   icon: ReactNode;
   /** lower-case text the query is matched against */
   hay: string;
@@ -10276,6 +10482,12 @@ const IconUser = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="12" cy="8" r="4" />
     <path d="M4 21a8 8 0 0 1 16 0" />
+  </svg>
+);
+
+const IconDensity = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M4 6h16M4 10h16M4 14h16M4 18h16" />
   </svg>
 );
 
@@ -10297,6 +10509,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const [q, setQ] = useState('');
   const [servers, setServers] = useState<Server[] | null>(null);
   const [active, setActive] = useState(0);
+  const [density, setDensity] = useDensity();
 
   useDialogFocus(box, onClose, () => input.current);
   const bd = useBackdropClose(onClose);
@@ -10331,15 +10544,27 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, 'Админка', `#/admin/${sec.id}`, sec.icon()));
     }
     if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
+    const compact = density === 'compact';
+    out.push({
+      key: 'act-density',
+      group: 'Действия',
+      label: 'Сменить плотность',
+      hint: compact ? 'Сейчас компактная, переключить на обычную' : 'Сейчас обычная, переключить на компактную',
+      href: '',
+      run: () => { setDensity(compact ? 'normal' : 'compact'); toast(compact ? 'Плотность: обычная' : 'Плотность: компактная'); },
+      icon: <IconDensity />,
+      hay: 'сменить плотность компактная обычная вид отступы density',
+    });
     return out;
-  }, [servers, isStaff, isAdmin, me]);
+  }, [servers, isStaff, isAdmin, me, density]);
 
   const results = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items;
     const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
     const secs = hit.filter((i) => i.group === 'Разделы');
-    return [...servs, ...secs];
+    const acts = hit.filter((i) => i.group === 'Действия');
+    return [...servs, ...secs, ...acts];
   }, [items, q]);
 
   useEffect(() => setActive(0), [q]);
@@ -10352,7 +10577,8 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const go = (it: Item | undefined) => {
     if (!it) return;
     onClose();
-    window.location.hash = it.href;
+    if (it.run) it.run();
+    else window.location.hash = it.href;
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -10364,7 +10590,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     else if (e.key === 'Enter') { e.preventDefault(); go(results[safeActive]); }
   };
 
-  const groups: ('Серверы' | 'Разделы')[] = ['Серверы', 'Разделы'];
+  const groups: Group[] = ['Серверы', 'Разделы', 'Действия'];
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (
@@ -10467,8 +10693,9 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/Illustrations.tsx" << '__COREGSM_EOF__'
-// Flat SVG illustrations for empty states and the sign-in screen.
+// Flat SVG illustrations for empty states, 404 and the sign-in screen.
 // They use the theme tokens (Tailwind classes), so they look right in the light and the dark theme.
+// Motion is CSS only (.art-* classes in index.css) and is switched off for prefers-reduced-motion.
 
 const OK = '#23a55a';
 const WARN = '#f0b232';
@@ -10476,14 +10703,21 @@ const BAD = '#f23f42';
 
 function Frame({ children, w = 220, h = 150, label }: { children: React.ReactNode; w?: number; h?: number; label: string }) {
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} role="img" aria-label={label} className="max-w-full">
+    <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} role="img" aria-label={label} className="max-w-full overflow-visible">
       {children}
     </svg>
   );
 }
 
 function Sparkle({ x, y, s = 1 }: { x: number; y: number; s?: number }) {
-  return <path d={`M${x} ${y - 6 * s} L${x + 1.6 * s} ${y - 1.6 * s} L${x + 6 * s} ${y} L${x + 1.6 * s} ${y + 1.6 * s} L${x} ${y + 6 * s} L${x - 1.6 * s} ${y + 1.6 * s} L${x - 6 * s} ${y} L${x - 1.6 * s} ${y - 1.6 * s}Z`} className="fill-brand" opacity="0.55" />;
+  return (
+    <path
+      d={`M${x} ${y - 6 * s} L${x + 1.6 * s} ${y - 1.6 * s} L${x + 6 * s} ${y} L${x + 1.6 * s} ${y + 1.6 * s} L${x} ${y + 6 * s} L${x - 1.6 * s} ${y + 1.6 * s} L${x - 6 * s} ${y} L${x - 1.6 * s} ${y - 1.6 * s}Z`}
+      className="fill-brand art-twinkle"
+      opacity="0.55"
+      style={{ animationDelay: `${((x * 7 + y * 3) % 20) / 10}s` }}
+    />
+  );
 }
 
 /** A small rack of three servers with the three status lights. */
@@ -10498,11 +10732,13 @@ export function ServersArt() {
         <g key={y} transform={`translate(${i === 1 ? 6 : 0} 0)`}>
           <rect x="52" y={y} width="116" height="25" rx="9" className="fill-card stroke-line" strokeWidth="2" />
           <rect x="62" y={y + 10} width="46" height="5" rx="2.5" className="fill-line" />
-          <circle cx="146" cy={y + 12.5} r="4.2" fill={lights[i]} />
+          <circle cx="146" cy={y + 12.5} r="4.2" fill={lights[i]} className="art-blink" style={{ animationDelay: `${i * 0.7}s` }} />
         </g>
       ))}
-      <circle cx="170" cy="40" r="15" className="fill-brand" />
-      <path d="M170 33v14M163 40h14" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+      <g className="art-float">
+        <circle cx="170" cy="40" r="15" className="fill-brand" />
+        <path d="M170 33v14M163 40h14" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+      </g>
       <Sparkle x={44} y={32} /> <Sparkle x={184} y={104} s={0.8} />
     </Frame>
   );
@@ -10514,17 +10750,22 @@ export function NewsArt() {
     <Frame label="Новости">
       <ellipse cx="110" cy="134" rx="76" ry="9" className="fill-soft" />
       <circle cx="108" cy="72" r="60" className="fill-soft" />
-      <rect x="112" y="34" width="62" height="78" rx="10" className="fill-card stroke-line" strokeWidth="2" transform="rotate(6 143 73)" />
-      <g transform="rotate(6 143 73)">
-        <rect x="124" y="48" width="38" height="6" rx="3" className="fill-brand" opacity="0.8" />
-        <rect x="124" y="62" width="38" height="4" rx="2" className="fill-line" />
-        <rect x="124" y="72" width="30" height="4" rx="2" className="fill-line" />
-        <rect x="124" y="82" width="34" height="4" rx="2" className="fill-line" />
-        <rect x="124" y="94" width="20" height="9" rx="4.5" fill={OK} opacity="0.85" />
+      <g className="art-float-2">
+        <rect x="112" y="34" width="62" height="78" rx="10" className="fill-card stroke-line" strokeWidth="2" transform="rotate(6 143 73)" />
+        <g transform="rotate(6 143 73)">
+          <rect x="124" y="48" width="38" height="6" rx="3" className="fill-brand" opacity="0.8" />
+          <rect x="124" y="62" width="38" height="4" rx="2" className="fill-line" />
+          <rect x="124" y="72" width="30" height="4" rx="2" className="fill-line" />
+          <rect x="124" y="82" width="34" height="4" rx="2" className="fill-line" />
+          <rect x="124" y="94" width="20" height="9" rx="4.5" fill={OK} opacity="0.85" />
+        </g>
       </g>
-      <path d="M44 66h16l34-20v52L60 78H44a6 6 0 0 1-6-6v0a6 6 0 0 1 6-6z" className="fill-brand" />
-      <rect x="52" y="78" width="10" height="22" rx="4" className="fill-brand" opacity="0.7" />
-      <path d="M102 62c8 4 8 20 0 24" fill="none" className="stroke-brand" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+      <g className="art-wobble">
+        <path d="M44 66h16l34-20v52L60 78H44a6 6 0 0 1-6-6v0a6 6 0 0 1 6-6z" className="fill-brand" />
+        <rect x="52" y="78" width="10" height="22" rx="4" className="fill-brand" opacity="0.7" />
+      </g>
+      <path d="M102 62c8 4 8 20 0 24" fill="none" className="stroke-brand art-blink" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+      <path d="M110 54c14 7 14 40 0 48" fill="none" className="stroke-brand art-blink" strokeWidth="3" strokeLinecap="round" opacity="0.3" style={{ animationDelay: '.4s' }} />
       <Sparkle x={34} y={40} s={0.9} /> <Sparkle x={186} y={30} s={0.7} />
     </Frame>
   );
@@ -10536,14 +10777,18 @@ export function DiscordArt() {
     <Frame label="Discord">
       <ellipse cx="110" cy="134" rx="76" ry="9" className="fill-soft" />
       <circle cx="110" cy="72" r="60" className="fill-soft" />
-      <rect x="40" y="36" width="104" height="44" rx="14" className="fill-card stroke-line" strokeWidth="2" />
-      <path d="M62 80l-6 14 20-14z" className="fill-card stroke-line" strokeWidth="2" strokeLinejoin="round" />
-      <rect x="54" y="48" width="48" height="6" rx="3" className="fill-brand" opacity="0.8" />
-      <rect x="54" y="60" width="76" height="5" rx="2.5" className="fill-line" />
-      <rect x="108" y="72" width="76" height="38" rx="13" className="fill-brand" />
-      <circle cx="132" cy="91" r="3.6" fill="#fff" /><circle cx="160" cy="91" r="3.6" fill="#fff" />
-      <path d="M140 99q4 3 8 0" stroke="#fff" strokeWidth="2.4" fill="none" strokeLinecap="round" />
-      <rect x="140" y="62" width="4" height="8" rx="2" className="fill-brand" /><circle cx="142" cy="60" r="3.5" fill={WARN} />
+      <g className="art-float">
+        <rect x="40" y="36" width="104" height="44" rx="14" className="fill-card stroke-line" strokeWidth="2" />
+        <path d="M62 80l-6 14 20-14z" className="fill-card stroke-line" strokeWidth="2" strokeLinejoin="round" />
+        <rect x="54" y="48" width="48" height="6" rx="3" className="fill-brand" opacity="0.8" />
+        <rect x="54" y="60" width="76" height="5" rx="2.5" className="fill-line" />
+      </g>
+      <g className="art-float-2">
+        <rect x="108" y="72" width="76" height="38" rx="13" className="fill-brand" />
+        <circle cx="132" cy="91" r="3.6" fill="#fff" /><circle cx="160" cy="91" r="3.6" fill="#fff" />
+        <path d="M140 99q4 3 8 0" stroke="#fff" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+        <rect x="140" y="62" width="4" height="8" rx="2" className="fill-brand" /><circle cx="142" cy="60" r="3.5" fill={WARN} className="art-blink" />
+      </g>
       <Sparkle x={34} y={110} s={0.8} /> <Sparkle x={190} y={44} />
     </Frame>
   );
@@ -10555,15 +10800,69 @@ export function CardsArt() {
     <Frame label="Карточки">
       <ellipse cx="110" cy="134" rx="76" ry="9" className="fill-soft" />
       <circle cx="110" cy="72" r="60" className="fill-soft" />
-      <rect x="42" y="38" width="136" height="80" rx="14" className="fill-card stroke-line" strokeWidth="2" />
-      <rect x="54" y="50" width="52" height="8" rx="4" className="fill-brand" opacity="0.8" />
-      <rect x="54" y="64" width="34" height="5" rx="2.5" className="fill-line" />
-      <text x="56" y="100" fontSize="26" fontWeight="900" className="fill-ink">26</text>
-      <text x="84" y="100" fontSize="13" fontWeight="800" className="fill-mute">/ 40</text>
-      <rect x="116" y="50" width="50" height="20" rx="7" className="fill-soft" />
-      <rect x="116" y="76" width="50" height="20" rx="7" className="fill-soft" />
-      <circle cx="166" cy="104" r="9" fill={OK} /><path d="M162 104l3 3 5-6" stroke="#fff" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <g className="art-float">
+        <rect x="42" y="38" width="136" height="80" rx="14" className="fill-card stroke-line" strokeWidth="2" />
+        <rect x="54" y="50" width="52" height="8" rx="4" className="fill-brand" opacity="0.8" />
+        <rect x="54" y="64" width="34" height="5" rx="2.5" className="fill-line" />
+        <text x="56" y="100" fontSize="26" fontWeight="900" className="fill-ink">26</text>
+        <text x="84" y="100" fontSize="13" fontWeight="800" className="fill-mute">/ 40</text>
+        <rect x="116" y="50" width="50" height="20" rx="7" className="fill-soft" />
+        <rect x="116" y="76" width="50" height="20" rx="7" className="fill-soft" />
+        <circle cx="166" cy="104" r="9" fill={OK} /><path d="M162 104l3 3 5-6" stroke="#fff" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
       <Sparkle x={186} y={42} s={0.8} />
+    </Frame>
+  );
+}
+
+/** A bell with a ripple: nothing was sent yet. */
+export function AlertsArt() {
+  return (
+    <Frame label="Оповещения" w={200} h={130}>
+      <ellipse cx="100" cy="118" rx="62" ry="7" className="fill-soft" />
+      <circle cx="100" cy="62" r="50" className="fill-soft" />
+      <g className="art-wobble">
+        <path d="M100 26c-18 0-28 14-28 32 0 18-8 24-12 28h80c-4-4-12-10-12-28 0-18-10-32-28-32z" className="fill-card stroke-line" strokeWidth="2" strokeLinejoin="round" />
+        <rect x="76" y="40" width="10" height="26" rx="5" className="fill-brand" opacity="0.18" />
+        <circle cx="100" cy="94" r="7" className="fill-brand" />
+        <circle cx="100" cy="21" r="4" className="fill-brand" />
+      </g>
+      <path d="M142 40c6 6 8 14 6 22" fill="none" className="stroke-brand art-blink" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+      <path d="M58 40c-6 6-8 14-6 22" fill="none" className="stroke-brand art-blink" strokeWidth="3" strokeLinecap="round" opacity="0.5" style={{ animationDelay: '.5s' }} />
+      <circle cx="140" cy="82" r="10" fill={OK} /><path d="M135 82l3.500 3.500 6.500-7" stroke="#fff" strokeWidth="2.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <Sparkle x={30} y={90} s={0.8} /> <Sparkle x={172} y={22} s={0.7} />
+    </Frame>
+  );
+}
+
+/** A server with an unplugged cable and a question mark: the page or the server does not exist. */
+export function NotFoundArt() {
+  return (
+    <Frame label="Страница не найдена" w={260} h={170}>
+      <ellipse cx="130" cy="152" rx="92" ry="9" className="fill-soft" />
+      <circle cx="130" cy="82" r="72" className="fill-soft" />
+      <g className="art-float">
+        <rect x="70" y="40" width="120" height="30" rx="11" className="fill-card stroke-line" strokeWidth="2" />
+        <rect x="70" y="76" width="120" height="30" rx="11" className="fill-card stroke-line" strokeWidth="2" />
+        <rect x="82" y="52" width="48" height="6" rx="3" className="fill-line" />
+        <rect x="82" y="88" width="34" height="6" rx="3" className="fill-line" />
+        <circle cx="166" cy="55" r="5" fill={WARN} className="art-blink" />
+        <circle cx="166" cy="91" r="5" fill={BAD} className="art-blink" style={{ animationDelay: '.8s' }} />
+        <circle cx="150" cy="55" r="5" className="fill-line" />
+        <circle cx="150" cy="91" r="5" className="fill-line" />
+      </g>
+      {/* the loose cable */}
+      <path d="M130 106c0 16-14 14-14 26s16 8 24 14" fill="none" className="stroke-brand" strokeWidth="4" strokeLinecap="round" />
+      <g className="art-wobble">
+        <rect x="140" y="140" width="22" height="13" rx="4" className="fill-brand" />
+        <rect x="162" y="143" width="9" height="3" rx="1.5" className="fill-mute" />
+        <rect x="162" y="148" width="9" height="3" rx="1.5" className="fill-mute" />
+      </g>
+      <g className="art-float-2">
+        <circle cx="206" cy="46" r="17" className="fill-brand" />
+        <text x="206" y="53" textAnchor="middle" fontSize="22" fontWeight="900" fill="#fff">?</text>
+      </g>
+      <Sparkle x={52} y={44} /> <Sparkle x={226} y={104} s={0.8} /> <Sparkle x={40} y={110} s={0.7} />
     </Frame>
   );
 }
@@ -10654,6 +10953,196 @@ export function Markdown({ text }: { text: string }) {
     out.push(line.trim() === '' ? <div key={i} className="h-2" /> : <div key={i}>{inlineMd(line)}</div>);
   }
   return <div className="break-words leading-snug">{out}</div>;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/NotFound.tsx" << '__COREGSM_EOF__'
+import { IconArrow } from '../ui';
+import { NotFoundArt } from './Illustrations';
+
+/** Unknown route or unknown server id. `kind` only changes the wording; both buttons are always there. */
+export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }) {
+  return (
+    <div className="panel fade-in mx-auto flex max-w-xl flex-col items-center gap-3 px-6 py-10 text-center sm:py-14" role="region" aria-labelledby="nf-title">
+      <NotFoundArt />
+      <p className="nf-code text-6xl font-black leading-none tracking-[-0.05em] sm:text-7xl" aria-hidden>404</p>
+      <h1 id="nf-title" className="text-2xl font-extrabold tracking-[-0.02em]">
+        {kind === 'server' ? 'Сервер не найден' : 'Такой страницы нет'}
+      </h1>
+      <p className="max-w-sm font-semibold text-mute">
+        {kind === 'server'
+          ? 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.'
+          : 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.'}
+      </p>
+      <div className="mt-3 flex flex-wrap justify-center gap-2.5">
+        <a className="btn" href="#/" data-magnetic>
+          На главную
+          <IconArrow />
+        </a>
+        <a className="btn btn-soft" href="#/servers">К серверам</a>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/SplitButton.tsx" << '__COREGSM_EOF__'
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { BtnSpinner } from './Button';
+
+export interface SplitItem {
+  key: string;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+  onSelect: () => void;
+}
+
+/**
+ * Main action plus a chevron that opens a menu of related actions.
+ * Menu button pattern: aria-haspopup, ArrowDown/Enter/Space open and focus the first item, arrows/Home/End move,
+ * Esc closes and returns focus to the chevron, Tab and a click outside close.
+ */
+export function SplitButton({
+  label,
+  onClick,
+  items,
+  disabled,
+  loading,
+  className = '',
+  menuLabel = 'Другие действия',
+  magnetic = false,
+  children,
+}: {
+  label: ReactNode;
+  onClick: () => void;
+  items: SplitItem[];
+  disabled?: boolean;
+  loading?: boolean;
+  className?: string;
+  menuLabel?: string;
+  magnetic?: boolean;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const caret = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const focusFirst = useRef<'first' | 'last' | null>(null);
+  const menuId = useId();
+  const off = !!disabled || !!loading;
+
+  const close = (returnFocus: boolean) => {
+    setOpen(false);
+    if (returnFocus) caret.current?.focus();
+  };
+  const show = (which: 'first' | 'last') => {
+    if (off) return;
+    // open upwards when the menu would not fit under the button
+    const r = caret.current?.getBoundingClientRect();
+    setUp(!!r && window.innerHeight - r.bottom < 40 + items.length * 56 && r.top > window.innerHeight - r.bottom);
+    focusFirst.current = which;
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const els = menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)');
+    if (els && els.length) (focusFirst.current === 'last' ? els[els.length - 1] : els[0]).focus();
+    focusFirst.current = null;
+    const onDown = (e: PointerEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+
+  const onCaretKey = (e: ReactKeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); show('first'); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); show('last'); }
+  };
+  const onMenuKey = (e: ReactKeyboardEvent) => {
+    const els = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const i = els.indexOf(document.activeElement as HTMLElement);
+    const go = (n: number) => { e.preventDefault(); els[(n + els.length) % els.length]?.focus(); };
+    if (e.key === 'ArrowDown') go(i + 1);
+    else if (e.key === 'ArrowUp') go(i - 1);
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(els.length - 1);
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+    else if (e.key === 'Tab') setOpen(false);
+  };
+
+  return (
+    <div ref={root} className={`split ${className}`} data-magnetic={magnetic || undefined}>
+      <button type="button" className="btn split-main" disabled={off} aria-busy={loading || undefined} onClick={onClick}>
+        {loading && <BtnSpinner />}
+        {label}
+      </button>
+      <button
+        ref={caret}
+        type="button"
+        className="btn split-caret"
+        disabled={off}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={menuLabel}
+        onClick={() => (open ? close(false) : show('first'))}
+        onKeyDown={onCaretKey}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div ref={menu} id={menuId} role="menu" aria-label={menuLabel} data-up={up} className="split-menu" onKeyDown={onMenuKey}>
+          {items.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              role="menuitem"
+              className="split-item"
+              disabled={it.disabled}
+              onClick={() => { close(true); it.onSelect(); }}
+            >
+              {it.label}
+              {it.hint && <small>{it.hint}</small>}
+            </button>
+          ))}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/Switch.tsx" << '__COREGSM_EOF__'
+import type { InputHTMLAttributes } from 'react';
+
+interface SwitchProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'checked' | 'type' | 'role'> {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}
+
+/**
+ * iOS-style on/off switch for a boolean setting. A real checkbox with role="switch": Space toggles it, a wrapping <label>
+ * works, the focus ring is the normal one. Give it an aria-label or put it inside a <label> with text.
+ * (Selecting rows from a list stays a plain checkbox.)
+ */
+export function Switch({ checked, onChange, className = '', ...rest }: SwitchProps) {
+  return (
+    <input
+      {...rest}
+      type="checkbox"
+      role="switch"
+      className={`switch ${className}`.trim()}
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+    />
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -11173,6 +11662,19 @@ const names = (() => {
 export const COUNTRIES: [string, string][] = CODES.map((c): [string, string] => [c, names?.of(c) ?? c]).sort((a, b) => a[1].localeCompare(b[1], 'ru'));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/cover.ts" << '__COREGSM_EOF__'
+/**
+ * CSS `background` for a server cover: the uploaded picture with a dark gradient on top (white text stays readable),
+ * the game gradient underneath as a fallback while the picture loads. Without a picture it is just the game gradient.
+ */
+export function coverBackground(coverUrl: string | null | undefined, gradient: string, opts: { small?: boolean; strong?: boolean } = {}): string {
+  if (!coverUrl) return gradient;
+  const url = opts.small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
+  const [a, b] = opts.strong ? [0.38, 0.7] : [0.28, 0.58];
+  return `linear-gradient(180deg, rgba(8,10,20,${a}) 0%, rgba(8,10,20,${b}) 100%), url("${url}") center / cover no-repeat, ${gradient}`;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameIcons.ts" << '__COREGSM_EOF__'
 // Pictograms for the games (24x24 grid, drawn with a 2px round stroke). The same data is used by the PNG card
 // in the backend (core-backend/src/gameIcons.ts): keep both files in sync.
@@ -11386,15 +11888,29 @@ __COREGSM_EOF__
 @layer components {
   /* primary: gradient pill with a soft coloured shadow */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 font-extrabold text-white transition active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none max-sm:min-h-[44px];
-    background-image: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2)));
-    box-shadow: 0 1px 2px rgb(var(--brand) / 0.25), 0 6px 16px -4px rgb(var(--brand) / 0.45);
+    @apply relative inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 font-extrabold text-white transition active:scale-[.97] disabled:opacity-50 disabled:pointer-events-none max-sm:min-h-[44px];
+    /* a top highlight over the brand -> brand-2 gradient: custom brand colours flow through both variables */
+    background-image:
+      linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0) 52%),
+      linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 1px 2px rgb(var(--brand) / 0.25), 0 8px 18px -6px rgb(var(--brand) / 0.55);
   }
-  .btn:hover { filter: brightness(1.07) saturate(1.05); }
+  /* soft light sweep across the button on hover (the pseudo-element inherits the pill shape, so nothing needs clipping) */
+  .btn::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 0.34) 50%, transparent 62%) no-repeat;
+    background-size: 260% 100%; background-position: 130% 0;
+    transition: background-position .7s cubic-bezier(.2, .7, .2, 1);
+  }
+  .btn:hover { filter: brightness(1.06) saturate(1.05); }
+  .btn:hover::after { background-position: -30% 0; }
+  .btn:active { box-shadow: inset 0 2px 8px rgb(0 0 0 / 0.28), 0 1px 2px rgb(var(--brand) / 0.2); filter: brightness(.97); }
   .btn-soft { @apply bg-soft text-link hover:bg-line; background-image: none; box-shadow: none; }
-  .btn-soft:hover { filter: none; }
+  .btn-soft::after, .btn-danger::after { display: none; }
+  .btn-soft:hover, .btn-soft:active { filter: none; }
+  .btn-soft:active, .btn-danger:active { box-shadow: inset 0 2px 6px rgb(0 0 0 / 0.12); }
   .btn-danger { @apply bg-badbg text-bad hover:bg-bad/20; background-image: none; box-shadow: none; }
-  .btn-danger:hover { filter: none; }
+  .btn-danger:hover, .btn-danger:active { filter: none; }
   .btn-sm { @apply px-3 py-1 text-sm max-sm:min-h-[44px] max-sm:px-4; }
   /* square icon button; 44px on phones */
   .btn-icon { @apply inline-grid h-10 w-10 place-items-center rounded-full bg-soft text-mute transition hover:text-link max-sm:h-11 max-sm:w-11; }
@@ -11411,9 +11927,9 @@ __COREGSM_EOF__
   .pill-mute { @apply bg-soft text-mute; }
 
   /* segmented control: soft capsule with a white (lifted) active pill. Works for links and buttons. */
-  .seg { @apply inline-flex gap-0.5 rounded-full bg-soft p-[3px]; }
+  .seg { @apply relative inline-flex gap-0.5 rounded-full bg-soft p-[3px]; }
   .seg-item {
-    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px];
+    @apply relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px];
   }
   .seg-item[aria-pressed='true'], .seg-item[aria-current='page'], .seg-item.on {
     color: rgb(var(--ink));
@@ -11541,7 +12057,7 @@ main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #000
 
 /* touch devices: bigger hit areas for small controls without changing the desktop look */
 @media (max-width: 639px) {
-  input[type='checkbox'], input[type='radio'] { width: 1.25rem !important; height: 1.25rem !important; }
+  input[type='checkbox']:not(.switch), input[type='radio'] { width: 1.25rem !important; height: 1.25rem !important; }
   label:has(> input[type='checkbox']), label:has(> input[type='radio']) { min-height: 44px; }
   /* text-style buttons ("Обновить список", "Показать правила") */
   button.text-link { min-height: 44px; display: inline-flex; align-items: center; }
@@ -11612,6 +12128,319 @@ main .grid > :nth-child(n+7) { animation-delay: 300ms; }
 @media (prefers-reduced-motion: reduce) {
   main .grid > .tile, main .grid > .panel { animation: none !important; }
 }
+
+/* =====================================================================================================
+   Visual language pass: buttons, magnetic CTAs, split button, switches, copy burst, view transitions,
+   hero depth, status breathing, roll digits, skeleton swap, micro-interactions, density.
+   Everything moving is switched off for prefers-reduced-motion (see the block at the end of the file).
+   ===================================================================================================== */
+
+/* the page colour also paints the canvas, so a view-transition slide never shows a white edge */
+html { background-color: rgb(var(--page)); }
+
+/* ---------- loading button ---------- */
+.btn[aria-busy='true']:disabled { opacity: .88; }
+.btn-spin { width: 1rem; height: 1rem; flex-shrink: 0; }
+
+/* ---------- magnetic CTAs (positioned by installMagnetic() in useMotion.ts through the `translate` property) ---------- */
+[data-magnetic] {
+  transition: translate .26s cubic-bezier(.2, .8, .2, 1), transform .15s ease, box-shadow .2s ease, filter .2s ease, background-color .2s ease, opacity .2s ease;
+}
+
+/* ---------- split button ---------- */
+.split { position: relative; display: inline-flex; max-width: 100%; }
+.split > .split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; min-width: 0; }
+.split > .split-caret {
+  border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: .7rem; padding-right: .7rem;
+  box-shadow: inset 1px 0 0 rgb(255 255 255 / 0.28), inset 0 1px 0 rgb(255 255 255 / 0.22), 0 8px 18px -6px rgb(var(--brand) / 0.55);
+}
+.split > .split-caret svg { transition: transform .25s cubic-bezier(.34, 1.4, .5, 1); }
+.split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
+.split-menu {
+  position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
+  padding: .35rem; border-radius: 20px; background: rgb(var(--card)); border: 1px solid var(--tile-border);
+  box-shadow: 0 18px 40px -12px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.08);
+  transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) both;
+}
+.split-menu[data-up='true'] { bottom: calc(100% + 6px); transform-origin: bottom right; }
+.split-menu[data-up='false'] { top: calc(100% + 6px); }
+.split-item {
+  display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
+  border-radius: 14px; padding: .55rem .8rem; font-weight: 800; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
+}
+.split-item small { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+.split-item:hover, .split-item:focus-visible { background: rgb(var(--soft)); outline: none; }
+.split-item:focus-visible { box-shadow: inset 0 0 0 2px rgb(var(--link)); }
+.split-item:disabled { opacity: .5; }
+@keyframes split-in { from { opacity: 0; transform: translateY(-6px) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* ---------- animated icons inside buttons ---------- */
+.ico-refresh { transition: transform .55s cubic-bezier(.3, 1.3, .5, 1); }
+:is(.btn, .btn-on-grad, .btn-ghost-on-grad):active .ico-refresh { transform: rotate(200deg); transition-duration: .15s; }
+.ico-refresh.spinning { animation: spin .85s linear infinite; }
+.ico-nudge { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
+:is(.btn, .btn-on-grad, .btn-ghost-on-grad, a):hover > .ico-nudge { transform: translateX(3px); }
+.ico-share { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
+:is(.btn, .btn-on-grad, .btn-ghost-on-grad):hover .ico-share { transform: translate(1.5px, -1.5px); }
+
+/* copy -> check with a small burst */
+.copy-ico { position: relative; display: inline-grid; width: 16px; height: 16px; place-items: center; flex-shrink: 0; }
+.copy-ico > .ico-copy, .copy-ico > .ico-check { grid-area: 1 / 1; transition: transform .28s cubic-bezier(.34, 1.56, .64, 1), opacity .18s ease; }
+.copy-ico > .ico-check { transform: scale(0) rotate(-40deg); opacity: 0; color: rgb(var(--ok)); }
+.copy-ico[data-done='true'] > .ico-copy { transform: scale(0) rotate(40deg); opacity: 0; }
+.copy-ico[data-done='true'] > .ico-check { transform: none; opacity: 1; }
+.ico-check path { stroke-dasharray: 24; stroke-dashoffset: 24; }
+.copy-ico[data-done='true'] .ico-check path { animation: check-draw .32s ease-out .05s forwards; }
+@keyframes check-draw { to { stroke-dashoffset: 0; } }
+
+.burst { position: absolute; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
+.burst i {
+  position: absolute; left: -2.5px; top: -2.5px; width: 5px; height: 5px; border-radius: 9999px;
+  background: rgb(var(--ok)); opacity: 0;
+  animation: burst .9s cubic-bezier(.15, .7, .3, 1) forwards;
+}
+.burst i:nth-child(3n+1) { background: rgb(var(--brand)); width: 4px; height: 4px; }
+.burst i:nth-child(3n+2) { background: #f0b232; }
+.burst i:nth-child(4n) { background: #ec4899; height: 4px; }
+@keyframes burst {
+  0% { opacity: 1; transform: rotate(var(--a)) translateY(-3px) scale(.4); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: rotate(var(--a)) translateY(calc(var(--r, 17px) * -1)) scale(.9); }
+}
+
+/* ---------- iOS-style switch (input type=checkbox role=switch) ---------- */
+@layer components {
+  .switch {
+    -webkit-appearance: none; appearance: none; position: relative; flex-shrink: 0; display: inline-block; vertical-align: middle;
+    width: 2.75rem; height: 1.625rem; border-radius: 9999px; cursor: pointer; margin: 0;
+    background-color: rgb(var(--field));
+    transition: background-color .25s ease, box-shadow .25s ease;
+  }
+  .switch::before {
+    content: ''; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: 9999px; background: #fff;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 .5px rgb(0 0 0 / 0.08);
+    transition: transform .42s cubic-bezier(.34, 1.56, .64, 1), width .18s ease;
+  }
+  .switch:checked { background-image: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: 0 4px 12px -4px rgb(var(--brand) / 0.55); }
+  .switch:checked::before { transform: translateX(18px); }
+  .switch:active:not(:disabled)::before { width: 25px; }
+  .switch:checked:active:not(:disabled)::before { transform: translateX(13px); }
+  .switch:disabled { opacity: .5; cursor: not-allowed; }
+}
+
+/* ---------- checkbox whose tick is drawn ---------- */
+@layer base {
+  input[type='checkbox']:not(.switch) {
+    -webkit-appearance: none; appearance: none; position: relative; flex-shrink: 0; display: inline-block; vertical-align: middle;
+    width: 1.125rem; height: 1.125rem; margin: 0; cursor: pointer;
+    border-radius: 6px; border: 2px solid rgb(var(--field)); background-color: rgb(var(--card));
+    transition: background-color .18s ease, border-color .18s ease, transform .18s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  input[type='checkbox']:not(.switch):active:not(:disabled) { transform: scale(.88); }
+  input[type='checkbox']:not(.switch):checked {
+    border-color: transparent;
+    background-image: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2)));
+  }
+  input[type='checkbox']:not(.switch)::after {
+    content: ''; position: absolute; left: 29%; top: 9%; width: 30%; height: 56%;
+    border: solid #fff; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); opacity: 0;
+  }
+  input[type='checkbox']:not(.switch):checked::after { opacity: 1; animation: tick-draw .3s ease-out both; }
+  input[type='checkbox']:not(.switch):disabled { opacity: .5; cursor: not-allowed; }
+}
+@keyframes tick-draw {
+  0% { clip-path: inset(100% 100% 0 0); }
+  45% { clip-path: inset(72% 0 0 0); }
+  100% { clip-path: inset(0 0 0 0); }
+}
+
+/* ---------- tabs / segmented controls: the active pill slides (positions come from installSegIndicator()) ---------- */
+.seg[data-ind]::before {
+  content: ''; position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none;
+  width: var(--ind-w); height: var(--ind-h); transform: translate(var(--ind-x), var(--ind-y));
+  border-radius: 9999px; background: rgb(var(--seg-on));
+  box-shadow: 0 1px 2px rgba(20, 24, 40, 0.1), 0 2px 8px rgba(40, 50, 110, 0.1);
+}
+:root[data-theme='dark'] .seg[data-ind]::before { box-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 2px 8px rgba(0, 0, 0, 0.4); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .seg[data-ind]::before { box-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 2px 8px rgba(0, 0, 0, 0.4); }
+}
+.seg[data-ind-anim]::before { transition: transform .38s cubic-bezier(.34, 1.3, .5, 1), width .3s cubic-bezier(.2, .8, .2, 1), height .2s ease; }
+.seg[data-ind] > .seg-item[aria-pressed='true'], .seg[data-ind] > .seg-item[aria-current='page'], .seg[data-ind] > .seg-item.on { background: transparent; box-shadow: none; }
+
+/* ---------- favourite star ---------- */
+.star-pop { display: inline-block; animation: star-pop .55s cubic-bezier(.3, 1.7, .5, 1) both; }
+@keyframes star-pop {
+  0% { transform: scale(.4) rotate(-50deg); }
+  55% { transform: scale(1.5) rotate(14deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+.star-wrap { position: relative; display: inline-grid; place-items: center; }
+
+/* ---------- toasts spring in and out ---------- */
+.toast-in { animation: toast-in .46s cubic-bezier(.34, 1.56, .64, 1) both; }
+.toast-out { animation: toast-out .2s ease-in both; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(16px) scale(.9); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(8px) scale(.94); } }
+
+/* ---------- view transitions: route change and theme reveal ---------- */
+body header.glass { view-transition-name: app-header; }
+body nav.glass.fixed { view-transition-name: app-nav; }
+.vt-theme body header.glass, .vt-theme body nav.glass.fixed { view-transition-name: none; }
+@keyframes vt-out { to { opacity: 0; transform: translateY(-5px); } }
+@keyframes vt-in { from { opacity: 0; transform: translateY(9px); } }
+::view-transition-old(root) { animation: vt-out .16s ease-in both; }
+::view-transition-new(root) { animation: vt-in .3s cubic-bezier(.2, .8, .2, 1) both; }
+/* the avatar morph: tile -> page banner */
+::view-transition-group(*) { animation-duration: .42s; animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+::view-transition-group(app-header), ::view-transition-group(app-nav) { animation: none; }
+::view-transition-old(app-header), ::view-transition-new(app-header), ::view-transition-old(app-nav), ::view-transition-new(app-nav) { animation: none; }
+.vt-theme::view-transition-old(root), .vt-theme::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+.vt-theme::view-transition-old(root) { z-index: 1; }
+.vt-theme::view-transition-new(root) { z-index: 2; }
+
+/* ---------- hero depth: layers drift with the pointer, a soft highlight follows it, a thin light runs along the edge ---------- */
+@property --edge-a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@media (hover: hover) and (pointer: fine) {
+  .depth { --px: 0; --py: 0; --ho: 0; --hx: 50%; --hy: 30%; }
+  .depth::before {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    opacity: var(--ho); transition: opacity .35s ease;
+    background: radial-gradient(420px circle at var(--hx) var(--hy), rgb(255 255 255 / 0.24), transparent 62%);
+  }
+  .depth-l1 { translate: calc(var(--px, 0) * 4px) calc(var(--py, 0) * 4px); transition: translate .3s ease-out; }
+  .depth-l2 { translate: calc(var(--px, 0) * -4px) calc(var(--py, 0) * -4px); transition: translate .3s ease-out; }
+  .depth::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+    background: conic-gradient(from var(--edge-a), transparent 0deg, transparent 236deg, rgb(255 255 255 / 0.85) 300deg, transparent 346deg);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    animation: edge-spin 8s linear infinite;
+  }
+}
+@keyframes edge-spin { to { --edge-a: 360deg; } }
+
+/* ---------- status that breathes ---------- */
+.pill-ok.live { animation: breathe-ok 3.4s ease-in-out infinite; }
+@keyframes breathe-ok {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
+  50% { box-shadow: 0 0 0 3px rgb(var(--ok) / 0.13), 0 0 14px rgb(var(--ok) / 0.28); }
+}
+.pill-warn.lag { animation: glow-warn 5.2s ease-in-out infinite; }
+.pill-warn.lag::before { animation: glow-dot 5.2s ease-in-out infinite; }
+@keyframes glow-warn {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--warn) / 0); }
+  50% { box-shadow: 0 0 12px 1px rgb(var(--warn) / 0.32); }
+}
+@keyframes glow-dot { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+/* a server just went offline: one red ring over the tile */
+.flash-ring {
+  position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5;
+  animation: flash-ring 1.9s ease-out both;
+}
+@keyframes flash-ring {
+  0% { box-shadow: inset 0 0 0 0 rgb(var(--bad) / 0), 0 0 0 0 rgb(var(--bad) / 0); }
+  14% { box-shadow: inset 0 0 0 4px rgb(var(--bad) / 0.9), 0 0 0 4px rgb(var(--bad) / 0.55), 0 0 34px 4px rgb(var(--bad) / 0.5); }
+  55% { box-shadow: inset 0 0 0 3px rgb(var(--bad) / 0.5), 0 0 0 3px rgb(var(--bad) / 0.3), 0 0 22px 2px rgb(var(--bad) / 0.25); }
+  100% { box-shadow: inset 0 0 0 0 rgb(var(--bad) / 0), 0 0 0 0 rgb(var(--bad) / 0); }
+}
+
+/* ---------- flip-board numbers ---------- */
+.roll { display: inline-block; position: relative; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* the invisible in-flow digit (.roll-g) gives the box its width and keeps the text baseline right (overflow: clip keeps it);
+   the column of 0..9 is absolute and slides under the clip */
+.roll-d { display: inline-block; position: relative; line-height: 1; overflow: hidden; overflow: clip; user-select: none; }
+.roll-g { visibility: hidden; }
+.roll-col { position: absolute; left: 0; top: 0; display: block; transition: transform .75s cubic-bezier(.2, .85, .2, 1); will-change: transform; }
+.roll-col > span { display: block; height: 1em; line-height: 1; }
+.roll-d.new { animation: roll-in .45s ease-out both; }
+@keyframes roll-in { from { opacity: 0; transform: translateY(.35em); } }
+.delta-chip {
+  position: absolute; right: 0; bottom: 100%; margin-bottom: 2px; z-index: 6; pointer-events: none;
+  font-size: 12px; line-height: 1; font-weight: 800; letter-spacing: 0; padding: 3px 7px; border-radius: 9999px; white-space: nowrap;
+  animation: delta-chip 2.1s ease-out both;
+}
+.delta-chip.up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.delta-chip.down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+@keyframes delta-chip {
+  0% { opacity: 0; transform: translateY(7px) scale(.8); }
+  12% { opacity: 1; transform: none; }
+  78% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: translateY(-7px); }
+}
+
+/* ---------- skeletons: same shapes as the content; content fades in when it arrives ---------- */
+.fade-in { animation: fade-in .4s ease-out both; }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.skel-line { height: 12px; border-radius: 9999px; }
+
+/* ---------- empty-state illustrations ---------- */
+.art-float { animation: art-float 4.5s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: center; }
+.art-float-2 { animation: art-float 5.6s ease-in-out -2s infinite alternate; transform-box: fill-box; transform-origin: center; }
+.art-twinkle { animation: art-twinkle 2.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.art-blink { animation: art-blink 2.4s ease-in-out infinite; }
+.art-wobble { animation: art-wobble 3.6s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+.art-spin { animation: spin 14s linear infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes art-float { from { transform: translateY(-3px); } to { transform: translateY(4px); } }
+@keyframes art-twinkle { 0%, 100% { opacity: .35; transform: scale(.7); } 50% { opacity: .9; transform: scale(1.15) rotate(12deg); } }
+@keyframes art-blink { 0%, 100% { opacity: 1; } 45% { opacity: .25; } }
+@keyframes art-wobble { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+
+/* ---------- density: Обычная / Компактная (html[data-density='compact']) ---------- */
+:root[data-density='compact'] body { font-size: 14px; }
+:root[data-density='compact'] .p-5 { padding: .9rem; }
+:root[data-density='compact'] .p-6 { padding: 1rem; }
+:root[data-density='compact'] .p-4 { padding: .75rem; }
+:root[data-density='compact'] .p-\[18px\] { padding: .8rem; }
+:root[data-density='compact'] .px-5 { padding-left: .9rem; padding-right: .9rem; }
+:root[data-density='compact'] .px-6 { padding-left: 1.1rem; padding-right: 1.1rem; }
+:root[data-density='compact'] .py-4 { padding-top: .7rem; padding-bottom: .7rem; }
+:root[data-density='compact'] .py-10 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+:root[data-density='compact'] .gap-3\.5 { gap: .6rem; }
+:root[data-density='compact'] .gap-5 { gap: .9rem; }
+:root[data-density='compact'] .gap-6 { gap: 1rem; }
+:root[data-density='compact'] .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: .85rem; }
+:root[data-density='compact'] .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: .7rem; }
+:root[data-density='compact'] .space-y-3\.5 > :not([hidden]) ~ :not([hidden]) { margin-top: .6rem; }
+:root[data-density='compact'] .space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: .5rem; }
+:root[data-density='compact'] .space-y-2\.5 > :not([hidden]) ~ :not([hidden]) { margin-top: .4rem; }
+:root[data-density='compact'] .tile, :root[data-density='compact'] .panel { border-radius: 20px; }
+:root[data-density='compact'] .stat-v { font-size: 28px; }
+:root[data-density='compact'] .btn { padding: .35rem .95rem; }
+:root[data-density='compact'] .btn-sm { padding: .15rem .65rem; }
+:root[data-density='compact'] .input { padding-top: .35rem; padding-bottom: .35rem; }
+:root[data-density='compact'] .seg-item { padding: .3rem .8rem; }
+:root[data-density='compact'] .pill { padding-top: .05rem; padding-bottom: .05rem; }
+:root[data-density='compact'] .h-\[88px\] { height: 64px; }
+:root[data-density='compact'] .text-\[64px\] { font-size: 48px; }
+:root[data-density='compact'] .text-\[30px\] { font-size: 24px; }
+@media (min-width: 640px) {
+  :root[data-density='compact'] .sm\:p-6 { padding: 1rem; }
+  :root[data-density='compact'] .sm\:p-\[18px\] { padding: .8rem; }
+  :root[data-density='compact'] .stat-v { font-size: 32px; }
+  :root[data-density='compact'] .sm\:text-\[78px\] { font-size: 60px; }
+}
+@media (min-width: 1024px) {
+  :root[data-density='compact'] .lg\:p-6 { padding: 1rem; }
+}
+
+/* ---------- 404 ---------- */
+.nf-code { background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* ---------- reduced motion: nothing moves, state changes are instant ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .btn::after, .depth::before, .depth::after { display: none !important; }
+  .btn:active, .btn-icon:active { transform: none !important; }
+  [data-magnetic] { translate: none !important; }
+  .depth-l1, .depth-l2 { translate: none !important; }
+  .roll-col, .switch::before, .seg[data-ind]::before, .split-menu, .star-pop, .toast-in, .toast-out, .delta-chip, .flash-ring,
+  .burst i, .art-float, .art-float-2, .art-twinkle, .art-blink, .art-wobble, .art-spin, .fade-in, .pill-ok.live, .pill-warn.lag, .pill-warn.lag::before,
+  .ico-refresh, .ico-nudge, .ico-share, input[type='checkbox']:not(.switch)::after {
+    animation: none !important; transition: none !important;
+  }
+  .burst { display: none; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -11621,6 +12450,12 @@ import ReactDOM from 'react-dom/client';
 import '@fontsource-variable/manrope/wght.css';
 import './index.css';
 import App from './App';
+import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
+
+// before the first paint: the saved density, the magnetic call-to-action buttons and the sliding tab pill
+initDensity();
+installMagnetic();
+installSegIndicator();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -11640,7 +12475,7 @@ import { api, type CertInfo, type Server, type ServerInput } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconRefresh, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import AlertsPage, { IconBell } from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
@@ -11766,7 +12601,7 @@ function CertWarning() {
 function ServersManage() {
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [editing, setEditing] = useState<{ id?: number; data: ServerInput } | null>(null);
+  const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
 
@@ -11792,9 +12627,15 @@ function ServersManage() {
   return (
     <div className="space-y-5">
       <PageHead title="Серверы" subtitle="Добавление и настройка игровых серверов" icon={<IconServers />}>
-        <button className="btn" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+        <button className="btn" data-magnetic onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
       </PageHead>
       <ErrorLine text={error} />
+
+      {!loaded && (
+        <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
+          {[0, 1, 2].map((i) => <div key={i} className="skeleton tile h-[74px]" />)}
+        </div>
+      )}
 
       {loaded && servers.length === 0 && (
         <Empty title="Серверов пока нет" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.">
@@ -11802,7 +12643,7 @@ function ServersManage() {
         </Empty>
       )}
 
-      <div className="space-y-3">
+      <div className="fade-in space-y-3">
         {servers.map((s) => (
           <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
             <GameAvatar game={s.game} size={44} />
@@ -11817,8 +12658,8 @@ function ServersManage() {
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="flex gap-2">
-              <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id}>{busyId === s.id ? '…' : 'Опросить'}</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country } })}>Изменить</button>
+              <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}><IconRefresh spinning={busyId === s.id} />Опросить</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>Изменить</button>
               <button className="btn btn-danger btn-sm" onClick={() => void remove(s)}>Удалить</button>
             </div>
           </div>
@@ -11829,6 +12670,8 @@ function ServersManage() {
         <ServerForm
           initial={editing.data}
           id={editing.id}
+          coverUrl={editing.cover}
+          onCoverChanged={() => void load()}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); toast('Сервер сохранён'); void load(); }}
         />
@@ -11842,7 +12685,8 @@ __COREGSM_EOF__
 import { useState } from 'react';
 import { api } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { ErrorLine, PageHead, ago, toast, usePoll } from '../ui';
+import { AlertsArt } from '../components/Illustrations';
+import { ErrorLine, PageHead, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -11893,7 +12737,7 @@ export default function AlertsPage() {
       {info && (
         <div className="panel space-y-5 p-6">
           <label className="flex cursor-pointer items-start gap-3">
-            <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-brand" checked={info.enabled} onChange={(e) => void save({ enabled: e.target.checked }, e.target.checked ? 'Оповещения включены' : 'Оповещения выключены')} />
+            <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Оповещения включены' : 'Оповещения выключены')} />
             <span>
               <span className="block font-extrabold">Оповещать о недоступности серверов</span>
               <span className="block text-sm font-semibold text-mute">Бот напишет в выбранный канал, а когда сервер вернётся, сообщит об этом и покажет, сколько он простоял.</span>
@@ -11940,7 +12784,17 @@ export default function AlertsPage() {
 
       <div className="panel space-y-3 p-6">
         <h2 className="text-lg font-black">Последние оповещения</h2>
-        {info && info.recent.length === 0 && <p className="font-semibold text-mute">Пока ничего не отправлялось.</p>}
+        {!info && <div className="skeleton h-14 rounded-2xl" aria-busy="true" aria-label="Загрузка" />}
+        {info && info.recent.length === 0 && (
+          <div className="fade-in flex flex-col items-center gap-1 py-2 text-center">
+            <AlertsArt />
+            <p className="font-extrabold">Пока ничего не отправлялось</p>
+            <p className="max-w-sm text-sm font-semibold text-mute">
+              {info.channelId ? 'Когда сервер перестанет отвечать, бот напишет в канал. Можно проверить заранее.' : 'Выберите канал: туда бот будет писать о падениях серверов.'}
+            </p>
+            {!info.channelId && <button className="btn mt-2" onClick={() => setChanging(true)}>Выбрать канал</button>}
+          </div>
+        )}
         <ul className="divide-y divide-line">
           {info?.recent.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
@@ -11962,7 +12816,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { ErrorLine, Field, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -12188,8 +13042,8 @@ export default function BackupsCard() {
           />
           <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.</p>
           {info?.remoteUrl && (
-            <label className="mt-2 flex items-center gap-2 text-sm font-bold text-mute">
-              <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearRemote} onChange={(e) => setClearRemote(e.target.checked)} />
+            <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={clearRemote} onChange={setClearRemote} />
               Отключить отправку
             </label>
           )}
@@ -12215,14 +13069,14 @@ export default function BackupsCard() {
           />
           <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.</p>
           {info?.encrypted && (
-            <label className="mt-2 flex items-center gap-2 text-sm font-bold text-mute">
-              <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearPass} onChange={(e) => setClearPass(e.target.checked)} />
+            <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={clearPass} onChange={setClearPass} />
               Отключить шифрование новых копий
             </label>
           )}
         </div>
 
-        <button className="btn" disabled={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</button>
+        <Button loading={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</Button>
       </form>
 
       <div>
@@ -12261,7 +13115,7 @@ import { useRef, useState, useEffect } from 'react';
 import { api, type Server } from '../api';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
-import { Empty, ErrorLine, IconCards, PageHead, toast, usePoll } from '../ui';
+import { Burst, Empty, ErrorLine, IconCards, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -12293,26 +13147,44 @@ export default function CardsPage() {
     }
   };
 
+  const [spin, setSpin] = useState(false);
   const refresh = () => {
     setForced((n) => n + 1);
-    void load();
+    setSpin(true);
+    void load().finally(() => window.setTimeout(() => setSpin(false), 500));
   };
 
   return (
     <div className="space-y-6">
       <PageHead icon={<IconCards />} title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно.">
-        <button className="btn btn-soft" onClick={refresh}>Обновить</button>
+        <button className="btn btn-soft" onClick={refresh} aria-busy={spin || undefined}><IconRefresh spinning={spin} />Обновить</button>
       </PageHead>
       <ErrorLine text={error} />
-      {loaded && servers.length === 0 && <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»." />}
-      <div className="grid gap-5 xl:grid-cols-2">
+      {!loaded && (
+        <div className="grid gap-5 xl:grid-cols-2" aria-busy="true" aria-label="Загрузка">
+          {[0, 1].map((i) => <div key={i} className="skeleton panel h-[330px]" />)}
+        </div>
+      )}
+      {loaded && servers.length === 0 && (
+        <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»: для каждого появится своя картинка.">
+          <a className="btn mt-3" href="#/admin/servers">Добавить сервер</a>
+        </Empty>
+      )}
+      <div className="fade-in grid gap-5 xl:grid-cols-2">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-4">
             <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-2xl bg-soft" />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="min-w-0 break-words font-black">{s.name}</span>
               <div className="flex flex-wrap gap-2">
-                <button className="btn btn-soft btn-sm" onClick={() => void copy(s)}>{copied === s.id ? 'Скопировано' : 'Копировать ссылку'}</button>
+                <button className="btn btn-soft btn-sm" onClick={() => void copy(s)}>
+                  <span className="copy-ico" data-done={copied === s.id} aria-hidden>
+                    <span className="ico-copy inline-grid"><IconCopy /></span>
+                    <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                    {copied === s.id && <Burst />}
+                  </span>
+                  {copied === s.id ? 'Скопировано' : 'Копировать ссылку'}
+                </button>
                 <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png`} target="_blank" rel="noreferrer">Открыть</a>
               </div>
             </div>
@@ -12329,7 +13201,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, ago, toast, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, Switch, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -12426,7 +13298,15 @@ export default function DiscordPage() {
         </ol>
       )}
 
-      {loaded && bindings.length === 0 && <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
+      {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
+
+      {loaded && bindings.length === 0 && (
+        <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
+          {servers.length > 0
+            ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
+            : <a className="btn mt-3" href="#/admin/servers">Сначала добавьте сервер</a>}
+        </Empty>
+      )}
 
       {bindings.length > 1 && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-4 py-2.5">
@@ -12599,13 +13479,13 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
         <Field label="Обновлять каждые, секунд (30–3600)">
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>
-        <label className="flex items-center gap-2 font-bold text-mute">
-          <input id="bind-enabled" type="checkbox" className="h-4 w-4 accent-brand" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Включена
+        <label className="flex items-center gap-3 font-bold text-mute">
+          <Switch id="bind-enabled" checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> Включена
         </label>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
-          <button className="btn" disabled={busy}>Сохранить</button>
+          <Button loading={busy}>Сохранить</Button>
         </div>
       </form>
     </Modal>
@@ -12761,7 +13641,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, Spinner, useShake } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake } from '../ui';
 
 const NAME_KEY = 'coregsm_login_name';
 const readName = () => {
@@ -12902,10 +13782,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
       </label>
 
       <ErrorLine text={error} />
-      <button className="btn w-full" disabled={busy || locked}>
-        {busy && <Spinner />}
+      <Button className="w-full" magnetic loading={busy} disabled={locked}>
         {busy ? 'Проверяю…' : 'Войти'}
-      </button>
+      </Button>
 
       {access.discordLogin && (
         <>
@@ -12997,7 +13876,7 @@ function NewsList() {
   return (
     <div className="space-y-6">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
-        <a className="btn" href="#/admin/news/new">+ Написать новость</a>
+        <a className="btn" href="#/admin/news/new" data-magnetic>+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -13027,7 +13906,13 @@ function NewsList() {
         </Empty>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
+      {!loaded && (
+        <div className="grid gap-4 md:grid-cols-2" aria-busy="true" aria-label="Загрузка">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton panel h-[188px]" />)}
+        </div>
+      )}
+
+      <div className="fade-in grid gap-4 md:grid-cols-2">
         {items.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
@@ -13076,7 +13961,12 @@ export function NewsFeed() {
       <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
       <ErrorLine text={error} />
       {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
-      <div className="mx-auto max-w-2xl space-y-4">
+      {!loaded && (
+        <div className="mx-auto max-w-2xl space-y-4" aria-busy="true" aria-label="Загрузка">
+          {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}
+        </div>
+      )}
+      <div className="fade-in mx-auto max-w-2xl space-y-4">
         {items.map((n) => (
           <article key={n.id} className="panel space-y-2 p-4">
             {n.sentAt && <div className="text-sm font-bold text-mute">{fmtDateTime(n.sentAt)}</div>}
@@ -13094,7 +13984,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
 import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { ErrorLine, Field, toast } from '../ui';
+import { Button, ErrorLine, Field, SplitButton, Switch, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 
 // ---------- draft <-> payload ----------
@@ -13405,7 +14295,24 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     })();
   }, [id]);
 
-  if (!d) return error ? <ErrorLine text={error} /> : <div className="skeleton panel h-64" />;
+  if (!d) {
+    return error ? <ErrorLine text={error} /> : (
+      <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
+        <div className="skeleton h-9 w-56 rounded-full" />
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
+          <div className="space-y-5">
+            <div className="skeleton panel h-52" />
+            <div className="skeleton panel h-60" />
+            <div className="skeleton panel h-72" />
+          </div>
+          <div className="space-y-4">
+            <div className="skeleton panel h-64" />
+            <div className="skeleton panel h-32" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const set = (patch: Partial<Draft>) => setD((cur) => (cur ? { ...cur, ...patch } : cur));
   const isSent = item?.status === 'sent' || item?.status === 'edit_queued';
@@ -13457,8 +14364,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
               {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
             </Field>
             {!isSent && (
-              <label className="flex items-center gap-2 text-sm font-bold text-mute">
-                <input type="checkbox" className="h-4 w-4 accent-brand" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} /> Сделать каналом новостей по умолчанию
+              <label className="flex items-center gap-3 text-sm font-bold text-mute">
+                <Switch checked={makeDefault} onChange={setMakeDefault} /> Сделать каналом новостей по умолчанию
               </label>
             )}
             <Field label="Упоминание">
@@ -13516,8 +14423,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                   <button type="button" className="btn btn-danger btn-sm shrink-0" aria-label="Удалить поле" onClick={() => set({ fields: d.fields.filter((_, j) => j !== i) })}>✕</button>
                 </div>
                 <textarea aria-label="Текст поля" className="input min-h-[4.5rem]" rows={2} value={f.value} maxLength={1024} placeholder="Текст" onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })} />
-                <label className="flex items-center gap-2 text-sm font-bold text-mute">
-                  <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.inline} onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, inline: e.target.checked } : x)) })} /> В ряд с соседними
+                <label className="flex items-center gap-3 text-sm font-bold text-mute">
+                  <Switch checked={f.inline} onChange={(on) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, inline: on } : x)) })} /> В ряд с соседними
                 </label>
               </div>
             ))}
@@ -13529,8 +14436,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
               <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label !mb-0">Текст внизу</label><Counter value={d.footer.length} max={2048} /></div>
               <input id="news-footer" className="input" value={d.footer} onChange={(e) => set({ footer: e.target.value })} maxLength={2048} placeholder="Например: Администрация сервера" />
             </div>
-            <label className="flex items-center gap-2 text-sm font-bold text-mute">
-              <input type="checkbox" className="h-4 w-4 accent-brand" checked={d.timestamp} onChange={(e) => set({ timestamp: e.target.checked })} /> Показывать время публикации
+            <label className="flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={d.timestamp} onChange={(on) => set({ timestamp: on })} /> Показывать время публикации
             </label>
           </Section>
         </div>
@@ -13548,14 +14455,26 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <ErrorLine text={error} />
             {noChannel && !isSent && <p className="text-sm font-bold text-mute">Выберите канал, чтобы опубликовать или запланировать.</p>}
             {isSent ? (
-              <button className="btn w-full" disabled={busy} onClick={() => save('draft')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</button>
+              <Button className="w-full" loading={busy} onClick={() => save('draft')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</Button>
             ) : (
               <>
-                <button className="btn w-full" disabled={busy || noChannel} onClick={() => save('now')}>{busy ? 'Отправляю…' : 'Опубликовать сейчас'}</button>
-                {scheduling ? (
+                <SplitButton
+                  className="w-full"
+                  magnetic
+                  loading={busy}
+                  disabled={noChannel}
+                  label={busy ? 'Отправляю…' : 'Опубликовать сейчас'}
+                  onClick={() => void save('now')}
+                  menuLabel="Другие способы публикации"
+                  items={[
+                    { key: 'schedule', label: 'Запланировать…', hint: 'Выбрать дату и время', onSelect: () => setScheduling(true) },
+                    { key: 'draft', label: 'Сохранить как черновик', hint: 'Ничего не отправляется в Discord', onSelect: () => void save('draft') },
+                  ]}
+                />
+                {scheduling && (
                   <div className="space-y-2 rounded-2xl bg-soft p-3">
                     <label htmlFor="news-when" className="label">Когда опубликовать</label>
-                    <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
+                    <input id="news-when" type="datetime-local" autoFocus className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
                     <label htmlFor="news-repeat" className="label">Повторять</label>
                     <select id="news-repeat" className="input" value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)}>
                       <option value="none">Не повторять</option>
@@ -13564,14 +14483,11 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                       <option value="monthly">Каждый месяц</option>
                     </select>
                     <div className="flex gap-2">
-                      <button className="btn flex-1" disabled={busy || noChannel} onClick={() => save('schedule')}>Запланировать</button>
-                      <button className="btn btn-soft" onClick={() => setScheduling(false)}>Отмена</button>
+                      <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => save('schedule')}>Запланировать</Button>
+                      <Button variant="soft" onClick={() => setScheduling(false)}>Отмена</Button>
                     </div>
                   </div>
-                ) : (
-                  <button className="btn btn-soft w-full" disabled={busy || noChannel} onClick={() => setScheduling(true)}>Запланировать на время…</button>
                 )}
-                <button className="btn btn-soft w-full" disabled={busy || noChannel} onClick={() => save('draft')}>Сохранить как черновик</button>
               </>
             )}
           </div>
@@ -13588,7 +14504,7 @@ import { api, getToken, type Server, type Session } from '../api';
 import { useAuth } from '../auth';
 import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
-import { ago, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast } from '../ui';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast, useDensity, type Density } from '../ui';
 
 /** "Chrome · Windows" from a User-Agent string */
 function deviceName(ua: string): string {
@@ -13642,6 +14558,7 @@ export default function ProfilePage() {
         <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
         <DiscordCard onChanged={reload} />
         <SessionsCard />
+        <AppearanceCard />
 
         {isAdmin && (
           <div className="panel flex flex-wrap items-center justify-between gap-3 p-6 md:col-span-2">
@@ -13665,6 +14582,29 @@ export default function ProfilePage() {
             </a>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** «Внешний вид»: how dense the panel is (kept in this browser only) */
+function AppearanceCard() {
+  const [density, setDensity] = useDensity();
+  const options: [Density, string, string][] = [
+    ['normal', 'Обычная', 'Больше воздуха, крупные плитки'],
+    ['compact', 'Компактная', 'Меньше отступов: больше серверов на экране'],
+  ];
+  return (
+    <div className="panel space-y-3 p-6">
+      <h2 className="text-lg font-black">Внешний вид</h2>
+      <div>
+        <span id="density-label" className="label">Плотность</span>
+        <div className="seg" role="group" aria-labelledby="density-label">
+          {options.map(([id, label]) => (
+            <button key={id} type="button" className="seg-item" aria-pressed={density === id} onClick={() => setDensity(id)}>{label}</button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm font-semibold text-mute">{options.find((o) => o[0] === density)?.[2]}. Запоминается в этом браузере.</p>
       </div>
     </div>
   );
@@ -13766,7 +14706,7 @@ function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChan
         <PasswordStrength password={next} />
       </PasswordField>
       <ErrorLine text={error} />
-      <button className="btn" disabled={busy}>{hasPassword ? 'Сохранить пароль' : 'Задать пароль'}</button>
+      <Button loading={busy}>{hasPassword ? 'Сохранить пароль' : 'Задать пароль'}</Button>
     </form>
   );
 }
@@ -13883,7 +14823,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, Spinner, toast, useShake } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, toast, useShake } from '../ui';
 
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
 const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
@@ -14084,10 +15024,9 @@ export default function Register({ onDone }: { onDone: () => void }) {
       )}
 
       <ErrorLine text={error} />
-      <button className="btn w-full" disabled={busy}>
-        {busy && <Spinner />}
+      <Button className="w-full" magnetic loading={busy}>
         {busy ? 'Создаю…' : access.registrationMode === 'approval' ? 'Отправить заявку' : 'Создать аккаунт'}
-      </button>
+      </Button>
 
       {access.discordLogin && (
         <>
@@ -14101,12 +15040,14 @@ export default function Register({ onDone }: { onDone: () => void }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type PlayerNow, type ServerDetails } from '../api';
 import { useAuth } from '../auth';
 import { COUNTRIES } from '../countries';
 import { gameColor, gameGradient, gameLabel } from '../games';
-import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, smoothPath, toast, usePoll } from '../ui';
+import { coverBackground } from '../cover';
+import { AnimatedNumber, CopyButton, ErrorLine, GameAvatar, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, plural, smoothPath, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 
@@ -14338,14 +15279,30 @@ function ServerDetailView({ id }: { id: number }) {
     void load(hours);
   }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (missing) {
+  const depth = useDepth<HTMLElement>();
+  const [shared, setShared] = useState(false);
+  // red ring once when the server goes online -> offline while this page is open
+  const wentOffline = useFlashOnChange(data ? data.server.online || !data.server.hasStatus : true, (prev, next) => prev && !next);
+
+  if (missing) return <NotFound kind="server" />;
+  if (!data) {
+    // the same blocks as the loaded page: banner, four numbers, chart + players, log + about
     return (
-      <Empty title="Сервер не найден" text="Возможно, его удалили.">
-        <a className="btn mt-3" href="#/servers">К списку серверов</a>
-      </Empty>
+      <div className="space-y-3.5" aria-busy="true" aria-label="Загрузка">
+        <div className="skel-line skeleton ml-1 !h-5 w-32" />
+        <div className="skeleton tile h-[188px] sm:h-[176px]" />
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton tile h-[106px]" />)}
+        </div>
+        <div className="grid gap-3.5 lg:grid-cols-12">
+          <div className="skeleton tile h-[340px] lg:col-span-8" />
+          <div className="skeleton tile h-[340px] lg:col-span-4" />
+          <div className="skeleton tile h-40 lg:col-span-8" />
+          <div className="skeleton tile h-40 lg:col-span-4" />
+        </div>
+      </div>
     );
   }
-  if (!data) return <div className="skeleton tile h-64" />;
 
   const { server: s, stats, events, points } = data;
   const color = gameColor(s.game);
@@ -14354,8 +15311,8 @@ function ServerDetailView({ id }: { id: number }) {
   const link = connectUrl(s.game, s.address, s.port);
   // placeholder versions such as 0.0.0.1 say nothing
   const realVersion = s.version && !/^0(\.0)*(\.\d+)?$/.test(s.version.trim()) ? s.version.trim() : null;
-  const tiles: [string, string, string?][] = [
-    ['Сейчас', s.online ? `${s.players}/${s.maxPlayers}` : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
+  const tiles: [string, ReactNode, string?][] = [
+    ['Сейчас', s.online ? <><AnimatedNumber value={s.players} delta />/{s.maxPlayers}</> : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
     ['Пик игроков', stats.peakPlayers == null ? '–' : String(stats.peakPlayers), stats.peakAt ? fmtDateTime(stats.peakAt) : undefined],
     ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
     ['В среднем', stats.avgPlayers == null ? '–' : String(stats.avgPlayers), 'пока сервер онлайн'],
@@ -14381,6 +15338,8 @@ function ServerDetailView({ id }: { id: number }) {
     try {
       await navigator.clipboard.writeText(url);
       toast('Ссылка скопирована');
+      setShared(true);
+      window.setTimeout(() => setShared(false), 1500);
     } catch {
       toast(`Не удалось скопировать. Ссылка: ${url}`, 'err', 8000);
     }
@@ -14402,12 +15361,15 @@ function ServerDetailView({ id }: { id: number }) {
       <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>
 
       <article
-        className="relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
-        style={{ background: `linear-gradient(120deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+        className="depth relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
+        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+        {...depth}
       >
-        <span aria-hidden className="pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+        <span aria-hidden className="depth-l1 pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+        <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
+        {wentOffline && <span className="flash-ring" aria-hidden />}
         <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
-          <GameAvatar game={s.game} size={68} glass />
+          <GameAvatar game={s.game} size={68} glass vtId={s.id} />
           <div className="min-w-0 flex-1 basis-64">
             <h1 className="break-words text-2xl font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-bold text-white/90">
@@ -14418,7 +15380,10 @@ function ServerDetailView({ id }: { id: number }) {
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
             <CopyButton text={s.address} label="Скопировать адрес" tone="grad" />
-            <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>Поделиться</button>
+            <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>
+              {shared ? <IconCheckMark /> : <IconShare />}
+              Поделиться
+            </button>
             {link && <a className="btn-ghost-on-grad" href={link}>Подключиться</a>}
           </div>
         </div>
@@ -14428,7 +15393,7 @@ function ServerDetailView({ id }: { id: number }) {
         <div className="relative mt-4 flex flex-wrap items-center gap-2">
           {isAdmin && (
             <>
-              <button className="btn-ghost-on-grad" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
+              <button className="btn-ghost-on-grad" onClick={refresh} disabled={busy} aria-busy={busy || undefined}><IconRefresh spinning={busy} />{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
               <button className="btn-ghost-on-grad" onClick={() => setEditing(true)}>Изменить</button>
               <button className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#b42323] transition hover:bg-white/90 max-sm:min-h-[44px]" onClick={remove}>Удалить</button>
             </>
@@ -14442,7 +15407,7 @@ function ServerDetailView({ id }: { id: number }) {
         {tiles.map(([k, v, hint]) => (
           <div key={k} className="tile p-4 sm:p-[18px]">
             <div className="stat-k">{k}</div>
-            <div className="stat-v mt-1 truncate">{v}</div>
+            <div className={`stat-v mt-1 ${typeof v === 'string' ? 'truncate' : ''}`}>{v}</div>
             {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
           </div>
         ))}
@@ -14509,6 +15474,8 @@ function ServerDetailView({ id }: { id: number }) {
         <ServerForm
           initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }}
           id={s.id}
+          coverUrl={s.coverUrl}
+          onCoverChanged={() => void load()}
           onClose={() => setEditing(false)}
           onSaved={() => { setEditing(false); void load(); }}
         />
@@ -14520,7 +15487,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerForm.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
-import { api, type ServerInput, type TestResult } from '../api';
+import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
@@ -14528,8 +15495,40 @@ import { COUNTRIES } from '../countries';
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
-export default function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; id?: number; onClose: () => void; onSaved: () => void }) {
+export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onClose, onSaved }: { initial: ServerInput; id?: number; coverUrl?: string | null; onCoverChanged?: () => void; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState(initial);
+  const [cover, setCover] = useState<string | null>(coverUrl ?? null);
+  const [coverBusy, setCoverBusy] = useState(false);
+
+  const uploadCover = async (file: File) => {
+    if (!id) return;
+    setCoverBusy(true);
+    setError('');
+    try {
+      const r = await fetch(`/api/servers/${id}/cover`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      const j = (await r.json().catch(() => null)) as { coverUrl?: string; error?: string } | null;
+      if (!r.ok) throw new Error(j?.error ?? 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)');
+      setCover(j?.coverUrl ?? null);
+      onCoverChanged?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCoverBusy(false);
+    }
+  };
+  const removeCover = async () => {
+    if (!id) return;
+    setCoverBusy(true);
+    try {
+      await api(`/servers/${id}/cover`, 'DELETE');
+      setCover(null);
+      onCoverChanged?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCoverBusy(false);
+    }
+  };
   const [custom, setCustom] = useState(!GAMES.some((g) => g.id === initial.game));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -14537,7 +15536,7 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
   const [test, setTest] = useState<TestResult | null>(null);
 
   // "advanced" is open when it already holds something (editing)
-  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country);
+  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country || coverUrl);
 
   const pickGame = (v: string) => {
     setTest(null);
@@ -14647,6 +15646,22 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
             </Field>
             <p className="-mt-2 text-sm font-semibold text-mute">Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.</p>
             <p className="-mt-2 text-sm font-semibold text-mute">Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.</p>
+            <div>
+              <span className="label">Обложка</span>
+              {id ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="h-[72px] w-32 shrink-0 overflow-hidden rounded-xl border border-line bg-soft" style={cover ? { backgroundImage: `url(${cover})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined} aria-hidden />
+                  <label className="btn btn-soft btn-sm cursor-pointer">
+                    {coverBusy ? 'Загружаю…' : 'Загрузить картинку'}
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={coverBusy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadCover(file); e.target.value = ''; }} />
+                  </label>
+                  {cover && <button type="button" className="btn btn-soft btn-sm" onClick={() => void removeCover()} disabled={coverBusy}>Убрать</button>}
+                  <span className="basis-full text-sm font-semibold text-mute">PNG, JPG или WebP до 5 МБ; обрезается до 16:9. Заменяет цветную обложку карточки и шапку страницы сервера.</span>
+                </div>
+              ) : (
+                <p className="text-sm font-semibold text-mute">Картинку можно загрузить после создания сервера: откройте «Изменить».</p>
+              )}
+            </div>
           </div>
         </details>
 
@@ -14666,28 +15681,50 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
+import { coverBackground } from '../cover';
 import { ServersArt } from '../components/Illustrations';
-import { AnimatedNumber, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, usePoll } from '../ui';
+import { AnimatedNumber, Burst, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, useFlashOnChange, usePoll } from '../ui';
+import NotFound from '../components/NotFound';
 import ServerDetail from './ServerDetail';
 
 export default function ServersPage({ sub }: { sub: string }) {
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <ServerDetail id={id} />;
+  // "#/servers/abc": not a server
+  if (sub) return <NotFound kind="server" />;
   return <ServerList />;
 }
 
+/** a greeting for the signed-in user: «Доброе утро, Иван» */
+function greeting(name: string): string {
+  const h = new Date().getHours();
+  const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
+  const first = name.trim().split(/\s+/)[0] || name;
+  return `${hello}, ${first}`;
+}
+
 function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: string; onClick: () => void; className?: string }) {
+  // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
+  const [pops, setPops] = useState(0);
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
       className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${className}`}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`В избранное: ${name}`}
       aria-pressed={on}
     >
-      {on ? '★' : '☆'}
+      <span className="star-wrap">
+        <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
+        {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
+      </span>
     </button>
   );
+}
+
+/** a red ring over the tile, once, when its server went online -> offline while the page was open */
+function useWentOffline(s: { online: boolean; hasStatus: boolean }): boolean {
+  return useFlashOnChange(s.online || !s.hasStatus, (prev, next) => prev && !next);
 }
 
 type Filter = 'all' | 'online' | 'offline' | 'fav';
@@ -14813,9 +15850,13 @@ function ServerList() {
 
   return (
     <div className="space-y-5">
-      <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени" icon={<IconServers />}>
+      <PageHead
+        title="Серверы"
+        subtitle={me ? `${greeting(me.username)}. Серверы в реальном времени` : 'Состояние ваших игровых серверов в реальном времени'}
+        icon={<IconServers />}
+      >
         <LiveBadge at={updatedAt} />
-        {isAdmin && <a className="btn btn-soft" href="#/admin/servers">Управление серверами</a>}
+        {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
       {servers.length > 1 && (
@@ -14847,7 +15888,7 @@ function ServerList() {
       )}
 
       {servers.length > 0 && effFilter !== 'all' && (
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
           {filtered.map((s, i) => (
             <SmallTile key={s.id} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
           ))}
@@ -14856,8 +15897,8 @@ function ServerList() {
       )}
 
       {servers.length > 0 && effFilter === 'all' && (
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {hero && <HeroTile idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
+        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+          {hero && <HeroTile key={hero.id} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
 
           {stats.map((t, i) => (
             <div
@@ -14891,17 +15932,21 @@ function ServerList() {
 function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
+  const depth = useDepth<HTMLElement>();
+  const flash = useWentOffline(s);
   return (
     <article
-      className="tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
-      style={{ ...stagger(idx), background: `linear-gradient(140deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
+      className="depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
+      style={{ ...stagger(idx), background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
       onClick={onOpen}
+      {...depth}
     >
-      <span aria-hidden className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
-      <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
+      <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
+      <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
+      {flash && <span className="flash-ring" aria-hidden />}
 
       <div className="relative flex items-start gap-3">
-        <GameAvatar game={s.game} size={48} glass />
+        <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
             <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{s.name}</a>
@@ -14921,7 +15966,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
       {s.online ? (
         <>
           <div className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
-            <AnimatedNumber value={s.players} pulse className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" />
+            <AnimatedNumber value={s.players} pulse delta className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" />
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
             {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
           </div>
@@ -14950,10 +15995,12 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
 function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
+  const flash = useWentOffline(s);
   return (
-    <article className="tile tile-in tile-hover col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
-      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
-        <GameAvatar game={s.game} size={40} glass />
+    <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
+      {flash && <span className="flash-ring" aria-hidden />}
+      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true }) }}>
+        <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
@@ -14970,7 +16017,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
       {s.online ? (
         <>
           <div className="flex items-baseline gap-1.5 px-1.5">
-            <AnimatedNumber value={s.players} pulse className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" />
+            <AnimatedNumber value={s.players} pulse delta className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" />
             <span className="font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
@@ -14997,10 +16044,12 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { WHITE, brandVars, parseTriplet, triplet, type RGB } from '../colors';
 import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { useAuth } from '../auth';
+import { Switch as ToggleSwitch } from '../components/Switch';
 import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
@@ -15014,20 +16063,60 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
+/** готовые темы: основной цвет и конец градиента */
+const THEME_PRESETS = [
+  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
+  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
+  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
+  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
+  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
+  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
+] as const;
+
 /** название, цвет и логотип сообщества */
 function BrandCard() {
   const { access, reload } = useAuth();
   const b = access.brand;
   const [name, setName] = useState(b.name);
   const [color, setColor] = useState(b.color);
+  const [color2, setColor2] = useState(b.color2 ?? '');
+  const [preset, setPreset] = useState(b.preset ?? '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const swatches = ['#4f46e5', '#7c3aed', '#db2777', '#e11d48', '#ea580c', '#16a34a', '#0891b2', '#2563eb'];
+  const savedRef = useRef(b);
+  savedRef.current = b;
+
+  const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
+  const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
+
+  // live preview of the chosen colours across the whole panel; the saved ones come back when leaving without saving
+  useEffect(() => {
+    const root = document.documentElement;
+    const paint = (c: string, c2: string | undefined) => {
+      const attr = root.getAttribute('data-theme');
+      const dark = attr === 'dark' || (!attr && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const st = getComputedStyle(root);
+      const surf = (n: string, f: RGB) => parseTriplet(st.getPropertyValue(`--${n}`)) ?? f;
+      const v = brandVars(c, c2, dark, surf('card', dark ? [23, 24, 29] : WHITE), surf('soft', dark ? [33, 34, 41] : [238, 240, 244]));
+      root.style.setProperty('--brand', triplet(v.fill));
+      root.style.setProperty('--brand-hover', triplet(v.hover));
+      root.style.setProperty('--brand-2', triplet(v.end));
+      root.style.setProperty('--link', triplet(v.link));
+    };
+    paint(color, color2 || undefined);
+    const mo = new MutationObserver(() => paint(color, color2 || undefined));
+    mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => {
+      mo.disconnect();
+      paint(savedRef.current.color, savedRef.current.color2 || undefined);
+    };
+  }, [color, color2]);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    await api('/branding', 'PUT', { name, color }).then(() => { toast('Оформление сохранено'); return reload(); }).catch((x: Error) => setError(x.message));
+    await api('/branding', 'PUT', { name, color, color2, preset }).then(() => { toast('Оформление сохранено'); return reload(); }).catch((x: Error) => setError(x.message));
   };
   const upload = async (file: File) => {
     setBusy(true);
@@ -15055,12 +16144,42 @@ function BrandCard() {
         <input id="brand-name" className="input" value={name} maxLength={32} onChange={(e) => setName(e.target.value)} />
       </Field>
       <div>
-        <span className="label">Цвет</span>
+        <span className="label">Тема</span>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+          {THEME_PRESETS.map((p) => {
+            const on = preset === p.id;
+            return (
+              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`rounded-2xl border bg-card p-2 text-left transition hover:-translate-y-0.5 ${on ? 'border-transparent ring-2 ring-ink ring-offset-2 ring-offset-card' : 'border-line'}`}>
+                <span className="block h-12 rounded-xl" style={{ background: `linear-gradient(135deg, ${p.c1}, ${p.c2})` }} />
+                <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <span className="label">Свой цвет</span>
         <div className="flex flex-wrap items-center gap-2">
           {swatches.map((c) => (
-            <button type="button" key={c} onClick={() => setColor(c)} aria-label={c} aria-pressed={color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card transition ${color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
+            <button type="button" key={c} onClick={() => pickColor(c)} aria-label={c} aria-pressed={!preset && color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card transition ${!preset && color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
           ))}
-          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-lg border border-line bg-card" aria-label="Свой цвет" />
+          <input type="color" value={color} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-lg border border-line bg-card" aria-label="Свой цвет" />
+        </div>
+      </div>
+      <div>
+        <span className="label">Как это выглядит</span>
+        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-soft p-4">
+          <Logo size={44} />
+          <div className="min-w-0">
+            <div className="truncate text-base font-black">{name.trim() || 'CoreGSM'}</div>
+            <div className="text-sm font-semibold text-mute">Мониторинг игровых серверов</div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop" aria-hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 7" /></svg>
+            </span>
+          </div>
         </div>
       </div>
       <div>
@@ -15486,7 +16605,7 @@ function UpdateCard() {
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
   return (
     <label className="flex cursor-pointer items-start gap-3">
-      <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[var(--brand,#5865f2)]" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      <ToggleSwitch className="mt-0.5" checked={on} onChange={onChange} />
       <span>
         <span className="block font-extrabold">{label}</span>
         <span className="block text-sm font-semibold text-mute">{hint}</span>
@@ -15631,7 +16750,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Setup.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { AuthBrand, AuthShell, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
+import { AuthBrand, AuthShell, Button, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -15731,7 +16850,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             <div className="flex gap-2 pt-1">
               <button type="button" className="btn btn-soft" onClick={() => setStep(0)} disabled={busy}>Назад</button>
               <button type="button" className="btn btn-soft ml-auto" onClick={() => void finish(true)} disabled={busy}>Пропустить</button>
-              <button className="btn" disabled={busy}>{busy ? 'Создаю…' : 'Завершить'}</button>
+              <Button loading={busy}>{busy ? 'Создаю…' : 'Завершить'}</Button>
             </div>
           </form>
         )}
@@ -15860,7 +16979,7 @@ export default function StatusPage() {
       )}
 
       {data && data.servers.length > 0 && (
-        <>
+        <div className="fade-in space-y-5">
           <Banner servers={data.servers} />
           <ul className="space-y-3">
             {data.servers.map((s) => <ServerRow key={s.id} s={s} />)}
@@ -15871,7 +16990,7 @@ export default function StatusPage() {
             ))}
             <span className="ml-auto">обновлено {ago(data.updatedAt)}</span>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -15995,6 +17114,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
 import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { revealTransition, withViewTransition } from './useMotion';
 import { useAuth } from './auth';
 import AuthShowcase from './components/AuthShowcase';
 import { getToken, type Server } from './api';
@@ -16041,6 +17161,15 @@ export function usePoll(fn: () => unknown, ms: number) {
 export const LAG_PING = 100;
 export const isLag = (s: Pick<Server, 'online' | 'ping'>) => s.online && s.ping != null && s.ping > LAG_PING;
 
+// shared building blocks live in their own files; pages import everything from here
+export { Button } from './components/Button';
+export type { ButtonProps } from './components/Button';
+export { Switch } from './components/Switch';
+export { SplitButton } from './components/SplitButton';
+export type { SplitItem } from './components/SplitButton';
+export { useFlashOnChange, useDepth, useDensity, setDensity, prefersReducedMotion } from './useMotion';
+export type { Density } from './useMotion';
+
 const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 /** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
@@ -16066,19 +17195,59 @@ export function useTween(value: number, ms = 600): number {
   return shown;
 }
 
-/** tabular number that tweens to new values and (optionally) flashes briefly when the value changes */
-export function AnimatedNumber({ value, className = '', pulse = false }: { value: number; className?: string; pulse?: boolean }) {
-  const shown = useTween(value);
+const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/**
+ * Tabular number whose digits roll vertically (slot-machine style) when the value changes.
+ * `pulse`: the number glows briefly; `delta`: a «+3» / «−2» chip floats above it for about two seconds.
+ * The real number is in a visually hidden node, the rolling digits are decoration (aria-hidden); no layout shift.
+ */
+export function AnimatedNumber({ value, className = '', pulse = false, delta = false }: { value: number; className?: string; pulse?: boolean; delta?: boolean }) {
   const [bump, setBump] = useState(false);
-  const first = useRef(true);
+  const [chip, setChip] = useState<{ n: number; k: number } | null>(null);
+  const prev = useRef(value);
+  const born = useRef(true);
   useEffect(() => {
-    if (first.current) { first.current = false; return; }
-    if (!pulse) return;
-    setBump(true);
-    const t = setTimeout(() => setBump(false), 950);
-    return () => clearTimeout(t);
-  }, [value, pulse]);
-  return <span aria-live="off" className={`tabular-nums ${bump ? 'num-bump' : ''} ${className}`}>{shown}</span>;
+    const diff = value - prev.current;
+    prev.current = value;
+    if (born.current) { born.current = false; return; }
+    if (diff === 0) return;
+    const timers: number[] = [];
+    if (pulse) {
+      setBump(true);
+      timers.push(window.setTimeout(() => setBump(false), 950));
+    }
+    if (delta) {
+      setChip({ n: diff, k: Date.now() });
+      timers.push(window.setTimeout(() => setChip(null), 2100));
+    }
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [value, pulse, delta]);
+
+  const text = String(Math.round(value));
+  const chars = [...text];
+  return (
+    <span className={`roll ${bump ? 'num-bump' : ''} ${className}`}>
+      <span className="sr-only">{text}</span>
+      <span aria-hidden>
+        {chars.map((c, i) => {
+          // keyed from the right, so a column keeps its identity when the number grows by a digit
+          const key = chars.length - i;
+          return /\d/.test(c)
+            ? (
+              <span key={key} className="roll-d">
+                <span className="roll-g">0</span>
+                <span className="roll-col" style={{ transform: `translateY(${-Number(c)}em)` }}>
+                  {DIGITS.map((d) => <span key={d}>{d}</span>)}
+                </span>
+              </span>
+            )
+            : <span key={key}>{c}</span>;
+        })}
+      </span>
+      {chip && <span key={chip.k} aria-hidden className={`delta-chip ${chip.n > 0 ? 'up' : 'down'}`}>{chip.n > 0 ? `+${chip.n}` : `−${Math.abs(chip.n)}`}</span>}
+    </span>
+  );
 }
 
 /** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
@@ -16087,12 +17256,50 @@ export function parseHash(): { page: string; sub: string } {
   return { page, sub: rest.join('/') };
 }
 
+// One hashchange listener for the whole app: every subscriber is updated together, inside one view transition
+// (cross-fade with a slight slide, and the server avatar morphing from its tile to the page banner).
+type HashState = { page: string; sub: string };
+let hashNow: HashState | null = null;
+const hashListeners = new Set<(h: HashState) => void>();
+
+const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub) ? h.sub : '');
+
+/** gives the avatar of a server (tagged data-vt-avatar) the view-transition-name that pairs the old and the new page */
+const nameAvatars = (ids: string[]) => {
+  for (const id of new Set(ids.filter(Boolean))) {
+    document.querySelector<HTMLElement>(`[data-vt-avatar="${id}"]`)?.style.setProperty('view-transition-name', `server-${id}`);
+  }
+};
+const clearAvatarNames = () => {
+  document.querySelectorAll<HTMLElement>('[data-vt-avatar]').forEach((el) => el.style.removeProperty('view-transition-name'));
+};
+
+function onHashChange() {
+  const prev = hashNow ?? parseHash();
+  const next = parseHash();
+  if (prev.page === next.page && prev.sub === next.sub) return;
+  const ids = [serverIdOf(prev), serverIdOf(next)];
+  withViewTransition(
+    () => {
+      hashNow = next;
+      hashListeners.forEach((l) => l(next));
+    },
+    { before: () => nameAvatars(ids), after: () => nameAvatars(ids), done: clearAvatarNames },
+  );
+}
+
 export function useHash() {
   const [h, setH] = useState(parseHash);
   useEffect(() => {
-    const f = () => setH(parseHash());
-    window.addEventListener('hashchange', f);
-    return () => window.removeEventListener('hashchange', f);
+    if (hashNow === null) {
+      hashNow = parseHash();
+      window.addEventListener('hashchange', onHashChange);
+    }
+    hashListeners.add(setH);
+    // the address may have changed between the first render and now
+    const cur = parseHash();
+    setH((p) => (p.page === cur.page && p.sub === cur.sub ? p : cur));
+    return () => { hashListeners.delete(setH); };
   }, []);
   return h;
 }
@@ -16154,6 +17361,37 @@ const IconAuto = () => (
 export const IconCopy = () => (
   <Icon size={16}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></Icon>
 );
+/** circular arrows; turns on click and spins while `spinning` (busy) */
+export const IconRefresh = ({ spinning = false }: { spinning?: boolean }) => (
+  <span className={`ico-refresh inline-grid ${spinning ? 'spinning' : ''}`} aria-hidden>
+    <Icon size={16}><path d="M20 11a8 8 0 0 0-14.5-4.1M4 4v4h4M4 13a8 8 0 0 0 14.5 4.1M20 20v-4h-4" /></Icon>
+  </span>
+);
+/** arrow that nudges forward when its button is hovered */
+export const IconArrow = () => (
+  <span className="ico-nudge inline-grid" aria-hidden>
+    <Icon size={16}><path d="M5 12h14M13 6l6 6-6 6" /></Icon>
+  </span>
+);
+export const IconCheckMark = () => (
+  <span className="star-pop inline-grid" aria-hidden>
+    <Icon size={16}><path d="M5 12.5l4.5 4.5L19 7.5" /></Icon>
+  </span>
+);
+export const IconShare = () => (
+  <span className="ico-share inline-grid" aria-hidden>
+    <Icon size={16}><path d="M7 17L17 7M9 7h8v8" /></Icon>
+  </span>
+);
+
+/** a few dots flying out of the centre of the parent (the parent must be `relative`); CSS only */
+export function Burst({ count = 8, radius = 17 }: { count?: number; radius?: number }) {
+  return (
+    <span className="burst" aria-hidden style={{ '--r': `${radius}px` } as CSSProperties}>
+      {Array.from({ length: count }, (_, i) => <i key={i} style={{ '--a': `${Math.round((360 / count) * i + 15)}deg` } as CSSProperties} />)}
+    </span>
+  );
+}
 
 // ---------- theme ----------
 type Theme = 'auto' | 'light' | 'dark';
@@ -16188,10 +17426,14 @@ export function ThemeToggle() {
       className="btn-icon"
       title={`Тема: ${label[theme]}. Нажмите, чтобы переключить`}
       aria-label={`Тема: ${label[theme]}. Переключить`}
-      onClick={() => {
+      onClick={(e) => {
         const t = next[theme];
-        applyTheme(t);
-        setTheme(t);
+        // the new theme grows as a circle out of the button (View Transitions); elsewhere it just switches
+        const r = e.currentTarget.getBoundingClientRect();
+        revealTransition(() => {
+          applyTheme(t);
+          setTheme(t);
+        }, r.left + r.width / 2, r.top + r.height / 2);
       }}
     >
       {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconAuto />}
@@ -16247,15 +17489,19 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function StatusPill({ online, known, lag }: { online: boolean; known: boolean; lag?: boolean }) {
   if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
   if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
-  return lag ? <span className="pill pill-warn">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
+  return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
 }
 
-/** `glass`: translucent white square, for use on top of a game-coloured cover */
-export function GameAvatar({ game, size = 44, glass = false }: { game: string; size?: number; glass?: boolean }) {
+/**
+ * `glass`: translucent white square, for use on top of a game-coloured cover.
+ * `vtId`: a server id; the avatar of that server morphs between the list tile and the server page (View Transitions).
+ */
+export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: string; size?: number; glass?: boolean; vtId?: number }) {
   const icon = gameIconPath(game);
   const [c1, c2] = gameGradient(game);
   return (
     <div
+      data-vt-avatar={vtId}
       className="grid shrink-0 place-items-center font-black text-white"
       style={{
         width: size,
@@ -16436,7 +17682,7 @@ export function ErrorLine({ text }: { text: string }) {
 
 export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="panel flex flex-col items-center gap-2 px-6 py-10 text-center">
+    <div className="panel fade-in flex flex-col items-center gap-2 px-6 py-10 text-center">
       {art ?? <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>}
       <h3 className="text-lg font-black">{title}</h3>
       <p className="max-w-sm font-semibold text-mute">{text}</p>
@@ -16462,8 +17708,14 @@ export function CopyButton({ text, label = 'Копировать', className = '
   };
   return (
     <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
-      <IconCopy />
-      {done ? 'Скопировано' : label}
+      <span className="copy-ico" data-done={done} aria-hidden>
+        <span className="ico-copy inline-grid"><IconCopy /></span>
+        <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12.5l4.5 4.5L19 7.500" />
+        </svg>
+        {done && <Burst />}
+      </span>
+      <span aria-live="polite">{done ? 'Скопировано' : label}</span>
     </button>
   );
 }
@@ -16558,7 +17810,7 @@ export function Wordmark({ className = '' }: { className?: string }) {
 
 // ---------- toasts: short confirmations that do not interrupt ----------
 type ToastKind = 'ok' | 'err' | 'info';
-interface ToastItem { id: number; text: string; kind: ToastKind }
+interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean }
 let toasts: ToastItem[] = [];
 let toastSeq = 0;
 const toastListeners = new Set<(t: ToastItem[]) => void>();
@@ -16573,9 +17825,15 @@ export function toast(text: string, kind: ToastKind = 'ok', ms?: number) {
 }
 
 export function dismissToast(id: number) {
-  if (!toasts.some((x) => x.id === id)) return;
-  toasts = toasts.filter((x) => x.id !== id);
+  const t = toasts.find((x) => x.id === id);
+  if (!t || t.leaving) return;
+  // it springs out first (about 200 ms), then it is removed
+  toasts = toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
   emitToasts();
+  setTimeout(() => {
+    toasts = toasts.filter((x) => x.id !== id);
+    emitToasts();
+  }, 200);
 }
 
 /**
@@ -16590,7 +17848,7 @@ export function Toaster() {
   }, []);
   const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-card text-ink ring-line' } as const;
   const item = (t: ToastItem) => (
-    <div key={t.id} className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
+    <div key={t.id} className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
       <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
       <button
@@ -16913,6 +18171,265 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
       </div>
     </div>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/useMotion.ts" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { flushSync } from 'react-dom';
+
+// Small motion helpers: no animation library, CSS does the painting. Everything here is a no-op for
+// prefers-reduced-motion and for coarse pointers, and nothing throws where an API is missing.
+
+export const prefersReducedMotion = () =>
+  typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+export const hasFinePointer = () =>
+  typeof window !== 'undefined' && !!window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
+
+// ---------- magnetic call-to-action buttons: [data-magnetic] leans up to 6 px toward a mouse pointer ----------
+let magneticOn = false;
+
+/** Call once. Elements opt in with the `data-magnetic` attribute (the Button component has a `magnetic` prop). */
+export function installMagnetic() {
+  if (magneticOn || typeof window === 'undefined') return;
+  magneticOn = true;
+  const MAX = 6;
+  const REACH = 26;
+  let raf = 0;
+  let px = -9999;
+  let py = -9999;
+
+  const settle = (el: HTMLElement) => {
+    if (el.style.translate) el.style.translate = '';
+  };
+  const frame = () => {
+    raf = 0;
+    const on = hasFinePointer() && !prefersReducedMotion();
+    document.querySelectorAll<HTMLElement>('[data-magnetic]').forEach((el) => {
+      if (!on || el.hasAttribute('disabled')) return settle(el);
+      const r = el.getBoundingClientRect();
+      if (r.width === 0) return;
+      // the box already moved by the current shift; measure the resting centre
+      const cur = (el.dataset.mag ?? '0,0').split(',').map(Number);
+      const cx = r.left + r.width / 2 - (cur[0] || 0);
+      const cy = r.top + r.height / 2 - (cur[1] || 0);
+      const hw = r.width / 2 + REACH;
+      const hh = r.height / 2 + REACH;
+      const dx = px - cx;
+      const dy = py - cy;
+      if (Math.abs(dx) > hw || Math.abs(dy) > hh) {
+        el.dataset.mag = '0,0';
+        return settle(el);
+      }
+      const tx = Math.max(-MAX, Math.min(MAX, (dx / hw) * MAX * 1.4));
+      const ty = Math.max(-MAX, Math.min(MAX, (dy / hh) * MAX * 1.4));
+      el.dataset.mag = `${tx.toFixed(1)},${ty.toFixed(1)}`;
+      el.style.translate = `${tx.toFixed(1)}px ${ty.toFixed(1)}px`;
+    });
+  };
+  const schedule = () => { if (!raf) raf = requestAnimationFrame(frame); };
+
+  window.addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    px = e.clientX;
+    py = e.clientY;
+    schedule();
+  }, { passive: true });
+  document.addEventListener('mouseleave', () => { px = -9999; py = -9999; schedule(); });
+  window.addEventListener('blur', () => { px = -9999; py = -9999; schedule(); });
+}
+
+// ---------- segmented controls: the active pill slides ----------
+let segOn = false;
+
+/** Call once. Measures the active `.seg-item` of every `.seg` and publishes its box as CSS variables for the sliding pill. */
+export function installSegIndicator() {
+  if (segOn || typeof window === 'undefined') return;
+  segOn = true;
+  let raf = 0;
+  const run = () => {
+    raf = 0;
+    document.querySelectorAll<HTMLElement>('.seg').forEach((seg) => {
+      const on = seg.querySelector<HTMLElement>('.seg-item[aria-pressed="true"], .seg-item[aria-current="page"], .seg-item.on');
+      if (!on || on.offsetWidth === 0) {
+        if (seg.hasAttribute('data-ind')) { seg.removeAttribute('data-ind'); seg.removeAttribute('data-ind-anim'); }
+        return;
+      }
+      seg.style.setProperty('--ind-x', `${on.offsetLeft}px`);
+      seg.style.setProperty('--ind-y', `${on.offsetTop}px`);
+      seg.style.setProperty('--ind-w', `${on.offsetWidth}px`);
+      seg.style.setProperty('--ind-h', `${on.offsetHeight}px`);
+      if (!seg.hasAttribute('data-ind')) {
+        seg.setAttribute('data-ind', '');
+        // transitions start only after the first position is painted, so the pill does not fly in from the corner
+        requestAnimationFrame(() => requestAnimationFrame(() => seg.setAttribute('data-ind-anim', '')));
+      }
+    });
+  };
+  const schedule = () => { if (!raf) raf = requestAnimationFrame(run); };
+  new MutationObserver(schedule).observe(document.body, {
+    subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-pressed', 'aria-current', 'class'],
+  });
+  window.addEventListener('resize', schedule);
+  void document.fonts?.ready.then(schedule);
+  schedule();
+}
+
+// ---------- View Transitions ----------
+interface ViewTransitionLike { finished: Promise<unknown>; ready: Promise<unknown>; skipTransition?: () => void }
+type StartVT = (cb: () => void) => ViewTransitionLike;
+const startVT = (): StartVT | null => {
+  const d = document as Document & { startViewTransition?: StartVT };
+  return typeof d.startViewTransition === 'function' ? d.startViewTransition.bind(document) : null;
+};
+
+/**
+ * Runs `update` (which must change React state) inside a view transition when the browser has them.
+ * `before` runs while the old page is still painted, `after` once the new DOM is committed.
+ * Without the API (or with reduced motion) `update` just runs.
+ */
+export function withViewTransition(update: () => void, opts: { before?: () => void; after?: () => void; done?: () => void } = {}) {
+  const start = startVT();
+  if (!start || prefersReducedMotion() || document.visibilityState === 'hidden') {
+    update();
+    return;
+  }
+  try {
+    opts.before?.();
+    const t = start(() => {
+      flushSync(update);
+      opts.after?.();
+    });
+    const done = () => opts.done?.();
+    t.finished.then(done, done);
+    // an interrupted transition rejects `ready`; nothing to handle
+    t.ready.catch(() => undefined);
+  } catch {
+    update();
+    opts.done?.();
+  }
+}
+
+/** Theme switch: the new theme is revealed as a circle growing from (x, y). Instant where View Transitions are missing. */
+export function revealTransition(update: () => void, x: number, y: number) {
+  const start = startVT();
+  if (!start || prefersReducedMotion() || document.visibilityState === 'hidden') {
+    update();
+    return;
+  }
+  const root = document.documentElement;
+  const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+  root.classList.add('vt-theme');
+  const end = () => root.classList.remove('vt-theme');
+  try {
+    const t = start(() => { flushSync(update); });
+    t.ready.then(() => {
+      root.animate(
+        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+        { duration: 560, easing: 'cubic-bezier(.4, 0, .2, 1)', pseudoElement: '::view-transition-new(root)' },
+      );
+    }).catch(() => undefined);
+    t.finished.then(end, end);
+  } catch {
+    end();
+    update();
+  }
+}
+
+// ---------- hooks ----------
+/**
+ * true for `ms` after `when(prev, next)` returned true for a change of `value`.
+ * Example: a tile flashes once when a server goes online -> offline.
+ */
+export function useFlashOnChange<T>(value: T, when: (prev: T, next: T) => boolean, ms = 1900): boolean {
+  const prev = useRef(value);
+  const whenRef = useRef(when);
+  whenRef.current = when;
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const p = prev.current;
+    prev.current = value;
+    if (Object.is(p, value)) return;
+    if (!whenRef.current(p, value)) { setOn(false); return; }
+    setOn(true);
+    const t = window.setTimeout(() => setOn(false), ms);
+    return () => window.clearTimeout(t);
+  }, [value, ms]);
+  return on;
+}
+
+/**
+ * Pointer depth for a hero tile: sets --px/--py (-1..1) and --hx/--hy (highlight position) on the element.
+ * Spread the result on the element and give it the `depth` class; children opt in with `depth-l1` / `depth-l2`.
+ * Mouse only; nothing happens for touch or reduced motion.
+ */
+export function useDepth<T extends HTMLElement>() {
+  const onPointerMove = useCallback((e: ReactPointerEvent<T>) => {
+    if (e.pointerType !== 'mouse' || prefersReducedMotion()) return;
+    const el = e.currentTarget;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return;
+    const nx = (e.clientX - r.left) / r.width;
+    const ny = (e.clientY - r.top) / r.height;
+    el.style.setProperty('--px', ((nx - 0.5) * 2).toFixed(3));
+    el.style.setProperty('--py', ((ny - 0.5) * 2).toFixed(3));
+    el.style.setProperty('--hx', `${(nx * 100).toFixed(1)}%`);
+    el.style.setProperty('--hy', `${(ny * 100).toFixed(1)}%`);
+    el.style.setProperty('--ho', '1');
+  }, []);
+  const onPointerLeave = useCallback((e: ReactPointerEvent<T>) => {
+    const el = e.currentTarget;
+    el.style.setProperty('--px', '0');
+    el.style.setProperty('--py', '0');
+    el.style.setProperty('--ho', '0');
+  }, []);
+  return { onPointerMove, onPointerLeave };
+}
+
+// ---------- density ----------
+export type Density = 'normal' | 'compact';
+const DENSITY_KEY = 'coregsm_density';
+const densityListeners = new Set<(d: Density) => void>();
+
+export const readDensity = (): Density => {
+  try {
+    return localStorage.getItem(DENSITY_KEY) === 'compact' ? 'compact' : 'normal';
+  } catch {
+    return 'normal';
+  }
+};
+
+const paintDensity = (d: Density) => {
+  const root = document.documentElement;
+  if (d === 'compact') root.setAttribute('data-density', 'compact');
+  else root.removeAttribute('data-density');
+};
+
+/** Applies the stored density to <html>; call once at start (before the first paint, from main.tsx). */
+export function initDensity() {
+  if (typeof document === 'undefined') return;
+  paintDensity(readDensity());
+}
+
+export function setDensity(d: Density) {
+  paintDensity(d);
+  try {
+    if (d === 'compact') localStorage.setItem(DENSITY_KEY, 'compact');
+    else localStorage.removeItem(DENSITY_KEY);
+  } catch {
+    /* private mode: applies for this visit only */
+  }
+  densityListeners.forEach((l) => l(d));
+}
+
+export function useDensity(): [Density, (d: Density) => void] {
+  const [d, setD] = useState<Density>(readDensity);
+  useEffect(() => {
+    densityListeners.add(setD);
+    return () => { densityListeners.delete(setD); };
+  }, []);
+  return [d, setDensity];
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"

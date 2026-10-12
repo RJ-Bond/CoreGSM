@@ -32,6 +32,8 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/servers$/, label: 'Добавлен сервер', detail: (r) => s(r.body?.name) || `${s(r.body?.host)}:${Number(r.body?.port) || ''}` },
   { m: 'PUT', re: /^\/api\/servers\/(\d+)$/, label: 'Изменён сервер', pre: serverName },
   { m: 'DELETE', re: /^\/api\/servers\/(\d+)$/, label: 'Удалён сервер', pre: serverName },
+  { m: 'PUT', re: /^\/api\/servers\/(\d+)\/cover$/, label: 'Загружена обложка сервера', pre: serverName },
+  { m: 'DELETE', re: /^\/api\/servers\/(\d+)\/cover$/, label: 'Убрана обложка сервера', pre: serverName },
   { m: 'POST', re: /^\/api\/bindings$/, label: 'Создана привязка Discord', detail: (r) => `сервер #${Number(r.body?.serverId) || '?'}` },
   { m: 'PUT', re: /^\/api\/bindings\/(\d+)$/, label: 'Изменена привязка Discord', pre: (id) => `#${id}` },
   { m: 'DELETE', re: /^\/api\/bindings\/(\d+)$/, label: 'Удалена привязка Discord', pre: (id) => `#${id}` },

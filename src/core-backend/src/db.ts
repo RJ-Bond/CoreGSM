@@ -28,6 +28,17 @@ if (fs.existsSync(pendingDir)) {
       for (const f of fs.readdirSync(newsSrc)) fs.copyFileSync(path.join(newsSrc, f), path.join(DATA_DIR, 'news', f));
     }
     if (full) {
+      // covers and avatars: the archive's set replaces the current one (ids belong to the restored database)
+      for (const [dir, re] of [
+        ['covers', /^\d{1,9}(@s)?\.jpg$/],
+        ['avatars', /^\d{1,9}\.png$/],
+      ] as const) {
+        const src = path.join(pendingDir, dir);
+        if (!fs.existsSync(src)) continue;
+        fs.mkdirSync(path.join(DATA_DIR, dir), { recursive: true });
+        for (const f of fs.readdirSync(path.join(DATA_DIR, dir))) if (re.test(f)) fs.rmSync(path.join(DATA_DIR, dir, f), { force: true });
+        for (const f of fs.readdirSync(src)) if (re.test(f)) fs.copyFileSync(path.join(src, f), path.join(DATA_DIR, dir, f));
+      }
       for (const f of fs.readdirSync(DATA_DIR)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.rmSync(path.join(DATA_DIR, f), { force: true });
       for (const f of fs.readdirSync(pendingDir)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.copyFileSync(path.join(pendingDir, f), path.join(DATA_DIR, f));
     }

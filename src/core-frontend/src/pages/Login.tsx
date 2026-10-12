@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, Spinner, useShake } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake } from '../ui';
 
 const NAME_KEY = 'coregsm_login_name';
 const readName = () => {
@@ -142,10 +142,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
       </label>
 
       <ErrorLine text={error} />
-      <button className="btn w-full" disabled={busy || locked}>
-        {busy && <Spinner />}
+      <Button className="w-full" magnetic loading={busy} disabled={locked}>
         {busy ? 'Проверяю…' : 'Войти'}
-      </button>
+      </Button>
 
       {access.discordLogin && (
         <>

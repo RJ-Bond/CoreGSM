@@ -2,28 +2,50 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
+import { coverBackground } from '../cover';
 import { ServersArt } from '../components/Illustrations';
-import { AnimatedNumber, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, usePoll } from '../ui';
+import { AnimatedNumber, Burst, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, useFlashOnChange, usePoll } from '../ui';
+import NotFound from '../components/NotFound';
 import ServerDetail from './ServerDetail';
 
 export default function ServersPage({ sub }: { sub: string }) {
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <ServerDetail id={id} />;
+  // "#/servers/abc": not a server
+  if (sub) return <NotFound kind="server" />;
   return <ServerList />;
 }
 
+/** a greeting for the signed-in user: «Доброе утро, Иван» */
+function greeting(name: string): string {
+  const h = new Date().getHours();
+  const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
+  const first = name.trim().split(/\s+/)[0] || name;
+  return `${hello}, ${first}`;
+}
+
 function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: string; onClick: () => void; className?: string }) {
+  // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
+  const [pops, setPops] = useState(0);
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
       className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${className}`}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`В избранное: ${name}`}
       aria-pressed={on}
     >
-      {on ? '★' : '☆'}
+      <span className="star-wrap">
+        <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
+        {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
+      </span>
     </button>
   );
+}
+
+/** a red ring over the tile, once, when its server went online -> offline while the page was open */
+function useWentOffline(s: { online: boolean; hasStatus: boolean }): boolean {
+  return useFlashOnChange(s.online || !s.hasStatus, (prev, next) => prev && !next);
 }
 
 type Filter = 'all' | 'online' | 'offline' | 'fav';
@@ -149,9 +171,13 @@ function ServerList() {
 
   return (
     <div className="space-y-5">
-      <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени" icon={<IconServers />}>
+      <PageHead
+        title="Серверы"
+        subtitle={me ? `${greeting(me.username)}. Серверы в реальном времени` : 'Состояние ваших игровых серверов в реальном времени'}
+        icon={<IconServers />}
+      >
         <LiveBadge at={updatedAt} />
-        {isAdmin && <a className="btn btn-soft" href="#/admin/servers">Управление серверами</a>}
+        {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
       {servers.length > 1 && (
@@ -183,7 +209,7 @@ function ServerList() {
       )}
 
       {servers.length > 0 && effFilter !== 'all' && (
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
           {filtered.map((s, i) => (
             <SmallTile key={s.id} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
           ))}
@@ -192,8 +218,8 @@ function ServerList() {
       )}
 
       {servers.length > 0 && effFilter === 'all' && (
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {hero && <HeroTile idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
+        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+          {hero && <HeroTile key={hero.id} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
 
           {stats.map((t, i) => (
             <div
@@ -227,17 +253,21 @@ function ServerList() {
 function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
+  const depth = useDepth<HTMLElement>();
+  const flash = useWentOffline(s);
   return (
     <article
-      className="tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
-      style={{ ...stagger(idx), background: `linear-gradient(140deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
+      className="depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
+      style={{ ...stagger(idx), background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
       onClick={onOpen}
+      {...depth}
     >
-      <span aria-hidden className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
-      <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
+      <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
+      <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
+      {flash && <span className="flash-ring" aria-hidden />}
 
       <div className="relative flex items-start gap-3">
-        <GameAvatar game={s.game} size={48} glass />
+        <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
             <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{s.name}</a>
@@ -257,7 +287,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
       {s.online ? (
         <>
           <div className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
-            <AnimatedNumber value={s.players} pulse className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" />
+            <AnimatedNumber value={s.players} pulse delta className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" />
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
             {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
           </div>
@@ -286,10 +316,12 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
 function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
+  const flash = useWentOffline(s);
   return (
-    <article className="tile tile-in tile-hover col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
-      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
-        <GameAvatar game={s.game} size={40} glass />
+    <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
+      {flash && <span className="flash-ring" aria-hidden />}
+      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true }) }}>
+        <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
@@ -306,7 +338,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
       {s.online ? (
         <>
           <div className="flex items-baseline gap-1.5 px-1.5">
-            <AnimatedNumber value={s.players} pulse className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" />
+            <AnimatedNumber value={s.players} pulse delta className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" />
             <span className="font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
