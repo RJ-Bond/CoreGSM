@@ -32,3 +32,7 @@ if ('serviceWorker' in navigator) {
 }
 
 if (/[?&]flashdebug=1/.test(location.search)) void import('./flashDebug').then((m) => m.installFlashDebug());
+{
+  const m = location.search.match(/[?&]flat=(\w+)/);
+  if (m) document.documentElement.setAttribute('data-flat', m[1]);
+}

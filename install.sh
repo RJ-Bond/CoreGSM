@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2b0967e31127"
+COREGSM_BUILD="05c11741210b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19609,6 +19609,14 @@ html[data-hidden] *, html[data-hidden] *::before, html[data-hidden] *::after { a
 @keyframes flash-ctl { 0% { box-shadow: 0 0 0 0 rgb(var(--brand) / 0.7); } 40% { box-shadow: 0 0 0 5px rgb(var(--brand) / 0.45); } 100% { box-shadow: 0 0 0 0 rgb(var(--brand) / 0); } }
 .flash-ctl { animation: flash-ctl 0.7s ease-out 2; border-radius: 16px; }
 @media (prefers-reduced-motion: reduce) { .flash-ctl { animation: none; box-shadow: 0 0 0 3px rgb(var(--brand) / 0.6); } }
+
+/* ---------- bisect switches for the black-square hunt: open the panel as /?flat=anim, /?flat=shadow, /?flat=filter or /?flat=all ---------- */
+html[data-flat='anim'] *, html[data-flat='anim'] *::before, html[data-flat='anim'] *::after,
+html[data-flat='all'] *, html[data-flat='all'] *::before, html[data-flat='all'] *::after { animation: none !important; transition: none !important; }
+html[data-flat='shadow'] *, html[data-flat='shadow'] *::before, html[data-flat='shadow'] *::after,
+html[data-flat='all'] *, html[data-flat='all'] *::before, html[data-flat='all'] *::after { box-shadow: none !important; text-shadow: none !important; }
+html[data-flat='filter'] *, html[data-flat='filter'] *::before, html[data-flat='filter'] *::after,
+html[data-flat='all'] *, html[data-flat='all'] *::before, html[data-flat='all'] *::after { filter: none !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; mask: none !important; -webkit-mask: none !important; clip-path: none !important; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -19646,6 +19654,10 @@ if ('serviceWorker' in navigator) {
 }
 
 if (/[?&]flashdebug=1/.test(location.search)) void import('./flashDebug').then((m) => m.installFlashDebug());
+{
+  const m = location.search.match(/[?&]flat=(\w+)/);
+  if (m) document.documentElement.setAttribute('data-flat', m[1]);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
