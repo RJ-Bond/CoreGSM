@@ -59,6 +59,8 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/auth\/password$/, label: 'Смена пароля' },
   { m: 'POST', re: /^\/api\/users\/(\d+)\/approve$/, label: 'Одобрена заявка на регистрацию', pre: userName },
   { m: 'POST', re: /^\/api\/sessions\/revoke-others$/, label: 'Завершены остальные сеансы' },
+  { m: 'PUT', re: /^\/api\/alerts$/, label: 'Изменены оповещения о недоступности серверов' },
+  { m: 'POST', re: /^\/api\/alerts\/test$/, label: 'Тестовое оповещение' },
 ];
 
 /** records every successful change made through the panel; must be installed before the routes */

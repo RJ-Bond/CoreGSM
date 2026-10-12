@@ -30,7 +30,14 @@ CREATE TABLE IF NOT EXISTS news (
 );
 `);
 
+try {
+  db.exec("ALTER TABLE news ADD COLUMN repeat TEXT NOT NULL DEFAULT 'none'");
+} catch {
+  /* column already exists */
+}
+
 interface NewsRow {
+  repeat: string;
   id: number;
   status: string;
   channel_id: string;
@@ -85,6 +92,8 @@ const bodySchema = z.object({
   payload: payloadSchema,
   action: z.enum(['draft', 'now', 'schedule']),
   scheduledAt: z.number().int().optional(),
+  // a scheduled item can repeat: after it is posted the next one is scheduled
+  repeat: z.enum(['none', 'daily', 'weekly', 'monthly']).optional(),
 });
 
 /** Drops empty strings, so "no title" is really absent. */
@@ -122,6 +131,18 @@ function check(p: NewsPayload): string | null {
 
 const titleOf = (p: NewsPayload) => p.embed?.title?.trim() || p.content.trim().slice(0, 70) || p.embed?.description?.trim().slice(0, 70) || 'Без названия';
 
+/** the next time a repeating item should go out, always in the future */
+function nextOccurrence(from: number, repeat: string, now: number): number {
+  const d = new Date(from);
+  let guard = 0;
+  do {
+    if (repeat === 'daily') d.setUTCDate(d.getUTCDate() + 1);
+    else if (repeat === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
+    else d.setUTCMonth(d.getUTCMonth() + 1);
+  } while (d.getTime() <= now && ++guard < 1000);
+  return d.getTime();
+}
+
 type ChannelInfo = (id: string) => { channelName: string | null; guildName: string | null; guildId: string | null };
 
 export function registerNews(deps: {
@@ -151,6 +172,7 @@ export function registerNews(deps: {
       messageUrl: r.message_id && ch.guildId ? `https://discord.com/channels/${ch.guildId}/${r.channel_id}/${r.message_id}` : null,
       payload,
       scheduledAt: r.scheduled_at,
+      repeat: r.repeat,
       sentAt: r.sent_at,
       error: r.error,
       createdAt: r.created_at,
@@ -234,8 +256,8 @@ export function registerNews(deps: {
       if (st.error) return res.status(400).json({ error: st.error });
       const now = Date.now();
       const info = db
-        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, now, now);
+        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now);
       res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
     }),
   );
@@ -260,11 +282,12 @@ export function registerNews(deps: {
       if (bad) return res.status(400).json({ error: bad });
       const st = statusFor(b.data.action, b.data.scheduledAt);
       if (st.error) return res.status(400).json({ error: st.error });
-      db.prepare('UPDATE news SET payload = ?, channel_id = ?, status = ?, scheduled_at = ?, error = NULL, updated_at = ? WHERE id = ?').run(
+      db.prepare('UPDATE news SET payload = ?, channel_id = ?, status = ?, scheduled_at = ?, repeat = ?, error = NULL, updated_at = ? WHERE id = ?').run(
         JSON.stringify(payload),
         b.data.channelId,
         st.status,
         st.at,
+        st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none',
         now,
         id,
       );
@@ -331,6 +354,12 @@ export function registerNews(deps: {
     if (b.data.status === 'deleted') {
       db.prepare('DELETE FROM news WHERE id = ?').run(id);
     } else if (b.data.status === 'sent') {
+      const prev = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
+      // the first successful post of a repeating item schedules the next one
+      if (prev && prev.repeat !== 'none' && !prev.sent_at && prev.scheduled_at) {
+        const next = nextOccurrence(prev.scheduled_at, prev.repeat, now);
+        db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('scheduled', ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now);
+      }
       db.prepare("UPDATE news SET status = 'sent', message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(
         b.data.messageId ?? null,
         now,

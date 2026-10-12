@@ -99,8 +99,9 @@ const embedLength = (d: Draft) =>
   d.title.length + d.description.length + d.authorName.length + d.footer.length + d.fields.reduce((n, f) => n + f.name.length + f.value.length, 0);
 
 // ---------- ready-made starting points ----------
-const TEMPLATES: { id: string; label: string; apply: Partial<Draft> }[] = [
+export const TEMPLATES: { id: string; label: string; apply: Partial<Draft> }[] = [
   { id: 'announce', label: '📢 Объявление', apply: { title: '📢 Важное объявление', description: 'Здесь текст объявления.\n\nМожно использовать **жирный**, *курсив* и списки:\n- первый пункт\n- второй пункт', color: 0x5865f2, mention: 'none', fields: [], footer: '', timestamp: true } },
+  { id: 'restart', label: '🔄 Перезапуск', apply: { title: '🔄 Перезапуск сервера', description: 'Сервер будет перезапущен **ВРЕМЯ** (МСК). Это займёт несколько минут. Сохраните прогресс заранее.', color: 0x3b82f6, mention: 'none', fields: [], footer: '', timestamp: true } },
   { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСервер будет недоступен около часа.', color: 0xf97316, mention: 'here', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
   { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
   { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
@@ -281,11 +282,12 @@ function ImageInput({ label, url, upload, onUrl, onUpload, allowUpload }: { labe
 }
 
 // ---------- the editor ----------
-export default function NewsEditor({ id }: { id: number | null }) {
+export default function NewsEditor({ id, template }: { id: number | null; template?: string }) {
   const [d, setD] = useState<Draft | null>(null);
   const [item, setItem] = useState<NewsItem | null>(null);
   const [makeDefault, setMakeDefault] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [repeat, setRepeat] = useState<'none' | 'daily' | 'weekly' | 'monthly'>('none');
   const [when, setWhen] = useState(() => toLocalInput(Date.now() + 3600_000));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -298,9 +300,11 @@ export default function NewsEditor({ id }: { id: number | null }) {
           setItem(n);
           setD(fromPayload(n.payload, n.channelId));
           if (n.scheduledAt) setWhen(toLocalInput(n.scheduledAt));
+          setRepeat(n.repeat ?? 'none');
         } else {
           const s = await api<NewsSettings>('/news/settings');
-          setD(blank(s.channelId ?? ''));
+          const tpl = TEMPLATES.find((x) => x.id === template);
+          setD({ ...blank(s.channelId ?? ''), ...(tpl?.apply ?? {}), channelId: s.channelId ?? '' });
         }
       } catch (e) {
         setError((e as Error).message);
@@ -330,6 +334,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
         payload: toPayload(d),
         action,
         scheduledAt: action === 'schedule' ? new Date(when).getTime() : undefined,
+        repeat: action === 'schedule' ? repeat : undefined,
       };
       if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
@@ -458,6 +463,13 @@ export default function NewsEditor({ id }: { id: number | null }) {
                   <div className="space-y-2 rounded-2xl bg-soft p-3">
                     <label htmlFor="news-when" className="label">Когда опубликовать</label>
                     <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
+                    <label htmlFor="news-repeat" className="label">Повторять</label>
+                    <select id="news-repeat" className="input" value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)}>
+                      <option value="none">Не повторять</option>
+                      <option value="daily">Каждый день</option>
+                      <option value="weekly">Каждую неделю</option>
+                      <option value="monthly">Каждый месяц</option>
+                    </select>
                     <div className="flex gap-2">
                       <button className="btn flex-1" disabled={busy || noChannel} onClick={() => save('schedule')}>Запланировать</button>
                       <button className="btn btn-soft" onClick={() => setScheduling(false)}>Отмена</button>

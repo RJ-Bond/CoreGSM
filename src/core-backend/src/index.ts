@@ -11,6 +11,7 @@ import { renderCard, renderGameIcon } from './card.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
+import { registerAlerts } from './alerts.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -1206,6 +1207,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 });
 
 registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
+registerAlerts({ app, admin, internal, channelInfo });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS });
 
 // ---------- errors ----------

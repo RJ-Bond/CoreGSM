@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { api, type Server, type ServerInput } from '../api';
 import { gameLabel } from '../games';
 import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, toast, usePoll } from '../ui';
+import AlertsPage, { IconBell } from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
@@ -35,6 +36,7 @@ export const ADMIN_SECTIONS: Section[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
   { id: 'discord', label: 'Discord', icon: IconDiscord },
   { id: 'news', label: 'Новости', icon: IconNews },
+  { id: 'alerts', label: 'Оповещения', icon: IconBell },
   { id: 'cards', label: 'Карточки', icon: IconCards },
   { id: 'users', label: 'Пользователи', icon: IconUsers },
   { id: 'journal', label: 'Журнал', icon: IconJournal },
@@ -69,6 +71,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'servers' && <ServersManage />}
         {current === 'discord' && <DiscordPage />}
         {current === 'news' && <NewsPage sub={tail} />}
+        {current === 'alerts' && <AlertsPage />}
         {current === 'cards' && <CardsPage />}
         {current === 'users' && <UsersTab />}
         {current === 'journal' && <JournalPage />}
