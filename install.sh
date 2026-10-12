@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="dfa77bcd803c"
+COREGSM_BUILD="c8062b81881b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2264,6 +2264,10 @@ const GAME_ACCENT: Record<string, number> = { vrising: 0x8b5cf6, icarus: 0xf5b01
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** games whose clients have a console with the "connect" command */
+/** Discord sizes an embed to its content, so embeds in one message get different widths; a line of invisible
+ *  characters (U+2800) pushes every embed to the same maximum width. Tune with EMBED_WIDTH_PAD. */
+const WIDTH_PAD = '⠀'.repeat(Number(process.env.EMBED_WIDTH_PAD) || 64);
+
 const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
 
 /** player names in rows of three: "Hustler · 69 · qlte" */
@@ -2304,7 +2308,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   if (!s.hasStatus) {
     return {
       title: cut(s.name, 256),
-      description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
+      description: `📍 ${addr}\n⏳ Жду первого ответа сервера…\n${WIDTH_PAD}`,
       color: GAME_ACCENT[s.game] ?? COLOR.unknown,
       thumbnail,
       footer,
@@ -2358,7 +2362,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   return {
     title: cut(s.name, 256),
-    description: lines.length ? lines.join('\n') : undefined,
+    description: [...lines, WIDTH_PAD].join('\n'),
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
     thumbnail,
     fields,
