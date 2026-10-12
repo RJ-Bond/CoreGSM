@@ -10,7 +10,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
 patchGatewayAgent(() => gatewayAgent);
-const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, MessageFlags, PermissionFlagsBits } = await import('discord.js');
+const { AttachmentBuilder, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
 
 interface Binding {
@@ -25,7 +25,6 @@ interface Binding {
 }
 
 /** Binding as the buttons need it: also available while paused. */
-type FullBinding = Binding & { enabled: boolean };
 
 interface BotConfig {
   discordToken: string;
@@ -210,9 +209,6 @@ async function applyConfig(): Promise<void> {
     ...(proxy ? { rest: { agent: proxy.rest } } : {}),
   });
   c.on('error', (e) => log('client error', e));
-  c.on('interactionCreate', (i) => {
-    if (i.isButton() && i.customId.startsWith('gsm:')) onButton(i).catch((e) => log('button failed:', (e as Error).message));
-  });
   client = c;
   setState('connecting');
   try {
@@ -230,23 +226,7 @@ async function applyConfig(): Promise<void> {
   }
 }
 
-type MessageButtons = InstanceType<typeof ActionRowBuilder<InstanceType<typeof ButtonBuilder>>>;
-
-/** the action row under the server message */
-function controls(bindingId: number, paused: boolean): MessageButtons {
-  const row = new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>();
-  if (paused) {
-    row.addComponents(new ButtonBuilder().setCustomId(`gsm:resume:${bindingId}`).setLabel('Возобновить').setEmoji('▶️').setStyle(ButtonStyle.Success));
-  } else {
-    row.addComponents(
-      new ButtonBuilder().setCustomId(`gsm:refresh:${bindingId}`).setLabel('Обновить').setEmoji('🔄').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`gsm:pause:${bindingId}`).setLabel('Пауза').setEmoji('⏸️').setStyle(ButtonStyle.Secondary),
-    );
-  }
-  return row;
-}
-
-/** Builds what a binding's message looks like (embed, card attachment, buttons). Shared by the periodic update and the buttons. */
+/** Builds what a binding's message looks like (embed and card attachment). */
 async function buildPayload(b: Binding) {
   const style = b.style ?? 'embed';
 
@@ -267,7 +247,7 @@ async function buildPayload(b: Binding) {
     files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name: 'card.png' }));
     embed.setImage('attachment://card.png');
   }
-  return { embeds: [embed], files, components: [controls(b.id, false)] };
+  return { embeds: [embed], files, components: [] };
 }
 
 async function update(c: DiscordClient, b: Binding): Promise<void> {
@@ -290,75 +270,6 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
   }
   const sent = await channel.send(payload());
   await report(b.id, { messageId: sent.id, error: null });
-}
-
-// ---------- buttons on the server message ----------
-const lastRefresh = new Map<number, number>();
-const REFRESH_COOLDOWN_MS = 10_000;
-
-async function onButton(i: import('discord.js').ButtonInteraction): Promise<void> {
-  const m = /^gsm:(refresh|pause|resume):(\d+)$/.exec(i.customId);
-  if (!m) return;
-  const action = m[1] as 'refresh' | 'pause' | 'resume';
-  const id = Number(m[2]);
-  const deny = (content: string) => i.reply({ content, flags: MessageFlags.Ephemeral });
-
-  // only people who manage the Discord server may press them
-  const perms = i.memberPermissions;
-  if (!perms || !(perms.has(PermissionFlagsBits.ManageGuild) || perms.has(PermissionFlagsBits.Administrator))) {
-    await deny('Недостаточно прав');
-    return;
-  }
-  if (action === 'refresh') {
-    const last = lastRefresh.get(id) ?? 0;
-    if (Date.now() - last < REFRESH_COOLDOWN_MS) {
-      await deny('Подождите несколько секунд');
-      return;
-    }
-    lastRefresh.set(id, Date.now());
-  }
-
-  const get = await backend(`/internal/bindings/${id}`);
-  if (!get.ok) {
-    await deny('Привязка не найдена: возможно, она удалена в панели');
-    return;
-  }
-  const b = (await get.json()) as FullBinding;
-  if (b.messageId && b.messageId !== i.message.id) {
-    await deny('Эта кнопка устарела: сообщение заменено новым');
-    return;
-  }
-
-  // the backend work may take longer than the 3 s Discord allows for an answer
-  await i.deferUpdate();
-  try {
-    if (action === 'pause') {
-      const r = await backend(`/internal/bindings/${id}/pause`, { method: 'POST' });
-      if (!r.ok) throw new Error(`pause HTTP ${r.status}`);
-      // keep the message as it is and mark it as paused
-      const prev = i.message.embeds[0];
-      const embed = prev ? EmbedBuilder.from(prev) : new EmbedBuilder().setColor(0x5a4bd1);
-      embed.setDescription(['⏸️ Обновление приостановлено', prev?.description].filter(Boolean).join('\n'));
-      await i.editReply({ embeds: [embed], components: [controls(id, true)] });
-      log(`binding ${id}: paused from Discord by ${i.user.tag}`);
-      return;
-    }
-    if (action === 'resume') {
-      const r = await backend(`/internal/bindings/${id}/resume`, { method: 'POST' });
-      if (!r.ok) throw new Error(`resume HTTP ${r.status}`);
-      lastRun.delete(id);
-    } else {
-      const r = await backend(`/internal/servers/${b.serverId}/refresh`, { method: 'POST', signal: AbortSignal.timeout(45_000) });
-      if (!r.ok) throw new Error(`refresh HTTP ${r.status}`);
-    }
-    const built = await buildPayload(b);
-    await i.editReply({ ...built, attachments: [] });
-    lastRun.set(id, Date.now());
-    log(`binding ${id}: ${action} from Discord by ${i.user.tag}`);
-  } catch (e) {
-    log(`binding ${id}: button ${action} failed:`, (e as Error).message);
-    await i.followUp({ content: `Не удалось выполнить: ${humanDiscordError(e)}`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-  }
 }
 
 // ---------- news: messages written in the panel ----------
