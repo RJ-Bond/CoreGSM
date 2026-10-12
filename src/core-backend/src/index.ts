@@ -669,8 +669,10 @@ app.get('/api/manifest.json', (_req, res) => {
     background_color: '#f4f5f7',
     theme_color: b.color,
     icons: [
-      { src: icon, sizes: '192x192', purpose: 'any' },
-      { src: icon, sizes: '512x512', purpose: 'any' },
+      { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: b.hasLogo ? icon : '/logo-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      // the maskable icon has a full-bleed background and a safe zone (Android adaptive icons)
+      { src: '/logo-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   });
 });

@@ -21,6 +21,7 @@ export const GAME_LABELS: Record<string, string> = {
   factorio: 'Factorio',
   unturned: 'Unturned',
   vrising: 'V Rising',
+  icarus: 'Icarus',
   projectzomboid: 'Project Zomboid',
   gta5f: 'FiveM (GTA V)',
   gtasam: 'SA-MP',

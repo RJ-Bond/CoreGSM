@@ -1,6 +1,7 @@
 // Pictograms for the games (24x24 grid, drawn with a 2px round stroke). The same data is used by the PNG card
 // in the backend (core-backend/src/gameIcons.ts): keep both files in sync.
 export const ICON_PATHS: Record<string, string> = {
+  planet: 'M6 12a6 6 0 1 0 12 0a6 6 0 1 0 -12 0 M3 15c4 3 16-3 18-6',
   cube: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.5l8-4.5 M12 12v9',
   crosshair: 'M4 12a8 8 0 1 0 16 0a8 8 0 1 0 -16 0 M12 2v4 M12 18v4 M2 12h4 M18 12h4 M12 12h.01',
   axe: 'M14.5 4l5.5 5.5-3 3-5.5-5.5z M11.5 8.5L4 20 M9 13l2 2',
@@ -25,7 +26,7 @@ export const GAME_ICON: Record<string, keyof typeof ICON_PATHS> = {
   rust: 'axe', valheim: 'shield', garrysmod: 'wrench', l4d2: 'warning', dayz: 'warning',
   terraria: 'sword', conanexiles: 'sword', sdtd: 'calendar', ase: 'leaf', asa: 'leaf',
   palworld: 'paw', factorio: 'gear', vrising: 'drop', projectzomboid: 'skull',
-  gta5f: 'car', gtasam: 'car', teamspeak3: 'headset',
+  gta5f: 'car', gtasam: 'car', teamspeak3: 'headset', icarus: 'planet',
 };
 
 export const gameIconPath = (game: string): string | null => {

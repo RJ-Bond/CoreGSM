@@ -108,10 +108,19 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   const ping = s.online && s.ping != null ? ` · ${s.ping} мс` : '';
   const pct = s.maxPlayers ? ` (${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%)` : '';
 
+  // third column: the country; without one, the game version when it says something, else the 24 h uptime
+  const ver = (s.version ?? '').trim();
+  const realVersion = ver && !/^0(\.0)*(\.\d+)?$/.test(ver) ? ver : null;
+  const third: { name: string; value: string; inline: boolean } = extra.country
+    ? { name: '🌍 Страна', value: extra.country, inline: true }
+    : realVersion
+      ? { name: '🔖 Версия', value: cut(realVersion, 100), inline: true }
+      : { name: '⏱️ Аптайм 24 ч', value: uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`, inline: true };
+
   const fields: NonNullable<DiscordEmbed['fields']> = [
     { name: '📶 Статус', value: `${status}${ping}`, inline: true },
     { name: '📍 Адрес:порт', value: addr, inline: true },
-    { name: extra.country ? '🌍 Страна' : '🔖 Версия', value: extra.country || s.version || '—', inline: true },
+    third,
     { name: '🎮 Игра', value: cut(gameLabel(s.game), 100), inline: true },
     { name: '🗺️ Текущая карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
     { name: '👥 Игроки', value: s.online ? `**${s.players}**/${s.maxPlayers || '?'}${pct}` : '—', inline: true },

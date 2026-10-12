@@ -39,7 +39,7 @@ const GAME_COLORS: Record<string, [string, string]> = {
   garrysmod: ['GM', '#3a8fd9'], teamfortress2: ['TF', '#c9533a'], l4d2: ['L4', '#b83a3a'], terraria: ['TR', '#46b86a'],
   sdtd: ['7D', '#b5483a'], dayz: ['DZ', '#6f8f4a'], ase: ['AK', '#3aa6a0'], asa: ['AS', '#2f9ea8'],
   conanexiles: ['CE', '#a8743a'], palworld: ['PW', '#2fc4bf'], factorio: ['FC', '#d98a3a'], unturned: ['UT', '#4aa86a'],
-  vrising: ['VR', '#a83a5a'], projectzomboid: ['PZ', '#7a8a4a'], gta5f: ['5M', '#f26a3d'], gtasam: ['SA', '#8a6ad9'],
+  vrising: ['VR', '#a83a5a'], icarus: ['IC', '#e0692b'], projectzomboid: ['PZ', '#7a8a4a'], gta5f: ['5M', '#f26a3d'], gtasam: ['SA', '#8a6ad9'],
   teamspeak3: ['TS', '#3a7ad9'],
 };
 
@@ -284,27 +284,26 @@ const iconCache = new Map<string, Buffer>();
 export async function renderGameIcon(game: string): Promise<Buffer> {
   const hit = iconCache.get(game);
   if (hit) return hit;
+  // transparent PNG without a background tile: the game artwork itself, or its pictogram in the game colour
   const color = GAME_COLORS[game]?.[1] ?? C.brand;
   const canvas = new Canvas(256, 256);
   const ctx = canvas.getContext('2d') as any;
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.roundRect(0, 0, 256, 256, 64);
-  ctx.fill();
   const p = gameIconPath(game);
   const art = await gameImage(game);
   if (art) {
-    ctx.drawImage(art, 28, 28, 200, 200);
+    const k = Math.min(240 / art.width, 240 / art.height);
+    const w = art.width * k, h = art.height * k;
+    ctx.drawImage(art, (256 - w) / 2, (256 - h) / 2, w, h);
   } else if (p) {
-    ctx.translate(128 - 12 * 7, 128 - 12 * 7);
-    ctx.scale(7, 7);
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
+    ctx.translate(128 - 12 * 9, 128 - 12 * 9);
+    ctx.scale(9, 9);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.9;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke(new Path2D(p));
   } else {
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = color;
     ctx.font = `700 96px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
