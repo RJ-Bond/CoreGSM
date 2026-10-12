@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api } from '../api';
-import { Markdown } from '../components/Markdown';
-import { ago, usePoll } from '../ui';
+import { DiscordMd, EnvCtx, THEMES, ThemeCtx, type DTheme, type MdEnv } from '../components/news/DiscordMd';
+import { usePoll } from '../ui';
 
 export interface DiscordEmbed {
   title?: string;
@@ -11,82 +11,199 @@ export interface DiscordEmbed {
   author?: { name: string; icon_url?: string };
   thumbnail?: { url: string };
   image?: { url: string };
-  fields?: { name: string; value: string; inline?: boolean }[];
+  /** `idx` is the position in the editor's list (to find the form control on click) */
+  fields?: { name: string; value: string; inline?: boolean; idx?: number }[];
   footer?: { text: string; icon_url?: string };
   timestamp?: string;
 }
 
-// Discord's own palette: the preview should look like the real message in either panel theme
-const D = { bg: '#2b2d31', outer: '#313338', text: '#dbdee1', title: '#ffffff', muted: '#949ba4' };
+/** a clickable part of the preview */
+export interface PreviewPart {
+  embed: number;
+  part: 'content' | 'title' | 'description' | 'author' | 'thumbnail' | 'image' | 'footer' | 'field';
+  field?: number;
+}
 
-/** A Discord message as the bot would post it: optional text above and an embed below. */
 /** only http(s) links and images are rendered: `javascript:` and `data:` urls are dropped */
 const safeUrl = (u?: string | null): string | undefined => (u && /^https?:\/\//i.test(u.trim()) ? u.trim() : undefined);
 
-export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; content?: string }) {
-  const authorIcon = safeUrl(embed?.author?.icon_url);
-  const embedUrl = safeUrl(embed?.url);
-  const thumb = safeUrl(embed?.thumbnail?.url);
-  const image = safeUrl(embed?.image?.url);
-  const footerIcon = safeUrl(embed?.footer?.icon_url);
-  const color = `#${(embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
-  const inlineFields = embed?.fields?.filter((f) => f.inline) ?? [];
-  const wideFields = embed?.fields?.filter((f) => !f.inline) ?? [];
+const PART_LABEL: Record<PreviewPart['part'], string> = {
+  content: 'текст сообщения', title: 'заголовок', description: 'основной текст', author: 'автора', thumbnail: 'миниатюру', image: 'картинку', footer: 'подпись', field: 'поле',
+};
+
+function Part({ part, embed, field, onPick, bad, className, style, children }: {
+  part: PreviewPart['part']; embed: number; field?: number; onPick?: (p: PreviewPart) => void; bad?: boolean; className?: string; style?: CSSProperties; children: ReactNode;
+}) {
+  const cls = `${className ?? ''} ${bad ? 'pv-bad' : ''} ${onPick ? 'pv-part' : ''}`.trim();
+  if (!onPick) return <div className={cls} style={style} title={bad ? 'Превышен лимит Discord' : undefined}>{children}</div>;
+  const pick = () => onPick({ embed, part, field });
   return (
-    <div style={{ background: D.outer, color: D.text }} className="rounded-2xl p-3">
-      <div className="mb-1.5 flex items-center gap-2 text-sm">
-        <span className="grid h-8 w-8 place-items-center rounded-full bg-[#5865f2] font-black text-white">C</span>
-        <span className="font-bold" style={{ color: D.title }}>CoreGSM</span>
-        <span className="rounded px-1 text-[11px] font-bold text-white" style={{ background: '#5865f2' }}>БОТ</span>
-      </div>
-      {content && <div className="mb-2 text-sm"><Markdown text={content} /></div>}
-      {embed && (
-        <div className="max-w-full rounded-md py-2.5 pl-3.5 pr-3.5" style={{ background: D.bg, borderLeft: `4px solid ${color}` }}>
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
-              {embed.author && (
-                <div className="mb-1 flex items-center gap-2 text-[13px] font-bold" style={{ color: D.title }}>
-                  {authorIcon && <img src={authorIcon} alt="" className="h-6 w-6 rounded-full object-cover" />}
-                  {embed.author.name}
-                </div>
-              )}
-              {embed.title && (
-                <div className="mb-1 break-words text-base font-bold" style={{ color: embedUrl ? '#00a8fc' : D.title }}>
-                  {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{embed.title}</a> : embed.title}
-                </div>
-              )}
-              {embed.description && <div className="mb-2 text-sm"><Markdown text={embed.description} /></div>}
-            </div>
-            {thumb && <img src={thumb} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />}
-          </div>
-          {inlineFields.length > 0 && (
-            <div className="mb-2 grid grid-cols-3 gap-x-3 gap-y-2">
-              {inlineFields.map((f, i) => (
-                <div key={`${f.name}-${i}`} className="min-w-0 text-sm">
-                  <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
-                  <Markdown text={f.value} />
-                </div>
-              ))}
-            </div>
+    <div
+      className={cls}
+      style={style}
+      role="button"
+      tabIndex={0}
+      title={bad ? `Превышен лимит Discord. Перейти к полю: ${PART_LABEL[part]}` : `Перейти к полю: ${PART_LABEL[part]}`}
+      aria-label={`Перейти к полю: ${PART_LABEL[part]}`}
+      onClick={(e: MouseEvent) => { if ((e.target as HTMLElement).closest('a,[data-spoiler]')) return; pick(); }}
+      onKeyDown={(e: KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); pick(); } }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Discord groups neighbouring inline fields in rows of up to three */
+function fieldRows(fields: NonNullable<DiscordEmbed['fields']>) {
+  const rows: NonNullable<DiscordEmbed['fields']>[] = [];
+  let cur: NonNullable<DiscordEmbed['fields']> = [];
+  for (const f of fields) {
+    if (f.inline) {
+      cur.push(f);
+      if (cur.length === 3) { rows.push(cur); cur = []; }
+    } else {
+      if (cur.length) { rows.push(cur); cur = []; }
+      rows.push([f]);
+    }
+  }
+  if (cur.length) rows.push(cur);
+  return rows;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+function stamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const t = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const now = new Date();
+  return d.toDateString() === now.toDateString() ? `Сегодня, в ${t}` : `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()} ${t}`;
+}
+
+function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed; index: number; theme: DTheme; onPick?: (p: PreviewPart) => void; invalid?: Set<string>; fill?: boolean }) {
+  const authorIcon = safeUrl(e.author?.icon_url);
+  const embedUrl = safeUrl(e.url);
+  const thumb = safeUrl(e.thumbnail?.url);
+  const image = safeUrl(e.image?.url);
+  const footerIcon = safeUrl(e.footer?.icon_url);
+  const color = `#${(e.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
+  const rows = fieldRows(e.fields ?? []);
+  const ts = e.timestamp ? stamp(e.timestamp) : '';
+  const bad = (k: string) => !!invalid?.has(`${index}:${k}`);
+  return (
+    <div
+      className="mt-1 rounded-md py-2 pl-3 pr-4"
+      style={{ background: theme.embed, borderLeft: `4px solid ${color}`, border: `1px solid ${theme.embedBorder}`, borderLeftWidth: 4, borderLeftColor: color, maxWidth: fill ? '100%' : 520, width: 'fit-content', minWidth: 'min(100%, 280px)' }}
+    >
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          {e.author && (
+            <Part part="author" embed={index} onPick={onPick} bad={bad('author')} className="mb-1 flex items-center gap-2 text-[13px] font-bold">
+              <span className="flex items-center gap-2" style={{ color: theme.title }}>
+                {authorIcon && <img src={authorIcon} alt="" className="h-6 w-6 rounded-full object-cover" />}
+                {e.author.name}
+              </span>
+            </Part>
           )}
-          {wideFields.map((f, i) => (
-            <div key={`${f.name}-${i}`} className="mb-2 text-sm">
-              <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
-              <Markdown text={f.value} />
-            </div>
-          ))}
-          {image && <img src={image} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
-          {(embed.footer || embed.timestamp) && (
-            <div className="mt-2 flex items-center gap-1.5 text-xs" style={{ color: D.muted }}>
-              {footerIcon && <img src={footerIcon} alt="" className="h-5 w-5 rounded-full" />}
-              <span>{embed.footer?.text}
-              {embed.footer && embed.timestamp ? ' • ' : ''}
-              {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}</span>
-            </div>
+          {e.title && (
+            <Part part="title" embed={index} onPick={onPick} bad={bad('title')} className="mb-1 break-words text-base font-bold">
+              {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: theme.link }}>{e.title}</a> : <span style={{ color: theme.title }}>{e.title}</span>}
+            </Part>
+          )}
+          {e.description && (
+            <Part part="description" embed={index} onPick={onPick} bad={bad('description')} className="mb-2 text-sm">
+              <DiscordMd text={e.description} />
+            </Part>
           )}
         </div>
+        {thumb && (
+          <Part part="thumbnail" embed={index} onPick={onPick} className="shrink-0">
+            <img src={thumb} alt="" className="h-20 w-20 rounded-md object-cover" />
+          </Part>
+        )}
+      </div>
+      {rows.map((row, ri) => (
+        <div key={ri} className="mb-2 grid gap-x-3 gap-y-2" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
+          {row.map((f, i) => (
+            <Part key={`${f.idx ?? ri}-${i}`} part="field" embed={index} field={f.idx} onPick={onPick} bad={f.idx != null && bad(`field:${f.idx}`)} className="min-w-0 text-sm">
+              <div className="text-[13px] font-bold" style={{ color: theme.title }}>{f.name}</div>
+              <DiscordMd text={f.value} />
+            </Part>
+          ))}
+        </div>
+      ))}
+      {image && (
+        <Part part="image" embed={index} onPick={onPick} className="mt-1">
+          <img src={image} alt="" className="max-h-[300px] w-full rounded-md object-cover" />
+        </Part>
+      )}
+      {(e.footer || ts) && (
+        <Part part="footer" embed={index} onPick={onPick} bad={bad('footer')} className="mt-2 text-xs">
+          <span className="flex items-center gap-1.5" style={{ color: theme.muted }}>
+            {footerIcon && <img src={footerIcon} alt="" className="h-5 w-5 rounded-full" />}
+            <span>
+              {e.footer?.text}
+              {e.footer?.text && ts ? ' • ' : ''}
+              {ts}
+            </span>
+          </span>
+        </Part>
       )}
     </div>
+  );
+}
+
+/**
+ * A Discord message as the bot would post it: optional text above and up to ten embeds below.
+ * `theme` / `width` switch the Discord skin and the phone layout; `onPick` makes the parts clickable;
+ * `invalid` holds keys of parts that exceed Discord limits (`<embed>:title`, `<embed>:field:<i>`, `content`).
+ */
+export function EmbedView({
+  embed, embeds, content, theme = 'dark', width = 'desktop', onPick, invalid, env, botName = 'CoreGSM', children,
+}: {
+  embed?: DiscordEmbed | null;
+  embeds?: DiscordEmbed[];
+  content?: string;
+  theme?: 'dark' | 'light';
+  width?: 'desktop' | 'phone';
+  onPick?: (p: PreviewPart) => void;
+  invalid?: Set<string>;
+  env?: MdEnv;
+  botName?: string;
+  children?: ReactNode;
+}) {
+  const t = THEMES[theme];
+  const list = embeds ?? (embed ? [embed] : []);
+  const phone = width === 'phone';
+  const now = new Date();
+  return (
+    <ThemeCtx.Provider value={t}>
+      <EnvCtx.Provider value={env ?? {}}>
+        <div className={phone ? 'mx-auto w-full max-w-[380px]' : 'w-full'}>
+          <div
+            style={{ background: t.outer, color: t.text, ...(phone ? { border: '6px solid #1e1f22', borderRadius: 28 } : {}) }}
+            className={`${phone ? '' : 'rounded-2xl'} p-3 ${phone ? 'text-[14px]' : 'text-[15px]'}`}
+          >
+            <div className="flex items-start gap-3">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full font-black text-white" style={{ background: '#5865f2' }} aria-hidden>{botName.slice(0, 1).toUpperCase()}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 text-[15px] leading-tight">
+                  <span className="font-bold" style={{ color: t.title }}>{botName}</span>
+                  <span className="rounded px-1 text-[10px] font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
+                  <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
+                </div>
+                {content && (
+                  <Part part="content" embed={0} onPick={onPick} bad={invalid?.has('content')} className="mt-0.5">
+                    <DiscordMd text={content} />
+                  </Part>
+                )}
+                {list.map((e, i) => <EmbedCard key={i} e={e} index={i} theme={t} onPick={onPick} invalid={invalid} fill={phone} />)}
+                {children}
+              </div>
+            </div>
+          </div>
+        </div>
+      </EnvCtx.Provider>
+    </ThemeCtx.Provider>
   );
 }
 

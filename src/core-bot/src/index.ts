@@ -308,21 +308,24 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
 }
 
 // ---------- news: messages written in the panel ----------
+interface NewsEmbed {
+  title?: string;
+  url?: string;
+  description?: string;
+  color?: number;
+  author?: { name: string; iconUrl?: string };
+  thumbnailUrl?: string;
+  image?: { url?: string; upload?: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string };
+  timestamp?: boolean;
+}
 interface NewsPayload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
-  embed?: {
-    title?: string;
-    url?: string;
-    description?: string;
-    color?: number;
-    author?: { name: string; iconUrl?: string };
-    thumbnailUrl?: string;
-    image?: { url?: string; upload?: string };
-    fields?: { name: string; value: string; inline?: boolean }[];
-    footer?: { text: string };
-    timestamp?: boolean;
-  };
+  embed?: NewsEmbed;
+  /** more embeds in the same message (variables are already substituted by the panel) */
+  extraEmbeds?: NewsEmbed[];
 }
 interface NewsItem {
   id: number;
@@ -330,15 +333,18 @@ interface NewsItem {
   channelId: string;
   messageId: string | null;
   payload: NewsPayload;
+  /** ready Discord embeds (server status cards) appended after the written ones */
+  statusEmbeds?: Record<string, unknown>[];
+  test?: boolean;
 }
 
-async function buildNews(p: NewsPayload) {
+async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[] = []) {
   const files: InstanceType<typeof AttachmentBuilder>[] = [];
   const mention = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
   const content = [mention, p.content?.trim()].filter(Boolean).join('\n');
   const embeds: InstanceType<typeof EmbedBuilder>[] = [];
-  const e = p.embed;
-  if (e) {
+  const attached = new Set<string>();
+  for (const e of [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])].slice(0, 10)) {
     const eb = new EmbedBuilder().setColor(e.color ?? 0x5865f2);
     if (e.title) eb.setTitle(e.title);
     if (e.url) eb.setURL(e.url);
@@ -346,10 +352,13 @@ async function buildNews(p: NewsPayload) {
     if (e.author?.name) eb.setAuthor({ name: e.author.name, ...(e.author.iconUrl ? { iconURL: e.author.iconUrl } : {}) });
     if (e.thumbnailUrl) eb.setThumbnail(e.thumbnailUrl);
     if (e.image?.upload) {
-      // a picture uploaded in the panel travels as an attachment
-      const r = await backend(`/api/news/images/${e.image.upload}`);
-      if (!r.ok) throw new Error('Не удалось получить загруженную картинку (она могла быть удалена)');
-      files.push(new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: e.image.upload }));
+      // a picture uploaded in the panel travels as an attachment (once, even when several embeds use it)
+      if (!attached.has(e.image.upload)) {
+        const r = await backend(`/api/news/images/${e.image.upload}`);
+        if (!r.ok) throw new Error('Не удалось получить загруженную картинку (она могла быть удалена)');
+        files.push(new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: e.image.upload }));
+        attached.add(e.image.upload);
+      }
       eb.setImage(`attachment://${e.image.upload}`);
     } else if (e.image?.url) {
       eb.setImage(e.image.url);
@@ -358,6 +367,10 @@ async function buildNews(p: NewsPayload) {
     if (e.footer?.text) eb.setFooter({ text: e.footer.text });
     if (e.timestamp) eb.setTimestamp();
     embeds.push(eb);
+  }
+  for (const raw of statusEmbeds) {
+    if (embeds.length >= 10) break;
+    embeds.push(new EmbedBuilder(raw as ConstructorParameters<typeof EmbedBuilder>[0]));
   }
   return {
     content: content || undefined,
@@ -397,7 +410,7 @@ async function processNews(): Promise<void> {
         continue;
       }
 
-      const msg = await buildNews(it.payload);
+      const msg = await buildNews(it.payload, it.statusEmbeds ?? []);
       if (it.action === 'edit' && it.messageId) {
         const m = await channel.messages.fetch(it.messageId);
         await m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, attachments: [], allowedMentions: msg.allowedMentions });

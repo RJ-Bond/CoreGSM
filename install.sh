@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c8062b81881b"
+COREGSM_BUILD="8707ca0cbd93"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4269,7 +4269,26 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   res.json({ ok: true });
 });
 
-registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
+registerNews({
+  app,
+  staff,
+  viewer,
+  internal,
+  channelInfo,
+  isStaff,
+  servers: () =>
+    (db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[]).map(serialize).map((s) => ({
+      id: s.id,
+      name: s.name,
+      players: s.players,
+      maxPlayers: s.maxPlayers,
+      online: s.online,
+      address: s.address,
+      map: s.map,
+      ping: s.ping,
+    })),
+  statusEmbed: (id) => embedFor(id, 60),
+});
 registerAlerts({ app, admin, internal, channelInfo });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin });
@@ -4336,10 +4355,36 @@ try {
 } catch {
   /* column already exists */
 }
+try {
+  // 1 = a test send (never shown in lists, cleaned up after an hour)
+  db.exec('ALTER TABLE news ADD COLUMN test INTEGER NOT NULL DEFAULT 0');
+} catch {
+  /* column already exists */
+}
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  news_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_news_versions_news ON news_versions (news_id, id);
+CREATE TABLE IF NOT EXISTS news_autosave (
+  user_key TEXT NOT NULL,
+  key TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_key, key)
+);
+`);
 
 interface NewsRow {
   repeat: string;
   id: number;
+  test?: number;
   status: string;
   channel_id: string;
   payload: string;
@@ -4384,8 +4429,13 @@ const payloadSchema = z.object({
   content: z.string().max(2000, 'Сообщение над embed: не более 2000 символов').default(''),
   mention: z.enum(['none', 'here', 'everyone']).default('none'),
   embed: embedSchema.optional(),
+  // more embeds in the same message (Discord: 10 embeds in total)
+  extraEmbeds: z.array(embedSchema).max(9, 'Дополнительных embed не больше 9').optional(),
+  // live status cards of these servers are appended to the message at send time
+  statusServerIds: z.array(z.number().int().positive()).max(5, 'Статусов серверов не больше 5').optional(),
 });
 
+type EmbedIn = z.infer<typeof embedSchema>;
 export type NewsPayload = z.infer<typeof payloadSchema>;
 
 const bodySchema = z.object({
@@ -4398,22 +4448,41 @@ const bodySchema = z.object({
 });
 
 /** Drops empty strings, so "no title" is really absent. */
-function tidy(p: NewsPayload): NewsPayload {
-  const e = p.embed;
-  if (!e) return { ...p, embed: undefined };
+function tidyEmbed(e: EmbedIn | undefined): EmbedIn | undefined {
+  if (!e) return undefined;
   const out = { ...e };
   for (const k of ['title', 'url', 'description', 'thumbnailUrl'] as const) if (!out[k]?.trim()) delete out[k];
   if (out.author && !out.author.name.trim()) delete out.author;
-  else if (out.author && !out.author.iconUrl) delete out.author.iconUrl;
+  else if (out.author && !out.author.iconUrl) out.author = { name: out.author.name };
   if (out.footer && !out.footer.text.trim()) delete out.footer;
   if (out.image && !out.image.url && !out.image.upload) delete out.image;
-  else if (out.image && !out.image.url) delete out.image.url;
+  else if (out.image && !out.image.url) out.image = { upload: out.image.upload };
   if (!out.fields?.length) delete out.fields;
   const hasEmbed = Object.keys(out).some((k) => k !== 'color' && k !== 'timestamp') || (out.timestamp && Object.keys(out).length > 1);
-  return { ...p, embed: hasEmbed ? out : undefined };
+  return hasEmbed ? out : undefined;
 }
 
-function embedLength(e: NonNullable<NewsPayload['embed']>): number {
+function tidy(p: NewsPayload): NewsPayload {
+  const extra = (p.extraEmbeds ?? []).map(tidyEmbed).filter((e): e is EmbedIn => !!e);
+  const ids = [...new Set(p.statusServerIds ?? [])];
+  return {
+    ...p,
+    embed: tidyEmbed(p.embed),
+    extraEmbeds: extra.length ? extra : undefined,
+    statusServerIds: ids.length ? ids : undefined,
+  };
+}
+
+const allEmbeds = (p: NewsPayload): EmbedIn[] => [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])];
+
+interface PlainEmbed {
+  title?: string;
+  description?: string;
+  author?: { name: string };
+  footer?: { text: string };
+  fields?: { name: string; value: string }[];
+}
+function embedLength(e: PlainEmbed): number {
   return (
     (e.title?.length ?? 0) +
     (e.description?.length ?? 0) +
@@ -4425,8 +4494,11 @@ function embedLength(e: NonNullable<NewsPayload['embed']>): number {
 
 /** Returns an error message when the payload cannot be posted, otherwise null. */
 function check(p: NewsPayload): string | null {
-  if (!p.content.trim() && !p.embed) return 'Напишите текст или заполните embed: пустое сообщение отправить нельзя';
-  if (p.embed && embedLength(p.embed) > 6000) return 'Embed длиннее 6000 символов (лимит Discord): сократите текст';
+  const embeds = allEmbeds(p);
+  if (!p.content.trim() && !embeds.length && !p.statusServerIds?.length) return 'Напишите текст или заполните embed: пустое сообщение отправить нельзя';
+  if (embeds.length > 10) return 'В сообщении не больше 10 embed';
+  for (const e of embeds) if (embedLength(e) > 6000) return 'Embed длиннее 6000 символов (лимит Discord): сократите текст';
+  if (embeds.reduce((n, e) => n + embedLength(e), 0) > 6000) return 'Все embed вместе длиннее 6000 символов (лимит Discord): сократите текст';
   return null;
 }
 
@@ -4444,6 +4516,26 @@ function nextOccurrence(from: number, repeat: string, now: number): number {
   return d.getTime();
 }
 
+export interface NewsServerInfo {
+  id: number;
+  name: string;
+  players: number;
+  maxPlayers: number;
+  online: boolean;
+  address: string;
+  map: string | null;
+  ping: number | null;
+}
+export interface StatusEmbed {
+  title?: string;
+  description?: string;
+  author?: { name: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string; icon_url?: string };
+}
+
+const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
 type ChannelInfo = (id: string) => { channelName: string | null; guildName: string | null; guildId: string | null };
 
 export function registerNews(deps: {
@@ -4455,8 +4547,136 @@ export function registerNews(deps: {
   channelInfo: ChannelInfo;
   /** the signed-in user is an administrator or a moderator */
   isStaff: (req: Request) => boolean;
+  /** every server with its current status (for variables) */
+  servers: () => NewsServerInfo[];
+  /** the status card of a server (the one the bot posts), or null */
+  statusEmbed: (serverId: number) => StatusEmbed | null;
 }) {
-  const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin } = deps;
+  const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
+  const actorOf = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '—';
+  const userKeyOf = (req: Request) => {
+    const u = (req as Request & { user?: { id?: number; username?: string } }).user;
+    return String(u?.id ?? u?.username ?? 'anon');
+  };
+
+  // ---------- version history ----------
+  const insertVersion = db.prepare('INSERT INTO news_versions (news_id, ts, actor, payload, note) VALUES (?, ?, ?, ?, ?)');
+  function addVersion(newsId: number, payloadJson: string, actor: string, note: string) {
+    insertVersion.run(newsId, Date.now(), actor, payloadJson, note);
+    db.prepare(
+      'DELETE FROM news_versions WHERE news_id = ? AND id NOT IN (SELECT id FROM news_versions WHERE news_id = ? ORDER BY id DESC LIMIT 30)',
+    ).run(newsId, newsId);
+  }
+
+  // ---------- variables ----------
+  const TZ = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+  const SERVER_FIELDS: [string, string][] = [
+    ['name', 'название'],
+    ['players', 'игроков сейчас'],
+    ['max', 'максимум игроков'],
+    ['online', 'состояние (онлайн/офлайн)'],
+    ['address', 'адрес'],
+    ['map', 'текущая карта'],
+    ['ping', 'пинг, мс'],
+  ];
+  function variableList() {
+    const out: { token: string; description: string }[] = [
+      { token: '{players}', description: 'Всего игроков онлайн на всех серверах' },
+      { token: '{online}', description: 'Сколько серверов сейчас онлайн' },
+      { token: '{servers}', description: 'Сколько всего серверов' },
+      { token: '{date}', description: 'Текущая дата (по часовому поясу панели)' },
+      { token: '{time}', description: 'Текущее время (по часовому поясу панели)' },
+    ];
+    for (const s of servers()) for (const [f, d] of SERVER_FIELDS) out.push({ token: `{server.${s.id}.${f}}`, description: `${s.name}: ${d}` });
+    return out;
+  }
+  function makeResolver() {
+    const list = servers();
+    const byId = new Map(list.map((s) => [s.id, s]));
+    const tz = TZ();
+    const now = new Date();
+    const fmt = (o: Intl.DateTimeFormatOptions) => {
+      try {
+        return now.toLocaleString('ru-RU', { ...o, timeZone: tz });
+      } catch {
+        return now.toLocaleString('ru-RU', o);
+      }
+    };
+    const lookup = (key: string): string | null => {
+      switch (key) {
+        case 'players':
+          return String(list.filter((s) => s.online).reduce((n, s) => n + s.players, 0));
+        case 'online':
+          return String(list.filter((s) => s.online).length);
+        case 'servers':
+          return String(list.length);
+        case 'date':
+          return fmt({ day: '2-digit', month: '2-digit', year: 'numeric' });
+        case 'time':
+          return fmt({ hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+      const m = /^server\.(\d+)\.(name|players|max|online|address|map|ping)$/.exec(key);
+      if (!m) return null;
+      const s = byId.get(Number(m[1]));
+      if (!s) return null;
+      switch (m[2]) {
+        case 'name':
+          return s.name;
+        case 'players':
+          return String(s.online ? s.players : 0);
+        case 'max':
+          return String(s.maxPlayers);
+        case 'online':
+          return s.online ? 'онлайн' : 'офлайн';
+        case 'address':
+          return s.address;
+        case 'map':
+          return s.map || '—';
+        default:
+          return s.ping != null ? String(s.ping) : '—';
+      }
+    };
+    return (text: string) => text.replace(/\{([A-Za-z0-9_.]+)\}/g, (all, k: string) => lookup(k) ?? all);
+  }
+
+  /** the payload as it goes to Discord: variables substituted, status cards appended */
+  function resolvePayload(p: NewsPayload, test: boolean) {
+    const r = makeResolver();
+    const embed = (e: EmbedIn): EmbedIn => ({
+      ...e,
+      ...(e.title ? { title: cut(r(e.title), 256) } : {}),
+      ...(e.description ? { description: cut(r(e.description), 4096) } : {}),
+      ...(e.author ? { author: { ...e.author, name: cut(r(e.author.name), 256) } } : {}),
+      ...(e.footer ? { footer: { text: cut(r(e.footer.text), 2048) } } : {}),
+      ...(e.fields ? { fields: e.fields.map((f) => ({ ...f, name: cut(r(f.name), 256), value: cut(r(f.value), 1024) })) } : {}),
+    });
+    let content = cut(r(p.content ?? ''), 2000);
+    let mention = p.mention;
+    if (test) {
+      mention = 'none';
+      content = cut(`[ТЕСТ]${content.trim() ? ` ${content}` : ''}`, 2000);
+    }
+    const out: NewsPayload = { content, mention, ...(p.embed ? { embed: embed(p.embed) } : {}) };
+    if (p.extraEmbeds?.length) out.extraEmbeds = p.extraEmbeds.map(embed);
+    // status cards: they never push the message over 10 embeds or 6000 characters
+    const statusEmbeds: StatusEmbed[] = [];
+    const used = allEmbeds(out);
+    let room = 10 - used.length;
+    let len = used.reduce((n, e) => n + embedLength(e), 0);
+    for (const id of p.statusServerIds ?? []) {
+      if (room <= 0) break;
+      const e = statusEmbed(id);
+      if (!e) continue;
+      const clean: StatusEmbed = { ...e };
+      delete clean.footer;
+      const l = embedLength(clean);
+      if (len + l > 6000) continue;
+      len += l;
+      room--;
+      statusEmbeds.push(clean);
+    }
+    return { payload: out, statusEmbeds };
+  }
   const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res)).catch(next);
   };
@@ -4486,13 +4706,86 @@ export function registerNews(deps: {
   // ---------- default news channel ----------
   app.get('/api/news/settings', staff, (_req, res) => {
     const channelId = getSetting('news_channel_id');
-    res.json({ channelId, ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }) });
+    const testChannelId = getSetting('news_test_channel_id') ?? '';
+    const tc = testChannelId ? channelInfo(testChannelId) : null;
+    res.json({
+      channelId,
+      ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }),
+      testChannelId,
+      testChannelName: tc?.channelName ?? null,
+      testGuildName: tc?.guildName ?? null,
+    });
   });
   app.put('/api/news/settings', staff, (req, res) => {
-    const b = z.object({ channelId: z.string().regex(/^\d{15,25}$/).nullable() }).safeParse(req.body);
+    const b = z
+      .object({
+        channelId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
+        testChannelId: z.union([z.string().regex(/^\d{15,25}$/), z.literal('')]).optional(),
+      })
+      .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
-    setSetting('news_channel_id', b.data.channelId);
-    res.json({ channelId: b.data.channelId });
+    if (b.data.channelId !== undefined) setSetting('news_channel_id', b.data.channelId);
+    if (b.data.testChannelId !== undefined) setSetting('news_test_channel_id', b.data.testChannelId || null);
+    res.json({ channelId: getSetting('news_channel_id'), testChannelId: getSetting('news_test_channel_id') ?? '' });
+  });
+
+  // ---------- variables, test send, autosave (fixed paths: must come before /api/news/:id) ----------
+  app.get('/api/news/variables', staff, (_req, res) => {
+    res.json(variableList());
+  });
+
+  app.post('/api/news/test', staff, (req, res) => {
+    const b = z
+      .object({ payload: payloadSchema, channelId: z.string().regex(/^\d{15,25}$/, 'Неверный канал').optional() })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const payload = tidy(b.data.payload);
+    const bad = check(payload);
+    if (bad) return res.status(400).json({ error: bad });
+    const channelId = b.data.channelId || getSetting('news_test_channel_id');
+    if (!channelId) return res.status(400).json({ error: 'Не задан тестовый канал: выберите его в настройках новостей' });
+    const now = Date.now();
+    const info = db
+      .prepare("INSERT INTO news (status, channel_id, payload, test, created_at, updated_at) VALUES ('queued', ?, ?, 1, ?, ?)")
+      .run(channelId, JSON.stringify(payload), now, now);
+    res.json({ ok: true, testId: Number(info.lastInsertRowid) });
+  });
+
+  // the outcome of a test send (the bot picks it up within a few seconds)
+  app.get('/api/news/test/:id', staff, (req, res) => {
+    const r = db.prepare('SELECT status, error FROM news WHERE id = ? AND test = 1').get(Number(req.params.id)) as { status: string; error: string | null } | undefined;
+    if (!r) return res.status(404).json({ error: 'Тест не найден' });
+    res.json({ status: r.status === 'test_sent' ? 'sent' : r.status === 'test_error' ? 'error' : 'pending', error: r.error });
+  });
+
+  const autosaveKey = z.string().min(1).max(40).regex(/^[A-Za-z0-9_-]+$/);
+  app.put('/api/news/autosave', staff, (req, res) => {
+    const b = z.object({ key: autosaveKey, payload: z.record(z.string(), z.unknown()) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неверные данные черновика' });
+    const json = JSON.stringify(b.data.payload);
+    if (json.length > 400_000) return res.status(413).json({ error: 'Черновик слишком большой' });
+    const now = Date.now();
+    db.prepare(
+      'INSERT INTO news_autosave (user_key, key, payload, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_key, key) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at',
+    ).run(userKeyOf(req), b.data.key, json, now);
+    // forget abandoned drafts after 30 days
+    db.prepare('DELETE FROM news_autosave WHERE updated_at < ?').run(now - 30 * 86400_000);
+    res.json({ ok: true, updatedAt: now });
+  });
+  app.get('/api/news/autosave', staff, (req, res) => {
+    const k = autosaveKey.safeParse(req.query.key);
+    if (!k.success) return res.status(400).json({ error: 'Укажите key' });
+    const r = db.prepare('SELECT payload, updated_at FROM news_autosave WHERE user_key = ? AND key = ?').get(userKeyOf(req), k.data) as
+      | { payload: string; updated_at: number }
+      | undefined;
+    if (!r) return res.json({ payload: null, updatedAt: null });
+    res.json({ payload: JSON.parse(r.payload), updatedAt: r.updated_at });
+  });
+  app.delete('/api/news/autosave', staff, (req, res) => {
+    const k = autosaveKey.safeParse(req.query.key ?? req.body?.key);
+    if (!k.success) return res.status(400).json({ error: 'Укажите key' });
+    db.prepare('DELETE FROM news_autosave WHERE user_key = ? AND key = ?').run(userKeyOf(req), k.data);
+    res.json({ ok: true });
   });
 
   // ---------- images (uploaded in the editor, attached by the bot) ----------
@@ -4528,13 +4821,13 @@ export function registerNews(deps: {
   };
 
   app.get('/api/news', viewer, (req, res) => {
-    const rows = db.prepare('SELECT * FROM news ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
+    const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
     if (isAdmin(req)) return res.json(rows.map(serialize));
     res.json(rows.filter((r) => r.status === 'sent' || r.status === 'edit_queued').map(publicNews));
   });
 
   app.get('/api/news/:id', viewer, (req, res) => {
-    const r = db.prepare('SELECT * FROM news WHERE id = ?').get(Number(req.params.id)) as NewsRow | undefined;
+    const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
     if (!r || (!isAdmin(req) && r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
     res.json(isAdmin(req) ? serialize(r) : publicNews(r));
   });
@@ -4561,6 +4854,7 @@ export function registerNews(deps: {
       const info = db
         .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now);
+      addVersion(Number(info.lastInsertRowid), JSON.stringify(payload), actorOf(req), 'Создано');
       res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
     }),
   );
@@ -4595,7 +4889,105 @@ export function registerNews(deps: {
         id,
       );
     }
+    const posted = old.status === 'sent' || old.status === 'edit_queued';
+    addVersion(id, JSON.stringify(payload), actorOf(req), posted ? 'Изменено после публикации' : 'Сохранено');
     res.json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow));
+  });
+
+  // ---------- versions, history, duplicate, reschedule ----------
+  const loadItem = (id: number) => db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(id) as NewsRow | undefined;
+
+  app.get('/api/news/:id/versions', staff, (req, res) => {
+    const id = Number(req.params.id);
+    if (!loadItem(id)) return res.status(404).json({ error: 'Новость не найдена' });
+    const rows = db.prepare('SELECT id, ts, actor, note FROM news_versions WHERE news_id = ? ORDER BY id DESC').all(id);
+    res.json(rows);
+  });
+
+  app.get('/api/news/:id/versions/:vid', staff, (req, res) => {
+    const r = db
+      .prepare('SELECT id, ts, actor, payload, note FROM news_versions WHERE id = ? AND news_id = ?')
+      .get(Number(req.params.vid), Number(req.params.id)) as { id: number; ts: number; actor: string; payload: string; note: string } | undefined;
+    if (!r) return res.status(404).json({ error: 'Версия не найдена' });
+    res.json({ id: r.id, ts: r.ts, actor: r.actor, note: r.note, payload: JSON.parse(r.payload) });
+  });
+
+  app.post('/api/news/:id/versions/:vid/restore', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const v = db
+      .prepare('SELECT id, payload FROM news_versions WHERE id = ? AND news_id = ?')
+      .get(Number(req.params.vid), id) as { id: number; payload: string } | undefined;
+    if (!v) return res.status(404).json({ error: 'Версия не найдена' });
+    if (['sending', 'delete_queued'].includes(item.status)) return res.status(409).json({ error: 'Новость сейчас отправляется, подождите несколько секунд' });
+    const parsed = payloadSchema.safeParse(JSON.parse(v.payload));
+    if (!parsed.success) return res.status(400).json({ error: 'Эту версию нельзя восстановить: ' + (parsed.error.issues[0]?.message ?? 'неверные данные') });
+    const payload = tidy(parsed.data);
+    const posted = item.status === 'sent' || item.status === 'edit_queued';
+    if (posted) {
+      const bad = check(payload);
+      if (bad) return res.status(400).json({ error: bad });
+      db.prepare("UPDATE news SET payload = ?, status = 'edit_queued', error = NULL, updated_at = ? WHERE id = ?").run(JSON.stringify(payload), Date.now(), id);
+    } else {
+      db.prepare('UPDATE news SET payload = ?, error = NULL, updated_at = ? WHERE id = ?').run(JSON.stringify(payload), Date.now(), id);
+    }
+    addVersion(id, JSON.stringify(payload), actorOf(req), `Восстановлено из версии #${v.id}`);
+    res.json(serialize(loadItem(id)!));
+  });
+
+  app.get('/api/news/:id/history', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const out: { ts: number; actor: string; action: string }[] = [];
+    for (const v of db.prepare('SELECT ts, actor, note FROM news_versions WHERE news_id = ?').all(id) as { ts: number; actor: string; note: string }[]) {
+      out.push({ ts: v.ts, actor: v.actor, action: v.note || 'Сохранено' });
+    }
+    // audit entries about this item that are not already a saved version
+    const audit = db
+      .prepare("SELECT ts, actor, action FROM audit WHERE detail = ? AND action IN ('Новость отправлена в Discord', 'Изменено время публикации новости', 'Создана копия новости')")
+      .all(`#${id}`) as { ts: number; actor: string; action: string }[];
+    out.push(...audit);
+    if (item.sent_at) out.push({ ts: item.sent_at, actor: 'бот', action: 'Опубликовано в Discord' });
+    out.sort((a, b) => b.ts - a.ts);
+    res.json(out.slice(0, 200));
+  });
+
+  app.post('/api/news/:id/duplicate', staff, (req, res) => {
+    const src = loadItem(Number(req.params.id));
+    if (!src) return res.status(404).json({ error: 'Новость не найдена' });
+    const p = JSON.parse(src.payload) as NewsPayload;
+    const SUFFIX = ' (копия)';
+    if (p.embed?.title?.trim()) p.embed.title = cut(p.embed.title, 256 - SUFFIX.length) + SUFFIX;
+    else if (p.content.trim()) p.content = cut(p.content, 2000 - SUFFIX.length) + SUFFIX;
+    else if (p.embed?.description?.trim()) p.embed.description = cut(p.embed.description, 4096 - SUFFIX.length) + SUFFIX;
+    const now = Date.now();
+    const json = JSON.stringify(p);
+    const info = db
+      .prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('draft', ?, ?, NULL, 'none', ?, ?)")
+      .run(src.channel_id, json, now, now);
+    addVersion(Number(info.lastInsertRowid), json, actorOf(req), `Копия новости #${src.id}`);
+    res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
+  });
+
+  app.patch('/api/news/:id/schedule', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const b = z.object({ scheduledAt: z.number().int().nullable() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Укажите время публикации или null' });
+    if (!['draft', 'scheduled'].includes(item.status)) return res.status(409).json({ error: 'Время можно менять только у черновика или запланированной новости' });
+    const now = Date.now();
+    if (b.data.scheduledAt === null) {
+      db.prepare("UPDATE news SET status = 'draft', scheduled_at = NULL, repeat = 'none', error = NULL, updated_at = ? WHERE id = ?").run(now, id);
+    } else {
+      if (b.data.scheduledAt <= now) return res.status(400).json({ error: 'Укажите время публикации в будущем' });
+      const bad = check(JSON.parse(item.payload) as NewsPayload);
+      if (bad) return res.status(400).json({ error: bad });
+      db.prepare("UPDATE news SET status = 'scheduled', scheduled_at = ?, error = NULL, updated_at = ? WHERE id = ?").run(b.data.scheduledAt, now, id);
+    }
+    res.json(serialize(loadItem(id)!));
   });
 
   // publish a draft / scheduled / failed item right now
@@ -4626,6 +5018,8 @@ export function registerNews(deps: {
   // ---------- internal: the bot ----------
   app.get('/internal/news/pending', internal, (_req, res) => {
     const now = Date.now();
+    // test sends are throw-away: forget the old ones
+    db.prepare('DELETE FROM news WHERE test = 1 AND updated_at < ?').run(now - 3600_000);
     const rows = db
       .prepare(
         `SELECT * FROM news WHERE status IN ('queued','edit_queued','delete_queued')
@@ -4638,7 +5032,11 @@ export function registerNews(deps: {
       const action = r.status === 'edit_queued' ? 'edit' : r.status === 'delete_queued' ? 'delete' : 'send';
       // claim sends so a slow bot cannot post the same news twice
       if (action === 'send') claim.run(now, r.id);
-      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: JSON.parse(r.payload) as NewsPayload };
+      const stored = JSON.parse(r.payload) as NewsPayload;
+      if (action === 'delete') return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: stored, statusEmbeds: [], test: false };
+      // variables are substituted and status cards built right now, at send time
+      const { payload, statusEmbeds } = resolvePayload(stored, !!r.test);
+      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test };
     });
     res.json(out);
   });
@@ -4656,6 +5054,13 @@ export function registerNews(deps: {
     const now = Date.now();
     if (b.data.status === 'deleted') {
       db.prepare('DELETE FROM news WHERE id = ?').run(id);
+    } else if (db.prepare('SELECT 1 FROM news WHERE id = ? AND test = 1').get(id)) {
+      db.prepare('UPDATE news SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(
+        b.data.status === 'sent' ? 'test_sent' : 'test_error',
+        b.data.status === 'sent' ? null : (b.data.error ?? 'Ошибка отправки'),
+        now,
+        id,
+      );
     } else if (b.data.status === 'sent') {
       const prev = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
       // the first successful post of a repeating item schedules the next one
@@ -4726,6 +5131,10 @@ const RULES: Rule[] = [
   { m: 'PUT', re: /^\/api\/news\/(\d+)$/, label: 'Изменена новость', pre: (id) => `#${id}` },
   { m: 'POST', re: /^\/api\/news\/(\d+)\/publish$/, label: 'Новость отправлена в Discord', pre: (id) => `#${id}` },
   { m: 'DELETE', re: /^\/api\/news\/(\d+)$/, label: 'Удалена новость', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/news\/(\d+)\/duplicate$/, label: 'Создана копия новости', pre: (id) => `#${id}` },
+  { m: 'PATCH', re: /^\/api\/news\/(\d+)\/schedule$/, label: 'Изменено время публикации новости', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/news\/(\d+)\/versions\/\d+\/restore$/, label: 'Новость восстановлена из версии', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/news\/test$/, label: 'Тестовая отправка новости', detail: (r) => s(r.body?.payload?.embed?.title) || s(r.body?.payload?.content, 60) },
   { m: 'PUT', re: /^\/api\/news\/settings$/, label: 'Изменён канал новостей' },
   { m: 'PUT', re: /^\/api\/users\/(\d+)$/, label: 'Изменена роль пользователя', pre: userName, detail: (r, p) => `${p ?? ''} → ${s(r.body?.role, 10)}` },
   { m: 'PUT', re: /^\/api\/users\/(\d+)\/password$/, label: 'Сброшен пароль пользователя', pre: userName },
@@ -5414,21 +5823,24 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
 }
 
 // ---------- news: messages written in the panel ----------
+interface NewsEmbed {
+  title?: string;
+  url?: string;
+  description?: string;
+  color?: number;
+  author?: { name: string; iconUrl?: string };
+  thumbnailUrl?: string;
+  image?: { url?: string; upload?: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string };
+  timestamp?: boolean;
+}
 interface NewsPayload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
-  embed?: {
-    title?: string;
-    url?: string;
-    description?: string;
-    color?: number;
-    author?: { name: string; iconUrl?: string };
-    thumbnailUrl?: string;
-    image?: { url?: string; upload?: string };
-    fields?: { name: string; value: string; inline?: boolean }[];
-    footer?: { text: string };
-    timestamp?: boolean;
-  };
+  embed?: NewsEmbed;
+  /** more embeds in the same message (variables are already substituted by the panel) */
+  extraEmbeds?: NewsEmbed[];
 }
 interface NewsItem {
   id: number;
@@ -5436,15 +5848,18 @@ interface NewsItem {
   channelId: string;
   messageId: string | null;
   payload: NewsPayload;
+  /** ready Discord embeds (server status cards) appended after the written ones */
+  statusEmbeds?: Record<string, unknown>[];
+  test?: boolean;
 }
 
-async function buildNews(p: NewsPayload) {
+async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[] = []) {
   const files: InstanceType<typeof AttachmentBuilder>[] = [];
   const mention = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
   const content = [mention, p.content?.trim()].filter(Boolean).join('\n');
   const embeds: InstanceType<typeof EmbedBuilder>[] = [];
-  const e = p.embed;
-  if (e) {
+  const attached = new Set<string>();
+  for (const e of [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])].slice(0, 10)) {
     const eb = new EmbedBuilder().setColor(e.color ?? 0x5865f2);
     if (e.title) eb.setTitle(e.title);
     if (e.url) eb.setURL(e.url);
@@ -5452,10 +5867,13 @@ async function buildNews(p: NewsPayload) {
     if (e.author?.name) eb.setAuthor({ name: e.author.name, ...(e.author.iconUrl ? { iconURL: e.author.iconUrl } : {}) });
     if (e.thumbnailUrl) eb.setThumbnail(e.thumbnailUrl);
     if (e.image?.upload) {
-      // a picture uploaded in the panel travels as an attachment
-      const r = await backend(`/api/news/images/${e.image.upload}`);
-      if (!r.ok) throw new Error('Не удалось получить загруженную картинку (она могла быть удалена)');
-      files.push(new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: e.image.upload }));
+      // a picture uploaded in the panel travels as an attachment (once, even when several embeds use it)
+      if (!attached.has(e.image.upload)) {
+        const r = await backend(`/api/news/images/${e.image.upload}`);
+        if (!r.ok) throw new Error('Не удалось получить загруженную картинку (она могла быть удалена)');
+        files.push(new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: e.image.upload }));
+        attached.add(e.image.upload);
+      }
       eb.setImage(`attachment://${e.image.upload}`);
     } else if (e.image?.url) {
       eb.setImage(e.image.url);
@@ -5464,6 +5882,10 @@ async function buildNews(p: NewsPayload) {
     if (e.footer?.text) eb.setFooter({ text: e.footer.text });
     if (e.timestamp) eb.setTimestamp();
     embeds.push(eb);
+  }
+  for (const raw of statusEmbeds) {
+    if (embeds.length >= 10) break;
+    embeds.push(new EmbedBuilder(raw as ConstructorParameters<typeof EmbedBuilder>[0]));
   }
   return {
     content: content || undefined,
@@ -5503,7 +5925,7 @@ async function processNews(): Promise<void> {
         continue;
       }
 
-      const msg = await buildNews(it.payload);
+      const msg = await buildNews(it.payload, it.statusEmbeds ?? []);
       if (it.action === 'edit' && it.messageId) {
         const m = await channel.messages.fetch(it.messageId);
         await m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, attachments: [], allowedMentions: msg.allowedMentions });
@@ -13678,10 +14100,63 @@ export interface NewsEmbed {
   timestamp?: boolean;
 }
 
+export type Embed = NewsEmbed;
+
 export interface NewsPayload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
   embed?: NewsEmbed;
+  /** further embeds of the same message (Discord allows 10 in total with `embed`) */
+  extraEmbeds?: Embed[];
+  /** live status block: up to 5 servers, refreshed by the bot when the message is sent */
+  statusServerIds?: number[];
+}
+
+/** GET /news/variables */
+export interface NewsVariable {
+  token: string;
+  description: string;
+}
+
+/** GET /news/:id/versions */
+export interface NewsVersion {
+  id: number | string;
+  ts: number;
+  actor: string;
+  note?: string | null;
+}
+
+/** GET /news/:id/versions/:vid */
+export interface NewsVersionFull {
+  id: number | string;
+  ts: number;
+  actor: string;
+  payload: NewsPayload;
+}
+
+/** GET /news/:id/history */
+export interface NewsHistoryEntry {
+  ts: number;
+  actor: string;
+  action: string;
+}
+
+/** GET /news/autosave?key= (null / empty when there is nothing) */
+export interface NewsAutosave {
+  payload?: NewsPayload | null;
+  channelId?: string | null;
+  ts?: number | null;
+  updatedAt?: number | null;
+}
+
+/** POST /news/test, then poll GET /news/test/:id */
+export interface NewsTestResult {
+  ok: boolean;
+  testId: number | string;
+}
+export interface NewsTestStatus {
+  status: 'pending' | 'sent' | 'error';
+  error?: string | null;
 }
 
 export type NewsStatus = 'draft' | 'scheduled' | 'queued' | 'sending' | 'sent' | 'error' | 'edit_queued' | 'delete_queued';
@@ -13709,6 +14184,10 @@ export interface NewsSettings {
   channelId: string | null;
   channelName?: string | null;
   guildName?: string | null;
+  /** where "Отправить тест" posts */
+  testChannelId?: string | null;
+  testChannelName?: string | null;
+  testGuildName?: string | null;
 }
 
 // ---------- accounts and access ----------
@@ -15230,6 +15709,1573 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/Calendar.tsx" << '__COREGSM_EOF__'
+import { useMemo, useState } from 'react';
+import type { NewsItem } from '../../api';
+
+const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const DOW = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+const dateOf = (n: NewsItem): number | null => (n.status === 'sent' || n.status === 'edit_queued' ? n.sentAt ?? n.scheduledAt : n.scheduledAt);
+const movable = (n: NewsItem) => n.status === 'scheduled' || n.status === 'draft';
+const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+const tone = (n: NewsItem) =>
+  n.status === 'sent' ? 'bg-okbg text-ok' : n.status === 'scheduled' ? 'bg-warnbg text-warn' : n.status === 'error' ? 'bg-badbg text-bad' : 'bg-soft text-mute';
+
+/** Month grid of scheduled and sent news. Scheduled / draft items can be dragged to another day (time of day is kept). */
+export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n: NewsItem, day: Date) => void }) {
+  const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [drag, setDrag] = useState<number | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+
+  const { cells, byDay, undated } = useMemo(() => {
+    const first = new Date(month);
+    const offset = (first.getDay() + 6) % 7;
+    const start = new Date(first.getFullYear(), first.getMonth(), 1 - offset);
+    const cells = Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+    const byDay = new Map<string, NewsItem[]>();
+    const undated: NewsItem[] = [];
+    for (const n of items) {
+      const t = dateOf(n);
+      if (!t) { if (movable(n)) undated.push(n); continue; }
+      const k = dayKey(new Date(t));
+      byDay.set(k, [...(byDay.get(k) ?? []), n]);
+    }
+    return { cells, byDay, undated };
+  }, [items, month]);
+
+  const todayKey = dayKey(new Date());
+  const byId = (id: number) => items.find((n) => n.id === id);
+  const chip = (n: NewsItem) => (
+    <a
+      key={n.id}
+      href={`#/admin/news/${n.id}`}
+      draggable={movable(n)}
+      onDragStart={(e) => { setDrag(n.id); e.dataTransfer.setData('text/plain', String(n.id)); e.dataTransfer.effectAllowed = 'move'; }}
+      onDragEnd={() => { setDrag(null); setOver(null); }}
+      title={`${n.title}${movable(n) ? ' (можно перетащить на другой день)' : ''}`}
+      className={`block truncate rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-4 ${tone(n)} ${drag === n.id ? 'opacity-50' : ''}`}
+      style={{ borderLeft: `3px solid #${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}` }}
+    >
+      {dateOf(n) ? `${new Date(dateOf(n) as number).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} ` : ''}{n.title || 'Без названия'}
+    </a>
+  );
+
+  return (
+    <div className="panel space-y-3 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-lg font-black">{MONTHS[month.getMonth()]} {month.getFullYear()}</h2>
+        <div className="flex items-center gap-1.5">
+          <button type="button" className="btn btn-soft btn-sm" aria-label="Предыдущий месяц" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}>←</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => { const d = new Date(); setMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }}>Сегодня</button>
+          <button type="button" className="btn btn-soft btn-sm" aria-label="Следующий месяц" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>→</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center text-xs font-extrabold uppercase text-mute">{DOW.map((d) => <div key={d}>{d}</div>)}</div>
+      <div className="grid grid-cols-7 gap-1">
+        {cells.map((d) => {
+          const k = dayKey(d);
+          const inMonth = d.getMonth() === month.getMonth();
+          const list = byDay.get(k) ?? [];
+          return (
+            <div
+              key={k}
+              onDragOver={(e) => { if (drag !== null) { e.preventDefault(); setOver(k); } }}
+              onDragLeave={() => setOver((o) => (o === k ? null : o))}
+              onDrop={(e) => {
+                e.preventDefault();
+                const id = drag ?? Number(e.dataTransfer.getData('text/plain'));
+                const n = byId(id);
+                setDrag(null);
+                setOver(null);
+                if (n && movable(n)) onMove(n, d);
+              }}
+              className={`min-h-[72px] rounded-xl border-2 p-1 sm:min-h-[96px] ${over === k ? 'border-brand bg-brand/10' : k === todayKey ? 'border-brand/60' : 'border-line'} ${inMonth ? '' : 'opacity-50'}`}
+            >
+              <div className={`mb-0.5 text-right text-[11px] font-extrabold tabular-nums ${k === todayKey ? 'text-link' : 'text-mute'}`}>{d.getDate()}</div>
+              <div className="space-y-0.5">{list.slice(0, 3).map(chip)}{list.length > 3 && <div className="text-[11px] font-bold text-mute">ещё {list.length - 3}</div>}</div>
+            </div>
+          );
+        })}
+      </div>
+      {undated.length > 0 && (
+        <div className="rounded-2xl bg-soft p-3">
+          <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">Черновики без даты: перетащите на день</div>
+          <div className="flex flex-wrap gap-1.5">{undated.map((n) => <div key={n.id} className="max-w-[16rem]">{chip(n)}</div>)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/Checklist.tsx" << '__COREGSM_EOF__'
+import { useMemo } from 'react';
+import { Button, Modal } from '../../ui';
+import { runChecks, type Check, type Draft } from './model';
+
+const MARK: Record<Check['level'], { icon: string; cls: string; label: string }> = {
+  ok: { icon: '✓', cls: 'bg-okbg text-ok', label: 'Готово' },
+  warn: { icon: '!', cls: 'bg-warnbg text-warn', label: 'Предупреждение' },
+  error: { icon: '✕', cls: 'bg-badbg text-bad', label: 'Ошибка' },
+};
+
+/** Pre-send checklist: errors block, warnings can be overridden. */
+export function ChecklistModal({
+  draft, mode, scheduleText, busy, onConfirm, onClose,
+}: { draft: Draft; mode: 'now' | 'schedule' | 'edit'; scheduleText?: string; busy?: boolean; onConfirm: () => void; onClose: () => void }) {
+  const checks = useMemo(() => runChecks(draft), [draft]);
+  const errors = checks.filter((c) => c.level === 'error');
+  const warns = checks.filter((c) => c.level === 'warn');
+  const verb = mode === 'schedule' ? 'Запланировать' : mode === 'edit' ? 'Сохранить в Discord' : 'Опубликовать';
+  // problems first
+  const sorted = [...errors, ...warns, ...checks.filter((c) => c.level === 'ok')];
+  return (
+    <Modal title="Проверка перед отправкой" onClose={onClose}>
+      {scheduleText && <p className="mb-3 text-sm font-bold text-mute">{scheduleText}</p>}
+      <ul className="space-y-2" aria-label="Результаты проверки">
+        {sorted.map((c, i) => (
+          <li key={i} className="flex items-start gap-3 rounded-2xl bg-soft px-3 py-2.5">
+            <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-sm font-black ${MARK[c.level].cls}`} aria-label={MARK[c.level].label}>{MARK[c.level].icon}</span>
+            <span className="min-w-0 text-sm font-bold">{c.text}</span>
+          </li>
+        ))}
+      </ul>
+      {errors.length > 0 && <p className="mt-3 text-sm font-bold text-bad" role="alert">Исправьте ошибки, чтобы продолжить.</p>}
+      <div className="mt-5 flex flex-wrap gap-2">
+        <Button className="flex-1" loading={busy} disabled={errors.length > 0} onClick={onConfirm}>
+          {warns.length > 0 ? `${verb} всё равно` : verb}
+        </Button>
+        <Button variant="soft" onClick={onClose}>Назад к редактору</Button>
+      </div>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/DiscordMd.tsx" << '__COREGSM_EOF__'
+import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
+
+/**
+ * Discord markdown for the message preview, in Discord's own dark and light colours:
+ * **bold** *italic* __underline__ ~~strike~~ ||spoiler|| `code` ```blocks``` [text](url) # headings -# small text
+ * > quotes, lists, @everyone/@here, <@&role>, <@user>, <#channel>, <t:unix:R> and custom emoji.
+ */
+
+export interface DTheme {
+  name: 'dark' | 'light';
+  outer: string;
+  embed: string;
+  embedBorder: string;
+  text: string;
+  title: string;
+  muted: string;
+  link: string;
+  code: string;
+  quote: string;
+  spoilerHide: string;
+  spoilerShow: string;
+  mentionBg: string;
+  mentionFg: string;
+  chipBg: string;
+}
+
+export const THEMES: Record<'dark' | 'light', DTheme> = {
+  dark: {
+    name: 'dark', outer: '#313338', embed: '#2b2d31', embedBorder: '#1e1f22', text: '#dbdee1', title: '#ffffff', muted: '#949ba4', link: '#00a8fc',
+    code: '#1e1f22', quote: '#4e5058', spoilerHide: '#1e1f22', spoilerShow: 'rgba(255,255,255,0.1)', mentionBg: 'rgba(88,101,242,0.3)', mentionFg: '#c9cdfb', chipBg: 'rgba(78,80,88,0.6)',
+  },
+  light: {
+    name: 'light', outer: '#ffffff', embed: '#f2f3f5', embedBorder: '#e3e5e8', text: '#313338', title: '#060607', muted: '#5c5e66', link: '#006ce7',
+    code: '#e3e5e8', quote: '#c4c9ce', spoilerHide: '#c4c9ce', spoilerShow: 'rgba(0,0,0,0.08)', mentionBg: 'rgba(88,101,242,0.15)', mentionFg: '#505cdc', chipBg: 'rgba(116,127,141,0.2)',
+  },
+};
+
+export const ThemeCtx = createContext<DTheme>(THEMES.dark);
+
+export interface MdEnv {
+  /** names of channels by id for <#id> */
+  channelName?: (id: string) => string | undefined;
+}
+export const EnvCtx = createContext<MdEnv>({});
+
+// ---------- timestamps ----------
+const RTF = typeof Intl !== 'undefined' && 'RelativeTimeFormat' in Intl ? new Intl.RelativeTimeFormat('ru', { numeric: 'auto' }) : null;
+
+export function formatTimestamp(unix: number, style: string, now = Date.now()): string {
+  const d = new Date(unix * 1000);
+  if (Number.isNaN(d.getTime())) return String(unix);
+  const o = (opts: Intl.DateTimeFormatOptions) => d.toLocaleString('ru-RU', opts);
+  switch (style) {
+    case 't': return o({ hour: '2-digit', minute: '2-digit' });
+    case 'T': return o({ hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    case 'd': return o({ day: '2-digit', month: '2-digit', year: 'numeric' });
+    case 'D': return o({ day: 'numeric', month: 'long', year: 'numeric' });
+    case 'F': return o({ weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    case 'R': {
+      const diff = Math.round((d.getTime() - now) / 1000);
+      const a = Math.abs(diff);
+      const [v, unit]: [number, Intl.RelativeTimeFormatUnit] =
+        a < 60 ? [diff, 'second'] : a < 3600 ? [Math.round(diff / 60), 'minute'] : a < 86400 ? [Math.round(diff / 3600), 'hour']
+          : a < 30 * 86400 ? [Math.round(diff / 86400), 'day'] : a < 365 * 86400 ? [Math.round(diff / (30 * 86400)), 'month'] : [Math.round(diff / (365 * 86400)), 'year'];
+      return RTF ? RTF.format(v, unit) : `${v} ${unit}`;
+    }
+    default: return o({ day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+}
+
+// ---------- inline ----------
+const INLINE = new RegExp(
+  '(' + [
+    '`[^`\\n]+`',
+    '\\[[^\\]\\n]+\\]\\(<?https?:\\/\\/[^)\\s>]+>?(?:\\s+"[^"\\n]*")?\\)',
+    '<t:-?\\d+(?::[tTdDfFR])?>',
+    '<a?:\\w+:\\d+>',
+    '<@&\\d+>',
+    '<@!?\\d+>',
+    '<#\\d+>',
+    '@everyone',
+    '@here',
+    '\\*\\*[^\\n]+?\\*\\*',
+    '__[^\\n]+?__',
+    '~~[^\\n]+?~~',
+    '\\|\\|[^\\n]+?\\|\\|',
+    '\\*[^*\\n]+\\*',
+    '_[^_\\n]+_',
+    'https?:\\/\\/[^\\s<>]+',
+  ].join('|') + ')',
+  'g',
+);
+
+function Spoiler({ children }: { children: ReactNode }) {
+  const t = useContext(ThemeCtx);
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      data-spoiler
+      role="button"
+      tabIndex={0}
+      aria-label={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
+      onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
+      className="cursor-pointer rounded px-0.5"
+      style={{ background: open ? t.spoilerShow : t.spoilerHide, color: open ? 'inherit' : 'transparent' }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Chip({ children, kind }: { children: ReactNode; kind: 'mention' | 'time' }) {
+  const t = useContext(ThemeCtx);
+  return (
+    <span
+      className="whitespace-nowrap rounded px-[3px] font-medium"
+      style={kind === 'mention' ? { background: t.mentionBg, color: t.mentionFg } : { background: t.chipBg }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function TimeChip({ unix, style }: { unix: number; style: string }) {
+  return (
+    <Chip kind="time">
+      <span title={`${new Date(unix * 1000).toLocaleString('ru-RU')} (<t:${unix}:${style}>)`}>{formatTimestamp(unix, style)}</span>
+    </Chip>
+  );
+}
+
+function ChannelChip({ id }: { id: string }) {
+  const env = useContext(EnvCtx);
+  return <Chip kind="mention">#{env.channelName?.(id) ?? 'канал'}</Chip>;
+}
+
+export function inlineMd(text: string, depth = 0): ReactNode[] {
+  return text.split(INLINE).map((part, i) => {
+    if (!part) return null;
+    const k = `${depth}-${i}`;
+    if (i % 2 === 0) return <Fragment key={k}>{part}</Fragment>;
+    if (part.startsWith('`') && part.length > 2) return <InlineCode key={k}>{part.slice(1, -1)}</InlineCode>;
+    const link = /^\[([^\]]+)\]\(<?(https?:\/\/[^)\s>]+)>?(?:\s+"[^"]*")?\)$/.exec(part);
+    if (link) return <Link key={k} href={link[2]}>{depth < 3 ? inlineMd(link[1], depth + 1) : link[1]}</Link>;
+    const ts = /^<t:(-?\d+)(?::([tTdDfFR]))?>$/.exec(part);
+    if (ts) return <TimeChip key={k} unix={Number(ts[1])} style={ts[2] ?? 'f'} />;
+    const emo = /^<(a?):(\w+):(\d+)>$/.exec(part);
+    if (emo) return <img key={k} src={`https://cdn.discordapp.com/emojis/${emo[3]}.${emo[1] ? 'gif' : 'png'}?size=48`} alt={`:${emo[2]}:`} title={`:${emo[2]}:`} className="inline-block h-[1.3em] w-[1.3em] align-text-bottom" />;
+    if (part === '@everyone' || part === '@here') return <Chip key={k} kind="mention">{part}</Chip>;
+    if (part.startsWith('<@&')) return <Chip key={k} kind="mention">@роль</Chip>;
+    if (part.startsWith('<@')) return <Chip key={k} kind="mention">@участник</Chip>;
+    const ch = /^<#(\d+)>$/.exec(part);
+    if (ch) return <ChannelChip key={k} id={ch[1]} />;
+    if (depth < 3) {
+      if (/^\*\*.+\*\*$/.test(part)) return <strong key={k}>{inlineMd(part.slice(2, -2), depth + 1)}</strong>;
+      if (/^__.+__$/.test(part)) return <u key={k}>{inlineMd(part.slice(2, -2), depth + 1)}</u>;
+      if (/^~~.+~~$/.test(part)) return <s key={k}>{inlineMd(part.slice(2, -2), depth + 1)}</s>;
+      if (/^\|\|.+\|\|$/.test(part)) return <Spoiler key={k}>{inlineMd(part.slice(2, -2), depth + 1)}</Spoiler>;
+      if (/^\*[^*]+\*$/.test(part) || /^_[^_]+_$/.test(part)) return <em key={k}>{inlineMd(part.slice(1, -1), depth + 1)}</em>;
+    }
+    if (/^https?:\/\//.test(part)) return <Link key={k} href={part} wrap>{part}</Link>;
+    return <Fragment key={k}>{part}</Fragment>;
+  });
+}
+
+function InlineCode({ children }: { children: ReactNode }) {
+  const t = useContext(ThemeCtx);
+  return <code style={{ background: t.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }} className="font-mono">{children}</code>;
+}
+
+function Link({ href, children, wrap }: { href: string; children: ReactNode; wrap?: boolean }) {
+  const t = useContext(ThemeCtx);
+  return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: t.link }} className={`hover:underline ${wrap ? 'break-all' : ''}`}>{children}</a>;
+}
+
+// ---------- blocks ----------
+export function DiscordMd({ text }: { text: string }) {
+  const t = useContext(ThemeCtx);
+  const out: ReactNode[] = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('```')) {
+      const body: string[] = [];
+      const first = line.trim().slice(3);
+      // ```js on the first line is the language: not shown; a single-line ```code``` is kept as text
+      const single = /^(.*)```$/.exec(first);
+      if (single) {
+        body.push(single[1]);
+      } else {
+        if (first && !/\s/.test(first)) { /* language tag */ } else if (first) body.push(first);
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith('```')) body.push(lines[i++]);
+      }
+      out.push(<pre key={i} className="my-1 overflow-x-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[13px]" style={{ background: t.code, borderColor: t.embedBorder }}>{body.join('\n')}</pre>);
+      continue;
+    }
+    if (line.startsWith('>>> ')) {
+      out.push(<Quote key={i}><div className="whitespace-pre-wrap">{inlineMd([line.slice(4), ...lines.slice(i + 1)].join('\n'))}</div></Quote>);
+      break;
+    }
+    if (/^>\s?/.test(line)) {
+      const q: string[] = [];
+      let j = i;
+      while (j < lines.length && /^>\s?/.test(lines[j]) && !lines[j].startsWith('>>> ')) q.push(lines[j++].replace(/^>\s?/, ''));
+      out.push(<Quote key={i}>{q.map((l, n) => <div key={n}>{inlineMd(l)}</div>)}</Quote>);
+      i = j - 1;
+      continue;
+    }
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (h) {
+      const size = h[1].length === 1 ? 'text-[1.5em]' : h[1].length === 2 ? 'text-[1.25em]' : 'text-[1.1em]';
+      out.push(<div key={i} className={`${size} mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>{inlineMd(h[2])}</div>);
+      continue;
+    }
+    const small = /^-#\s+(.*)$/.exec(line);
+    if (small) {
+      out.push(<div key={i} className="text-[0.8em]" style={{ color: t.muted }}>{inlineMd(small[1])}</div>);
+      continue;
+    }
+    const li = /^(\s*)[-*•]\s+(.*)$/.exec(line);
+    if (li) {
+      const lvl = Math.min(2, Math.floor(li[1].length / 2));
+      out.push(<div key={i} className="flex gap-2" style={{ paddingLeft: 8 + lvl * 16 }}><span aria-hidden>{lvl ? '◦' : '•'}</span><span className="min-w-0">{inlineMd(li[2])}</span></div>);
+      continue;
+    }
+    const ol = /^(\s*)(\d+)\.\s+(.*)$/.exec(line);
+    if (ol) {
+      out.push(<div key={i} className="flex gap-1.5" style={{ paddingLeft: 8 + Math.min(2, Math.floor(ol[1].length / 2)) * 16 }}><span aria-hidden className="tabular-nums">{ol[2]}.</span><span className="min-w-0">{inlineMd(ol[3])}</span></div>);
+      continue;
+    }
+    out.push(line.trim() === '' ? <div key={i} className="h-[0.6em]" /> : <div key={i}>{inlineMd(line)}</div>);
+  }
+  return <div className="break-words leading-snug">{out}</div>;
+}
+
+function Quote({ children }: { children: ReactNode }) {
+  const t = useContext(ThemeCtx);
+  return <div className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${t.quote}` }}>{children}</div>;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/FieldsBuilder.tsx" << '__COREGSM_EOF__'
+import { useRef, useState } from 'react';
+import type { NewsVariable } from '../../api';
+import { LIMITS, newKey, type FieldRow } from './model';
+import { MarkdownField } from './MarkdownField';
+
+/** schematic of how the fields sit in Discord: up to three inline ones in a row */
+function MiniLayout({ fields }: { fields: FieldRow[] }) {
+  const rows: FieldRow[][] = [];
+  let cur: FieldRow[] = [];
+  for (const f of fields) {
+    if (f.inline) { cur.push(f); if (cur.length === 3) { rows.push(cur); cur = []; } }
+    else { if (cur.length) { rows.push(cur); cur = []; } rows.push([f]); }
+  }
+  if (cur.length) rows.push(cur);
+  if (!rows.length) return null;
+  return (
+    <div className="rounded-2xl bg-soft p-3" aria-label="Схема расположения полей" role="img">
+      <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">Как расположены поля</div>
+      <div className="space-y-1">
+        {rows.map((row, i) => (
+          <div key={i} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
+            {row.map((f) => (
+              <div key={f.k} className="h-4 truncate rounded bg-brand/25 px-1.5 text-[10px] font-bold leading-4 text-ink">{f.name || '…'}</div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const Up = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 15l6-6 6 6" /></svg>;
+const Down = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9l6 6 6-6" /></svg>;
+
+const iconBtn = 'grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-card text-mute transition hover:text-ink disabled:opacity-40';
+
+export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRow[]; onChange: (f: FieldRow[]) => void; variables?: NewsVariable[] }) {
+  const [drag, setDrag] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const cards = useRef<Record<string, HTMLDivElement | null>>({});
+
+  const patch = (i: number, p: Partial<FieldRow>) => onChange(fields.map((f, j) => (j === i ? { ...f, ...p } : f)));
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= fields.length || from === to) return;
+    const next = fields.slice();
+    const [x] = next.splice(from, 1);
+    next.splice(to, 0, x);
+    onChange(next);
+  };
+
+  return (
+    <div className="space-y-3">
+      <MiniLayout fields={fields} />
+      {fields.map((f, i) => (
+        <div
+          key={f.k}
+          ref={(el) => { cards.current[f.k] = el; }}
+          onDragOver={(e) => { if (drag !== null) { e.preventDefault(); setOver(i); } }}
+          onDrop={(e) => { e.preventDefault(); if (drag !== null) move(drag, i); setDrag(null); setOver(null); }}
+          className={`space-y-2 rounded-2xl bg-soft p-3 transition ${drag === i ? 'opacity-50' : ''} ${over === i && drag !== null && drag !== i ? 'ring-2 ring-brand' : ''}`}
+        >
+          <div className="flex items-center gap-1.5">
+            <span
+              draggable
+              role="img"
+              aria-label="Перетащить поле"
+              title="Перетащите, чтобы поменять порядок"
+              onDragStart={(e) => {
+                setDrag(i);
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', String(i));
+                const c = cards.current[f.k];
+                if (c) e.dataTransfer.setDragImage(c, 16, 16);
+              }}
+              onDragEnd={() => { setDrag(null); setOver(null); }}
+              className="grid h-9 w-7 shrink-0 cursor-grab place-items-center rounded-lg text-mute active:cursor-grabbing"
+            >
+              <svg width="14" height="18" viewBox="0 0 14 18" fill="currentColor" aria-hidden><circle cx="4" cy="3" r="1.5" /><circle cx="10" cy="3" r="1.5" /><circle cx="4" cy="9" r="1.5" /><circle cx="10" cy="9" r="1.5" /><circle cx="4" cy="15" r="1.5" /><circle cx="10" cy="15" r="1.5" /></svg>
+            </span>
+            <input
+              id={`news-f${i}-name`}
+              aria-label={`Название поля ${i + 1}`}
+              className={`input ${f.name.length > LIMITS.fieldName ? '!border-bad' : ''}`}
+              value={f.name}
+              placeholder="Название"
+              onChange={(e) => patch(i, { name: e.target.value })}
+            />
+            <button type="button" className={iconBtn} aria-label={`Поднять поле ${i + 1}`} disabled={i === 0} onClick={() => move(i, i - 1)}><Up /></button>
+            <button type="button" className={iconBtn} aria-label={`Опустить поле ${i + 1}`} disabled={i === fields.length - 1} onClick={() => move(i, i + 1)}><Down /></button>
+          </div>
+          <MarkdownField
+            id={`news-f${i}-value`}
+            label={`Текст поля ${i + 1}`}
+            hideLabel
+            compact
+            rows={2}
+            max={LIMITS.fieldValue}
+            value={f.value}
+            placeholder="Текст"
+            variables={variables}
+            onChange={(v) => patch(i, { value: v })}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="seg" role="group" aria-label={`Расположение поля ${i + 1}`}>
+              <button type="button" className="seg-item" aria-pressed={!f.inline} onClick={() => patch(i, { inline: false })} title="Во всю ширину">
+                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-sm bg-current opacity-60" />Широкое
+              </button>
+              <button type="button" className="seg-item" aria-pressed={f.inline} onClick={() => patch(i, { inline: true })} title="В ряд с соседними">
+                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /></span>В ряд
+              </button>
+            </div>
+            <span className="ml-auto flex items-center gap-1.5">
+              <button type="button" className="btn btn-soft btn-sm" disabled={fields.length >= LIMITS.fields} onClick={() => { const c = fields.slice(); c.splice(i + 1, 0, { ...f, k: newKey() }); onChange(c); }}>Дублировать</button>
+              <button type="button" className="btn btn-danger btn-sm" aria-label={`Удалить поле ${i + 1}`} onClick={() => onChange(fields.filter((_, j) => j !== i))}>Удалить</button>
+            </span>
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="btn btn-soft btn-sm"
+        disabled={fields.length >= LIMITS.fields}
+        onClick={() => onChange([...fields, { k: newKey(), name: '', value: '', inline: fields.length > 0 && fields.length < 3 }])}
+      >
+        + Добавить поле {fields.length > 0 && <span className="ml-1 text-mute">({fields.length}/{LIMITS.fields})</span>}
+      </button>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/HistoryPanel.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api, ApiError, type NewsHistoryEntry, type NewsItem, type NewsPayload, type NewsVersion, type NewsVersionFull } from '../../api';
+import { confirmDialog } from '../../confirm';
+import { EmbedView } from '../../pages/EmbedPreview';
+import { Button, Modal, fmtDateTime, toast } from '../../ui';
+import { fromPayload, sampleVars } from './model';
+import { embedView, messageContent } from './Preview';
+
+const ACTIONS: Record<string, string> = {
+  create: 'создал', created: 'создал', update: 'изменил', updated: 'изменил', edit: 'изменил', publish: 'опубликовал', published: 'опубликовал', schedule: 'запланировал', scheduled: 'запланировал',
+  restore: 'восстановил версию', restored: 'восстановил версию', delete: 'удалил', duplicate: 'дублировал', duplicated: 'дублировал', send: 'отправил', sent: 'отправил',
+};
+const actionText = (a: string) => ACTIONS[a] ?? a;
+
+function VersionPreview({ payload }: { payload: NewsPayload }) {
+  const d = fromPayload(payload, '');
+  const v = sampleVars(null);
+  const embeds = d.embeds.map((e) => embedView(e, v)).filter((e): e is NonNullable<typeof e> => !!e);
+  return <EmbedView content={messageContent(d, v)} embeds={embeds} />;
+}
+
+/** Version history and «who changed what» for an existing item. Hidden when the backend has no such routes. */
+export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestored: (item: NewsItem) => void; locked?: boolean }) {
+  const [versions, setVersions] = useState<NewsVersion[] | null>(null);
+  const [history, setHistory] = useState<NewsHistoryEntry[] | null>(null);
+  const [supported, setSupported] = useState(true);
+  const [open, setOpen] = useState<NewsVersionFull | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = () => {
+    api<NewsVersion[]>(`/news/${id}/versions`)
+      .then((v) => setVersions(Array.isArray(v) ? v : []))
+      .catch((e) => { if (e instanceof ApiError && e.status === 404) setSupported(false); else setVersions([]); });
+    api<NewsHistoryEntry[]>(`/news/${id}/history`)
+      .then((h) => setHistory(Array.isArray(h) ? h : []))
+      .catch(() => setHistory([]));
+  };
+  useEffect(load, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!supported) return null;
+
+  const view = async (v: NewsVersion) => {
+    setErr('');
+    try { setOpen(await api<NewsVersionFull>(`/news/${id}/versions/${v.id}`)); } catch (e) { setErr((e as Error).message); }
+  };
+  const restore = async () => {
+    if (!open) return;
+    if (!(await confirmDialog({ title: 'Восстановить эту версию?', text: 'Текущий текст заменится выбранной версией. Он сохранится в истории.', confirmLabel: 'Восстановить' }))) return;
+    setBusy(true);
+    try {
+      const item = await api<NewsItem>(`/news/${id}/versions/${open.id}/restore`, 'POST');
+      toast('Версия восстановлена');
+      setOpen(null);
+      onRestored(item);
+      load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel space-y-3.5 p-5">
+      <div>
+        <h2 className="text-lg font-black">История версий</h2>
+        <p className="text-sm font-semibold text-mute">Каждое сохранение запоминается: можно посмотреть и вернуть прежний текст.</p>
+      </div>
+      {err && <p className="text-sm font-bold text-bad" role="alert">{err}</p>}
+      {versions === null && <div className="skeleton h-16 rounded-2xl" />}
+      {versions && versions.length === 0 && <p className="text-sm font-semibold text-mute">Прошлых версий пока нет.</p>}
+      {versions && versions.length > 0 && (
+        <ul className="divide-y divide-line rounded-2xl border-2 border-line">
+          {versions.map((v) => (
+            <li key={v.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-extrabold">{fmtDateTime(v.ts)} · {v.actor}</div>
+                {v.note && <div className="truncate text-xs font-semibold text-mute">{v.note}</div>}
+              </div>
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => void view(v)}>Посмотреть</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {history && history.length > 0 && (
+        <div>
+          <h3 className="mb-1.5 text-sm font-extrabold text-mute">Кто и когда правил</h3>
+          <ul className="space-y-1">
+            {history.slice(0, 20).map((h, i) => (
+              <li key={i} className="text-sm font-semibold"><span className="text-mute">{fmtDateTime(h.ts)}</span> · <b>{h.actor}</b> {actionText(h.action)}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {open && (
+        <Modal title={`Версия от ${fmtDateTime(open.ts)}`} onClose={() => setOpen(null)}>
+          <p className="mb-3 text-sm font-semibold text-mute">Только просмотр. Автор: {open.actor}.</p>
+          <div className="max-h-[55dvh] overflow-auto rounded-2xl">
+            <VersionPreview payload={open.payload} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button className="flex-1" loading={busy} disabled={locked} onClick={() => void restore()}>Восстановить эту версию</Button>
+            <Button variant="soft" onClick={() => setOpen(null)}>Закрыть</Button>
+          </div>
+          {locked && <p className="mt-2 text-xs font-semibold text-mute">Новость сейчас отправляется, подождите.</p>}
+        </Modal>
+      )}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/ImageDrop.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
+import { MAX_UPLOAD, uploadImage } from './model';
+
+export interface ImageDropApi { upload: (file: File) => Promise<void> }
+
+/** Drag-and-drop / pick / paste-url image input with preview, clearing and size warnings. */
+export function ImageDrop({
+  id, label, url, upload, onUrl, onUpload, allowUpload, minWidth, bind,
+}: {
+  id: string;
+  label: string;
+  url: string;
+  upload: string;
+  onUrl: (v: string) => void;
+  onUpload: (name: string) => void;
+  allowUpload?: boolean;
+  /** warn when the picture is narrower than this */
+  minWidth?: number;
+  /** gives the parent a way to upload a file (paste from the clipboard) */
+  bind?: (api: ImageDropApi | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [hot, setHot] = useState(false);
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const [size, setSize] = useState<number | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+
+  const src = upload ? `/api/news/images/${upload}` : /^https?:\/\//i.test(url) ? url : '';
+
+  const doUpload = async (file: File | undefined) => {
+    if (!file || !allowUpload) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const name = await uploadImage(file);
+      setSize(file.size);
+      onUpload(name);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const doUploadRef = useRef(doUpload);
+  doUploadRef.current = doUpload;
+  useEffect(() => {
+    bind?.({ upload: (f) => doUploadRef.current(f) });
+    return () => bind?.(null);
+  }, [bind]);
+
+  useEffect(() => { setDims(null); }, [src]);
+
+  const warns: string[] = [];
+  if (size && size > MAX_UPLOAD * 0.6) warns.push(`Файл тяжёлый (${(size / 1048576).toFixed(1)} МБ): Discord может грузить его медленно.`);
+  if (dims && minWidth && dims.w < minWidth) warns.push(`Картинка маленькая (${dims.w}×${dims.h}): в Discord она будет выглядеть размыто, лучше от ${minWidth} px по ширине.`);
+  if (url && !upload && !/^https:\/\//i.test(url)) warns.push('Ссылка должна начинаться с https://.');
+
+  return (
+    <div className="flash-host space-y-2">
+      <span className="label !mb-0">{label}</span>
+      {src ? (
+        <div className="flex items-center gap-3 rounded-2xl bg-soft p-2">
+          <img src={src} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-bold">{upload ? 'Загруженная картинка' : url}</div>
+            {dims && <div className="text-xs font-semibold text-mute">{dims.w}×{dims.h}{size && upload ? ` · ${(size / 1024).toFixed(0)} КБ` : ''}</div>}
+          </div>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => { onUpload(''); onUrl(''); setSize(null); }}>Убрать</button>
+        </div>
+      ) : (
+        <div
+          onDragOver={(e) => { if (allowUpload) { e.preventDefault(); setHot(true); } }}
+          onDragLeave={() => setHot(false)}
+          onDrop={(e) => { e.preventDefault(); setHot(false); void doUpload(Array.from(e.dataTransfer.files).find((f) => f.type.startsWith('image/'))); }}
+          className={`rounded-2xl border-2 border-dashed p-3 text-center transition ${hot ? 'border-brand bg-brand/10' : 'border-line'}`}
+        >
+          {allowUpload && (
+            <button type="button" disabled={busy} onClick={() => input.current?.click()} className="w-full py-2 text-sm font-bold text-mute hover:text-ink">
+              {busy ? 'Загрузка…' : 'Перетащите картинку сюда или нажмите, чтобы выбрать файл'}
+              <span className="block text-xs font-semibold">PNG, JPEG, GIF, WebP до 8 МБ. Можно вставить из буфера (Ctrl+V) в текст.</span>
+            </button>
+          )}
+          <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" aria-label={`${label}: выбрать файл`} onChange={(e) => { void doUpload(e.target.files?.[0]); e.target.value = ''; }} />
+          <input id={id} aria-label={`${label}: ссылка`} className="input mt-1" value={url} onChange={(e) => onUrl(e.target.value.trim())} placeholder="https://… или ссылка на картинку" />
+        </div>
+      )}
+      {src && !upload && <input id={id} aria-label={`${label}: ссылка`} className="sr-only" value={url} onChange={(e) => onUrl(e.target.value.trim())} />}
+      {err && <p className="text-sm font-bold text-bad" role="alert">{err}</p>}
+      {warns.map((w) => <p key={w} className="rounded-xl bg-warnbg px-3 py-1.5 text-sm font-bold text-warn">⚠ {w}</p>)}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/LimitsPanel.tsx" << '__COREGSM_EOF__'
+import { LIMITS, totalLength, type Draft } from './model';
+
+function Bar({ label, value, max, detail }: { label: string; value: number; max: number; detail?: string }) {
+  const r = max ? value / max : 0;
+  const tone = r > 1 ? 'bad' : r >= 0.8 ? 'warn' : 'ok';
+  const color = tone === 'bad' ? 'rgb(var(--bad))' : tone === 'warn' ? '#f0b232' : 'rgb(var(--brand))';
+  return (
+    <li className="space-y-1">
+      <div className="flex items-baseline justify-between gap-2 text-sm">
+        <span className="font-bold">{label}{detail && <span className="ml-1.5 text-xs font-semibold text-mute">{detail}</span>}</span>
+        <span className={`text-xs font-extrabold tabular-nums ${tone === 'bad' ? 'text-bad' : tone === 'warn' ? 'text-warn' : 'text-mute'}`}>{value}/{max}{tone === 'bad' ? ' · превышено' : ''}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-soft" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={max} aria-valuenow={Math.min(value, max)}>
+        <div className="h-full rounded-full" style={{ width: `${Math.min(100, r * 100)}%`, background: color }} />
+      </div>
+    </li>
+  );
+}
+
+/** One panel with every Discord limit that matters for the open embed and the whole message. */
+export function LimitsPanel({ d, active }: { d: Draft; active: number }) {
+  const e = d.embeds[active] ?? d.embeds[0];
+  if (!e) return null;
+  const worstName = e.fields.reduce((m, f) => Math.max(m, f.name.length), 0);
+  const worstValue = e.fields.reduce((m, f) => Math.max(m, f.value.length), 0);
+  const total = totalLength(d);
+  return (
+    <section className="panel space-y-3 p-4" aria-label="Лимиты Discord">
+      <div>
+        <h2 className="text-lg font-black">Лимиты</h2>
+        <p className="text-xs font-semibold text-mute">{d.embeds.length > 1 ? `Показаны значения для блока ${active + 1}; сумма: по всему сообщению.` : 'Ограничения Discord для этого сообщения.'}</p>
+      </div>
+      <ul className="space-y-2.5">
+        <Bar label="Текст сообщения" value={d.content.length} max={LIMITS.content} />
+        <Bar label="Заголовок" value={e.title.length} max={LIMITS.title} />
+        <Bar label="Основной текст" value={e.description.length} max={LIMITS.description} />
+        <Bar label="Название поля" value={worstName} max={LIMITS.fieldName} detail="самое длинное" />
+        <Bar label="Значение поля" value={worstValue} max={LIMITS.fieldValue} detail="самое длинное" />
+        <Bar label="Подпись" value={e.footer.length} max={LIMITS.footer} />
+        <Bar label="Полей" value={e.fields.length} max={LIMITS.fields} />
+        <Bar label="Embed-блоков" value={d.embeds.length} max={LIMITS.embeds} />
+        <Bar label="Всего символов во всех embed" value={total} max={LIMITS.total} />
+      </ul>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/MarkdownField.tsx" << '__COREGSM_EOF__'
+import { memo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import type { NewsVariable } from '../../api';
+import { searchEmoji } from './emoji';
+
+const EMOJIS = ['📢', '📣', '🔔', '🎉', '🎊', '🎁', '🏆', '🥇', '⭐', '🌟', '✨', '🔥', '💥', '⚡', '🚀', '🆕', '✅', '❌', '⚠️', '❗', '❓', '🛠️', '🔧', '⚙️', '🧹', '🗑️', '📅', '🗓️', '⏰', '🕒', '⏳', '📍', '🌍', '🗺️', '🎮', '🕹️', '👑', '⚔️', '🛡️', '🏹', '💎', '💰', '🪙', '❤️', '💜', '💙', '💚', '👍', '👏', '🙌', '🤝', '💬', '📝', '📌', '🔗', '🖼️', '🎤', '🎧', '📈', '🟢', '🟡', '🔴', '🔵'];
+
+export function Counter({ value, max }: { value: number; max: number }) {
+  const over = value > max;
+  const near = !over && value > max * 0.9;
+  return <span className={`text-xs font-bold tabular-nums ${over ? 'text-bad' : near ? 'text-warn' : 'text-mute'}`} aria-label={`${value} из ${max} символов`}>{value}/{max}</span>;
+}
+
+const Btn = ({ onClick, title, children, on }: { onClick: () => void; title: string; children: ReactNode; on?: boolean }) => (
+  <button
+    type="button"
+    title={title}
+    aria-label={title}
+    aria-pressed={on}
+    onMouseDown={(e) => e.preventDefault()}
+    onClick={onClick}
+    className="grid h-8 min-w-8 place-items-center rounded-lg px-1.5 text-sm font-bold text-ink transition hover:bg-soft"
+  >
+    {children}
+  </button>
+);
+
+interface Props {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  max: number;
+  rows?: number;
+  placeholder?: string;
+  /** a short field (field value): fewer toolbar buttons */
+  compact?: boolean;
+  variables?: NewsVariable[];
+  /** an image was pasted from the clipboard */
+  onImage?: (file: File) => void;
+  hideLabel?: boolean;
+}
+
+/** Text area with a Discord-markdown toolbar, shortcuts (Ctrl+B/I/U/K), `:name` emoji autocomplete and smart paste. */
+function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placeholder, compact, variables, onImage, hideLabel }: Props) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [panel, setPanel] = useState<'' | 'emoji' | 'vars'>('');
+  const [sug, setSug] = useState<{ start: number; end: number; items: [string, string][]; idx: number } | null>(null);
+
+  const apply = (text: string, selStart: number, selEnd: number) => {
+    onChange(text);
+    const ta = ref.current;
+    requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(selStart, selEnd); });
+  };
+
+  const wrap = (mark: string, ph = 'текст') => {
+    const ta = ref.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const sel = value.slice(s, e);
+    const before = value.slice(0, s), after = value.slice(e);
+    // toggle: already wrapped -> unwrap
+    if (sel && before.endsWith(mark) && after.startsWith(mark)) {
+      apply(before.slice(0, -mark.length) + sel + after.slice(mark.length), s - mark.length, e - mark.length);
+      return;
+    }
+    const inner = sel || ph;
+    apply(before + mark + inner + mark + after, s + mark.length, s + mark.length + inner.length);
+  };
+
+  /** line-based formats: the selection grows to whole lines */
+  const prefixLines = (prefix: string, ph = 'текст') => {
+    const ta = ref.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const ls = value.lastIndexOf('\n', s - 1) + 1;
+    let le = value.indexOf('\n', e);
+    if (le === -1) le = value.length;
+    const block = value.slice(ls, le) || ph;
+    const lines = block.split('\n');
+    const all = lines.every((l) => l.startsWith(prefix));
+    const out = (all ? lines.map((l) => l.slice(prefix.length)) : lines.map((l) => prefix + l.replace(/^(#{1,3}\s+|-#\s+|>\s?)/, ''))).join('\n');
+    apply(value.slice(0, ls) + out + value.slice(le), ls, ls + out.length);
+  };
+
+  const numbered = () => {
+    const ta = ref.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const ls = value.lastIndexOf('\n', s - 1) + 1;
+    let le = value.indexOf('\n', e);
+    if (le === -1) le = value.length;
+    const lines = (value.slice(ls, le) || 'пункт').split('\n');
+    const out = lines.map((l, i) => `${i + 1}. ${l.replace(/^\d+\.\s+/, '')}`).join('\n');
+    apply(value.slice(0, ls) + out + value.slice(le), ls, ls + out.length);
+  };
+
+  const codeBlock = () => {
+    const ta = ref.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const inner = value.slice(s, e) || 'код';
+    const pre = s > 0 && value[s - 1] !== '\n' ? '\n' : '';
+    const text = `${value.slice(0, s)}${pre}\`\`\`\n${inner}\n\`\`\`${value.slice(e)}`;
+    const a = s + pre.length + 4;
+    apply(text, a, a + inner.length);
+  };
+
+  const link = () => {
+    const ta = ref.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const sel = value.slice(s, e);
+    if (/^https?:\/\/\S+$/.test(sel)) {
+      const text = `${value.slice(0, s)}[ссылка](${sel})${value.slice(e)}`;
+      apply(text, s + 1, s + 7);
+      return;
+    }
+    const lbl = sel || 'текст ссылки';
+    const text = `${value.slice(0, s)}[${lbl}](https://)${value.slice(e)}`;
+    const st = s + lbl.length + 3;
+    apply(text, st, st + 8);
+  };
+
+  const insert = (t: string) => {
+    const ta = ref.current;
+    const s = ta?.selectionStart ?? value.length;
+    const e = ta?.selectionEnd ?? value.length;
+    apply(value.slice(0, s) + t + value.slice(e), s + t.length, s + t.length);
+  };
+
+  const detect = (text: string, caret: number) => {
+    const m = /(?:^|[\s(])(:[\p{L}\p{N}_+-]{2,})$/u.exec(text.slice(0, caret));
+    if (!m) return setSug(null);
+    const items = searchEmoji(m[1]);
+    setSug(items.length ? { start: caret - m[1].length, end: caret, items, idx: 0 } : null);
+  };
+
+  const accept = (emoji: string) => {
+    if (!sug) return;
+    apply(value.slice(0, sug.start) + emoji + value.slice(sug.end), sug.start + emoji.length, sug.start + emoji.length);
+    setSug(null);
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (sug) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSug({ ...sug, idx: (sug.idx + 1) % sug.items.length }); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setSug({ ...sug, idx: (sug.idx - 1 + sug.items.length) % sug.items.length }); return; }
+      if ((e.key === 'Enter' && !e.ctrlKey && !e.metaKey) || e.key === 'Tab') { e.preventDefault(); accept(sug.items[sug.idx][0]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSug(null); return; }
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      // by physical key: works in the Russian layout too (Ctrl+Z stays native undo)
+      if (e.code === 'KeyB') { e.preventDefault(); wrap('**'); }
+      else if (e.code === 'KeyI') { e.preventDefault(); wrap('*'); }
+      else if (e.code === 'KeyU') { e.preventDefault(); wrap('__'); }
+      else if (e.code === 'KeyK') { e.preventDefault(); link(); }
+    }
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const cd = e.clipboardData;
+    if (onImage) {
+      const file = Array.from(cd.files).find((f) => f.type.startsWith('image/'));
+      if (file) { e.preventDefault(); onImage(file); return; }
+    }
+    const text = cd.getData('text').trim();
+    const ta = e.currentTarget;
+    const s = ta.selectionStart, en = ta.selectionEnd;
+    if (s !== en && /^https?:\/\/\S+$/.test(text)) {
+      e.preventDefault();
+      const sel = value.slice(s, en);
+      const out = `[${sel}](${text})`;
+      apply(value.slice(0, s) + out + value.slice(en), s + out.length, s + out.length);
+    }
+  };
+
+  const onInput = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    onChange(e.target.value);
+    detect(e.target.value, e.target.selectionStart);
+  };
+
+  return (
+    <div>
+      <div className={`mb-1.5 flex items-center justify-between ${hideLabel ? 'sr-only' : ''}`}>
+        <label htmlFor={id} className="label !mb-0">{label}</label>
+        <Counter value={value.length} max={max} />
+      </div>
+      <div className="flash-host relative rounded-2xl border-2 border-line focus-within:border-brand">
+        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1" role="toolbar" aria-label={`Форматирование: ${label}`}>
+          <Btn onClick={() => wrap('**')} title="Жирный (Ctrl+B)"><b>Ж</b></Btn>
+          <Btn onClick={() => wrap('*')} title="Курсив (Ctrl+I)"><i>К</i></Btn>
+          <Btn onClick={() => wrap('__')} title="Подчёркнутый (Ctrl+U)"><u>Ч</u></Btn>
+          <Btn onClick={() => wrap('~~')} title="Зачёркнутый"><s>З</s></Btn>
+          <Btn onClick={() => wrap('||')} title="Спойлер">▒</Btn>
+          <Btn onClick={() => wrap('`', 'код')} title="Код в строке"><span className="font-mono">{'<>'}</span></Btn>
+          {!compact && <Btn onClick={codeBlock} title="Блок кода"><span className="font-mono text-xs">{'```'}</span></Btn>}
+          <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+          {!compact && (
+            <>
+              <Btn onClick={() => prefixLines('# ', 'Заголовок')} title="Заголовок 1"><span className="text-xs">H1</span></Btn>
+              <Btn onClick={() => prefixLines('## ', 'Заголовок')} title="Заголовок 2"><span className="text-xs">H2</span></Btn>
+              <Btn onClick={() => prefixLines('### ', 'Заголовок')} title="Заголовок 3"><span className="text-xs">H3</span></Btn>
+              <Btn onClick={() => prefixLines('-# ')} title="Мелкий текст"><span className="text-[10px]">-#</span></Btn>
+            </>
+          )}
+          <Btn onClick={() => prefixLines('> ')} title="Цитата">❝</Btn>
+          <Btn onClick={() => prefixLines('- ')} title="Маркированный список">•≡</Btn>
+          {!compact && <Btn onClick={numbered} title="Нумерованный список"><span className="text-xs">1.</span></Btn>}
+          <Btn onClick={link} title="Ссылка (Ctrl+K)">🔗</Btn>
+          <Btn onClick={() => setPanel((v) => (v === 'emoji' ? '' : 'emoji'))} title="Эмодзи" on={panel === 'emoji'}>😀</Btn>
+          {variables && variables.length > 0 && (
+            <Btn onClick={() => setPanel((v) => (v === 'vars' ? '' : 'vars'))} title="Вставить переменную" on={panel === 'vars'}><span className="font-mono text-xs">{'{ }'}</span></Btn>
+          )}
+        </div>
+        {panel === 'emoji' && (
+          <div className="absolute right-0 top-11 z-20 grid w-72 max-w-[85vw] grid-cols-8 gap-0.5 rounded-2xl bg-card p-2 shadow-soft ring-2 ring-line">
+            {EMOJIS.map((e) => (
+              <button key={e} type="button" aria-label={`Эмодзи ${e}`} className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setPanel(''); }}>{e}</button>
+            ))}
+          </div>
+        )}
+        {panel === 'vars' && variables && (
+          <div className="absolute right-0 top-11 z-20 max-h-72 w-80 max-w-[85vw] overflow-auto rounded-2xl bg-card p-1.5 shadow-soft ring-2 ring-line" role="menu" aria-label="Переменные">
+            {variables.map((v) => (
+              <button key={v.token} type="button" role="menuitem" className="block w-full rounded-xl px-3 py-2 text-left hover:bg-soft" onClick={() => { insert(v.token); setPanel(''); }}>
+                <span className="block font-mono text-sm font-bold">{v.token}</span>
+                <span className="block text-xs font-semibold text-mute">{v.description}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <textarea
+          id={id}
+          ref={ref}
+          rows={rows}
+          value={value}
+          onChange={onInput}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          onClick={(e) => detect(value, e.currentTarget.selectionStart)}
+          onBlur={() => setTimeout(() => setSug(null), 120)}
+          placeholder={placeholder}
+          aria-autocomplete={sug ? 'list' : undefined}
+          aria-controls={sug ? `${id}-sug` : undefined}
+          className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-none"
+        />
+        {sug && (
+          <ul id={`${id}-sug`} role="listbox" aria-label="Подсказки эмодзи" className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
+            {sug.items.map(([em, names], i) => (
+              <li key={`${em}-${i}`} role="option" aria-selected={i === sug.idx}>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onMouseDown={(e) => { e.preventDefault(); accept(em); }}
+                  className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left ${i === sug.idx ? 'bg-soft' : ''}`}
+                >
+                  <span className="text-lg">{em}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-bold text-mute">{names.split(' ').slice(0, 2).join(' · ')}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export const MarkdownField = memo(MarkdownFieldImpl);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/Preview.tsx" << '__COREGSM_EOF__'
+import { useMemo, useState } from 'react';
+import type { Server } from '../../api';
+import { gameColor } from '../../games';
+import { EmbedView, type DiscordEmbed, type PreviewPart } from '../../pages/EmbedPreview';
+import { imageSrc, invalidParts, parseHex, resolveVars, type Draft, type EmbedDraft, type VarSample } from './model';
+
+const load = <T extends string>(key: string, allowed: T[], def: T): T => {
+  try {
+    const v = localStorage.getItem(key) as T | null;
+    return v && allowed.includes(v) ? v : def;
+  } catch { return def; }
+};
+const save = (key: string, v: string) => { try { localStorage.setItem(key, v); } catch { /* ignore */ } };
+
+export function embedView(e: EmbedDraft, v: VarSample): DiscordEmbed | null {
+  const r = (s: string) => resolveVars(s, v);
+  const fields = e.fields
+    .map((f, idx) => ({ name: r(f.name), value: r(f.value), inline: f.inline, idx }))
+    .filter((f) => f.name.trim() && f.value.trim());
+  const img = imageSrc(e);
+  const has = e.title || e.description || e.authorName || e.thumbnail || img || fields.length || e.footer;
+  if (!has) return null;
+  return {
+    title: e.title ? r(e.title) : undefined,
+    url: e.url || undefined,
+    description: e.description ? r(e.description) : undefined,
+    color: e.color,
+    author: e.authorName ? { name: r(e.authorName), icon_url: e.authorIcon || undefined } : undefined,
+    thumbnail: e.thumbnail ? { url: e.thumbnail } : undefined,
+    image: img ? { url: img } : undefined,
+    fields,
+    footer: e.footer ? { text: r(e.footer) } : undefined,
+    timestamp: e.timestamp ? new Date().toISOString() : undefined,
+  };
+}
+
+export const messageContent = (d: Draft, v: VarSample) => {
+  const mention = d.mention === 'everyone' ? '@everyone' : d.mention === 'here' ? '@here' : '';
+  return [mention, resolveVars(d.content.trim(), v)].filter(Boolean).join('\n');
+};
+
+/** placeholder of the live status block: the real card is built by the bot when the message goes out */
+function statusEmbeds(ids: number[], servers: Server[] | null): DiscordEmbed[] {
+  return ids.map((id) => {
+    const s = servers?.find((x) => x.id === id);
+    const color = s ? parseHex(gameColor(s.game)) : 0x5865f2;
+    return {
+      title: s ? s.name : `Сервер №${id}`,
+      description: s ? (s.online ? `🟢 Онлайн · ${s.players}/${s.maxPlayers} игроков${s.map ? ` · ${s.map}` : ''}` : '🔴 Офлайн') : 'Данные появятся при отправке',
+      color: Number.isFinite(color) ? color : 0x5865f2,
+      footer: { text: 'Статус сервера · обновится при отправке' },
+    };
+  });
+}
+
+export function Preview({
+  draft, vars, servers, channelNames, onPick, total,
+}: {
+  draft: Draft;
+  vars: VarSample;
+  servers: Server[] | null;
+  channelNames: Record<string, string>;
+  onPick: (p: PreviewPart) => void;
+  total: number;
+}) {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => load('news_pv_theme', ['dark', 'light'], 'dark'));
+  const [width, setWidth] = useState<'desktop' | 'phone'>(() => load('news_pv_width', ['desktop', 'phone'], 'desktop'));
+  const content = messageContent(draft, vars);
+  const embeds = useMemo(() => draft.embeds.map((e) => embedView(e, vars)), [draft.embeds, vars]);
+  // a tab without content still keeps its index for click mapping: render only those that have something
+  const shown: { e: DiscordEmbed; i: number }[] = [];
+  embeds.forEach((e, i) => { if (e) shown.push({ e, i }); });
+  const status = statusEmbeds(draft.statusServerIds, servers);
+  const invalid = useMemo(() => invalidParts(draft), [draft]);
+  const empty = !content && shown.length === 0 && status.length === 0;
+
+  // remap the indexes to what is drawn (empty embeds are skipped)
+  const list = [...shown.map((s) => s.e), ...status];
+  const realIndex = shown.map((s) => s.i);
+  const inv = new Set<string>();
+  invalid.forEach((k) => {
+    if (k === 'content') { inv.add(k); return; }
+    const [n, ...rest] = k.split(':');
+    const pos = realIndex.indexOf(Number(n));
+    if (pos >= 0) inv.add(`${pos}:${rest.join(':')}`);
+  });
+  const pick = (p: PreviewPart) => onPick(p.part === 'content' ? p : p.embed < realIndex.length ? { ...p, embed: realIndex[p.embed] } : p);
+
+  return (
+    <div className="panel p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-black">Предпросмотр</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="seg" role="group" aria-label="Тема Discord">
+            <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => { setTheme('dark'); save('news_pv_theme', 'dark'); }}>Тёмная</button>
+            <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => { setTheme('light'); save('news_pv_theme', 'light'); }}>Светлая</button>
+          </div>
+          <div className="seg" role="group" aria-label="Ширина">
+            <button type="button" className="seg-item" aria-pressed={width === 'desktop'} onClick={() => { setWidth('desktop'); save('news_pv_width', 'desktop'); }}>Компьютер</button>
+            <button type="button" className="seg-item" aria-pressed={width === 'phone'} onClick={() => { setWidth('phone'); save('news_pv_width', 'phone'); }}>Телефон</button>
+          </div>
+        </div>
+      </div>
+      {empty ? (
+        <p className="py-10 text-center font-semibold text-mute">Начните писать: здесь появится сообщение, как оно будет выглядеть в Discord.</p>
+      ) : (
+        <EmbedView
+          content={content}
+          embeds={list}
+          theme={theme}
+          width={width}
+          onPick={pick}
+          invalid={inv}
+          env={{ channelName: (id) => channelNames[id] }}
+        />
+      )}
+      <p className="mt-2 flex items-center justify-between gap-2 text-xs font-semibold text-mute">
+        <span>Нажмите на часть сообщения, чтобы перейти к её полю. Красная рамка: превышен лимит.</span>
+        <span className={`shrink-0 font-extrabold tabular-nums ${total > 6000 ? 'text-bad' : ''}`}>{total}/6000</span>
+      </p>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/StatusServers.tsx" << '__COREGSM_EOF__'
+import type { Server } from '../../api';
+import { GameAvatar } from '../../ui';
+import { LIMITS } from './model';
+
+/** pick up to five servers whose live status card is appended to the message */
+export function StatusServers({ servers, value, onChange }: { servers: Server[]; value: number[]; onChange: (ids: number[]) => void }) {
+  const toggle = (id: number) => {
+    if (value.includes(id)) onChange(value.filter((x) => x !== id));
+    else if (value.length < LIMITS.statusServers) onChange([...value, id]);
+  };
+  return (
+    <div className="space-y-2">
+      <ul className="grid gap-2 sm:grid-cols-2">
+        {servers.map((s) => {
+          const on = value.includes(s.id);
+          const full = !on && value.length >= LIMITS.statusServers;
+          return (
+            <li key={s.id}>
+              <label className={`flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-2.5 transition ${on ? 'border-brand bg-brand/10' : 'border-line'} ${full ? 'cursor-not-allowed opacity-50' : ''}`}>
+                <input type="checkbox" className="h-4 w-4 shrink-0 accent-[rgb(var(--brand))]" checked={on} disabled={full} onChange={() => toggle(s.id)} />
+                <GameAvatar game={s.game} size={32} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-extrabold">{s.name}</span>
+                  <span className="block text-xs font-semibold text-mute">{s.online ? `онлайн · ${s.players}/${s.maxPlayers}` : 'офлайн'}</span>
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-xs font-semibold text-mute">Выбрано {value.length} из {LIMITS.statusServers}. Карточки добавляются под сообщением и обновляются автоматически.</p>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/emoji.ts" << '__COREGSM_EOF__'
+/** Small emoji dictionary for the `:name` autocomplete: [emoji, space separated Russian + English names]. */
+export const EMOJI_DICT: [string, string][] = [
+  ['😀', 'улыбка smile grin'], ['😂', 'смех ржу joy lol'], ['🙂', 'ок слегка slight'], ['😉', 'подмигнуть wink'], ['😍', 'любовь влюблён heart_eyes'],
+  ['😎', 'круто cool sunglasses'], ['🤔', 'думаю hmm think'], ['😢', 'грусть плачу sad cry'], ['😡', 'злость angry rage'], ['😱', 'шок ужас scream'],
+  ['🥳', 'праздник party partying'], ['😴', 'сон спать sleep zzz'], ['🤝', 'рукопожатие договор handshake deal'], ['👍', 'класс лайк thumbsup like plus'], ['👎', 'дизлайк thumbsdown dislike'],
+  ['👏', 'аплодисменты clap'], ['🙌', 'ура hands raised'], ['🙏', 'пожалуйста спасибо pray thanks please'], ['💪', 'сила muscle strong'], ['👋', 'привет wave hello'],
+  ['👀', 'глаза eyes look'], ['🫡', 'салют salute'], ['❤️', 'сердце любовь heart love'], ['💜', 'фиолетовое сердце purple_heart'], ['💙', 'синее сердце blue_heart'],
+  ['💚', 'зелёное сердце green_heart'], ['💛', 'жёлтое сердце yellow_heart'], ['🖤', 'чёрное сердце black_heart'], ['💔', 'разбитое сердце broken_heart'], ['💯', 'сто баллов 100 hundred'],
+  ['🔥', 'огонь fire hot'], ['💥', 'взрыв boom collision'], ['⚡', 'молния зап zap lightning'], ['✨', 'искры блеск sparkles'], ['⭐', 'звезда star'],
+  ['🌟', 'сияющая звезда glowing_star'], ['🎉', 'ура праздник tada party'], ['🎊', 'конфетти confetti'], ['🎁', 'подарок gift present'], ['🏆', 'кубок трофей trophy'],
+  ['🥇', 'золото первое место gold medal first'], ['🥈', 'серебро silver'], ['🥉', 'бронза bronze'], ['🎖️', 'награда medal'], ['👑', 'корона crown king'],
+  ['💎', 'алмаз кристалл diamond gem'], ['💰', 'деньги мешок money moneybag'], ['🪙', 'монета coin'], ['🛒', 'магазин корзина cart shop'], ['🎫', 'билет ticket'],
+  ['📢', 'объявление громкоговоритель loudspeaker announce'], ['📣', 'мегафон megaphone'], ['🔔', 'колокол уведомление bell'], ['🔕', 'без звука bell_off mute'], ['📌', 'кнопка закреп pushpin pin'],
+  ['📎', 'скрепка paperclip'], ['📝', 'заметка запись memo note'], ['📅', 'календарь дата calendar date'], ['🗓️', 'календарь spiral_calendar'], ['⏰', 'будильник alarm clock'],
+  ['🕒', 'время часы time clock'], ['⏳', 'песочные часы hourglass wait'], ['⌛', 'песочные часы hourglass_done'], ['📍', 'метка место pin location'], ['🌍', 'мир земля earth world globe'],
+  ['🗺️', 'карта map'], ['🧭', 'компас compass'], ['🏠', 'дом house home'], ['🏰', 'замок castle'], ['⛏️', 'кирка pick mining'],
+  ['🪓', 'топор axe'], ['⚔️', 'мечи бой swords crossed'], ['🗡️', 'кинжал меч dagger sword'], ['🛡️', 'щит shield'], ['🏹', 'лук bow arrow'],
+  ['💣', 'бомба bomb'], ['🔫', 'пистолет gun'], ['🎯', 'цель мишень target dart'], ['🎮', 'игра геймпад game controller'], ['🕹️', 'джойстик joystick'],
+  ['🎲', 'кости dice'], ['🧩', 'пазл puzzle'], ['🎲', 'кубик random'], ['🛠️', 'инструменты тех работы tools hammer wrench'], ['🔧', 'ключ wrench'],
+  ['🔨', 'молоток hammer'], ['⚙️', 'настройки шестерёнка gear settings'], ['🔩', 'болт bolt nut'], ['🧹', 'метла вайп broom sweep wipe'], ['🗑️', 'корзина удалить trash wastebasket'],
+  ['🧪', 'колба тест test_tube lab'], ['🔬', 'микроскоп microscope'], ['💻', 'компьютер ноутбук computer laptop'], ['🖥️', 'монитор desktop monitor'], ['📱', 'телефон phone mobile'],
+  ['🎧', 'наушники headphones'], ['🎤', 'микрофон microphone'], ['🎵', 'музыка нота music note'], ['📷', 'камера фото camera photo'], ['🎬', 'кино видео clapper movie'],
+  ['🖼️', 'картинка frame picture'], ['📈', 'рост график chart_up growth'], ['📉', 'падение chart_down'], ['📊', 'статистика bar_chart stats'], ['🆕', 'новое new'],
+  ['🆓', 'бесплатно free'], ['🔝', 'топ top'], ['🔜', 'скоро soon'], ['✅', 'готово галочка check done ok'], ['❌', 'крестик нет cross no x'],
+  ['⚠️', 'внимание предупреждение warning'], ['❗', 'восклицание exclamation'], ['❓', 'вопрос question'], ['🚫', 'запрещено no_entry prohibited'], ['⛔', 'стоп stop no_entry'],
+  ['🔒', 'замок закрыто lock locked'], ['🔓', 'открыто unlock'], ['🔑', 'ключ key'], ['🔗', 'ссылка link'], ['💬', 'сообщение чат speech chat'],
+  ['📨', 'письмо mail envelope'], ['🚀', 'ракета запуск rocket launch'], ['🌈', 'радуга rainbow'], ['☀️', 'солнце sun'], ['🌙', 'луна moon'],
+  ['❄️', 'снег холод snowflake snow'], ['🌧️', 'дождь rain'], ['🍀', 'клевер удача clover luck'], ['🍕', 'пицца pizza'], ['🍺', 'пиво beer'],
+  ['☕', 'кофе coffee'], ['🎂', 'торт cake birthday'], ['🐉', 'дракон dragon'], ['🐺', 'волк wolf'], ['🦇', 'летучая мышь bat'],
+  ['🧛', 'вампир vampire'], ['💀', 'череп skull'], ['👻', 'призрак ghost'], ['🧟', 'зомби zombie'], ['🤖', 'бот робот bot robot'],
+  ['🟢', 'зелёный круг online green_circle'], ['🟡', 'жёлтый круг yellow_circle'], ['🔴', 'красный круг offline red_circle'], ['🔵', 'синий круг blue_circle'], ['🟣', 'фиолетовый круг purple_circle'],
+  ['▶️', 'играть старт play'], ['⏸️', 'пауза pause'], ['⏹️', 'стоп stop_button'], ['🔄', 'перезапуск обновить restart refresh arrows'], ['➡️', 'стрелка вправо arrow_right'],
+  ['⬅️', 'стрелка влево arrow_left'], ['⬆️', 'стрелка вверх arrow_up'], ['⬇️', 'стрелка вниз arrow_down'], ['➕', 'плюс plus'], ['➖', 'минус minus'],
+  ['•', 'точка bullet dot'], ['—', 'тире dash'], ['→', 'стрелка arrow'], ['©', 'копирайт copyright'], ['™', 'товарный знак trademark'],
+];
+
+export function searchEmoji(query: string, limit = 6): [string, string][] {
+  const q = query.toLowerCase().replace(/^:/, '');
+  if (q.length < 2) return [];
+  const starts: [string, string][] = [];
+  const inside: [string, string][] = [];
+  for (const e of EMOJI_DICT) {
+    const words = e[1].toLowerCase().split(/\s+/);
+    if (words.some((w) => w.startsWith(q))) starts.push(e);
+    else if (e[1].toLowerCase().includes(q)) inside.push(e);
+  }
+  return [...starts, ...inside].slice(0, limit);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/model.ts" << '__COREGSM_EOF__'
+import { getToken, type NewsEmbed, type NewsPayload } from '../../api';
+import { GAMES } from '../../games';
+
+// ---------- limits (Discord) ----------
+export const LIMITS = {
+  content: 2000,
+  title: 256,
+  description: 4096,
+  author: 256,
+  fieldName: 256,
+  fieldValue: 1024,
+  fields: 25,
+  footer: 2048,
+  total: 6000,
+  embeds: 10,
+  statusServers: 5,
+} as const;
+
+// ---------- draft <-> payload ----------
+export interface FieldRow { k: string; name: string; value: string; inline: boolean }
+
+export interface EmbedDraft {
+  title: string;
+  url: string;
+  description: string;
+  color: number;
+  authorName: string;
+  authorIcon: string;
+  thumbnail: string;
+  imageUrl: string;
+  imageUpload: string;
+  fields: FieldRow[];
+  footer: string;
+  timestamp: boolean;
+}
+
+export interface Draft {
+  channelId: string;
+  content: string;
+  mention: 'none' | 'here' | 'everyone';
+  /** the first one is `payload.embed`, the others `payload.extraEmbeds` */
+  embeds: EmbedDraft[];
+  statusServerIds: number[];
+}
+
+let keySeq = 0;
+export const newKey = () => `f${Date.now().toString(36)}${(keySeq++).toString(36)}`;
+
+export const blankEmbed = (): EmbedDraft => ({
+  title: '', url: '', description: '', color: 0x5865f2, authorName: '', authorIcon: '',
+  thumbnail: '', imageUrl: '', imageUpload: '', fields: [], footer: '', timestamp: false,
+});
+
+export const blank = (channelId: string): Draft => ({ channelId, content: '', mention: 'none', embeds: [blankEmbed()], statusServerIds: [] });
+
+function embedToPayload(d: EmbedDraft): NewsEmbed {
+  return {
+    title: d.title,
+    url: d.url,
+    description: d.description,
+    color: d.color,
+    author: { name: d.authorName, iconUrl: d.authorIcon },
+    thumbnailUrl: d.thumbnail,
+    image: { url: d.imageUrl, upload: d.imageUpload || undefined },
+    fields: d.fields.filter((f) => f.name.trim() || f.value.trim()).map((f) => ({ name: f.name, value: f.value, inline: f.inline })),
+    footer: { text: d.footer },
+    timestamp: d.timestamp,
+  };
+}
+
+export function toPayload(d: Draft): NewsPayload {
+  const p: NewsPayload = { content: d.content, mention: d.mention, embed: embedToPayload(d.embeds[0] ?? blankEmbed()) };
+  if (d.embeds.length > 1) p.extraEmbeds = d.embeds.slice(1).map(embedToPayload);
+  if (d.statusServerIds.length) p.statusServerIds = d.statusServerIds;
+  return p;
+}
+
+function embedFromPayload(e: NewsEmbed | undefined): EmbedDraft {
+  const x = e ?? {};
+  return {
+    title: x.title ?? '',
+    url: x.url ?? '',
+    description: x.description ?? '',
+    color: x.color ?? 0x5865f2,
+    authorName: x.author?.name ?? '',
+    authorIcon: x.author?.iconUrl ?? '',
+    thumbnail: x.thumbnailUrl ?? '',
+    imageUrl: x.image?.url ?? '',
+    imageUpload: x.image?.upload ?? '',
+    fields: (x.fields ?? []).map((f) => ({ k: newKey(), name: f.name, value: f.value, inline: !!f.inline })),
+    footer: x.footer?.text ?? '',
+    timestamp: !!x.timestamp,
+  };
+}
+
+export function fromPayload(p: NewsPayload, channelId: string): Draft {
+  return {
+    channelId,
+    content: p.content ?? '',
+    mention: p.mention ?? 'none',
+    embeds: [embedFromPayload(p.embed), ...(p.extraEmbeds ?? []).map((e) => embedFromPayload(e))].slice(0, LIMITS.embeds),
+    statusServerIds: (p.statusServerIds ?? []).slice(0, LIMITS.statusServers),
+  };
+}
+
+/** stable string of a payload: "did anything change" */
+export const payloadKey = (p: NewsPayload) => JSON.stringify(p);
+
+export const imageSrc = (e: EmbedDraft) => (e.imageUpload ? `/api/news/images/${e.imageUpload}` : e.imageUrl);
+
+export const embedLength = (e: EmbedDraft) =>
+  e.title.length + e.description.length + e.authorName.length + e.footer.length + e.fields.reduce((n, f) => n + f.name.length + f.value.length, 0);
+
+export const embedHasContent = (e: EmbedDraft) =>
+  !!(e.title.trim() || e.description.trim() || e.authorName.trim() || e.thumbnail || imageSrc(e) || e.footer.trim() || e.fields.some((f) => f.name.trim() && f.value.trim()));
+
+// ---------- ready-made starting points ----------
+export interface TemplateApply extends Partial<Omit<EmbedDraft, 'fields'>> {
+  mention?: Draft['mention'];
+  fields?: { name: string; value: string; inline: boolean }[];
+}
+
+export const TEMPLATES: { id: string; label: string; apply: TemplateApply }[] = [
+  { id: 'announce', label: '📢 Объявление', apply: { title: '📢 Важное объявление', description: 'Здесь текст объявления.\n\nМожно использовать **жирный**, *курсив* и списки:\n- первый пункт\n- второй пункт', color: 0x5865f2, mention: 'none', fields: [], footer: '', timestamp: true } },
+  { id: 'restart', label: '🔄 Перезапуск', apply: { title: '🔄 Перезапуск сервера', description: 'Сервер будет перезапущен **ВРЕМЯ** (МСК). Это займёт несколько минут. Сохраните прогресс заранее.', color: 0x3b82f6, mention: 'none', fields: [], footer: '', timestamp: true } },
+  { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСервер будет недоступен около часа.', color: 0xf97316, mention: 'here', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
+  { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
+  { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
+  { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
+  { id: 'giveaway', label: '🎁 Розыгрыш', apply: { title: '🎁 Розыгрыш', description: 'Разыгрываем **ПРИЗ**! Условия ниже.', color: 0xf0b232, mention: 'everyone', fields: [{ name: '📝 Как участвовать', value: 'Поставьте реакцию 🎉 под этим сообщением', inline: false }, { name: '⏰ Итоги', value: 'ДАТА, ВРЕМЯ', inline: false }], footer: 'Удачи!', timestamp: false } },
+];
+
+/** apply a template to the first embed (and mention) of a draft, keeping the channel */
+export function applyTemplate(d: Draft, t: TemplateApply): Draft {
+  const { mention, fields, ...rest } = t;
+  const e: EmbedDraft = { ...blankEmbed(), ...rest, fields: (fields ?? []).map((f) => ({ ...f, k: newKey() })) };
+  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e] };
+}
+
+// ---------- message types: colour + icon + title prefix ----------
+export interface Preset { id: string; label: string; icon: string; color: number }
+export const PRESETS: Preset[] = [
+  { id: 'update', label: 'Обновление', icon: '🚀', color: 0x23a55a },
+  { id: 'event', label: 'Событие', icon: '🎉', color: 0xeb459e },
+  { id: 'wipe', label: 'Вайп', icon: '🧹', color: 0xf97316 },
+  { id: 'maint', label: 'Технические работы', icon: '🛠️', color: 0xf0b232 },
+  { id: 'announce', label: 'Объявление', icon: '📢', color: 0x5865f2 },
+];
+
+const ICONS = PRESETS.map((p) => p.icon);
+
+export function applyPreset(e: EmbedDraft, p: Preset): EmbedDraft {
+  let title = e.title;
+  for (const i of ICONS) if (title.startsWith(i)) { title = title.slice(i.length).trimStart(); break; }
+  return { ...e, color: p.color, title: `${p.icon} ${title}`.trimEnd().slice(0, LIMITS.title) };
+}
+
+export const presetOf = (e: EmbedDraft) => PRESETS.find((p) => e.color === p.color && e.title.startsWith(p.icon));
+
+// ---------- colours ----------
+export const PALETTE: [string, number][] = [
+  ['Фиолетовый', 0x5865f2], ['Зелёный', 0x23a55a], ['Жёлтый', 0xf0b232], ['Красный', 0xf23f42], ['Оранжевый', 0xf97316],
+  ['Розовый', 0xeb459e], ['Бирюзовый', 0x14b8a6], ['Синий', 0x3b82f6], ['Серый', 0x4e5058], ['Белый', 0xffffff],
+];
+
+export const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
+export const parseHex = (h: string) => parseInt(h.replace('#', ''), 16);
+
+/** accent colours of games: V Rising purple, Icarus yellow and the games of the user's servers */
+export function gameColors(gameIds: string[] = []): [string, number][] {
+  const ids = ['vrising', 'icarus', ...gameIds];
+  const seen = new Set<number>();
+  const out: [string, number][] = [];
+  for (const id of ids) {
+    const g = GAMES.find((x) => x.id === id);
+    if (!g) continue;
+    const c = parseHex(g.color);
+    if (!Number.isFinite(c) || seen.has(c)) continue;
+    seen.add(c);
+    out.push([g.label, c]);
+  }
+  return out;
+}
+
+// ---------- misc helpers ----------
+export const toLocalInput = (ms: number) => {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+};
+
+export const MAX_UPLOAD = 8 * 1024 * 1024;
+
+export async function uploadImage(file: File): Promise<string> {
+  if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) throw new Error('Нужна картинка PNG, JPEG, GIF или WebP');
+  if (file.size > MAX_UPLOAD) throw new Error('Файл больше 8 МБ');
+  const res = await fetch('/api/news/images', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Ошибка ${res.status}`);
+  return (data as { name: string }).name;
+}
+
+// ---------- variables ----------
+export interface VarServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; address: string; map: string | null; ping: number | null }
+export interface VarSample { players: number; online: number; servers: number; date: string; time: string; byId: Map<number, VarServer> }
+
+export function sampleVars(servers: VarServer[] | null, now = new Date()): VarSample {
+  const list = servers ?? [];
+  const p = (n: number) => String(n).padStart(2, '0');
+  return {
+    players: list.reduce((n, s) => n + (s.online ? s.players : 0), 0),
+    online: list.filter((s) => s.online).length,
+    servers: list.length,
+    date: `${p(now.getDate())}.${p(now.getMonth() + 1)}.${now.getFullYear()}`,
+    time: `${p(now.getHours())}:${p(now.getMinutes())}`,
+    byId: new Map(list.map((s) => [s.id, s])),
+  };
+}
+
+export function resolveVars(text: string, v: VarSample): string {
+  if (!text || !text.includes('{')) return text;
+  return text
+    .replace(/\{(players|online|servers|date|time)\}/g, (_m, k: 'players' | 'online' | 'servers' | 'date' | 'time') => String(v[k]))
+    .replace(/\{server\.(\d+)\.(name|players|max|online|address|map|ping)\}/g, (m, id: string, k: string) => {
+      const s = v.byId.get(Number(id));
+      if (!s) return m;
+      switch (k) {
+        case 'name': return s.name;
+        case 'players': return String(s.players);
+        case 'max': return String(s.maxPlayers);
+        case 'online': return s.online ? 'онлайн' : 'офлайн';
+        case 'address': return s.address;
+        case 'map': return s.map ?? '–';
+        default: return s.ping != null ? `${s.ping} мс` : '–';
+      }
+    });
+}
+
+// ---------- validation (limits) ----------
+/** keys of preview parts that exceed a Discord limit: `${embed}:title`, `${embed}:field:${i}`, `content` ... */
+export function invalidParts(d: Draft): Set<string> {
+  const s = new Set<string>();
+  if (d.content.length + (d.mention !== 'none' ? 9 : 0) > LIMITS.content) s.add('content');
+  d.embeds.forEach((e, i) => {
+    if (e.title.length > LIMITS.title) s.add(`${i}:title`);
+    if (e.description.length > LIMITS.description) s.add(`${i}:description`);
+    if (e.authorName.length > LIMITS.author) s.add(`${i}:author`);
+    if (e.footer.length > LIMITS.footer) s.add(`${i}:footer`);
+    e.fields.forEach((f, j) => {
+      if (f.name.length > LIMITS.fieldName || f.value.length > LIMITS.fieldValue) s.add(`${i}:field:${j}`);
+    });
+  });
+  return s;
+}
+
+export const totalLength = (d: Draft) => d.embeds.reduce((n, e) => n + embedLength(e), 0);
+
+// ---------- pre-send checklist ----------
+export interface Check { level: 'ok' | 'warn' | 'error'; text: string }
+
+const TEMPLATE_WORDS = /(^|[^А-ЯЁа-яёA-Za-z0-9_])(ДАТА|ВРЕМЯ|НАЗВАНИЕ|ПРИЗ)(?![А-ЯЁа-яёA-Za-z0-9_])/g;
+
+export function runChecks(d: Draft): Check[] {
+  const out: Check[] = [];
+  const noChannel = !/^\d{15,25}$/.test(d.channelId);
+  out.push(noChannel ? { level: 'error', text: 'Не выбран канал для отправки.' } : { level: 'ok', text: 'Канал выбран.' });
+
+  const hasEmbed = d.embeds.some(embedHasContent);
+  const empty = !d.content.trim() && !hasEmbed && d.statusServerIds.length === 0;
+  out.push(empty ? { level: 'error', text: 'Сообщение пустое: добавьте текст, заголовок или картинку.' } : { level: 'ok', text: 'В сообщении есть содержимое.' });
+
+  if (d.embeds.length > LIMITS.embeds) out.push({ level: 'error', text: `Embed-блоков ${d.embeds.length}, максимум ${LIMITS.embeds}.` });
+  const total = totalLength(d);
+  if (total > LIMITS.total) out.push({ level: 'error', text: `Суммарная длина embed ${total} символов, максимум ${LIMITS.total}.` });
+  const bad = invalidParts(d);
+  if (bad.size) out.push({ level: 'error', text: `Превышены лимиты Discord в ${bad.size} ${bad.size === 1 ? 'месте' : 'местах'} (подсвечено красным в предпросмотре).` });
+
+  if (d.mention === 'everyone' || /@everyone/.test(d.content) || d.embeds.some((e) => /@everyone/.test(e.description))) {
+    out.push({ level: 'warn', text: 'Сообщение упомянет @everyone: уведомление получат все участники сервера. Убедитесь, что это нужно.' });
+  } else if (d.mention === 'here' || /@here/.test(d.content)) {
+    out.push({ level: 'warn', text: 'Сообщение упомянет @here: уведомление получат все, кто сейчас онлайн.' });
+  }
+
+  const httpImg: string[] = [];
+  d.embeds.forEach((e) => {
+    for (const u of [e.imageUrl, e.thumbnail, e.authorIcon]) if (u && !/^https:\/\//i.test(u)) httpImg.push(u);
+  });
+  if (httpImg.length) out.push({ level: 'warn', text: 'Ссылка на картинку не начинается с https://: Discord может её не показать.' });
+
+  const half = d.embeds.reduce((n, e) => n + e.fields.filter((f) => !!f.name.trim() !== !!f.value.trim()).length, 0);
+  if (half) out.push({ level: 'warn', text: `Полей с пустым названием или значением: ${half}. Они не будут показаны.` });
+
+  const texts = [d.content, ...d.embeds.flatMap((e) => [e.title, e.description, e.footer, e.authorName, ...e.fields.flatMap((f) => [f.name, f.value])])];
+  const words = new Set<string>();
+  for (const t of texts) for (const m of t.matchAll(TEMPLATE_WORDS)) words.add(m[2]);
+  if (words.size) out.push({ level: 'warn', text: `В тексте остались слова шаблона: ${[...words].join(', ')}. Замените их на свои.` });
+
+  return out;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
@@ -17491,6 +19537,14 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 .srv-ok { animation: none !important; box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.4), 0 14px 40px -14px rgb(var(--g) / 0.45); }
 .pill-ok.live, .pill-warn.lag { animation: none !important; }
 html[data-hidden] *, html[data-hidden] *::before, html[data-hidden] *::after { animation-play-state: paused !important; }
+
+/* ---------- news editor: preview parts, flash on focus, drop zones ---------- */
+.pv-part { cursor: pointer; border-radius: 4px; outline: 2px solid transparent; outline-offset: 2px; }
+.pv-part:hover, .pv-part:focus-visible { outline: 2px dashed rgba(88, 101, 242, 0.85); }
+.pv-bad, .pv-bad.pv-part { outline: 2px solid #f23f42; outline-offset: 2px; border-radius: 4px; }
+@keyframes flash-ctl { 0% { box-shadow: 0 0 0 0 rgb(var(--brand) / 0.7); } 40% { box-shadow: 0 0 0 5px rgb(var(--brand) / 0.45); } 100% { box-shadow: 0 0 0 0 rgb(var(--brand) / 0); } }
+.flash-ctl { animation: flash-ctl 0.7s ease-out 2; border-radius: 16px; }
+@media (prefers-reduced-motion: reduce) { .flash-ctl { animation: none; box-shadow: 0 0 0 3px rgb(var(--brand) / 0.6); } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -19031,10 +21085,10 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/EmbedPreview.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api } from '../api';
-import { Markdown } from '../components/Markdown';
-import { ago, usePoll } from '../ui';
+import { DiscordMd, EnvCtx, THEMES, ThemeCtx, type DTheme, type MdEnv } from '../components/news/DiscordMd';
+import { usePoll } from '../ui';
 
 export interface DiscordEmbed {
   title?: string;
@@ -19044,82 +21098,199 @@ export interface DiscordEmbed {
   author?: { name: string; icon_url?: string };
   thumbnail?: { url: string };
   image?: { url: string };
-  fields?: { name: string; value: string; inline?: boolean }[];
+  /** `idx` is the position in the editor's list (to find the form control on click) */
+  fields?: { name: string; value: string; inline?: boolean; idx?: number }[];
   footer?: { text: string; icon_url?: string };
   timestamp?: string;
 }
 
-// Discord's own palette: the preview should look like the real message in either panel theme
-const D = { bg: '#2b2d31', outer: '#313338', text: '#dbdee1', title: '#ffffff', muted: '#949ba4' };
+/** a clickable part of the preview */
+export interface PreviewPart {
+  embed: number;
+  part: 'content' | 'title' | 'description' | 'author' | 'thumbnail' | 'image' | 'footer' | 'field';
+  field?: number;
+}
 
-/** A Discord message as the bot would post it: optional text above and an embed below. */
 /** only http(s) links and images are rendered: `javascript:` and `data:` urls are dropped */
 const safeUrl = (u?: string | null): string | undefined => (u && /^https?:\/\//i.test(u.trim()) ? u.trim() : undefined);
 
-export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; content?: string }) {
-  const authorIcon = safeUrl(embed?.author?.icon_url);
-  const embedUrl = safeUrl(embed?.url);
-  const thumb = safeUrl(embed?.thumbnail?.url);
-  const image = safeUrl(embed?.image?.url);
-  const footerIcon = safeUrl(embed?.footer?.icon_url);
-  const color = `#${(embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
-  const inlineFields = embed?.fields?.filter((f) => f.inline) ?? [];
-  const wideFields = embed?.fields?.filter((f) => !f.inline) ?? [];
+const PART_LABEL: Record<PreviewPart['part'], string> = {
+  content: 'текст сообщения', title: 'заголовок', description: 'основной текст', author: 'автора', thumbnail: 'миниатюру', image: 'картинку', footer: 'подпись', field: 'поле',
+};
+
+function Part({ part, embed, field, onPick, bad, className, style, children }: {
+  part: PreviewPart['part']; embed: number; field?: number; onPick?: (p: PreviewPart) => void; bad?: boolean; className?: string; style?: CSSProperties; children: ReactNode;
+}) {
+  const cls = `${className ?? ''} ${bad ? 'pv-bad' : ''} ${onPick ? 'pv-part' : ''}`.trim();
+  if (!onPick) return <div className={cls} style={style} title={bad ? 'Превышен лимит Discord' : undefined}>{children}</div>;
+  const pick = () => onPick({ embed, part, field });
   return (
-    <div style={{ background: D.outer, color: D.text }} className="rounded-2xl p-3">
-      <div className="mb-1.5 flex items-center gap-2 text-sm">
-        <span className="grid h-8 w-8 place-items-center rounded-full bg-[#5865f2] font-black text-white">C</span>
-        <span className="font-bold" style={{ color: D.title }}>CoreGSM</span>
-        <span className="rounded px-1 text-[11px] font-bold text-white" style={{ background: '#5865f2' }}>БОТ</span>
-      </div>
-      {content && <div className="mb-2 text-sm"><Markdown text={content} /></div>}
-      {embed && (
-        <div className="max-w-full rounded-md py-2.5 pl-3.5 pr-3.5" style={{ background: D.bg, borderLeft: `4px solid ${color}` }}>
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
-              {embed.author && (
-                <div className="mb-1 flex items-center gap-2 text-[13px] font-bold" style={{ color: D.title }}>
-                  {authorIcon && <img src={authorIcon} alt="" className="h-6 w-6 rounded-full object-cover" />}
-                  {embed.author.name}
-                </div>
-              )}
-              {embed.title && (
-                <div className="mb-1 break-words text-base font-bold" style={{ color: embedUrl ? '#00a8fc' : D.title }}>
-                  {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{embed.title}</a> : embed.title}
-                </div>
-              )}
-              {embed.description && <div className="mb-2 text-sm"><Markdown text={embed.description} /></div>}
-            </div>
-            {thumb && <img src={thumb} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />}
-          </div>
-          {inlineFields.length > 0 && (
-            <div className="mb-2 grid grid-cols-3 gap-x-3 gap-y-2">
-              {inlineFields.map((f, i) => (
-                <div key={`${f.name}-${i}`} className="min-w-0 text-sm">
-                  <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
-                  <Markdown text={f.value} />
-                </div>
-              ))}
-            </div>
+    <div
+      className={cls}
+      style={style}
+      role="button"
+      tabIndex={0}
+      title={bad ? `Превышен лимит Discord. Перейти к полю: ${PART_LABEL[part]}` : `Перейти к полю: ${PART_LABEL[part]}`}
+      aria-label={`Перейти к полю: ${PART_LABEL[part]}`}
+      onClick={(e: MouseEvent) => { if ((e.target as HTMLElement).closest('a,[data-spoiler]')) return; pick(); }}
+      onKeyDown={(e: KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); pick(); } }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Discord groups neighbouring inline fields in rows of up to three */
+function fieldRows(fields: NonNullable<DiscordEmbed['fields']>) {
+  const rows: NonNullable<DiscordEmbed['fields']>[] = [];
+  let cur: NonNullable<DiscordEmbed['fields']> = [];
+  for (const f of fields) {
+    if (f.inline) {
+      cur.push(f);
+      if (cur.length === 3) { rows.push(cur); cur = []; }
+    } else {
+      if (cur.length) { rows.push(cur); cur = []; }
+      rows.push([f]);
+    }
+  }
+  if (cur.length) rows.push(cur);
+  return rows;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+function stamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const t = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const now = new Date();
+  return d.toDateString() === now.toDateString() ? `Сегодня, в ${t}` : `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()} ${t}`;
+}
+
+function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed; index: number; theme: DTheme; onPick?: (p: PreviewPart) => void; invalid?: Set<string>; fill?: boolean }) {
+  const authorIcon = safeUrl(e.author?.icon_url);
+  const embedUrl = safeUrl(e.url);
+  const thumb = safeUrl(e.thumbnail?.url);
+  const image = safeUrl(e.image?.url);
+  const footerIcon = safeUrl(e.footer?.icon_url);
+  const color = `#${(e.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
+  const rows = fieldRows(e.fields ?? []);
+  const ts = e.timestamp ? stamp(e.timestamp) : '';
+  const bad = (k: string) => !!invalid?.has(`${index}:${k}`);
+  return (
+    <div
+      className="mt-1 rounded-md py-2 pl-3 pr-4"
+      style={{ background: theme.embed, borderLeft: `4px solid ${color}`, border: `1px solid ${theme.embedBorder}`, borderLeftWidth: 4, borderLeftColor: color, maxWidth: fill ? '100%' : 520, width: 'fit-content', minWidth: 'min(100%, 280px)' }}
+    >
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          {e.author && (
+            <Part part="author" embed={index} onPick={onPick} bad={bad('author')} className="mb-1 flex items-center gap-2 text-[13px] font-bold">
+              <span className="flex items-center gap-2" style={{ color: theme.title }}>
+                {authorIcon && <img src={authorIcon} alt="" className="h-6 w-6 rounded-full object-cover" />}
+                {e.author.name}
+              </span>
+            </Part>
           )}
-          {wideFields.map((f, i) => (
-            <div key={`${f.name}-${i}`} className="mb-2 text-sm">
-              <div className="text-[13px] font-bold" style={{ color: D.title }}>{f.name}</div>
-              <Markdown text={f.value} />
-            </div>
-          ))}
-          {image && <img src={image} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
-          {(embed.footer || embed.timestamp) && (
-            <div className="mt-2 flex items-center gap-1.5 text-xs" style={{ color: D.muted }}>
-              {footerIcon && <img src={footerIcon} alt="" className="h-5 w-5 rounded-full" />}
-              <span>{embed.footer?.text}
-              {embed.footer && embed.timestamp ? ' • ' : ''}
-              {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}</span>
-            </div>
+          {e.title && (
+            <Part part="title" embed={index} onPick={onPick} bad={bad('title')} className="mb-1 break-words text-base font-bold">
+              {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: theme.link }}>{e.title}</a> : <span style={{ color: theme.title }}>{e.title}</span>}
+            </Part>
+          )}
+          {e.description && (
+            <Part part="description" embed={index} onPick={onPick} bad={bad('description')} className="mb-2 text-sm">
+              <DiscordMd text={e.description} />
+            </Part>
           )}
         </div>
+        {thumb && (
+          <Part part="thumbnail" embed={index} onPick={onPick} className="shrink-0">
+            <img src={thumb} alt="" className="h-20 w-20 rounded-md object-cover" />
+          </Part>
+        )}
+      </div>
+      {rows.map((row, ri) => (
+        <div key={ri} className="mb-2 grid gap-x-3 gap-y-2" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
+          {row.map((f, i) => (
+            <Part key={`${f.idx ?? ri}-${i}`} part="field" embed={index} field={f.idx} onPick={onPick} bad={f.idx != null && bad(`field:${f.idx}`)} className="min-w-0 text-sm">
+              <div className="text-[13px] font-bold" style={{ color: theme.title }}>{f.name}</div>
+              <DiscordMd text={f.value} />
+            </Part>
+          ))}
+        </div>
+      ))}
+      {image && (
+        <Part part="image" embed={index} onPick={onPick} className="mt-1">
+          <img src={image} alt="" className="max-h-[300px] w-full rounded-md object-cover" />
+        </Part>
+      )}
+      {(e.footer || ts) && (
+        <Part part="footer" embed={index} onPick={onPick} bad={bad('footer')} className="mt-2 text-xs">
+          <span className="flex items-center gap-1.5" style={{ color: theme.muted }}>
+            {footerIcon && <img src={footerIcon} alt="" className="h-5 w-5 rounded-full" />}
+            <span>
+              {e.footer?.text}
+              {e.footer?.text && ts ? ' • ' : ''}
+              {ts}
+            </span>
+          </span>
+        </Part>
       )}
     </div>
+  );
+}
+
+/**
+ * A Discord message as the bot would post it: optional text above and up to ten embeds below.
+ * `theme` / `width` switch the Discord skin and the phone layout; `onPick` makes the parts clickable;
+ * `invalid` holds keys of parts that exceed Discord limits (`<embed>:title`, `<embed>:field:<i>`, `content`).
+ */
+export function EmbedView({
+  embed, embeds, content, theme = 'dark', width = 'desktop', onPick, invalid, env, botName = 'CoreGSM', children,
+}: {
+  embed?: DiscordEmbed | null;
+  embeds?: DiscordEmbed[];
+  content?: string;
+  theme?: 'dark' | 'light';
+  width?: 'desktop' | 'phone';
+  onPick?: (p: PreviewPart) => void;
+  invalid?: Set<string>;
+  env?: MdEnv;
+  botName?: string;
+  children?: ReactNode;
+}) {
+  const t = THEMES[theme];
+  const list = embeds ?? (embed ? [embed] : []);
+  const phone = width === 'phone';
+  const now = new Date();
+  return (
+    <ThemeCtx.Provider value={t}>
+      <EnvCtx.Provider value={env ?? {}}>
+        <div className={phone ? 'mx-auto w-full max-w-[380px]' : 'w-full'}>
+          <div
+            style={{ background: t.outer, color: t.text, ...(phone ? { border: '6px solid #1e1f22', borderRadius: 28 } : {}) }}
+            className={`${phone ? '' : 'rounded-2xl'} p-3 ${phone ? 'text-[14px]' : 'text-[15px]'}`}
+          >
+            <div className="flex items-start gap-3">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full font-black text-white" style={{ background: '#5865f2' }} aria-hidden>{botName.slice(0, 1).toUpperCase()}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 text-[15px] leading-tight">
+                  <span className="font-bold" style={{ color: t.title }}>{botName}</span>
+                  <span className="rounded px-1 text-[10px] font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
+                  <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
+                </div>
+                {content && (
+                  <Part part="content" embed={0} onPick={onPick} bad={invalid?.has('content')} className="mt-0.5">
+                    <DiscordMd text={content} />
+                  </Part>
+                )}
+                {list.map((e, i) => <EmbedCard key={i} e={e} index={i} theme={t} onPick={onPick} invalid={invalid} fill={phone} />)}
+                {children}
+              </div>
+            </div>
+          </div>
+        </div>
+      </EnvCtx.Provider>
+    </ThemeCtx.Provider>
   );
 }
 
@@ -19342,8 +21513,9 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/News.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
+import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
-import { api, type NewsItem, type NewsSettings, type PublicNews } from '../api';
+import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
@@ -19385,6 +21557,14 @@ function NewsList() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [changingTest, setChangingTest] = useState(false);
+  const [view, setView] = useState<'list' | 'calendar'>(() => {
+    try { return localStorage.getItem('news_view') === 'calendar' ? 'calendar' : 'list'; } catch { return 'list'; }
+  });
+  const pickView = (v: 'list' | 'calendar') => {
+    setView(v);
+    try { localStorage.setItem('news_view', v); } catch { /* ignore */ }
+  };
 
   const load = () =>
     Promise.all([api<NewsItem[]>('/news'), api<NewsSettings>('/news/settings')])
@@ -19405,8 +21585,32 @@ function NewsList() {
     await api(`/news/${n.id}/publish`, 'POST').then(() => toast('Новость отправляется в Discord')).catch((e) => setError(e.message));
     void load();
   };
+  const setTestChannel = async (testChannelId: string) => {
+    if (testChannelId && !/^\d{15,25}$/.test(testChannelId)) return;
+    await api('/news/settings', 'PUT', { testChannelId }).catch((e) => setError(e.message));
+    setChangingTest(false);
+    void load();
+  };
   const copy = async (n: NewsItem) => {
+    try {
+      const created = await api<NewsItem>(`/news/${n.id}/duplicate`, 'POST');
+      toast('Копия создана');
+      window.location.hash = `#/admin/news/${created.id}`;
+      return;
+    } catch (e) {
+      // an older backend has no duplicate route: make the copy by hand
+      if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) { setError((e as Error).message); return; }
+    }
     await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast('Копия сохранена как черновик')).catch((e) => setError(e.message));
+    void load();
+  };
+  const reschedule = async (n: NewsItem, day: Date) => {
+    const base = n.scheduledAt ? new Date(n.scheduledAt) : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12, 0);
+    const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), base.getHours(), base.getMinutes()).getTime();
+    if (at <= Date.now()) { toast('Нельзя назначить время в прошлом', 'err'); return; }
+    await api(`/news/${n.id}/schedule`, 'PATCH', { scheduledAt: at })
+      .then(() => toast(`Перенесено на ${fmtDateTime(at)}`))
+      .catch((e) => setError(e.message));
     void load();
   };
   const remove = async (n: NewsItem) => {
@@ -19449,6 +21653,32 @@ function NewsList() {
         )}
       </div>
 
+      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+        <div className="min-w-0">
+          <div className="text-sm font-extrabold text-mute">Тестовый канал</div>
+          <div className="font-black">
+            {settings?.testChannelId ? (settings.testChannelName ? `# ${settings.testChannelName}${settings.testGuildName ? ` · ${settings.testGuildName}` : ''}` : `Канал ${settings.testChannelId}`) : 'не выбран'}
+          </div>
+          <div className="text-xs font-semibold text-mute">Сюда уходит «Отправить тест» из редактора.</div>
+        </div>
+        <span className="flex gap-2">
+          {settings?.testChannelId && <button className="btn btn-soft btn-sm" onClick={() => void setTestChannel('')}>Сбросить</button>}
+          <button className="btn btn-soft btn-sm" onClick={() => setChangingTest((v) => !v)} aria-expanded={changingTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать канал'}</button>
+        </span>
+        {changingTest && (
+          <div className="w-full">
+            <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} />
+          </div>
+        )}
+      </div>
+
+      <div className="seg" role="group" aria-label="Вид списка">
+        <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => pickView('list')}>Список</button>
+        <button type="button" className="seg-item" aria-pressed={view === 'calendar'} onClick={() => pickView('calendar')}>Календарь</button>
+      </div>
+
+      {view === 'calendar' && items.length > 0 && <NewsCalendar items={items} onMove={(n, day) => void reschedule(n, day)} />}
+
       {loaded && items.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
@@ -19461,7 +21691,7 @@ function NewsList() {
         </div>
       )}
 
-      <div className="fade-in grid gap-4 md:grid-cols-2">
+      <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
         {items.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
@@ -19478,10 +21708,11 @@ function NewsList() {
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
+                <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <span className="ml-auto flex items-center gap-1.5">
-                  <button type="button" className="row-act" title="Сделать копию" aria-label="Сделать копию" onClick={() => void copy(n)}><IconCopyPlus /></button>
+                  <button type="button" className="row-act" title="Дублировать" aria-label="Дублировать" onClick={() => void copy(n)}><IconCopyPlus /></button>
                   <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(n)}><IconTrash /></button>
                 </span>
               </div>
@@ -19531,143 +21762,28 @@ export function NewsFeed() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/NewsEditor.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  api, ApiError, type DiscordGuild, type NewsAutosave, type NewsItem, type NewsPayload, type NewsSettings, type NewsTestResult, type NewsTestStatus, type NewsVariable, type Server,
+} from '../api';
 import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { Button, ErrorLine, Field, GoLink, IconNews, PageHead, SplitButton, Switch, toast } from '../ui';
-import { EmbedView, type DiscordEmbed } from './EmbedPreview';
+import { ChecklistModal } from '../components/news/Checklist';
+import { FieldsBuilder } from '../components/news/FieldsBuilder';
+import { HistoryPanel } from '../components/news/HistoryPanel';
+import { ImageDrop } from '../components/news/ImageDrop';
+import { LimitsPanel } from '../components/news/LimitsPanel';
+import { Counter, MarkdownField } from '../components/news/MarkdownField';
+import {
+  LIMITS, PALETTE, PRESETS, TEMPLATES, applyPreset, applyTemplate as applyTpl, blank, blankEmbed, embedHasContent, fromPayload, gameColors, hex, parseHex, payloadKey, presetOf,
+  sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type VarServer,
+} from '../components/news/model';
+import { Preview } from '../components/news/Preview';
+import { StatusServers } from '../components/news/StatusServers';
+import type { PreviewPart } from './EmbedPreview';
+import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, Switch, fmtDateTime, toast } from '../ui';
 
-// ---------- draft <-> payload ----------
-interface FieldRow { name: string; value: string; inline: boolean }
-interface Draft {
-  channelId: string;
-  content: string;
-  mention: 'none' | 'here' | 'everyone';
-  title: string;
-  url: string;
-  description: string;
-  color: number;
-  authorName: string;
-  authorIcon: string;
-  thumbnail: string;
-  imageUrl: string;
-  imageUpload: string;
-  fields: FieldRow[];
-  footer: string;
-  timestamp: boolean;
-}
-
-const blank = (channelId: string): Draft => ({
-  channelId, content: '', mention: 'none', title: '', url: '', description: '', color: 0x5865f2, authorName: '', authorIcon: '',
-  thumbnail: '', imageUrl: '', imageUpload: '', fields: [], footer: '', timestamp: false,
-});
-
-function toPayload(d: Draft): NewsPayload {
-  return {
-    content: d.content,
-    mention: d.mention,
-    embed: {
-      title: d.title,
-      url: d.url,
-      description: d.description,
-      color: d.color,
-      author: { name: d.authorName, iconUrl: d.authorIcon },
-      thumbnailUrl: d.thumbnail,
-      image: { url: d.imageUrl, upload: d.imageUpload || undefined },
-      fields: d.fields.filter((f) => f.name.trim() || f.value.trim()),
-      footer: { text: d.footer },
-      timestamp: d.timestamp,
-    },
-  };
-}
-
-function fromPayload(p: NewsPayload, channelId: string): Draft {
-  const e = p.embed ?? {};
-  return {
-    channelId,
-    content: p.content ?? '',
-    mention: p.mention ?? 'none',
-    title: e.title ?? '',
-    url: e.url ?? '',
-    description: e.description ?? '',
-    color: e.color ?? 0x5865f2,
-    authorName: e.author?.name ?? '',
-    authorIcon: e.author?.iconUrl ?? '',
-    thumbnail: e.thumbnailUrl ?? '',
-    imageUrl: e.image?.url ?? '',
-    imageUpload: e.image?.upload ?? '',
-    fields: (e.fields ?? []).map((f) => ({ name: f.name, value: f.value, inline: !!f.inline })),
-    footer: e.footer?.text ?? '',
-    timestamp: !!e.timestamp,
-  };
-}
-
-const imageSrc = (d: Draft) => (d.imageUpload ? `/api/news/images/${d.imageUpload}` : d.imageUrl);
-
-function previewOf(d: Draft): { content: string; embed: DiscordEmbed | null } {
-  const mention = d.mention === 'everyone' ? '@everyone' : d.mention === 'here' ? '@here' : '';
-  const content = [mention, d.content.trim()].filter(Boolean).join('\n');
-  const fields = d.fields.filter((f) => f.name.trim() && f.value.trim());
-  const img = imageSrc(d);
-  const has = d.title || d.description || d.authorName || d.thumbnail || img || fields.length || d.footer;
-  if (!has) return { content, embed: null };
-  return {
-    content,
-    embed: {
-      title: d.title || undefined,
-      url: d.url || undefined,
-      description: d.description || undefined,
-      color: d.color,
-      author: d.authorName ? { name: d.authorName, icon_url: d.authorIcon || undefined } : undefined,
-      thumbnail: d.thumbnail ? { url: d.thumbnail } : undefined,
-      image: img ? { url: img } : undefined,
-      fields,
-      footer: d.footer ? { text: d.footer } : undefined,
-      timestamp: d.timestamp ? new Date().toISOString() : undefined,
-    },
-  };
-}
-
-const embedLength = (d: Draft) =>
-  d.title.length + d.description.length + d.authorName.length + d.footer.length + d.fields.reduce((n, f) => n + f.name.length + f.value.length, 0);
-
-// ---------- ready-made starting points ----------
-export const TEMPLATES: { id: string; label: string; apply: Partial<Draft> }[] = [
-  { id: 'announce', label: '📢 Объявление', apply: { title: '📢 Важное объявление', description: 'Здесь текст объявления.\n\nМожно использовать **жирный**, *курсив* и списки:\n- первый пункт\n- второй пункт', color: 0x5865f2, mention: 'none', fields: [], footer: '', timestamp: true } },
-  { id: 'restart', label: '🔄 Перезапуск', apply: { title: '🔄 Перезапуск сервера', description: 'Сервер будет перезапущен **ВРЕМЯ** (МСК). Это займёт несколько минут. Сохраните прогресс заранее.', color: 0x3b82f6, mention: 'none', fields: [], footer: '', timestamp: true } },
-  { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСервер будет недоступен около часа.', color: 0xf97316, mention: 'here', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
-  { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
-  { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
-  { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
-  { id: 'giveaway', label: '🎁 Розыгрыш', apply: { title: '🎁 Розыгрыш', description: 'Разыгрываем **ПРИЗ**! Условия ниже.', color: 0xf0b232, mention: 'everyone', fields: [{ name: '📝 Как участвовать', value: 'Поставьте реакцию 🎉 под этим сообщением', inline: false }, { name: '⏰ Итоги', value: 'ДАТА, ВРЕМЯ', inline: false }], footer: 'Удачи!', timestamp: false } },
-];
-
-const PALETTE: [string, number][] = [
-  ['Фиолетовый', 0x5865f2], ['Зелёный', 0x23a55a], ['Жёлтый', 0xf0b232], ['Красный', 0xf23f42], ['Оранжевый', 0xf97316],
-  ['Розовый', 0xeb459e], ['Бирюзовый', 0x14b8a6], ['Синий', 0x3b82f6], ['Серый', 0x4e5058], ['Белый', 0xffffff],
-];
-
-const EMOJIS = ['📢', '📣', '🔔', '🎉', '🎊', '🎁', '🏆', '🥇', '⭐', '🌟', '✨', '🔥', '💥', '⚡', '🚀', '🆕', '✅', '❌', '⚠️', '❗', '❓', '🛠️', '🔧', '⚙️', '🧹', '🗑️', '📅', '🗓️', '⏰', '🕒', '⏳', '📍', '🌍', '🗺️', '🎮', '🕹️', '👑', '⚔️', '🛡️', '🏹', '💎', '💰', '🪙', '❤️', '💜', '💙', '💚', '👍', '👏', '🙌', '🤝', '💬', '📝', '📌', '🔗', '🖼️', '🎤', '🎧', '📈', '🟢', '🟡', '🔴', '🔵'];
-
-const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
-const toLocalInput = (ms: number) => {
-  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
-  return d.toISOString().slice(0, 16);
-};
-
-async function uploadImage(file: File): Promise<string> {
-  if (file.size > 8 * 1024 * 1024) throw new Error('Файл больше 8 МБ');
-  const res = await fetch('/api/news/images', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Ошибка ${res.status}`);
-  return (data as { name: string }).name;
-}
-
-// ---------- small editor widgets ----------
-function Counter({ value, max }: { value: number; max: number }) {
-  return <span className={`text-xs font-bold tabular-nums ${value > max ? 'text-bad' : 'text-mute'}`}>{value}/{max}</span>;
-}
+export { TEMPLATES };
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -19681,176 +21797,157 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
-/** Text area with a Discord-markdown toolbar and an emoji picker. */
-function MarkdownField({ id, label, value, onChange, max, rows = 6, placeholder }: { id: string; label: string; value: string; onChange: (v: string) => void; max: number; rows?: number; placeholder?: string }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const [emoji, setEmoji] = useState(false);
-
-  const edit = (build: (sel: string, before: string, after: string) => { text: string; selStart: number; selEnd: number }) => {
-    const ta = ref.current;
-    if (!ta) return;
-    const s = ta.selectionStart, e = ta.selectionEnd;
-    const r = build(value.slice(s, e), value.slice(0, s), value.slice(e));
-    onChange(r.text);
-    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(r.selStart, r.selEnd); });
-  };
-  const wrap = (mark: string, placeholder = 'текст') => edit((sel, before, after) => {
-    const inner = sel || placeholder;
-    return { text: before + mark + inner + mark + after, selStart: before.length + mark.length, selEnd: before.length + mark.length + inner.length };
-  });
-  const prefixLines = (prefix: string) => edit((sel, before, after) => {
-    const inner = (sel || 'текст').split('\n').map((l) => prefix + l).join('\n');
-    return { text: before + inner + after, selStart: before.length, selEnd: before.length + inner.length };
-  });
-  const link = () => edit((sel, before, after) => {
-    const label = sel || 'текст ссылки';
-    const text = `${before}[${label}](https://)${after}`;
-    const start = before.length + label.length + 3;
-    return { text, selStart: start, selEnd: start + 8 };
-  });
-  const insert = (t: string) => edit((_sel, before, after) => ({ text: before + t + after, selStart: before.length + t.length, selEnd: before.length + t.length }));
-
-  const Btn = ({ onClick, title, children }: { onClick: () => void; title: string; children: ReactNode }) => (
-    <button type="button" title={title} aria-label={title} onClick={onClick} className="grid h-8 min-w-8 place-items-center rounded-lg px-1.5 text-sm font-bold text-ink transition hover:bg-soft">
-      {children}
-    </button>
+function ColorPicker({ value, onChange, games }: { value: number; onChange: (n: number) => void; games: [string, number][] }) {
+  const dot = (name: string, c: number) => (
+    <button
+      key={`${name}-${c}`}
+      type="button"
+      title={name}
+      aria-label={name}
+      aria-pressed={value === c}
+      onClick={() => onChange(c)}
+      className={`h-8 w-8 rounded-full border-2 transition ${value === c ? 'scale-110 border-ink' : 'border-line'}`}
+      style={{ background: hex(c) }}
+    />
   );
-
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <label htmlFor={id} className="label !mb-0">{label}</label>
-        <Counter value={value.length} max={max} />
-      </div>
-      <div className="relative rounded-2xl border-2 border-line focus-within:border-brand">
-        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1">
-          <Btn onClick={() => wrap('**')} title="Жирный"><b>Ж</b></Btn>
-          <Btn onClick={() => wrap('*')} title="Курсив"><i>К</i></Btn>
-          <Btn onClick={() => wrap('__')} title="Подчёркнутый"><u>Ч</u></Btn>
-          <Btn onClick={() => wrap('~~')} title="Зачёркнутый"><s>З</s></Btn>
-          <Btn onClick={() => wrap('||')} title="Спойлер">▒</Btn>
-          <Btn onClick={() => wrap('`', 'код')} title="Код"><span className="font-mono">{'<>'}</span></Btn>
-          <span className="mx-1 h-5 w-px bg-line" />
-          <Btn onClick={() => prefixLines('> ')} title="Цитата">❝</Btn>
-          <Btn onClick={() => prefixLines('- ')} title="Список">•≡</Btn>
-          <Btn onClick={() => prefixLines('## ')} title="Заголовок">H</Btn>
-          <Btn onClick={link} title="Ссылка">🔗</Btn>
-          <Btn onClick={() => setEmoji((v) => !v)} title="Эмодзи">😀</Btn>
-        </div>
-        {emoji && (
-          <div className="absolute right-0 top-11 z-20 grid w-72 max-w-[85vw] grid-cols-8 gap-0.5 rounded-2xl bg-card p-2 shadow-soft ring-2 ring-line">
-            {EMOJIS.map((e) => (
-              <button key={e} type="button" className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setEmoji(false); }}>{e}</button>
-            ))}
-          </div>
-        )}
-        <textarea
-          id={id}
-          ref={ref}
-          rows={rows}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-none"
-        />
-      </div>
-    </div>
-  );
-}
-
-function ColorPicker({ value, onChange }: { value: number; onChange: (n: number) => void }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {PALETTE.map(([name, c]) => (
-        <button
-          key={c}
-          type="button"
-          title={name}
-          aria-label={name}
-          aria-pressed={value === c}
-          onClick={() => onChange(c)}
-          className={`h-8 w-8 rounded-full border-2 transition ${value === c ? 'scale-110 border-ink' : 'border-line'}`}
-          style={{ background: hex(c) }}
-        />
-      ))}
-      <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm font-extrabold text-mute">
-        <input type="color" value={hex(value)} onChange={(e) => onChange(parseInt(e.target.value.slice(1), 16))} className="h-8 w-10 cursor-pointer rounded border-2 border-line bg-card" aria-label="Свой цвет" />
-        свой
-      </label>
-    </div>
-  );
-}
-
-function ImageInput({ label, url, upload, onUrl, onUpload, allowUpload }: { label: string; url: string; upload: string; onUrl: (v: string) => void; onUpload: (name: string) => void; allowUpload?: boolean }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const pick = async (file: File | undefined) => {
-    if (!file) return;
-    setBusy(true);
-    setErr('');
-    try { onUpload(await uploadImage(file)); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-  };
   return (
     <div className="space-y-2">
-      <span className="label !mb-0">{label}</span>
-      {upload ? (
-        <div className="flex items-center gap-3 rounded-2xl bg-soft p-2">
-          <img src={`/api/news/images/${upload}`} alt="" className="h-14 w-14 rounded-xl object-cover" />
-          <span className="min-w-0 flex-1 truncate text-sm font-bold">Загруженная картинка</span>
-          <button type="button" className="btn btn-danger btn-sm" onClick={() => onUpload('')}>Убрать</button>
-        </div>
-      ) : (
-        <div className="flex gap-2">
-          <input className="input" value={url} onChange={(e) => onUrl(e.target.value.trim())} placeholder="https://… ссылка на картинку" />
-          {allowUpload && (
-            <label className={`btn btn-soft shrink-0 cursor-pointer ${busy ? 'pointer-events-none opacity-60' : ''}`}>
-              {busy ? 'Загрузка…' : 'Загрузить'}
-              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(e) => { void pick(e.target.files?.[0]); e.target.value = ''; }} />
-            </label>
-          )}
+      <div className="flex flex-wrap items-center gap-2">
+        {PALETTE.map(([n, c]) => dot(n, c))}
+        <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm font-extrabold text-mute">
+          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded border-2 border-line bg-card" aria-label="Свой цвет" />
+          свой
+        </label>
+      </div>
+      {games.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Игры</span>
+          {games.map(([n, c]) => dot(n, c))}
         </div>
       )}
-      {err && <p className="text-sm font-bold text-bad">{err}</p>}
     </div>
   );
 }
+
+const PART_ID: Record<PreviewPart['part'], string> = {
+  content: 'news-content', title: 'news-title', description: 'news-desc', author: 'news-author', thumbnail: 'news-thumb', image: 'news-image', footer: 'news-footer', field: 'news-f',
+};
 
 // ---------- the editor ----------
 export default function NewsEditor({ id, template }: { id: number | null; template?: string }) {
   const [d, setD] = useState<Draft | null>(null);
   const [item, setItem] = useState<NewsItem | null>(null);
+  const [settings, setSettings] = useState<NewsSettings | null>(null);
+  const [servers, setServers] = useState<Server[] | null>(null);
+  const [variables, setVariables] = useState<NewsVariable[] | undefined>(undefined);
+  const [channelNames, setChannelNames] = useState<Record<string, string>>({});
+  const [active, setActive] = useState(0);
+  const [mobileTab, setMobileTab] = useState<'editor' | 'preview'>('editor');
+  const [moreOpen, setMoreOpen] = useState(false);
   const [makeDefault, setMakeDefault] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [repeat, setRepeat] = useState<'none' | 'daily' | 'weekly' | 'monthly'>('none');
   const [when, setWhen] = useState(() => toLocalInput(Date.now() + 3600_000));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [check, setCheck] = useState<'now' | 'schedule' | 'edit' | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [pickTest, setPickTest] = useState(false);
+  const [restore, setRestore] = useState<{ payload: NewsPayload; channelId?: string; ts?: number } | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
 
+  const baseline = useRef('');
+  const autosaveOff = useRef(false);
+  const akey = id ? String(id) : 'new';
+  const primary = useRef<() => void>(() => undefined);
+
+  // ----- load -----
   useEffect(() => {
+    let dead = false;
     (async () => {
       try {
+        const s = await api<NewsSettings>('/news/settings').catch(() => null);
+        if (dead) return;
+        setSettings(s);
+        let draft: Draft;
         if (id) {
           const n = await api<NewsItem>(`/news/${id}`);
+          if (dead) return;
           setItem(n);
-          setD(fromPayload(n.payload, n.channelId));
+          draft = fromPayload(n.payload, n.channelId);
           if (n.scheduledAt) setWhen(toLocalInput(n.scheduledAt));
           setRepeat(n.repeat ?? 'none');
         } else {
-          const s = await api<NewsSettings>('/news/settings');
           const tpl = TEMPLATES.find((x) => x.id === template);
-          setD({ ...blank(s.channelId ?? ''), ...(tpl?.apply ?? {}), channelId: s.channelId ?? '' });
+          const b = blank(s?.channelId ?? '');
+          draft = tpl ? applyTpl(b, tpl.apply) : b;
         }
+        baseline.current = payloadKey(toPayload(draft));
+        setD(draft);
+        // an unsaved draft from a previous session
+        api<NewsAutosave | null>(`/news/autosave?key=${encodeURIComponent(akey)}`)
+          .then((r) => {
+            if (dead || !r?.payload) return;
+            const { channelId: savedChannel, ...saved } = r.payload as typeof r.payload & { channelId?: string };
+            if (payloadKey(saved as typeof r.payload) === baseline.current) return;
+            setRestore({ payload: saved as typeof r.payload, channelId: r.channelId ?? savedChannel ?? undefined, ts: r.updatedAt ?? r.ts ?? undefined });
+          })
+          .catch((e) => { if (e instanceof ApiError && e.status === 404) autosaveOff.current = true; });
       } catch (e) {
-        setError((e as Error).message);
+        if (!dead) setError((e as Error).message);
       }
     })();
-  }, [id]);
+    api<Server[]>('/servers').then((s) => !dead && Array.isArray(s) && setServers(s)).catch(() => undefined);
+    api<NewsVariable[] | { variables: NewsVariable[] }>('/news/variables')
+      .then((v) => {
+        const list = Array.isArray(v) ? v : v?.variables;
+        if (!dead && Array.isArray(list) && list.length) setVariables(list);
+      })
+      .catch(() => undefined);
+    api<DiscordGuild[]>('/discord/channels')
+      .then((g) => {
+        const m: Record<string, string> = {};
+        for (const gg of g) for (const c of gg.channels) m[c.id] = c.name;
+        if (!dead) setChannelNames(m);
+      })
+      .catch(() => undefined);
+    return () => { dead = true; };
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ----- autosave: 1.5 s after the last change -----
+  useEffect(() => {
+    if (!d || restore || autosaveOff.current) return;
+    const payload = toPayload(d);
+    if (payloadKey(payload) === baseline.current) return;
+    const t = setTimeout(() => {
+      api(`/news/autosave`, 'PUT', { key: akey, payload: { ...payload, channelId: d.channelId } })
+        .then(() => setSavedAt(Date.now()))
+        .catch((e) => { if (e instanceof ApiError && (e.status === 404 || e.status === 405)) autosaveOff.current = true; });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [d, restore, akey]);
+
+  // ----- Ctrl+Enter publishes -----
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); primary.current(); }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  const varServers = useMemo<VarServer[] | null>(
+    () => servers?.map((s) => ({ id: s.id, name: s.name, online: s.online, players: s.players, maxPlayers: s.maxPlayers, address: s.address, map: s.map, ping: s.ping })) ?? null,
+    [servers],
+  );
+  const vars = useMemo(() => sampleVars(varServers), [varServers]);
+  const games = useMemo(() => gameColors(servers?.map((s) => s.game)), [servers]);
 
   if (!d) {
     return error ? <ErrorLine text={error} /> : (
       <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
         <div className="skeleton h-9 w-56 rounded-full" />
-        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
           <div className="space-y-5">
             <div className="skeleton panel h-52" />
             <div className="skeleton panel h-60" />
@@ -19866,16 +21963,63 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   }
 
   const set = (patch: Partial<Draft>) => setD((cur) => (cur ? { ...cur, ...patch } : cur));
+  const cur = Math.min(active, d.embeds.length - 1);
+  const e = d.embeds[cur];
+  const setE = (patch: Partial<EmbedDraft>) => setD((c) => (c ? { ...c, embeds: c.embeds.map((x, i) => (i === cur ? { ...x, ...patch } : x)) } : c));
   const isSent = item?.status === 'sent' || item?.status === 'edit_queued';
-  const total = embedLength(d);
-  const preview = previewOf(d);
+  const total = totalLength(d);
+  const noChannel = !/^\d{15,25}$/.test(d.channelId);
+  const dirtyText = !!d.content || d.embeds.some(embedHasContent);
 
-  const applyTemplate = async (t: (typeof TEMPLATES)[number]) => {
-    const dirty = d.title || d.description || d.content || d.fields.length;
-    if (dirty && !(await confirmDialog({ title: 'Заменить текущий текст шаблоном?', text: 'Введённый текст будет потерян.', confirmLabel: 'Заменить' }))) return;
-    set({ ...blank(d.channelId), ...t.apply, channelId: d.channelId });
+  // ----- click in the preview -> the matching control -----
+  const focusPart = (p: PreviewPart) => {
+    setMobileTab('editor');
+    if (p.embed !== cur && p.part !== 'content') setActive(p.embed);
+    if (p.part === 'author' || p.part === 'thumbnail' || p.part === 'image') setMoreOpen(true);
+    const elId = p.part === 'field' ? `news-f${p.field ?? 0}-name` : PART_ID[p.part];
+    setTimeout(() => {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      el.focus({ preventScroll: true });
+      const host = el.closest('.flash-host') ?? el;
+      host.classList.remove('flash-ctl');
+      void (host as HTMLElement).offsetWidth;
+      host.classList.add('flash-ctl');
+      setTimeout(() => host.classList.remove('flash-ctl'), 1400);
+    }, 60);
   };
 
+  const pasteImage = async (file: File) => {
+    try {
+      const name = await uploadImage(file);
+      setE({ imageUpload: name, imageUrl: '' });
+      setMoreOpen(true);
+      toast('Картинка загружена из буфера');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const applyTemplate = async (t: (typeof TEMPLATES)[number]) => {
+    if (dirtyText && !(await confirmDialog({ title: 'Заменить текущий текст шаблоном?', text: 'Введённый текст будет потерян.', confirmLabel: 'Заменить' }))) return;
+    setD((c) => (c ? { ...applyTpl(c, t.apply), statusServerIds: c.statusServerIds } : c));
+    setActive(0);
+  };
+
+  const addEmbed = () => {
+    if (d.embeds.length >= LIMITS.embeds) return;
+    set({ embeds: [...d.embeds, blankEmbed()] });
+    setActive(d.embeds.length);
+  };
+  const removeEmbed = async () => {
+    if (d.embeds.length <= 1) return;
+    if (embedHasContent(e) && !(await confirmDialog({ title: `Удалить embed ${cur + 1}?`, confirmLabel: 'Удалить', danger: true }))) return;
+    set({ embeds: d.embeds.filter((_, i) => i !== cur) });
+    setActive(Math.max(0, cur - 1));
+  };
+
+  // ----- saving -----
   const save = async (action: 'draft' | 'now' | 'schedule') => {
     setBusy(true);
     setError('');
@@ -19890,29 +22034,160 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
       if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
+      await api(`/news/autosave?key=${encodeURIComponent(akey)}`, 'DELETE').catch(() => undefined);
+      baseline.current = payloadKey(toPayload(d));
       toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
       window.location.hash = '#/admin/news';
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (err) {
+      setError((err as Error).message);
       setBusy(false);
+      setCheck(null);
     }
   };
 
-  const noChannel = !/^\d{15,25}$/.test(d.channelId);
+  const request = (mode: 'now' | 'schedule' | 'edit') => {
+    setError('');
+    if (mode === 'schedule' && !(new Date(when).getTime() > Date.now())) { setError('Выберите время в будущем'); return; }
+    setCheck(mode);
+  };
+  primary.current = () => {
+    if (busy || check) return;
+    if (isSent) request('edit');
+    else if (scheduling) request('schedule');
+    else request('now');
+  };
+
+  const sendTest = async () => {
+    setTesting(true);
+    setError('');
+    try {
+      const r = await api<NewsTestResult>('/news/test', 'POST', { payload: toPayload(d), channelId: settings?.testChannelId || undefined });
+      let st: NewsTestStatus = { status: 'pending' };
+      for (let i = 0; i < 20 && st.status === 'pending'; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        st = await api<NewsTestStatus>(`/news/test/${r.testId}`);
+      }
+      if (st.status === 'sent') toast('Тестовое сообщение отправлено');
+      else if (st.status === 'error') setError(st.error || 'Не удалось отправить тест');
+      else toast('Тест поставлен в очередь', 'ok');
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 404 ? 'Тестовая отправка недоступна на этом сервере.' : (err as Error).message);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const setTestChannel = async (channelId: string) => {
+    if (!/^\d{15,25}$/.test(channelId)) return;
+    await api('/news/settings', 'PUT', { testChannelId: channelId }).catch((err) => setError(err.message));
+    const s = await api<NewsSettings>('/news/settings').catch(() => null);
+    if (s) setSettings(s);
+    setPickTest(false);
+  };
+
+  const doRestore = () => {
+    if (!restore) return;
+    const nd = fromPayload(restore.payload, restore.channelId && /^\d{15,25}$/.test(restore.channelId) ? restore.channelId : d.channelId);
+    setD(nd);
+    setActive(0);
+    setRestore(null);
+    toast('Черновик восстановлен');
+  };
+  const dropRestore = () => {
+    setRestore(null);
+    void api(`/news/autosave?key=${encodeURIComponent(akey)}`, 'DELETE').catch(() => undefined);
+  };
+
+  const hasLive = d.statusServerIds.length > 0;
+
+  const actions = (
+    <div className="panel fixed inset-x-0 bottom-0 z-30 max-h-[75dvh] space-y-3 overflow-auto rounded-b-none p-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:max-h-none lg:overflow-visible lg:rounded-b-3xl lg:pb-4">
+      <ErrorLine text={error} />
+      {noChannel && !isSent && <p className="text-sm font-bold text-mute">Выберите канал, чтобы опубликовать или запланировать.</p>}
+      {isSent ? (
+        <Button className="w-full" loading={busy} onClick={() => request('edit')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</Button>
+      ) : (
+        <>
+          <SplitButton
+            className="w-full"
+            magnetic
+            loading={busy}
+            disabled={noChannel}
+            label={busy ? 'Отправляю…' : 'Опубликовать сейчас'}
+            onClick={() => request('now')}
+            menuLabel="Другие способы публикации"
+            items={[
+              { key: 'schedule', label: 'Запланировать…', hint: 'Выбрать дату и время', onSelect: () => setScheduling(true) },
+              { key: 'draft', label: 'Сохранить как черновик', hint: 'Ничего не отправляется в Discord', onSelect: () => void save('draft') },
+            ]}
+          />
+          {scheduling && (
+            <div className="space-y-2 rounded-2xl bg-soft p-3">
+              <label htmlFor="news-when" className="label">Когда опубликовать</label>
+              <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(ev) => setWhen(ev.target.value)} />
+              <label htmlFor="news-repeat" className="label">Повторять</label>
+              <select id="news-repeat" className="input" value={repeat} onChange={(ev) => setRepeat(ev.target.value as typeof repeat)}>
+                <option value="none">Не повторять</option>
+                <option value="daily">Каждый день</option>
+                <option value="weekly">Каждую неделю</option>
+                <option value="monthly">Каждый месяц</option>
+              </select>
+              <div className="flex gap-2">
+                <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => request('schedule')}>Запланировать</Button>
+                <Button variant="soft" onClick={() => setScheduling(false)}>Отмена</Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      <div className="flex flex-wrap items-center gap-2 border-t-2 border-line pt-3">
+        <Button variant="soft" loading={testing} disabled={!settings?.testChannelId && noChannel} onClick={() => void sendTest()}>Отправить тест</Button>
+        <span className="min-w-0 flex-1 text-xs font-semibold text-mute">
+          {settings?.testChannelId
+            ? <>Тест уйдёт в {settings.testChannelName ? `# ${settings.testChannelName}` : `канал ${settings.testChannelId}`}{settings.testGuildName ? ` · ${settings.testGuildName}` : ''}. </>
+            : 'Тестовый канал не задан: тест уйдёт в канал новости. '}
+          <button type="button" className="font-extrabold text-link hover:underline" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать'}</button>
+        </span>
+        {pickTest && <div className="w-full"><ChannelPicker id="news-test-channel" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} /></div>}
+      </div>
+      {savedAt && <p className="text-xs font-semibold text-mute">Черновик автоматически сохранён в {fmtDateTime(savedAt)}</p>}
+    </div>
+  );
+
+  const scheduleText = check === 'schedule' ? `Будет опубликовано ${fmtDateTime(new Date(when).getTime())}.` : undefined;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 pb-40 lg:pb-0">
       <a href="#/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
       <PageHead
         icon={<IconNews />}
         title={id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}
         subtitle={isSent ? 'Сообщение в Discord будет отредактировано, новое отправлено не будет.' : undefined}
         hint="Заполните канал и текст, проверьте предпросмотр справа и нажмите «Опубликовать сейчас». Можно запланировать или сохранить как черновик."
-        help={<p>Кнопки отправки находятся справа от формы (на телефоне под ней). Слова ДАТА и ВРЕМЯ в шаблонах замените на свои. Чтобы упоминание @everyone сработало, у бота должно быть соответствующее право в канале.</p>}
+        help={<p>Нажмите на часть сообщения в предпросмотре, чтобы перейти к её полю. Ctrl+Enter публикует. Слова ДАТА и ВРЕМЯ в шаблонах замените на свои. Перед отправкой панель проверяет лимиты Discord и типичные ошибки. Изменения сохраняются в черновик автоматически.</p>}
       />
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
-        <div className="space-y-5">
+      {restore && (
+        <Notice
+          tone="info"
+          action={
+            <span className="flex gap-3">
+              <button type="button" className="font-extrabold underline" onClick={doRestore}>Восстановить</button>
+              <button type="button" className="font-extrabold underline" onClick={dropRestore}>Отбросить</button>
+            </span>
+          }
+        >
+          Найден несохранённый черновик{restore.ts ? ` от ${fmtDateTime(restore.ts)}` : ''}.
+        </Notice>
+      )}
+
+      <div className="seg lg:hidden" role="group" aria-label="Режим">
+        <button type="button" className="seg-item" aria-pressed={mobileTab === 'editor'} onClick={() => setMobileTab('editor')}>Редактор</button>
+        <button type="button" className="seg-item" aria-pressed={mobileTab === 'preview'} onClick={() => setMobileTab('preview')}>Превью</button>
+      </div>
+
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
+        <div className={`space-y-5 ${mobileTab === 'preview' ? 'hidden lg:block lg:space-y-5' : ''}`}>
           <Section title="Куда отправить">
             <Field label="Канал">
               {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
@@ -19929,7 +22204,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
               </label>
             )}
             <Field label="Упоминание">
-              <select id="news-mention" className="input" value={d.mention} onChange={(e) => set({ mention: e.target.value as Draft['mention'] })}>
+              <select id="news-mention" className="input" value={d.mention} onChange={(ev) => set({ mention: ev.target.value as Draft['mention'] })}>
                 <option value="none">Без упоминания</option>
                 <option value="here">@here: онлайн-участникам</option>
                 <option value="everyone">@everyone: всем</option>
@@ -19942,117 +22217,108 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <Section title="Шаблон" hint="Готовая заготовка, которую можно изменить. Слова ДАТА, ВРЕМЯ и т. п. замените на свои.">
               <div className="flex flex-wrap gap-2">
                 {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(t)}>{t.label}</button>)}
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => set({ ...blank(d.channelId) })}>Очистить</button>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => { set({ ...blank(d.channelId), statusServerIds: d.statusServerIds }); setActive(0); }}>Очистить</button>
               </div>
             </Section>
           )}
 
           <Section title="Текст" hint="Обычный текст над рамкой. Можно оставить пустым.">
-            <MarkdownField id="news-content" label="Сообщение" value={d.content} onChange={(v) => set({ content: v })} max={2000} rows={3} placeholder="Например: Друзья, у нас новости!" />
+            <MarkdownField id="news-content" label="Сообщение" value={d.content} onChange={(v) => set({ content: v })} max={LIMITS.content} rows={3} placeholder="Например: Друзья, у нас новости!" variables={variables} onImage={(f) => void pasteImage(f)} />
           </Section>
 
-          <Section title="Оформление (embed)" hint="Цветная карточка с заголовком, текстом, полями и картинкой.">
-            <Field label="Цвет полосы"><ColorPicker value={d.color} onChange={(c) => set({ color: c })} /></Field>
+          <Section title="Оформление (embed)" hint="Цветная карточка с заголовком, текстом, полями и картинкой. В одном сообщении можно несколько блоков.">
+            <div className="no-scrollbar flex items-center gap-2 overflow-x-auto" role="tablist" aria-label="Embed-блоки">
+              <div className="seg flex w-fit shrink-0">
+                {d.embeds.map((x, i) => (
+                  <button key={i} type="button" role="tab" aria-selected={i === cur} aria-pressed={i === cur} className="seg-item whitespace-nowrap" onClick={() => setActive(i)}>
+                    Embed {i + 1}{!embedHasContent(x) && <span className="ml-1 text-mute" aria-label="пустой">·</span>}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="btn btn-soft btn-sm shrink-0" disabled={d.embeds.length >= LIMITS.embeds} onClick={addEmbed}>+ Добавить embed</button>
+              {d.embeds.length > 1 && <button type="button" className="btn btn-danger btn-sm shrink-0" onClick={() => void removeEmbed()}>Удалить Embed {cur + 1}</button>}
+            </div>
+
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label !mb-0">Заголовок</label><Counter value={d.title.length} max={256} /></div>
-              <input id="news-title" className="input" value={d.title} onChange={(e) => set({ title: e.target.value })} maxLength={256} placeholder="📢 Заголовок новости" />
+              <span className="label">Тип сообщения</span>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Тип сообщения">
+                {PRESETS.map((p) => {
+                  const on = presetOf(e)?.id === p.id;
+                  return (
+                    <button key={p.id} type="button" aria-pressed={on} onClick={() => setE(applyPreset(e, p))} className={`btn btn-sm ${on ? '' : 'btn-soft'}`}>
+                      <span aria-hidden className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full" style={{ background: hex(p.color) }} />{p.icon} {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <Field label="Цвет полосы"><ColorPicker value={e.color} onChange={(c) => setE({ color: c })} games={games} /></Field>
+            <div>
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label !mb-0">Заголовок</label><Counter value={e.title.length} max={LIMITS.title} /></div>
+              <input id="news-title" className="input" value={e.title} onChange={(ev) => setE({ title: ev.target.value })} placeholder="📢 Заголовок новости" />
             </div>
             <Field label="Ссылка заголовка (необязательно)">
-              <input id="news-url" className="input" value={d.url} onChange={(e) => set({ url: e.target.value.trim() })} placeholder="https://…" />
+              <input id="news-url" className="input" value={e.url} onChange={(ev) => setE({ url: ev.target.value.trim() })} placeholder="https://…" />
             </Field>
-            <MarkdownField id="news-desc" label="Основной текст" value={d.description} onChange={(v) => set({ description: v })} max={4096} rows={8} placeholder="Расскажите, что произошло. Поддерживается оформление Discord." />
+            <MarkdownField id="news-desc" label="Основной текст" value={e.description} onChange={(v) => setE({ description: v })} max={LIMITS.description} rows={8} placeholder="Расскажите, что произошло. Поддерживается оформление Discord." variables={variables} onImage={(f) => void pasteImage(f)} />
 
-            <details className="rounded-2xl border-2 border-line px-4 py-2.5" open={!!(d.authorName || d.thumbnail || d.imageUrl || d.imageUpload)}>
+            <details className="rounded-2xl border-2 border-line px-4 py-2.5" open={moreOpen || !!(e.authorName || e.thumbnail || e.imageUrl || e.imageUpload)} onToggle={(ev) => setMoreOpen(ev.currentTarget.open)}>
               <summary className="cursor-pointer select-none font-extrabold text-link">Автор, миниатюра и большая картинка</summary>
               <div className="mt-3 space-y-3.5">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Автор (имя)"><input className="input" value={d.authorName} onChange={(e) => set({ authorName: e.target.value })} maxLength={256} placeholder="Администрация" /></Field>
-                  <Field label="Аватар автора (ссылка)"><input className="input" value={d.authorIcon} onChange={(e) => set({ authorIcon: e.target.value.trim() })} placeholder="https://…" /></Field>
+                  <label className="block"><span className="label">Автор (имя)</span><input id="news-author" className="input" value={e.authorName} onChange={(ev) => setE({ authorName: ev.target.value })} placeholder="Администрация" /></label>
+                  <label className="block"><span className="label">Аватар автора (ссылка)</span><input className="input" value={e.authorIcon} onChange={(ev) => setE({ authorIcon: ev.target.value.trim() })} placeholder="https://…" /></label>
                 </div>
-                <Field label="Миниатюра справа сверху (ссылка)"><input className="input" value={d.thumbnail} onChange={(e) => set({ thumbnail: e.target.value.trim() })} placeholder="https://…" /></Field>
-                <ImageInput label="Большая картинка внизу" url={d.imageUrl} upload={d.imageUpload} onUrl={(v) => set({ imageUrl: v })} onUpload={(n) => set({ imageUpload: n, imageUrl: n ? '' : d.imageUrl })} allowUpload />
+                <ImageDrop id="news-thumb" label="Миниатюра справа сверху" url={e.thumbnail} upload="" onUrl={(v) => setE({ thumbnail: v })} onUpload={() => undefined} minWidth={80} />
+                <ImageDrop id="news-image" label="Большая картинка внизу" url={e.imageUrl} upload={e.imageUpload} onUrl={(v) => setE({ imageUrl: v })} onUpload={(n) => setE({ imageUpload: n, imageUrl: n ? '' : e.imageUrl })} allowUpload minWidth={400} />
               </div>
             </details>
           </Section>
 
-          <Section title="Поля" hint="Блоки «название и значение». Короткие можно ставить в ряд по три.">
-            {d.fields.map((f, i) => (
-              <div key={i} className="space-y-2 rounded-2xl bg-soft p-3">
-                <div className="flex gap-2">
-                  <input aria-label="Название поля" className="input" value={f.name} maxLength={256} placeholder="Название" onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })} />
-                  <button type="button" className="btn btn-danger btn-sm shrink-0" aria-label="Удалить поле" onClick={() => set({ fields: d.fields.filter((_, j) => j !== i) })}>✕</button>
-                </div>
-                <textarea aria-label="Текст поля" className="input min-h-[4.5rem]" rows={2} value={f.value} maxLength={1024} placeholder="Текст" onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })} />
-                <label className="flex items-center gap-3 text-sm font-bold text-mute">
-                  <Switch checked={f.inline} onChange={(on) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, inline: on } : x)) })} /> В ряд с соседними
-                </label>
-              </div>
-            ))}
-            <button type="button" className="btn btn-soft btn-sm" disabled={d.fields.length >= 25} onClick={() => set({ fields: [...d.fields, { name: '', value: '', inline: d.fields.length > 0 && d.fields.length < 3 }] })}>+ Добавить поле</button>
+          <Section title="Поля" hint="Блоки «название и значение». Перетаскивайте за ручку или используйте стрелки; короткие поля можно ставить в ряд по три.">
+            <FieldsBuilder fields={e.fields} onChange={(f) => setE({ fields: f })} variables={variables} />
           </Section>
 
           <Section title="Подпись">
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label !mb-0">Текст внизу</label><Counter value={d.footer.length} max={2048} /></div>
-              <input id="news-footer" className="input" value={d.footer} onChange={(e) => set({ footer: e.target.value })} maxLength={2048} placeholder="Например: Администрация сервера" />
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label !mb-0">Текст внизу</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
+              <input id="news-footer" className="input" value={e.footer} onChange={(ev) => setE({ footer: ev.target.value })} placeholder="Например: Администрация сервера" />
             </div>
             <label className="flex items-center gap-3 text-sm font-bold text-mute">
-              <Switch checked={d.timestamp} onChange={(on) => set({ timestamp: on })} /> Показывать время публикации
+              <Switch checked={e.timestamp} onChange={(on) => setE({ timestamp: on })} /> Показывать время публикации
             </label>
           </Section>
+
+          {servers && servers.length > 0 && (
+            <Section title="Статус серверов" hint="Живой блок: бот добавит карточки выбранных серверов (онлайн, игроки) и будет обновлять их.">
+              <StatusServers servers={servers} value={d.statusServerIds} onChange={(ids) => set({ statusServerIds: ids })} />
+            </Section>
+          )}
+
+          {id && <HistoryPanel id={id} locked={item?.status === 'sending' || item?.status === 'queued'} onRestored={(it) => { setItem(it); const nd = fromPayload(it.payload, it.channelId); baseline.current = payloadKey(toPayload(nd)); setD(nd); setActive(0); }} />}
         </div>
 
-        <aside className="space-y-4 lg:sticky lg:top-4">
-          <div className="panel p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-lg font-black">Предпросмотр</h2>
-              <span className={`text-xs font-bold tabular-nums ${total > 6000 ? 'text-bad' : 'text-mute'}`} title="Лимит Discord на весь embed">{total}/6000</span>
-            </div>
-            {preview.content || preview.embed ? <EmbedView content={preview.content} embed={preview.embed} /> : <p className="py-10 text-center font-semibold text-mute">Начните писать: здесь появится сообщение, как оно будет выглядеть в Discord.</p>}
+        <aside className="space-y-4 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:space-y-4 lg:overflow-y-auto lg:overscroll-contain">
+          <div className={mobileTab === 'editor' ? 'hidden space-y-4 lg:block' : 'space-y-4'}>
+            <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
+            {hasLive && <p className="px-1 text-xs font-semibold text-mute">Карточки серверов показаны образцом: настоящие данные появятся при отправке.</p>}
+            <LimitsPanel d={d} active={cur} />
           </div>
-
-          <div className="panel space-y-3 p-4">
-            <ErrorLine text={error} />
-            {noChannel && !isSent && <p className="text-sm font-bold text-mute">Выберите канал, чтобы опубликовать или запланировать.</p>}
-            {isSent ? (
-              <Button className="w-full" loading={busy} onClick={() => save('draft')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</Button>
-            ) : (
-              <>
-                <SplitButton
-                  className="w-full"
-                  magnetic
-                  loading={busy}
-                  disabled={noChannel}
-                  label={busy ? 'Отправляю…' : 'Опубликовать сейчас'}
-                  onClick={() => void save('now')}
-                  menuLabel="Другие способы публикации"
-                  items={[
-                    { key: 'schedule', label: 'Запланировать…', hint: 'Выбрать дату и время', onSelect: () => setScheduling(true) },
-                    { key: 'draft', label: 'Сохранить как черновик', hint: 'Ничего не отправляется в Discord', onSelect: () => void save('draft') },
-                  ]}
-                />
-                {scheduling && (
-                  <div className="space-y-2 rounded-2xl bg-soft p-3">
-                    <label htmlFor="news-when" className="label">Когда опубликовать</label>
-                    <input id="news-when" type="datetime-local" autoFocus className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
-                    <label htmlFor="news-repeat" className="label">Повторять</label>
-                    <select id="news-repeat" className="input" value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)}>
-                      <option value="none">Не повторять</option>
-                      <option value="daily">Каждый день</option>
-                      <option value="weekly">Каждую неделю</option>
-                      <option value="monthly">Каждый месяц</option>
-                    </select>
-                    <div className="flex gap-2">
-                      <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => save('schedule')}>Запланировать</Button>
-                      <Button variant="soft" onClick={() => setScheduling(false)}>Отмена</Button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          {actions}
         </aside>
       </div>
+
+      {check && (
+        <ChecklistModal
+          draft={d}
+          mode={check}
+          scheduleText={scheduleText}
+          busy={busy}
+          onClose={() => setCheck(null)}
+          onConfirm={() => void save(check === 'edit' ? 'draft' : check)}
+        />
+      )}
     </div>
   );
 }
