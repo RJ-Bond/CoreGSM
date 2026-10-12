@@ -186,7 +186,9 @@
   background: rgb(var(--brand)); color: #fff; box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
 }
 .skip-link:focus { transform: none; }
-main:focus { outline: none; }
+/* <main> gets focus programmatically on every route change: no ring around the whole page */
+main:focus,
+main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #0000; }
 
 /* a value that just changed: short glow */
 @keyframes num-bump {

@@ -86,6 +86,8 @@ export async function encryptFile(src: string, dst: string, pass: string): Promi
     out.on('finish', res);
     out.on('error', rej);
   });
+  // a failure before `await done` must not become an unhandled rejection
+  done.catch(() => undefined);
   out.write(header);
   for await (const chunk of fs.createReadStream(src)) {
     const c = cipher.update(chunk as Buffer);
@@ -118,6 +120,8 @@ export async function decryptFile(src: string, dst: string, pass: string): Promi
     out.on('finish', res);
     out.on('error', rej);
   });
+  // a failure before `await done` must not become an unhandled rejection
+  done.catch(() => undefined);
   try {
     if (size - 16 > HEADER_LEN) {
       for await (const chunk of fs.createReadStream(src, { start: HEADER_LEN, end: size - 17 })) {
