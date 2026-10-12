@@ -10,6 +10,7 @@ import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard, renderGameIcon } from './card.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
+import { installAudit, registerOps } from './ops.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -84,6 +85,7 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
+installAudit(app);
 
 const wrap =
   (fn: (req: Request, res: Response) => unknown) =>
@@ -980,6 +982,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 });
 
 registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
+registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS });
 
 // ---------- errors ----------
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

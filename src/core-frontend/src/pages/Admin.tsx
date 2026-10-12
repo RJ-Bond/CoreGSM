@@ -6,13 +6,26 @@ import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
+import JournalPage from './Journal';
 import SettingsPage, { UsersTab } from './Settings';
+import SystemPage from './System';
 
 const IconUsers = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
     <circle cx="9" cy="7" r="4" />
     <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+
+const IconJournal = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+  </svg>
+);
+const IconSystem = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
   </svg>
 );
 
@@ -24,6 +37,8 @@ export const ADMIN_SECTIONS: Section[] = [
   { id: 'news', label: 'Новости', icon: IconNews },
   { id: 'cards', label: 'Карточки', icon: IconCards },
   { id: 'users', label: 'Пользователи', icon: IconUsers },
+  { id: 'journal', label: 'Журнал', icon: IconJournal },
+  { id: 'system', label: 'Система', icon: IconSystem },
   { id: 'settings', label: 'Настройки', icon: IconSettings },
 ];
 
@@ -56,6 +71,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'news' && <NewsPage sub={tail} />}
         {current === 'cards' && <CardsPage />}
         {current === 'users' && <UsersTab />}
+        {current === 'journal' && <JournalPage />}
+        {current === 'system' && <SystemPage />}
         {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
     </div>
