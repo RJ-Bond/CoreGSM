@@ -3,7 +3,7 @@ import { api, type CertInfo, type Server, type ServerInput } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconRefresh, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import AlertsPage, { IconBell } from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
@@ -129,7 +129,7 @@ function CertWarning() {
 function ServersManage() {
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [editing, setEditing] = useState<{ id?: number; data: ServerInput } | null>(null);
+  const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
 
@@ -155,9 +155,15 @@ function ServersManage() {
   return (
     <div className="space-y-5">
       <PageHead title="Серверы" subtitle="Добавление и настройка игровых серверов" icon={<IconServers />}>
-        <button className="btn" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+        <button className="btn" data-magnetic onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
       </PageHead>
       <ErrorLine text={error} />
+
+      {!loaded && (
+        <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
+          {[0, 1, 2].map((i) => <div key={i} className="skeleton tile h-[74px]" />)}
+        </div>
+      )}
 
       {loaded && servers.length === 0 && (
         <Empty title="Серверов пока нет" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.">
@@ -165,7 +171,7 @@ function ServersManage() {
         </Empty>
       )}
 
-      <div className="space-y-3">
+      <div className="fade-in space-y-3">
         {servers.map((s) => (
           <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
             <GameAvatar game={s.game} size={44} />
@@ -180,8 +186,8 @@ function ServersManage() {
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="flex gap-2">
-              <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id}>{busyId === s.id ? '…' : 'Опросить'}</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country } })}>Изменить</button>
+              <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}><IconRefresh spinning={busyId === s.id} />Опросить</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>Изменить</button>
               <button className="btn btn-danger btn-sm" onClick={() => void remove(s)}>Удалить</button>
             </div>
           </div>
@@ -192,6 +198,8 @@ function ServersManage() {
         <ServerForm
           initial={editing.data}
           id={editing.id}
+          coverUrl={editing.cover}
+          onCoverChanged={() => void load()}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); toast('Сервер сохранён'); void load(); }}
         />

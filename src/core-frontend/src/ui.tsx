@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { revealTransition, withViewTransition } from './useMotion';
 import { useAuth } from './auth';
 import AuthShowcase from './components/AuthShowcase';
 import { getToken, type Server } from './api';
@@ -45,6 +46,15 @@ export function usePoll(fn: () => unknown, ms: number) {
 export const LAG_PING = 100;
 export const isLag = (s: Pick<Server, 'online' | 'ping'>) => s.online && s.ping != null && s.ping > LAG_PING;
 
+// shared building blocks live in their own files; pages import everything from here
+export { Button } from './components/Button';
+export type { ButtonProps } from './components/Button';
+export { Switch } from './components/Switch';
+export { SplitButton } from './components/SplitButton';
+export type { SplitItem } from './components/SplitButton';
+export { useFlashOnChange, useDepth, useDensity, setDensity, prefersReducedMotion } from './useMotion';
+export type { Density } from './useMotion';
+
 const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 /** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
@@ -70,19 +80,59 @@ export function useTween(value: number, ms = 600): number {
   return shown;
 }
 
-/** tabular number that tweens to new values and (optionally) flashes briefly when the value changes */
-export function AnimatedNumber({ value, className = '', pulse = false }: { value: number; className?: string; pulse?: boolean }) {
-  const shown = useTween(value);
+const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/**
+ * Tabular number whose digits roll vertically (slot-machine style) when the value changes.
+ * `pulse`: the number glows briefly; `delta`: a «+3» / «−2» chip floats above it for about two seconds.
+ * The real number is in a visually hidden node, the rolling digits are decoration (aria-hidden); no layout shift.
+ */
+export function AnimatedNumber({ value, className = '', pulse = false, delta = false }: { value: number; className?: string; pulse?: boolean; delta?: boolean }) {
   const [bump, setBump] = useState(false);
-  const first = useRef(true);
+  const [chip, setChip] = useState<{ n: number; k: number } | null>(null);
+  const prev = useRef(value);
+  const born = useRef(true);
   useEffect(() => {
-    if (first.current) { first.current = false; return; }
-    if (!pulse) return;
-    setBump(true);
-    const t = setTimeout(() => setBump(false), 950);
-    return () => clearTimeout(t);
-  }, [value, pulse]);
-  return <span aria-live="off" className={`tabular-nums ${bump ? 'num-bump' : ''} ${className}`}>{shown}</span>;
+    const diff = value - prev.current;
+    prev.current = value;
+    if (born.current) { born.current = false; return; }
+    if (diff === 0) return;
+    const timers: number[] = [];
+    if (pulse) {
+      setBump(true);
+      timers.push(window.setTimeout(() => setBump(false), 950));
+    }
+    if (delta) {
+      setChip({ n: diff, k: Date.now() });
+      timers.push(window.setTimeout(() => setChip(null), 2100));
+    }
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [value, pulse, delta]);
+
+  const text = String(Math.round(value));
+  const chars = [...text];
+  return (
+    <span className={`roll ${bump ? 'num-bump' : ''} ${className}`}>
+      <span className="sr-only">{text}</span>
+      <span aria-hidden>
+        {chars.map((c, i) => {
+          // keyed from the right, so a column keeps its identity when the number grows by a digit
+          const key = chars.length - i;
+          return /\d/.test(c)
+            ? (
+              <span key={key} className="roll-d">
+                <span className="roll-g">0</span>
+                <span className="roll-col" style={{ transform: `translateY(${-Number(c)}em)` }}>
+                  {DIGITS.map((d) => <span key={d}>{d}</span>)}
+                </span>
+              </span>
+            )
+            : <span key={key}>{c}</span>;
+        })}
+      </span>
+      {chip && <span key={chip.k} aria-hidden className={`delta-chip ${chip.n > 0 ? 'up' : 'down'}`}>{chip.n > 0 ? `+${chip.n}` : `−${Math.abs(chip.n)}`}</span>}
+    </span>
+  );
 }
 
 /** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
@@ -91,12 +141,50 @@ export function parseHash(): { page: string; sub: string } {
   return { page, sub: rest.join('/') };
 }
 
+// One hashchange listener for the whole app: every subscriber is updated together, inside one view transition
+// (cross-fade with a slight slide, and the server avatar morphing from its tile to the page banner).
+type HashState = { page: string; sub: string };
+let hashNow: HashState | null = null;
+const hashListeners = new Set<(h: HashState) => void>();
+
+const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub) ? h.sub : '');
+
+/** gives the avatar of a server (tagged data-vt-avatar) the view-transition-name that pairs the old and the new page */
+const nameAvatars = (ids: string[]) => {
+  for (const id of new Set(ids.filter(Boolean))) {
+    document.querySelector<HTMLElement>(`[data-vt-avatar="${id}"]`)?.style.setProperty('view-transition-name', `server-${id}`);
+  }
+};
+const clearAvatarNames = () => {
+  document.querySelectorAll<HTMLElement>('[data-vt-avatar]').forEach((el) => el.style.removeProperty('view-transition-name'));
+};
+
+function onHashChange() {
+  const prev = hashNow ?? parseHash();
+  const next = parseHash();
+  if (prev.page === next.page && prev.sub === next.sub) return;
+  const ids = [serverIdOf(prev), serverIdOf(next)];
+  withViewTransition(
+    () => {
+      hashNow = next;
+      hashListeners.forEach((l) => l(next));
+    },
+    { before: () => nameAvatars(ids), after: () => nameAvatars(ids), done: clearAvatarNames },
+  );
+}
+
 export function useHash() {
   const [h, setH] = useState(parseHash);
   useEffect(() => {
-    const f = () => setH(parseHash());
-    window.addEventListener('hashchange', f);
-    return () => window.removeEventListener('hashchange', f);
+    if (hashNow === null) {
+      hashNow = parseHash();
+      window.addEventListener('hashchange', onHashChange);
+    }
+    hashListeners.add(setH);
+    // the address may have changed between the first render and now
+    const cur = parseHash();
+    setH((p) => (p.page === cur.page && p.sub === cur.sub ? p : cur));
+    return () => { hashListeners.delete(setH); };
   }, []);
   return h;
 }
@@ -158,6 +246,37 @@ const IconAuto = () => (
 export const IconCopy = () => (
   <Icon size={16}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></Icon>
 );
+/** circular arrows; turns on click and spins while `spinning` (busy) */
+export const IconRefresh = ({ spinning = false }: { spinning?: boolean }) => (
+  <span className={`ico-refresh inline-grid ${spinning ? 'spinning' : ''}`} aria-hidden>
+    <Icon size={16}><path d="M20 11a8 8 0 0 0-14.5-4.1M4 4v4h4M4 13a8 8 0 0 0 14.5 4.1M20 20v-4h-4" /></Icon>
+  </span>
+);
+/** arrow that nudges forward when its button is hovered */
+export const IconArrow = () => (
+  <span className="ico-nudge inline-grid" aria-hidden>
+    <Icon size={16}><path d="M5 12h14M13 6l6 6-6 6" /></Icon>
+  </span>
+);
+export const IconCheckMark = () => (
+  <span className="star-pop inline-grid" aria-hidden>
+    <Icon size={16}><path d="M5 12.5l4.5 4.5L19 7.5" /></Icon>
+  </span>
+);
+export const IconShare = () => (
+  <span className="ico-share inline-grid" aria-hidden>
+    <Icon size={16}><path d="M7 17L17 7M9 7h8v8" /></Icon>
+  </span>
+);
+
+/** a few dots flying out of the centre of the parent (the parent must be `relative`); CSS only */
+export function Burst({ count = 8, radius = 17 }: { count?: number; radius?: number }) {
+  return (
+    <span className="burst" aria-hidden style={{ '--r': `${radius}px` } as CSSProperties}>
+      {Array.from({ length: count }, (_, i) => <i key={i} style={{ '--a': `${Math.round((360 / count) * i + 15)}deg` } as CSSProperties} />)}
+    </span>
+  );
+}
 
 // ---------- theme ----------
 type Theme = 'auto' | 'light' | 'dark';
@@ -192,10 +311,14 @@ export function ThemeToggle() {
       className="btn-icon"
       title={`Тема: ${label[theme]}. Нажмите, чтобы переключить`}
       aria-label={`Тема: ${label[theme]}. Переключить`}
-      onClick={() => {
+      onClick={(e) => {
         const t = next[theme];
-        applyTheme(t);
-        setTheme(t);
+        // the new theme grows as a circle out of the button (View Transitions); elsewhere it just switches
+        const r = e.currentTarget.getBoundingClientRect();
+        revealTransition(() => {
+          applyTheme(t);
+          setTheme(t);
+        }, r.left + r.width / 2, r.top + r.height / 2);
       }}
     >
       {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconAuto />}
@@ -251,15 +374,19 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function StatusPill({ online, known, lag }: { online: boolean; known: boolean; lag?: boolean }) {
   if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
   if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
-  return lag ? <span className="pill pill-warn">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
+  return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
 }
 
-/** `glass`: translucent white square, for use on top of a game-coloured cover */
-export function GameAvatar({ game, size = 44, glass = false }: { game: string; size?: number; glass?: boolean }) {
+/**
+ * `glass`: translucent white square, for use on top of a game-coloured cover.
+ * `vtId`: a server id; the avatar of that server morphs between the list tile and the server page (View Transitions).
+ */
+export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: string; size?: number; glass?: boolean; vtId?: number }) {
   const icon = gameIconPath(game);
   const [c1, c2] = gameGradient(game);
   return (
     <div
+      data-vt-avatar={vtId}
       className="grid shrink-0 place-items-center font-black text-white"
       style={{
         width: size,
@@ -440,7 +567,7 @@ export function ErrorLine({ text }: { text: string }) {
 
 export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="panel flex flex-col items-center gap-2 px-6 py-10 text-center">
+    <div className="panel fade-in flex flex-col items-center gap-2 px-6 py-10 text-center">
       {art ?? <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>}
       <h3 className="text-lg font-black">{title}</h3>
       <p className="max-w-sm font-semibold text-mute">{text}</p>
@@ -466,8 +593,14 @@ export function CopyButton({ text, label = 'Копировать', className = '
   };
   return (
     <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
-      <IconCopy />
-      {done ? 'Скопировано' : label}
+      <span className="copy-ico" data-done={done} aria-hidden>
+        <span className="ico-copy inline-grid"><IconCopy /></span>
+        <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12.5l4.5 4.5L19 7.500" />
+        </svg>
+        {done && <Burst />}
+      </span>
+      <span aria-live="polite">{done ? 'Скопировано' : label}</span>
     </button>
   );
 }
@@ -562,7 +695,7 @@ export function Wordmark({ className = '' }: { className?: string }) {
 
 // ---------- toasts: short confirmations that do not interrupt ----------
 type ToastKind = 'ok' | 'err' | 'info';
-interface ToastItem { id: number; text: string; kind: ToastKind }
+interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean }
 let toasts: ToastItem[] = [];
 let toastSeq = 0;
 const toastListeners = new Set<(t: ToastItem[]) => void>();
@@ -577,9 +710,15 @@ export function toast(text: string, kind: ToastKind = 'ok', ms?: number) {
 }
 
 export function dismissToast(id: number) {
-  if (!toasts.some((x) => x.id === id)) return;
-  toasts = toasts.filter((x) => x.id !== id);
+  const t = toasts.find((x) => x.id === id);
+  if (!t || t.leaving) return;
+  // it springs out first (about 200 ms), then it is removed
+  toasts = toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
   emitToasts();
+  setTimeout(() => {
+    toasts = toasts.filter((x) => x.id !== id);
+    emitToasts();
+  }, 200);
 }
 
 /**
@@ -594,7 +733,7 @@ export function Toaster() {
   }, []);
   const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-card text-ink ring-line' } as const;
   const item = (t: ToastItem) => (
-    <div key={t.id} className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
+    <div key={t.id} className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
       <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
       <button

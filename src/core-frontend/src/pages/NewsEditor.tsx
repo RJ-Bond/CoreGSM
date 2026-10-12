@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
 import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { ErrorLine, Field, toast } from '../ui';
+import { Button, ErrorLine, Field, SplitButton, Switch, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 
 // ---------- draft <-> payload ----------
@@ -313,7 +313,24 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     })();
   }, [id]);
 
-  if (!d) return error ? <ErrorLine text={error} /> : <div className="skeleton panel h-64" />;
+  if (!d) {
+    return error ? <ErrorLine text={error} /> : (
+      <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
+        <div className="skeleton h-9 w-56 rounded-full" />
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
+          <div className="space-y-5">
+            <div className="skeleton panel h-52" />
+            <div className="skeleton panel h-60" />
+            <div className="skeleton panel h-72" />
+          </div>
+          <div className="space-y-4">
+            <div className="skeleton panel h-64" />
+            <div className="skeleton panel h-32" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const set = (patch: Partial<Draft>) => setD((cur) => (cur ? { ...cur, ...patch } : cur));
   const isSent = item?.status === 'sent' || item?.status === 'edit_queued';
@@ -365,8 +382,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
               {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
             </Field>
             {!isSent && (
-              <label className="flex items-center gap-2 text-sm font-bold text-mute">
-                <input type="checkbox" className="h-4 w-4 accent-brand" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} /> Сделать каналом новостей по умолчанию
+              <label className="flex items-center gap-3 text-sm font-bold text-mute">
+                <Switch checked={makeDefault} onChange={setMakeDefault} /> Сделать каналом новостей по умолчанию
               </label>
             )}
             <Field label="Упоминание">
@@ -424,8 +441,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                   <button type="button" className="btn btn-danger btn-sm shrink-0" aria-label="Удалить поле" onClick={() => set({ fields: d.fields.filter((_, j) => j !== i) })}>✕</button>
                 </div>
                 <textarea aria-label="Текст поля" className="input min-h-[4.5rem]" rows={2} value={f.value} maxLength={1024} placeholder="Текст" onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })} />
-                <label className="flex items-center gap-2 text-sm font-bold text-mute">
-                  <input type="checkbox" className="h-4 w-4 accent-brand" checked={f.inline} onChange={(e) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, inline: e.target.checked } : x)) })} /> В ряд с соседними
+                <label className="flex items-center gap-3 text-sm font-bold text-mute">
+                  <Switch checked={f.inline} onChange={(on) => set({ fields: d.fields.map((x, j) => (j === i ? { ...x, inline: on } : x)) })} /> В ряд с соседними
                 </label>
               </div>
             ))}
@@ -437,8 +454,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
               <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label !mb-0">Текст внизу</label><Counter value={d.footer.length} max={2048} /></div>
               <input id="news-footer" className="input" value={d.footer} onChange={(e) => set({ footer: e.target.value })} maxLength={2048} placeholder="Например: Администрация сервера" />
             </div>
-            <label className="flex items-center gap-2 text-sm font-bold text-mute">
-              <input type="checkbox" className="h-4 w-4 accent-brand" checked={d.timestamp} onChange={(e) => set({ timestamp: e.target.checked })} /> Показывать время публикации
+            <label className="flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={d.timestamp} onChange={(on) => set({ timestamp: on })} /> Показывать время публикации
             </label>
           </Section>
         </div>
@@ -456,14 +473,26 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <ErrorLine text={error} />
             {noChannel && !isSent && <p className="text-sm font-bold text-mute">Выберите канал, чтобы опубликовать или запланировать.</p>}
             {isSent ? (
-              <button className="btn w-full" disabled={busy} onClick={() => save('draft')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</button>
+              <Button className="w-full" loading={busy} onClick={() => save('draft')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</Button>
             ) : (
               <>
-                <button className="btn w-full" disabled={busy || noChannel} onClick={() => save('now')}>{busy ? 'Отправляю…' : 'Опубликовать сейчас'}</button>
-                {scheduling ? (
+                <SplitButton
+                  className="w-full"
+                  magnetic
+                  loading={busy}
+                  disabled={noChannel}
+                  label={busy ? 'Отправляю…' : 'Опубликовать сейчас'}
+                  onClick={() => void save('now')}
+                  menuLabel="Другие способы публикации"
+                  items={[
+                    { key: 'schedule', label: 'Запланировать…', hint: 'Выбрать дату и время', onSelect: () => setScheduling(true) },
+                    { key: 'draft', label: 'Сохранить как черновик', hint: 'Ничего не отправляется в Discord', onSelect: () => void save('draft') },
+                  ]}
+                />
+                {scheduling && (
                   <div className="space-y-2 rounded-2xl bg-soft p-3">
                     <label htmlFor="news-when" className="label">Когда опубликовать</label>
-                    <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
+                    <input id="news-when" type="datetime-local" autoFocus className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
                     <label htmlFor="news-repeat" className="label">Повторять</label>
                     <select id="news-repeat" className="input" value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)}>
                       <option value="none">Не повторять</option>
@@ -472,14 +501,11 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                       <option value="monthly">Каждый месяц</option>
                     </select>
                     <div className="flex gap-2">
-                      <button className="btn flex-1" disabled={busy || noChannel} onClick={() => save('schedule')}>Запланировать</button>
-                      <button className="btn btn-soft" onClick={() => setScheduling(false)}>Отмена</button>
+                      <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => save('schedule')}>Запланировать</Button>
+                      <Button variant="soft" onClick={() => setScheduling(false)}>Отмена</Button>
                     </div>
                   </div>
-                ) : (
-                  <button className="btn btn-soft w-full" disabled={busy || noChannel} onClick={() => setScheduling(true)}>Запланировать на время…</button>
                 )}
-                <button className="btn btn-soft w-full" disabled={busy || noChannel} onClick={() => save('draft')}>Сохранить как черновик</button>
               </>
             )}
           </div>

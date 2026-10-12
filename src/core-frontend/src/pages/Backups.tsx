@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { ErrorLine, Field, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -227,8 +227,8 @@ export default function BackupsCard() {
           />
           <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.</p>
           {info?.remoteUrl && (
-            <label className="mt-2 flex items-center gap-2 text-sm font-bold text-mute">
-              <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearRemote} onChange={(e) => setClearRemote(e.target.checked)} />
+            <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={clearRemote} onChange={setClearRemote} />
               Отключить отправку
             </label>
           )}
@@ -254,14 +254,14 @@ export default function BackupsCard() {
           />
           <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.</p>
           {info?.encrypted && (
-            <label className="mt-2 flex items-center gap-2 text-sm font-bold text-mute">
-              <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearPass} onChange={(e) => setClearPass(e.target.checked)} />
+            <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={clearPass} onChange={setClearPass} />
               Отключить шифрование новых копий
             </label>
           )}
         </div>
 
-        <button className="btn" disabled={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</button>
+        <Button loading={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</Button>
       </form>
 
       <div>

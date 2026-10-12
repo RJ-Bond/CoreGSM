@@ -105,7 +105,7 @@ export default function StatusPage() {
       )}
 
       {data && data.servers.length > 0 && (
-        <>
+        <div className="fade-in space-y-5">
           <Banner servers={data.servers} />
           <ul className="space-y-3">
             {data.servers.map((s) => <ServerRow key={s.id} s={s} />)}
@@ -116,7 +116,7 @@ export default function StatusPage() {
             ))}
             <span className="ml-auto">обновлено {ago(data.updatedAt)}</span>
           </div>
-        </>
+        </div>
       )}
     </div>
   );

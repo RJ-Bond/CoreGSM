@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
-import { ErrorLine, PageHead, ago, toast, usePoll } from '../ui';
+import { AlertsArt } from '../components/Illustrations';
+import { ErrorLine, PageHead, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -52,7 +53,7 @@ export default function AlertsPage() {
       {info && (
         <div className="panel space-y-5 p-6">
           <label className="flex cursor-pointer items-start gap-3">
-            <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-brand" checked={info.enabled} onChange={(e) => void save({ enabled: e.target.checked }, e.target.checked ? 'Оповещения включены' : 'Оповещения выключены')} />
+            <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Оповещения включены' : 'Оповещения выключены')} />
             <span>
               <span className="block font-extrabold">Оповещать о недоступности серверов</span>
               <span className="block text-sm font-semibold text-mute">Бот напишет в выбранный канал, а когда сервер вернётся, сообщит об этом и покажет, сколько он простоял.</span>
@@ -99,7 +100,17 @@ export default function AlertsPage() {
 
       <div className="panel space-y-3 p-6">
         <h2 className="text-lg font-black">Последние оповещения</h2>
-        {info && info.recent.length === 0 && <p className="font-semibold text-mute">Пока ничего не отправлялось.</p>}
+        {!info && <div className="skeleton h-14 rounded-2xl" aria-busy="true" aria-label="Загрузка" />}
+        {info && info.recent.length === 0 && (
+          <div className="fade-in flex flex-col items-center gap-1 py-2 text-center">
+            <AlertsArt />
+            <p className="font-extrabold">Пока ничего не отправлялось</p>
+            <p className="max-w-sm text-sm font-semibold text-mute">
+              {info.channelId ? 'Когда сервер перестанет отвечать, бот напишет в канал. Можно проверить заранее.' : 'Выберите канал: туда бот будет писать о падениях серверов.'}
+            </p>
+            {!info.channelId && <button className="btn mt-2" onClick={() => setChanging(true)}>Выбрать канал</button>}
+          </div>
+        )}
         <ul className="divide-y divide-line">
           {info?.recent.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">

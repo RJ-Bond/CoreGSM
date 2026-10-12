@@ -15,6 +15,7 @@ import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
+import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
 
@@ -621,17 +622,26 @@ const logoFile = () => Object.values(LOGO_TYPES).map((e) => `${LOGO_PATH}.${e}`)
 const brand = () => ({
   name: getSetting('brand_name') || 'CoreGSM',
   color: getSetting('brand_color') || '#4f46e5',
+  color2: getSetting('brand_color2') || '',
+  preset: getSetting('brand_preset') || '',
   hasLogo: !!logoFile(),
   logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
 });
 
 app.put('/api/branding', admin, (req, res) => {
   const b = z
-    .object({ name: z.string().trim().min(1).max(32), color: z.string().regex(/^#[0-9a-fA-F]{6}$/) })
+    .object({
+      name: z.string().trim().min(1).max(32),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+      color2: z.string().regex(/^(#[0-9a-fA-F]{6})?$/).optional(),
+      preset: z.string().trim().max(24).optional(),
+    })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Название до 32 символов, цвет в виде #RRGGBB' });
   setSetting('brand_name', b.data.name);
   setSetting('brand_color', b.data.color.toLowerCase());
+  setSetting('brand_color2', (b.data.color2 ?? '').toLowerCase());
+  setSetting('brand_preset', b.data.preset ?? '');
   res.json(brand());
 });
 app.put(
@@ -987,6 +997,7 @@ function serialize(r: ServerJoin) {
     queryPort: r.query_port,
     displayAddress: r.display_address,
     country: r.country ?? '',
+    coverUrl: coverUrl(r.id),
     // the address shown in the panel and on cards
     address: r.display_address || `${r.host}:${r.port}`,
     hasStatus: r.has_status != null,
@@ -1052,6 +1063,7 @@ app.put(
 app.delete('/api/servers/:id', admin, (req, res) => {
   const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
+  removeCover(Number(req.params.id));
   res.json({ ok: true });
 });
 
@@ -1160,6 +1172,9 @@ app.get(
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
   }),
 );
+
+/** bump when the game icon artwork changes: Discord caches embed images by URL */
+const GAME_ICON_VERSION = 3;
 
 // game pictogram for embeds (public: Discord fetches it); unknown ids get the generic icon
 app.get(
@@ -1272,6 +1287,7 @@ app.get('/api/status', viewer, (req, res) => {
         name: sv.name,
         game: sv.game,
         address: sv.address,
+        coverUrl: sv.coverUrl,
         online: sv.online,
         players: sv.players,
         maxPlayers: sv.maxPlayers,
@@ -1347,7 +1363,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -1510,6 +1526,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
 registerAlerts({ app, admin, internal, channelInfo });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
+registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 

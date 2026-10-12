@@ -4,14 +4,18 @@ import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_SECTIONS } from '../pages/Admin';
-import { GameAvatar, IconNews, IconServers } from '../ui';
+import { GameAvatar, IconNews, IconServers, toast, useDensity } from '../ui';
+
+type Group = 'Серверы' | 'Разделы' | 'Действия';
 
 interface Item {
   key: string;
-  group: 'Серверы' | 'Разделы';
+  group: Group;
   label: string;
   hint: string;
   href: string;
+  /** an action instead of a link: runs after the palette closes */
+  run?: () => void;
   icon: ReactNode;
   /** lower-case text the query is matched against */
   hay: string;
@@ -26,6 +30,12 @@ const IconUser = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="12" cy="8" r="4" />
     <path d="M4 21a8 8 0 0 1 16 0" />
+  </svg>
+);
+
+const IconDensity = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M4 6h16M4 10h16M4 14h16M4 18h16" />
   </svg>
 );
 
@@ -47,6 +57,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const [q, setQ] = useState('');
   const [servers, setServers] = useState<Server[] | null>(null);
   const [active, setActive] = useState(0);
+  const [density, setDensity] = useDensity();
 
   useDialogFocus(box, onClose, () => input.current);
   const bd = useBackdropClose(onClose);
@@ -81,15 +92,27 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, 'Админка', `#/admin/${sec.id}`, sec.icon()));
     }
     if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
+    const compact = density === 'compact';
+    out.push({
+      key: 'act-density',
+      group: 'Действия',
+      label: 'Сменить плотность',
+      hint: compact ? 'Сейчас компактная, переключить на обычную' : 'Сейчас обычная, переключить на компактную',
+      href: '',
+      run: () => { setDensity(compact ? 'normal' : 'compact'); toast(compact ? 'Плотность: обычная' : 'Плотность: компактная'); },
+      icon: <IconDensity />,
+      hay: 'сменить плотность компактная обычная вид отступы density',
+    });
     return out;
-  }, [servers, isStaff, isAdmin, me]);
+  }, [servers, isStaff, isAdmin, me, density]);
 
   const results = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items;
     const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
     const secs = hit.filter((i) => i.group === 'Разделы');
-    return [...servs, ...secs];
+    const acts = hit.filter((i) => i.group === 'Действия');
+    return [...servs, ...secs, ...acts];
   }, [items, q]);
 
   useEffect(() => setActive(0), [q]);
@@ -102,7 +125,8 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const go = (it: Item | undefined) => {
     if (!it) return;
     onClose();
-    window.location.hash = it.href;
+    if (it.run) it.run();
+    else window.location.hash = it.href;
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -114,7 +138,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     else if (e.key === 'Enter') { e.preventDefault(); go(results[safeActive]); }
   };
 
-  const groups: ('Серверы' | 'Разделы')[] = ['Серверы', 'Разделы'];
+  const groups: Group[] = ['Серверы', 'Разделы', 'Действия'];
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (

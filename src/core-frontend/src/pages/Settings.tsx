@@ -1,7 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { WHITE, brandVars, parseTriplet, triplet, type RGB } from '../colors';
 import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { useAuth } from '../auth';
+import { Switch as ToggleSwitch } from '../components/Switch';
 import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
@@ -15,20 +17,60 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
+/** готовые темы: основной цвет и конец градиента */
+const THEME_PRESETS = [
+  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
+  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
+  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
+  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
+  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
+  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
+] as const;
+
 /** название, цвет и логотип сообщества */
 function BrandCard() {
   const { access, reload } = useAuth();
   const b = access.brand;
   const [name, setName] = useState(b.name);
   const [color, setColor] = useState(b.color);
+  const [color2, setColor2] = useState(b.color2 ?? '');
+  const [preset, setPreset] = useState(b.preset ?? '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const swatches = ['#4f46e5', '#7c3aed', '#db2777', '#e11d48', '#ea580c', '#16a34a', '#0891b2', '#2563eb'];
+  const savedRef = useRef(b);
+  savedRef.current = b;
+
+  const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
+  const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
+
+  // live preview of the chosen colours across the whole panel; the saved ones come back when leaving without saving
+  useEffect(() => {
+    const root = document.documentElement;
+    const paint = (c: string, c2: string | undefined) => {
+      const attr = root.getAttribute('data-theme');
+      const dark = attr === 'dark' || (!attr && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const st = getComputedStyle(root);
+      const surf = (n: string, f: RGB) => parseTriplet(st.getPropertyValue(`--${n}`)) ?? f;
+      const v = brandVars(c, c2, dark, surf('card', dark ? [23, 24, 29] : WHITE), surf('soft', dark ? [33, 34, 41] : [238, 240, 244]));
+      root.style.setProperty('--brand', triplet(v.fill));
+      root.style.setProperty('--brand-hover', triplet(v.hover));
+      root.style.setProperty('--brand-2', triplet(v.end));
+      root.style.setProperty('--link', triplet(v.link));
+    };
+    paint(color, color2 || undefined);
+    const mo = new MutationObserver(() => paint(color, color2 || undefined));
+    mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => {
+      mo.disconnect();
+      paint(savedRef.current.color, savedRef.current.color2 || undefined);
+    };
+  }, [color, color2]);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    await api('/branding', 'PUT', { name, color }).then(() => { toast('Оформление сохранено'); return reload(); }).catch((x: Error) => setError(x.message));
+    await api('/branding', 'PUT', { name, color, color2, preset }).then(() => { toast('Оформление сохранено'); return reload(); }).catch((x: Error) => setError(x.message));
   };
   const upload = async (file: File) => {
     setBusy(true);
@@ -56,12 +98,42 @@ function BrandCard() {
         <input id="brand-name" className="input" value={name} maxLength={32} onChange={(e) => setName(e.target.value)} />
       </Field>
       <div>
-        <span className="label">Цвет</span>
+        <span className="label">Тема</span>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+          {THEME_PRESETS.map((p) => {
+            const on = preset === p.id;
+            return (
+              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`rounded-2xl border bg-card p-2 text-left transition hover:-translate-y-0.5 ${on ? 'border-transparent ring-2 ring-ink ring-offset-2 ring-offset-card' : 'border-line'}`}>
+                <span className="block h-12 rounded-xl" style={{ background: `linear-gradient(135deg, ${p.c1}, ${p.c2})` }} />
+                <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <span className="label">Свой цвет</span>
         <div className="flex flex-wrap items-center gap-2">
           {swatches.map((c) => (
-            <button type="button" key={c} onClick={() => setColor(c)} aria-label={c} aria-pressed={color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card transition ${color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
+            <button type="button" key={c} onClick={() => pickColor(c)} aria-label={c} aria-pressed={!preset && color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card transition ${!preset && color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
           ))}
-          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-lg border border-line bg-card" aria-label="Свой цвет" />
+          <input type="color" value={color} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-lg border border-line bg-card" aria-label="Свой цвет" />
+        </div>
+      </div>
+      <div>
+        <span className="label">Как это выглядит</span>
+        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-soft p-4">
+          <Logo size={44} />
+          <div className="min-w-0">
+            <div className="truncate text-base font-black">{name.trim() || 'CoreGSM'}</div>
+            <div className="text-sm font-semibold text-mute">Мониторинг игровых серверов</div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop" aria-hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 7" /></svg>
+            </span>
+          </div>
         </div>
       </div>
       <div>
@@ -487,7 +559,7 @@ function UpdateCard() {
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
   return (
     <label className="flex cursor-pointer items-start gap-3">
-      <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[var(--brand,#5865f2)]" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      <ToggleSwitch className="mt-0.5" checked={on} onChange={onChange} />
       <span>
         <span className="block font-extrabold">{label}</span>
         <span className="block text-sm font-semibold text-mute">{hint}</span>

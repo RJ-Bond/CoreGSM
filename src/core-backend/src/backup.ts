@@ -39,7 +39,8 @@ const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
 const MAGIC = Buffer.from('CGSMENC1');
 const HEADER_LEN = 8 + 16 + 12;
 const NAME_RE = /^coregsm-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual)\.tar\.gz(\.enc)?$/;
-const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp))$/;
+const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png)$/;
+const DIR_ENTRIES = new Set(['news', 'covers', 'avatars']);
 
 /** user-facing error (message is shown in the panel) */
 export class BackupError extends Error {
@@ -209,6 +210,20 @@ export async function buildArchive(dest: string, passphrase: string | null): Pro
         files.push(`news/${f}`);
       }
       entries.push('news');
+    }
+    for (const [dir, re] of [
+      ['covers', /^\d{1,9}(@s)?\.jpg$/],
+      ['avatars', /^\d{1,9}\.png$/],
+    ] as const) {
+      const src = path.join(DATA_DIR, dir);
+      if (!fs.existsSync(src)) continue;
+      fs.mkdirSync(path.join(stage, dir));
+      for (const f of fs.readdirSync(src)) {
+        if (!re.test(f)) continue;
+        fs.copyFileSync(path.join(src, f), path.join(stage, dir, f));
+        files.push(`${dir}/${f}`);
+      }
+      entries.push(dir);
     }
     for (const f of fs.readdirSync(DATA_DIR)) {
       if (/^brand-logo\.(png|jpg|webp)$/.test(f)) {
@@ -386,7 +401,8 @@ async function unpack(file: string, stage: string): Promise<void> {
       const e = entry as { type?: string; size?: number };
       const name = p.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
       const okType = e.type === 'File' || e.type === 'Directory';
-      if (!okType || !ALLOWED_ENTRY.test(name) || (name === 'news' && e.type !== 'Directory') || (name !== 'news' && e.type === 'Directory')) {
+      const isDir = DIR_ENTRIES.has(name);
+      if (!okType || !ALLOWED_ENTRY.test(name) || (isDir && e.type !== 'Directory') || (!isDir && e.type === 'Directory')) {
         bad ??= name || p;
         return false;
       }

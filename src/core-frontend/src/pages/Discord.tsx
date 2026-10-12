@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, ago, toast, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, Switch, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -99,7 +99,15 @@ export default function DiscordPage() {
         </ol>
       )}
 
-      {loaded && bindings.length === 0 && <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
+      {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
+
+      {loaded && bindings.length === 0 && (
+        <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
+          {servers.length > 0
+            ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
+            : <a className="btn mt-3" href="#/admin/servers">Сначала добавьте сервер</a>}
+        </Empty>
+      )}
 
       {bindings.length > 1 && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-4 py-2.5">
@@ -272,13 +280,13 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
         <Field label="Обновлять каждые, секунд (30–3600)">
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>
-        <label className="flex items-center gap-2 font-bold text-mute">
-          <input id="bind-enabled" type="checkbox" className="h-4 w-4 accent-brand" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Включена
+        <label className="flex items-center gap-3 font-bold text-mute">
+          <Switch id="bind-enabled" checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> Включена
         </label>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
-          <button className="btn" disabled={busy}>Сохранить</button>
+          <Button loading={busy}>Сохранить</Button>
         </div>
       </form>
     </Modal>

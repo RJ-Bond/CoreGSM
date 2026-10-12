@@ -75,6 +75,21 @@ export const BLACK: RGB = [0, 0, 0];
 const hex = (c: RGB) => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
 
 /**
+ * CSS-variable values of the brand colour(s): `fill` (buttons, white text >= 4.5:1), `hover`, `end` (the other end
+ * of the gradients: the second colour darkened until white text reads >= 4.5:1, or a darker mix of `fill`) and `link`
+ * (brand-coloured text, >= 4.5:1 on the card and soft surfaces).
+ */
+export function brandVars(color: string, color2: string | undefined, dark: boolean, card: RGB, soft: RGB) {
+  const base = parseHex(color) ?? ([79, 70, 229] as RGB);
+  const fill = contrast(base, WHITE) >= 4.5 ? base : ensureContrast(base, [WHITE], 4.5, 'darken');
+  const hover = mix(fill, BLACK, 0.14);
+  const link = dark ? ensureContrast(mix(base, WHITE, 0.45), [card, soft], 4.5, 'lighten') : ensureContrast(base, [card, soft], 4.5, 'darken');
+  const second = color2 ? parseHex(color2) : null;
+  const end = second ? (contrast(second, WHITE) >= 4.5 ? second : ensureContrast(second, [WHITE], 4.5, 'darken')) : mix(fill, BLACK, 0.24);
+  return { fill, hover, end, link };
+}
+
+/**
  * Two-stop gradient for a tile cover from a game colour: c1 is the deeper end (white text keeps >= 4.5:1),
  * c2 a lighter, slightly warmer end (large white text keeps >= 3:1).
  */

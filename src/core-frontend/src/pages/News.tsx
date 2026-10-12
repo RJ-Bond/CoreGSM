@@ -76,7 +76,7 @@ function NewsList() {
   return (
     <div className="space-y-6">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Публикации от имени бота в Discord">
-        <a className="btn" href="#/admin/news/new">+ Написать новость</a>
+        <a className="btn" href="#/admin/news/new" data-magnetic>+ Написать новость</a>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -106,7 +106,13 @@ function NewsList() {
         </Empty>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
+      {!loaded && (
+        <div className="grid gap-4 md:grid-cols-2" aria-busy="true" aria-label="Загрузка">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton panel h-[188px]" />)}
+        </div>
+      )}
+
+      <div className="fade-in grid gap-4 md:grid-cols-2">
         {items.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
@@ -155,7 +161,12 @@ export function NewsFeed() {
       <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
       <ErrorLine text={error} />
       {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
-      <div className="mx-auto max-w-2xl space-y-4">
+      {!loaded && (
+        <div className="mx-auto max-w-2xl space-y-4" aria-busy="true" aria-label="Загрузка">
+          {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}
+        </div>
+      )}
+      <div className="fade-in mx-auto max-w-2xl space-y-4">
         {items.map((n) => (
           <article key={n.id} className="panel space-y-2 p-4">
             {n.sentAt && <div className="text-sm font-bold text-mute">{fmtDateTime(n.sentAt)}</div>}

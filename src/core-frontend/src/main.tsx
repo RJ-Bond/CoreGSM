@@ -4,6 +4,12 @@ import ReactDOM from 'react-dom/client';
 import '@fontsource-variable/manrope/wght.css';
 import './index.css';
 import App from './App';
+import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
+
+// before the first paint: the saved density, the magnetic call-to-action buttons and the sliding tab pill
+initDensity();
+installMagnetic();
+installSegIndicator();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

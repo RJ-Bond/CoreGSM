@@ -22,6 +22,8 @@ export interface Server {
   displayAddress: string;
   /** country shown in Discord ('' = detected automatically) */
   country: string;
+  /** "/api/covers/<id>.jpg?v=..." when an administrator uploaded a cover picture */
+  coverUrl: string | null;
   /** the address shown in the panel and on cards */
   address: string;
   hasStatus: boolean;
@@ -154,6 +156,7 @@ export interface StatusServer {
   name: string;
   game: string;
   address: string;
+  coverUrl?: string | null;
   online: boolean;
   players: number;
   maxPlayers: number;
@@ -301,6 +304,10 @@ export interface Session {
 export interface Brand {
   name: string;
   color: string;
+  /** optional second (end) colour of the gradients; '' = derived automatically */
+  color2?: string;
+  /** id of the chosen theme preset ('' = custom colour) */
+  preset?: string;
   hasLogo: boolean;
   logoV: number;
 }
