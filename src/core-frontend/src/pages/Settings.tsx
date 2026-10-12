@@ -474,7 +474,7 @@ function UpdateCard() {
               <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
                 <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 break-words font-bold hover:text-link">{c.title}</a>
                 <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
-                <span className="text-sm font-semibold text-mute">{ago(Date.parse(c.date) || null)}</span>
+                <span className="text-sm font-semibold text-mute">{ago(typeof c.date === 'number' ? c.date : Date.parse(String(c.date)) || null)}</span>
               </li>
             ))}
           </ul>

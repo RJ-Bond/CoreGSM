@@ -131,8 +131,8 @@ export interface UpdateInfo {
 export interface ChangelogItem {
   sha: string;
   title: string;
-  /** ISO date */
-  date: string;
+  /** commit time, ms (older servers may send an ISO string) */
+  date: number | string | null;
   url: string;
 }
 

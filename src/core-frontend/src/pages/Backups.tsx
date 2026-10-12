@@ -123,7 +123,9 @@ export default function BackupsCard() {
     if (file.name.endsWith('.enc')) {
       const p = await askPassphrase(file.name);
       if (p == null) return;
-      headers['x-backup-passphrase'] = p;
+      // headers are Latin-1: send the passphrase percent-encoded
+      headers['x-backup-passphrase'] = encodeURIComponent(p);
+      headers['x-backup-passphrase-encoding'] = 'uri';
     }
     setRestoring(true);
     setError('');
