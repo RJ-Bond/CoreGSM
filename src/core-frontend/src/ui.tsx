@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useAuth } from './auth';
+import AuthShowcase from './components/AuthShowcase';
 import { getToken, type Server } from './api';
 import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
 import { GAME_IMAGE, gameAbbr, gameGradient } from './games';
@@ -656,7 +657,11 @@ export function AuthShell({ children }: { children: ReactNode }) {
     <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden p-4 pt-20 sm:p-8">
       <AuthDecor />
       <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
-      <div className="relative z-[1] flex w-full justify-center">{children}</div>
+      <div className="relative z-[1] grid w-full max-w-6xl items-center justify-items-center gap-10 xl:grid-cols-[minmax(0,1fr)_24rem_minmax(0,1fr)]">
+        <AuthShowcase side="left" />
+        {children}
+        <AuthShowcase side="right" />
+      </div>
     </div>
   );
 }
