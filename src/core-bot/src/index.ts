@@ -372,6 +372,36 @@ async function processNews(): Promise<void> {
   }
 }
 
+/** alerts about game servers going down / coming back (queued by the panel) */
+async function processAlerts(): Promise<void> {
+  const c = client;
+  if (!c || state !== 'online') return;
+  const res = await backend('/internal/alerts/pending');
+  if (!res.ok) throw new Error(`alerts HTTP ${res.status}`);
+  const items = (await res.json()) as { id: number; channelId: string; payload: { content: string; mention: 'none' | 'here' | 'everyone'; embed: ConstructorParameters<typeof EmbedBuilder>[0] } }[];
+  for (const it of items) {
+    let body: { status: 'sent' | 'error'; error?: string } = { status: 'sent' };
+    try {
+      const channel = await c.channels.fetch(it.channelId);
+      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
+      await channel.send({
+        content: it.payload.content || undefined,
+        embeds: [new EmbedBuilder(it.payload.embed)],
+        allowedMentions: { parse: (it.payload.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
+      });
+      log(`alert ${it.id}: sent`);
+    } catch (e) {
+      log(`alert ${it.id} failed:`, (e as Error).message);
+      body = { status: 'error', error: humanDiscordError(e) };
+    }
+    try {
+      await backend(`/internal/alerts/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    } catch (e) {
+      log('alert report failed', e);
+    }
+  }
+}
+
 async function updateBindings(): Promise<void> {
   const c = client;
   if (!c || state !== 'online') return;
@@ -402,6 +432,7 @@ async function tick(): Promise<void> {
     await publishGuilds();
     await updateBindings();
     await processNews();
+    await processAlerts();
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {

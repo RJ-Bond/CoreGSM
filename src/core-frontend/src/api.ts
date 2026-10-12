@@ -183,6 +183,8 @@ export interface NewsItem {
   messageUrl: string | null;
   payload: NewsPayload;
   scheduledAt: number | null;
+  /** a scheduled item can repeat: the next one is scheduled after each post */
+  repeat: 'none' | 'daily' | 'weekly' | 'monthly';
   sentAt: number | null;
   error: string | null;
   createdAt: number;

@@ -5,11 +5,11 @@ import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
-import NewsEditor from './NewsEditor';
+import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
-  if (sub === 'new') return <NewsEditor id={null} />;
+  if (sub === 'new' || sub.startsWith('new/')) return <NewsEditor id={null} template={sub.slice(4)} />;
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <NewsEditor id={id} />;
   return <NewsList />;
@@ -79,6 +79,11 @@ function NewsList() {
       </PageHead>
       <ErrorLine text={error} />
 
+      <div className="panel flex flex-wrap items-center gap-2 px-5 py-3">
+        <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
+        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`#/admin/news/new/${t.id}`}>{t.label}</a>)}
+      </div>
+
       <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
@@ -106,7 +111,10 @@ function NewsList() {
           return (
             <article key={n.id} className="panel flex flex-col gap-3 overflow-hidden p-5" style={{ borderTop: `4px solid ${color}` }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <StatusPill n={n} />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <StatusPill n={n} />
+                  {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? 'КАЖДЫЙ ДЕНЬ' : n.repeat === 'weekly' ? 'КАЖДУЮ НЕДЕЛЮ' : 'КАЖДЫЙ МЕСЯЦ'}</span>}
+                </div>
                 <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
               </div>
               <h3 className="line-clamp-2 break-words text-lg font-black leading-tight">{n.title}</h3>

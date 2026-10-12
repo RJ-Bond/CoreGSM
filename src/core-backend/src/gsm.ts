@@ -1,4 +1,5 @@
 import { GameDig } from 'gamedig';
+import { trackAlerts } from './alerts.js';
 import { db, type ServerRow } from './db.js';
 
 export interface QueryResult {
@@ -105,6 +106,11 @@ export async function refreshServer(s: ServerRow): Promise<void> {
     ts,
   });
   addHistory.run(s.id, ts, r.online ? 1 : 0, r.players);
+  try {
+    trackAlerts(s.id, r.online, r.error);
+  } catch (e) {
+    console.error('alerts failed', (e as Error).message);
+  }
 }
 
 let running = false;

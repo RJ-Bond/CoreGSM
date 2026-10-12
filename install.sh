@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="37b49496a569"
+COREGSM_BUILD="2df8abff16d7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -483,6 +483,223 @@ CREATE TABLE status (
     "@types/node": "^20.16.0",
     "typescript": "^5.6.3"
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/alerts.ts" << '__COREGSM_EOF__'
+/**
+ * Alerts: a message to an administrators' Discord channel when a game server stops answering
+ * (after a grace period) and another one when it is back. The bot delivers the queued messages.
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
+import { gameLabel } from './games.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS alert_state (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  down_since INTEGER NOT NULL,
+  alerted INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  server_name TEXT NOT NULL DEFAULT '',
+  channel_id TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  sent_at INTEGER
+);
+`);
+
+const settings = () => ({
+  enabled: getSetting('alerts_enabled') === '1',
+  channelId: getSetting('alerts_channel') ?? '',
+  afterMin: Math.min(120, Math.max(1, Number(getSetting('alerts_after_min')) || 3)),
+  mention: (['none', 'here', 'everyone'].includes(getSetting('alerts_mention') ?? '') ? getSetting('alerts_mention') : 'none') as 'none' | 'here' | 'everyone',
+});
+
+const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
+
+interface Payload {
+  content: string;
+  mention: 'none' | 'here' | 'everyone';
+  embed: Record<string, unknown>;
+}
+
+function enqueue(kind: 'down' | 'up' | 'test', serverName: string, payload: Payload) {
+  const s = settings();
+  const now = Date.now();
+  db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
+  db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
+}
+
+const minutes = (ms: number) => Math.max(1, Math.round(ms / 60_000));
+const human = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min / 60)} ч ${min % 60} мин`);
+
+/** Called after every poll of a server. */
+export function trackAlerts(serverId: number, online: boolean, error: string | null): void {
+  const s = settings();
+  if (!s.enabled || !s.channelId) {
+    db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
+    return;
+  }
+  const now = Date.now();
+  const st = db.prepare('SELECT down_since, alerted FROM alert_state WHERE server_id = ?').get(serverId) as { down_since: number; alerted: number } | undefined;
+  const info = () =>
+    db
+      .prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.game, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`)
+      .get(serverId) as { n: string; game: string; display_address: string; host: string; port: number } | undefined;
+
+  if (online) {
+    if (st) {
+      db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
+      if (st.alerted) {
+        const i = info();
+        if (i) {
+          enqueue('up', i.n, {
+            content: '',
+            mention: 'none',
+            embed: {
+              title: `🟢 ${i.n} снова в сети`,
+              description: `📍 \`${i.display_address || `${i.host}:${i.port}`}\`\nПростой: **${human(minutes(now - st.down_since))}**`,
+              color: COLOR.up,
+              author: { name: `🎮 ${gameLabel(i.game)}` },
+              footer: { text: 'CoreGSM · оповещение' },
+              timestamp: new Date(now).toISOString(),
+            },
+          });
+        }
+      }
+    }
+    return;
+  }
+
+  if (!st) {
+    db.prepare('INSERT INTO alert_state (server_id, down_since, alerted) VALUES (?, ?, 0)').run(serverId, now);
+    return;
+  }
+  if (!st.alerted && now - st.down_since >= s.afterMin * 60_000) {
+    const i = info();
+    db.prepare('UPDATE alert_state SET alerted = 1 WHERE server_id = ?').run(serverId);
+    if (!i) return;
+    enqueue('down', i.n, {
+      content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
+      mention: s.mention,
+      embed: {
+        title: `🔴 ${i.n} недоступен`,
+        description: `📍 \`${i.display_address || `${i.host}:${i.port}`}\`\nСервер не отвечает уже **${human(minutes(now - st.down_since))}**${error ? `\n⚠️ ${error.slice(0, 300)}` : ''}`,
+        color: COLOR.down,
+        author: { name: `🎮 ${gameLabel(i.game)}` },
+        footer: { text: 'CoreGSM · оповещение' },
+        timestamp: new Date(now).toISOString(),
+      },
+    });
+  }
+}
+
+export function registerAlerts(deps: {
+  app: Express;
+  admin: RequestHandler;
+  internal: RequestHandler;
+  channelInfo: (id: string) => { channelName: string | null; guildName: string | null };
+}): void {
+  const { app, admin, internal, channelInfo } = deps;
+
+  const payload = () => {
+    const s = settings();
+    const ch = s.channelId ? channelInfo(s.channelId) : { channelName: null, guildName: null };
+    const recent = db.prepare('SELECT id, kind, server_name, status, error, created_at, sent_at FROM alerts ORDER BY id DESC LIMIT 30').all() as {
+      id: number;
+      kind: string;
+      server_name: string;
+      status: string;
+      error: string | null;
+      created_at: number;
+      sent_at: number | null;
+    }[];
+    return {
+      ...s,
+      channelName: ch.channelName,
+      guildName: ch.guildName,
+      recent: recent.map((r) => ({ id: r.id, kind: r.kind, serverName: r.server_name, status: r.status, error: r.error, createdAt: r.created_at, sentAt: r.sent_at })),
+    };
+  };
+
+  app.get('/api/alerts', admin, (_req, res) => res.json(payload()));
+
+  app.put('/api/alerts', admin, (req, res) => {
+    const b = z
+      .object({
+        enabled: z.boolean().optional(),
+        channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
+        afterMin: z.number().int().min(1).max(120).optional(),
+        mention: z.enum(['none', 'here', 'everyone']).optional(),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    if (b.data.enabled !== undefined) {
+      if (b.data.enabled && !(b.data.channelId ?? getSetting('alerts_channel'))) return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
+      setSetting('alerts_enabled', b.data.enabled ? '1' : '0');
+    }
+    if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
+    if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
+    if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
+    res.json(payload());
+  });
+
+  app.post('/api/alerts/test', admin, (_req, res) => {
+    const s = settings();
+    if (!s.channelId) return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
+    enqueue('test', 'Проверка', {
+      content: '',
+      mention: 'none',
+      embed: {
+        title: '🔔 Проверка оповещений',
+        description: 'Если вы видите это сообщение, оповещения о недоступности серверов настроены верно.',
+        color: COLOR.test,
+        footer: { text: 'CoreGSM · оповещение' },
+        timestamp: new Date().toISOString(),
+      },
+    });
+    res.json(payload());
+  });
+
+  // ----- the bot -----
+  app.get('/internal/alerts/pending', internal, (_req, res) => {
+    const now = Date.now();
+    const rows = db.prepare("SELECT id, channel_id, payload FROM alerts WHERE status = 'queued' OR (status = 'sending' AND updated_at < ?)").all(now - 2 * 60_000) as {
+      id: number;
+      channel_id: string;
+      payload: string;
+    }[];
+    const claim = db.prepare("UPDATE alerts SET status = 'sending', updated_at = ? WHERE id = ?");
+    res.json(
+      rows.map((r) => {
+        claim.run(now, r.id);
+        return { id: r.id, channelId: r.channel_id, payload: JSON.parse(r.payload) as Payload };
+      }),
+    );
+  });
+
+  app.patch('/internal/alerts/:id', internal, (req, res) => {
+    const b = z.object({ status: z.enum(['sent', 'error']), error: z.string().max(300).nullable().optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const now = Date.now();
+    db.prepare('UPDATE alerts SET status = ?, error = ?, sent_at = CASE WHEN ? = \'sent\' THEN ? ELSE sent_at END, updated_at = ? WHERE id = ?').run(
+      b.data.status,
+      b.data.error ?? null,
+      b.data.status,
+      now,
+      now,
+      Number(req.params.id),
+    );
+    res.json({ ok: true });
+  });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -1236,6 +1453,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gsm.ts" << '__COREGSM_EOF__'
 import { GameDig } from 'gamedig';
+import { trackAlerts } from './alerts.js';
 import { db, type ServerRow } from './db.js';
 
 export interface QueryResult {
@@ -1342,6 +1560,11 @@ export async function refreshServer(s: ServerRow): Promise<void> {
     ts,
   });
   addHistory.run(s.id, ts, r.online ? 1 : 0, r.players);
+  try {
+    trackAlerts(s.id, r.online, r.error);
+  } catch (e) {
+    console.error('alerts failed', (e as Error).message);
+  }
 }
 
 let running = false;
@@ -1378,6 +1601,7 @@ import { renderCard, renderGameIcon } from './card.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
+import { registerAlerts } from './alerts.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -2573,6 +2797,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 });
 
 registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
+registerAlerts({ app, admin, internal, channelInfo });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS });
 
 // ---------- errors ----------
@@ -2625,7 +2850,14 @@ CREATE TABLE IF NOT EXISTS news (
 );
 `);
 
+try {
+  db.exec("ALTER TABLE news ADD COLUMN repeat TEXT NOT NULL DEFAULT 'none'");
+} catch {
+  /* column already exists */
+}
+
 interface NewsRow {
+  repeat: string;
   id: number;
   status: string;
   channel_id: string;
@@ -2680,6 +2912,8 @@ const bodySchema = z.object({
   payload: payloadSchema,
   action: z.enum(['draft', 'now', 'schedule']),
   scheduledAt: z.number().int().optional(),
+  // a scheduled item can repeat: after it is posted the next one is scheduled
+  repeat: z.enum(['none', 'daily', 'weekly', 'monthly']).optional(),
 });
 
 /** Drops empty strings, so "no title" is really absent. */
@@ -2717,6 +2951,18 @@ function check(p: NewsPayload): string | null {
 
 const titleOf = (p: NewsPayload) => p.embed?.title?.trim() || p.content.trim().slice(0, 70) || p.embed?.description?.trim().slice(0, 70) || 'Без названия';
 
+/** the next time a repeating item should go out, always in the future */
+function nextOccurrence(from: number, repeat: string, now: number): number {
+  const d = new Date(from);
+  let guard = 0;
+  do {
+    if (repeat === 'daily') d.setUTCDate(d.getUTCDate() + 1);
+    else if (repeat === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
+    else d.setUTCMonth(d.getUTCMonth() + 1);
+  } while (d.getTime() <= now && ++guard < 1000);
+  return d.getTime();
+}
+
 type ChannelInfo = (id: string) => { channelName: string | null; guildName: string | null; guildId: string | null };
 
 export function registerNews(deps: {
@@ -2746,6 +2992,7 @@ export function registerNews(deps: {
       messageUrl: r.message_id && ch.guildId ? `https://discord.com/channels/${ch.guildId}/${r.channel_id}/${r.message_id}` : null,
       payload,
       scheduledAt: r.scheduled_at,
+      repeat: r.repeat,
       sentAt: r.sent_at,
       error: r.error,
       createdAt: r.created_at,
@@ -2829,8 +3076,8 @@ export function registerNews(deps: {
       if (st.error) return res.status(400).json({ error: st.error });
       const now = Date.now();
       const info = db
-        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, now, now);
+        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now);
       res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
     }),
   );
@@ -2855,11 +3102,12 @@ export function registerNews(deps: {
       if (bad) return res.status(400).json({ error: bad });
       const st = statusFor(b.data.action, b.data.scheduledAt);
       if (st.error) return res.status(400).json({ error: st.error });
-      db.prepare('UPDATE news SET payload = ?, channel_id = ?, status = ?, scheduled_at = ?, error = NULL, updated_at = ? WHERE id = ?').run(
+      db.prepare('UPDATE news SET payload = ?, channel_id = ?, status = ?, scheduled_at = ?, repeat = ?, error = NULL, updated_at = ? WHERE id = ?').run(
         JSON.stringify(payload),
         b.data.channelId,
         st.status,
         st.at,
+        st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none',
         now,
         id,
       );
@@ -2926,6 +3174,12 @@ export function registerNews(deps: {
     if (b.data.status === 'deleted') {
       db.prepare('DELETE FROM news WHERE id = ?').run(id);
     } else if (b.data.status === 'sent') {
+      const prev = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
+      // the first successful post of a repeating item schedules the next one
+      if (prev && prev.repeat !== 'none' && !prev.sent_at && prev.scheduled_at) {
+        const next = nextOccurrence(prev.scheduled_at, prev.repeat, now);
+        db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('scheduled', ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now);
+      }
       db.prepare("UPDATE news SET status = 'sent', message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(
         b.data.messageId ?? null,
         now,
@@ -3005,6 +3259,8 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/auth\/password$/, label: 'Смена пароля' },
   { m: 'POST', re: /^\/api\/users\/(\d+)\/approve$/, label: 'Одобрена заявка на регистрацию', pre: userName },
   { m: 'POST', re: /^\/api\/sessions\/revoke-others$/, label: 'Завершены остальные сеансы' },
+  { m: 'PUT', re: /^\/api\/alerts$/, label: 'Изменены оповещения о недоступности серверов' },
+  { m: 'POST', re: /^\/api\/alerts\/test$/, label: 'Тестовое оповещение' },
 ];
 
 /** records every successful change made through the panel; must be installed before the routes */
@@ -3635,6 +3891,36 @@ async function processNews(): Promise<void> {
   }
 }
 
+/** alerts about game servers going down / coming back (queued by the panel) */
+async function processAlerts(): Promise<void> {
+  const c = client;
+  if (!c || state !== 'online') return;
+  const res = await backend('/internal/alerts/pending');
+  if (!res.ok) throw new Error(`alerts HTTP ${res.status}`);
+  const items = (await res.json()) as { id: number; channelId: string; payload: { content: string; mention: 'none' | 'here' | 'everyone'; embed: ConstructorParameters<typeof EmbedBuilder>[0] } }[];
+  for (const it of items) {
+    let body: { status: 'sent' | 'error'; error?: string } = { status: 'sent' };
+    try {
+      const channel = await c.channels.fetch(it.channelId);
+      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
+      await channel.send({
+        content: it.payload.content || undefined,
+        embeds: [new EmbedBuilder(it.payload.embed)],
+        allowedMentions: { parse: (it.payload.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
+      });
+      log(`alert ${it.id}: sent`);
+    } catch (e) {
+      log(`alert ${it.id} failed:`, (e as Error).message);
+      body = { status: 'error', error: humanDiscordError(e) };
+    }
+    try {
+      await backend(`/internal/alerts/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    } catch (e) {
+      log('alert report failed', e);
+    }
+  }
+}
+
 async function updateBindings(): Promise<void> {
   const c = client;
   if (!c || state !== 'online') return;
@@ -3665,6 +3951,7 @@ async function tick(): Promise<void> {
     await publishGuilds();
     await updateBindings();
     await processNews();
+    await processAlerts();
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {
@@ -4911,6 +5198,8 @@ export interface NewsItem {
   messageUrl: string | null;
   payload: NewsPayload;
   scheduledAt: number | null;
+  /** a scheduled item can repeat: the next one is scheduled after each post */
+  repeat: 'none' | 'daily' | 'weekly' | 'monthly';
   sentAt: number | null;
   error: string | null;
   createdAt: number;
@@ -5571,6 +5860,7 @@ import { useState, type ReactNode } from 'react';
 import { api, type Server, type ServerInput } from '../api';
 import { gameLabel } from '../games';
 import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, toast, usePoll } from '../ui';
+import AlertsPage, { IconBell } from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
@@ -5604,6 +5894,7 @@ export const ADMIN_SECTIONS: Section[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
   { id: 'discord', label: 'Discord', icon: IconDiscord },
   { id: 'news', label: 'Новости', icon: IconNews },
+  { id: 'alerts', label: 'Оповещения', icon: IconBell },
   { id: 'cards', label: 'Карточки', icon: IconCards },
   { id: 'users', label: 'Пользователи', icon: IconUsers },
   { id: 'journal', label: 'Журнал', icon: IconJournal },
@@ -5638,6 +5929,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'servers' && <ServersManage />}
         {current === 'discord' && <DiscordPage />}
         {current === 'news' && <NewsPage sub={tail} />}
+        {current === 'alerts' && <AlertsPage />}
         {current === 'cards' && <CardsPage />}
         {current === 'users' && <UsersTab />}
         {current === 'journal' && <JournalPage />}
@@ -5719,6 +6011,126 @@ function ServersManage() {
           onSaved={() => { setEditing(null); toast('Сервер сохранён'); void load(); }}
         />
       )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Alerts.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { ChannelPicker } from '../components/ChannelPicker';
+import { ErrorLine, PageHead, ago, toast, usePoll } from '../ui';
+
+interface AlertsInfo {
+  enabled: boolean;
+  channelId: string;
+  channelName: string | null;
+  guildName: string | null;
+  afterMin: number;
+  mention: 'none' | 'here' | 'everyone';
+  recent: { id: number; kind: 'down' | 'up' | 'test'; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
+}
+
+const IconBell = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+  </svg>
+);
+export { IconBell };
+
+const KIND = {
+  down: { label: 'Сервер упал', cls: 'pill-bad' },
+  up: { label: 'Сервер вернулся', cls: 'pill-ok' },
+  test: { label: 'Проверка', cls: 'pill-mute' },
+} as const;
+
+/** Messages to a Discord channel when a game server stops answering and when it is back. */
+export default function AlertsPage() {
+  const [info, setInfo] = useState<AlertsInfo | null>(null);
+  const [error, setError] = useState('');
+  const [changing, setChanging] = useState(false);
+
+  const load = () => api<AlertsInfo>('/alerts').then((a) => { setInfo(a); setError(''); }).catch((e: Error) => setError(e.message));
+  usePoll(load, 10_000);
+
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention'>>, done?: string) => {
+    await api<AlertsInfo>('/alerts', 'PUT', patch)
+      .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
+      .catch((e: Error) => setError(e.message));
+  };
+  const test = async () => {
+    await api<AlertsInfo>('/alerts/test', 'POST').then((a) => { setInfo(a); toast('Тестовое сообщение поставлено в очередь'); }).catch((e: Error) => setError(e.message));
+  };
+
+  return (
+    <div className="space-y-5">
+      <PageHead icon={<IconBell />} title="Оповещения" subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся" />
+      <ErrorLine text={error} />
+
+      {info && (
+        <div className="panel space-y-5 p-6">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-brand" checked={info.enabled} onChange={(e) => void save({ enabled: e.target.checked }, e.target.checked ? 'Оповещения включены' : 'Оповещения выключены')} />
+            <span>
+              <span className="block font-extrabold">Оповещать о недоступности серверов</span>
+              <span className="block text-sm font-semibold text-mute">Бот напишет в выбранный канал, а когда сервер вернётся, сообщит об этом и покажет, сколько он простоял.</span>
+            </span>
+          </label>
+
+          <div>
+            <span className="label">Канал для оповещений</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : `Канал ${info.channelId}`) : 'не выбран'}</span>
+              <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)}>{info.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+            </div>
+            {changing && (
+              <div className="mt-3">
+                <ChannelPicker id="alerts-channel" value={info.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }, 'Канал сохранён'); setChanging(false); } }} />
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="alerts-after" className="label">Считать сервер упавшим через</label>
+              <select id="alerts-after" className="input" value={info.afterMin} onChange={(e) => void save({ afterMin: Number(e.target.value) }, 'Сохранено')}>
+                {[1, 2, 3, 5, 10, 15, 30, 60].map((m) => <option key={m} value={m}>{m} {m === 1 ? 'минуту' : m < 5 ? 'минуты' : 'минут'} без ответа</option>)}
+              </select>
+              <p className="mt-1 text-sm font-semibold text-mute">Короткие сбои короче этого времени не отправляют сообщение.</p>
+            </div>
+            <div>
+              <label htmlFor="alerts-mention" className="label">Кого упоминать при падении</label>
+              <select id="alerts-mention" className="input" value={info.mention} onChange={(e) => void save({ mention: e.target.value as AlertsInfo['mention'] }, 'Сохранено')}>
+                <option value="none">Никого</option>
+                <option value="here">@here (кто в сети)</option>
+                <option value="everyone">@everyone</option>
+              </select>
+              <p className="mt-1 text-sm font-semibold text-mute">Сообщение о возвращении сервера всегда без упоминания.</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-soft" onClick={() => void test()} disabled={!info.channelId}>Отправить тестовое сообщение</button>
+          </div>
+        </div>
+      )}
+
+      <div className="panel space-y-3 p-6">
+        <h2 className="text-lg font-black">Последние оповещения</h2>
+        {info && info.recent.length === 0 && <p className="font-semibold text-mute">Пока ничего не отправлялось.</p>}
+        <ul className="divide-y divide-line">
+          {info?.recent.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <span className={`pill ${KIND[r.kind].cls}`}>{KIND[r.kind].label}</span>
+              <span className="min-w-0 flex-1 truncate font-bold">{r.serverName}</span>
+              {r.status === 'sent' && <span className="text-sm font-semibold text-mute">отправлено {ago(r.sentAt)}</span>}
+              {(r.status === 'queued' || r.status === 'sending') && <span className="text-sm font-semibold text-warn">ждёт бота…</span>}
+              {r.status === 'error' && <span className="text-sm font-bold text-bad" title={r.error ?? ''}>не отправлено: {r.error}</span>}
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -6368,11 +6780,11 @@ import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, toast, usePoll } from '../ui';
-import NewsEditor from './NewsEditor';
+import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
-  if (sub === 'new') return <NewsEditor id={null} />;
+  if (sub === 'new' || sub.startsWith('new/')) return <NewsEditor id={null} template={sub.slice(4)} />;
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <NewsEditor id={id} />;
   return <NewsList />;
@@ -6442,6 +6854,11 @@ function NewsList() {
       </PageHead>
       <ErrorLine text={error} />
 
+      <div className="panel flex flex-wrap items-center gap-2 px-5 py-3">
+        <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
+        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`#/admin/news/new/${t.id}`}>{t.label}</a>)}
+      </div>
+
       <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
@@ -6469,7 +6886,10 @@ function NewsList() {
           return (
             <article key={n.id} className="panel flex flex-col gap-3 overflow-hidden p-5" style={{ borderTop: `4px solid ${color}` }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <StatusPill n={n} />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <StatusPill n={n} />
+                  {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? 'КАЖДЫЙ ДЕНЬ' : n.repeat === 'weekly' ? 'КАЖДУЮ НЕДЕЛЮ' : 'КАЖДЫЙ МЕСЯЦ'}</span>}
+                </div>
                 <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
               </div>
               <h3 className="line-clamp-2 break-words text-lg font-black leading-tight">{n.title}</h3>
@@ -6624,8 +7044,9 @@ const embedLength = (d: Draft) =>
   d.title.length + d.description.length + d.authorName.length + d.footer.length + d.fields.reduce((n, f) => n + f.name.length + f.value.length, 0);
 
 // ---------- ready-made starting points ----------
-const TEMPLATES: { id: string; label: string; apply: Partial<Draft> }[] = [
+export const TEMPLATES: { id: string; label: string; apply: Partial<Draft> }[] = [
   { id: 'announce', label: '📢 Объявление', apply: { title: '📢 Важное объявление', description: 'Здесь текст объявления.\n\nМожно использовать **жирный**, *курсив* и списки:\n- первый пункт\n- второй пункт', color: 0x5865f2, mention: 'none', fields: [], footer: '', timestamp: true } },
+  { id: 'restart', label: '🔄 Перезапуск', apply: { title: '🔄 Перезапуск сервера', description: 'Сервер будет перезапущен **ВРЕМЯ** (МСК). Это займёт несколько минут. Сохраните прогресс заранее.', color: 0x3b82f6, mention: 'none', fields: [], footer: '', timestamp: true } },
   { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСервер будет недоступен около часа.', color: 0xf97316, mention: 'here', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
   { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
   { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
@@ -6806,11 +7227,12 @@ function ImageInput({ label, url, upload, onUrl, onUpload, allowUpload }: { labe
 }
 
 // ---------- the editor ----------
-export default function NewsEditor({ id }: { id: number | null }) {
+export default function NewsEditor({ id, template }: { id: number | null; template?: string }) {
   const [d, setD] = useState<Draft | null>(null);
   const [item, setItem] = useState<NewsItem | null>(null);
   const [makeDefault, setMakeDefault] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [repeat, setRepeat] = useState<'none' | 'daily' | 'weekly' | 'monthly'>('none');
   const [when, setWhen] = useState(() => toLocalInput(Date.now() + 3600_000));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -6823,9 +7245,11 @@ export default function NewsEditor({ id }: { id: number | null }) {
           setItem(n);
           setD(fromPayload(n.payload, n.channelId));
           if (n.scheduledAt) setWhen(toLocalInput(n.scheduledAt));
+          setRepeat(n.repeat ?? 'none');
         } else {
           const s = await api<NewsSettings>('/news/settings');
-          setD(blank(s.channelId ?? ''));
+          const tpl = TEMPLATES.find((x) => x.id === template);
+          setD({ ...blank(s.channelId ?? ''), ...(tpl?.apply ?? {}), channelId: s.channelId ?? '' });
         }
       } catch (e) {
         setError((e as Error).message);
@@ -6855,6 +7279,7 @@ export default function NewsEditor({ id }: { id: number | null }) {
         payload: toPayload(d),
         action,
         scheduledAt: action === 'schedule' ? new Date(when).getTime() : undefined,
+        repeat: action === 'schedule' ? repeat : undefined,
       };
       if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
@@ -6983,6 +7408,13 @@ export default function NewsEditor({ id }: { id: number | null }) {
                   <div className="space-y-2 rounded-2xl bg-soft p-3">
                     <label htmlFor="news-when" className="label">Когда опубликовать</label>
                     <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(e) => setWhen(e.target.value)} />
+                    <label htmlFor="news-repeat" className="label">Повторять</label>
+                    <select id="news-repeat" className="input" value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)}>
+                      <option value="none">Не повторять</option>
+                      <option value="daily">Каждый день</option>
+                      <option value="weekly">Каждую неделю</option>
+                      <option value="monthly">Каждый месяц</option>
+                    </select>
                     <div className="flex gap-2">
                       <button className="btn flex-1" disabled={busy || noChannel} onClick={() => save('schedule')}>Запланировать</button>
                       <button className="btn btn-soft" onClick={() => setScheduling(false)}>Отмена</button>
