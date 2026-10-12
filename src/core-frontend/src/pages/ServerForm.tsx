@@ -2,8 +2,9 @@ import { useState, type FormEvent } from 'react';
 import { api, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import { ErrorLine, Field, Modal } from '../ui';
+import { COUNTRIES } from '../countries';
 
-export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '' };
+export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
 export default function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; id?: number; onClose: () => void; onSaved: () => void }) {
@@ -15,7 +16,7 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
   const [test, setTest] = useState<TestResult | null>(null);
 
   // "advanced" is open when it already holds something (editing)
-  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress);
+  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country);
 
   const pickGame = (v: string) => {
     setTest(null);
@@ -117,6 +118,13 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
             <Field label="Адрес для отображения">
               <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
             </Field>
+            <Field label="Страна (для сообщения в Discord)">
+              <select id="srv-country" className="input" value={f.country} onChange={(e) => change({ country: e.target.value })}>
+                <option value="">Определить автоматически по адресу</option>
+                {COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              </select>
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.</p>
             <p className="-mt-2 text-sm font-semibold text-mute">Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.</p>
           </div>
         </details>

@@ -20,6 +20,8 @@ export interface Server {
   queryPort: number | null;
   /** what people see instead of host:port ('' = not set) */
   displayAddress: string;
+  /** country shown in Discord ('' = detected automatically) */
+  country: string;
   /** the address shown in the panel and on cards */
   address: string;
   hasStatus: boolean;
@@ -57,6 +59,8 @@ export interface ServerInput {
   port: number;
   queryPort: number | null;
   displayAddress: string;
+  /** ISO country code shown in Discord; '' = detect automatically */
+  country: string;
 }
 
 /** an error answer from the API; `data` is the whole JSON body (retryAfter, attemptsLeft, pending ...) */

@@ -138,7 +138,7 @@ function ServersManage() {
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="flex gap-2">
               <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id}>{busyId === s.id ? '…' : 'Опросить'}</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country } })}>Изменить</button>
               <button className="btn btn-danger btn-sm" onClick={() => void remove(s)}>Удалить</button>
             </div>
           </div>

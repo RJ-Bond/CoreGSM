@@ -829,6 +829,8 @@ const serverSchema = z.object({
     .max(100)
     .regex(/^[^\s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
     .optional(),
+  // two-letter country code shown in the Discord message; empty = detect from the address
+  country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
 });
 
 /** What a non-admin may see: the display address, never the internal host/port used for querying. */
@@ -850,6 +852,7 @@ function serialize(r: ServerJoin) {
     port: r.port,
     queryPort: r.query_port,
     displayAddress: r.display_address,
+    country: r.country ?? '',
     // the address shown in the panel and on cards
     address: r.display_address || `${r.host}:${r.port}`,
     hasStatus: r.has_status != null,
@@ -888,8 +891,8 @@ app.post(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const info = db
-      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', Date.now());
+      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
@@ -904,8 +907,8 @@ app.put(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const r = db
-      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=? WHERE id=?')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', id);
+      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=? WHERE id=?')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));
@@ -929,6 +932,7 @@ app.post(
       id: 0,
       name: '',
       display_address: '',
+      country: '',
       game: b.data.game,
       host: b.data.host,
       port: b.data.port,
@@ -1092,7 +1096,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = getSetting('public_base');
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
