@@ -14,6 +14,7 @@ import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
+import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
 
@@ -770,6 +771,7 @@ app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
   if (u.role === 'admin' && u.status === 'active' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  removeAvatar(id);
   res.json({ ok: true });
 });
 
@@ -796,7 +798,16 @@ const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
   if (req.user!.role === 'admin') rememberAdminBase(req);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
-  res.json({ username: u.username, role: u.role, avatarUrl: avatarUrl(u), discordName: u.discord_name, hasPassword: !u.no_password });
+  // an uploaded picture wins over the Discord avatar
+  const custom = customAvatarUrl(u.id);
+  res.json({
+    username: u.username,
+    role: u.role,
+    avatarUrl: custom ?? avatarUrl(u),
+    avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
+    discordName: u.discord_name,
+    hasPassword: !u.no_password,
+  });
 });
 
 app.post(
@@ -1496,6 +1507,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 
 registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
 registerAlerts({ app, admin, internal, channelInfo });
+registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 

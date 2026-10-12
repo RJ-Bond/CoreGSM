@@ -468,6 +468,22 @@ const passFromHeader = (req: Request): string | null => {
   return v;
 };
 
+/**
+ * Ends the process so the container restarts and db.ts applies the staged restore. The database is closed first
+ * (WAL checkpoint); then the process is killed outright: process.exit() was seen to hang while the native canvas
+ * library was being torn down, and a hung process would never be restarted.
+ */
+function restartSoon(): void {
+  setTimeout(() => {
+    try {
+      db.close();
+    } catch {
+      /* ignore */
+    }
+    process.kill(process.pid, 'SIGKILL');
+  }, 800);
+}
+
 // ---------- routes ----------
 export function registerBackups({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const fail = (res: Response, e: unknown) => {
@@ -522,7 +538,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       }
       // the swap happens at start-up (see db.ts); the container restarts by itself
       res.json({ ok: true, restarting: true });
-      setTimeout(() => process.exit(0), 800);
+      restartSoon();
     }),
   );
 
@@ -607,7 +623,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       const pass = (given.success && given.data.passphrase) || backupSettings().passphrase;
       await stageRestore(f.file, pass || null);
       res.json({ ok: true, restarting: true });
-      setTimeout(() => process.exit(0), 800);
+      restartSoon();
     }),
   );
 }

@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c27765e07d9f"
+COREGSM_BUILD="965840247469"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -674,6 +674,77 @@ export function registerAlerts(deps: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/avatars.ts" << '__COREGSM_EOF__'
+/**
+ * User avatars uploaded in the profile. The picture is cropped to a square and stored as a 256 px PNG
+ * (<data dir>/avatars/<user id>.png); it takes priority over the Discord avatar.
+ */
+import express, { type Express, type RequestHandler } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import skia from 'skia-canvas';
+
+const { Canvas, loadImage } = skia;
+
+const DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'avatars');
+fs.mkdirSync(DIR, { recursive: true });
+
+const fileOf = (userId: number) => path.join(DIR, `${Math.trunc(userId)}.png`);
+
+/** "/api/avatars/7.png?v=<mtime>" when the user uploaded a picture, otherwise null */
+export function customAvatarUrl(userId: number): string | null {
+  try {
+    const st = fs.statSync(fileOf(userId));
+    return `/api/avatars/${Math.trunc(userId)}.png?v=${Math.floor(st.mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+export function removeAvatar(userId: number): void {
+  fs.rmSync(fileOf(userId), { force: true });
+}
+
+const TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+export function registerAvatars(deps: { app: Express; auth: RequestHandler; userId: (req: express.Request) => number }): void {
+  const { app, auth, userId } = deps;
+
+  app.put('/api/me/avatar', auth, express.raw({ type: TYPES, limit: '3mb' }), async (req, res) => {
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 3 МБ' });
+    try {
+      const img = await loadImage(body);
+      if (!img.width || !img.height || img.width > 8000 || img.height > 8000) throw new Error('size');
+      const side = Math.min(img.width, img.height);
+      const canvas = new Canvas(256, 256);
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      // centre crop to a square
+      ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256);
+      const png = await canvas.toBuffer('png');
+      fs.writeFileSync(fileOf(userId(req)), png, { mode: 0o644 });
+      res.json({ avatarUrl: customAvatarUrl(userId(req)) });
+    } catch {
+      res.status(400).json({ error: 'Не удалось прочитать картинку: выберите PNG, JPG или WebP' });
+    }
+  });
+
+  app.delete('/api/me/avatar', auth, (req, res) => {
+    removeAvatar(userId(req));
+    res.json({ ok: true });
+  });
+
+  app.get('/api/avatars/:file', (req, res) => {
+    const m = /^(\d{1,9})\.png$/.exec(String(req.params.file));
+    if (!m) return res.status(404).end();
+    const f = fileOf(Number(m[1]));
+    if (!fs.existsSync(f)) return res.status(404).end();
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/backup.ts" << '__COREGSM_EOF__'
 /**
  * Full backups of the panel: archive format, schedule, off-host copy, staged restore.
@@ -1145,6 +1216,22 @@ const passFromHeader = (req: Request): string | null => {
   return v;
 };
 
+/**
+ * Ends the process so the container restarts and db.ts applies the staged restore. The database is closed first
+ * (WAL checkpoint); then the process is killed outright: process.exit() was seen to hang while the native canvas
+ * library was being torn down, and a hung process would never be restarted.
+ */
+function restartSoon(): void {
+  setTimeout(() => {
+    try {
+      db.close();
+    } catch {
+      /* ignore */
+    }
+    process.kill(process.pid, 'SIGKILL');
+  }, 800);
+}
+
 // ---------- routes ----------
 export function registerBackups({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const fail = (res: Response, e: unknown) => {
@@ -1199,7 +1286,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       }
       // the swap happens at start-up (see db.ts); the container restarts by itself
       res.json({ ok: true, restarting: true });
-      setTimeout(() => process.exit(0), 800);
+      restartSoon();
     }),
   );
 
@@ -1284,7 +1371,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       const pass = (given.success && given.data.passphrase) || backupSettings().passphrase;
       await stageRestore(f.file, pass || null);
       res.json({ ok: true, restarting: true });
-      setTimeout(() => process.exit(0), 800);
+      restartSoon();
     }),
   );
 }
@@ -2372,6 +2459,7 @@ import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
+import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
 
@@ -3128,6 +3216,7 @@ app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
   if (u.role === 'admin' && u.status === 'active' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  removeAvatar(id);
   res.json({ ok: true });
 });
 
@@ -3154,7 +3243,16 @@ const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
   if (req.user!.role === 'admin') rememberAdminBase(req);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
-  res.json({ username: u.username, role: u.role, avatarUrl: avatarUrl(u), discordName: u.discord_name, hasPassword: !u.no_password });
+  // an uploaded picture wins over the Discord avatar
+  const custom = customAvatarUrl(u.id);
+  res.json({
+    username: u.username,
+    role: u.role,
+    avatarUrl: custom ?? avatarUrl(u),
+    avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
+    discordName: u.discord_name,
+    hasPassword: !u.no_password,
+  });
 });
 
 app.post(
@@ -3854,6 +3952,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 
 registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
 registerAlerts({ app, admin, internal, channelInfo });
+registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 
@@ -6766,6 +6865,8 @@ export interface Me {
   role: 'admin' | 'moderator' | 'player';
   /** Discord CDN url */
   avatarUrl: string | null;
+  /** where the picture comes from: an uploaded file wins over Discord */
+  avatarSource: 'custom' | 'discord' | null;
   discordName: string | null;
   hasPassword: boolean;
 }
@@ -10033,7 +10134,7 @@ export default function ProfilePage() {
 
       <div className="grid items-start gap-5 md:grid-cols-2">
         <div className="panel flex flex-wrap items-center gap-4 p-5 md:col-span-2">
-          <UserAvatar name={me.username} url={me.avatarUrl} size={64} tone="brand" className="!rounded-3xl" />
+          <AvatarEditor onChanged={reload} />
           <div className="min-w-0 flex-1">
             <div className="line-clamp-2 break-words text-2xl font-black leading-tight">{me.username}</div>
             <div className="flex flex-wrap items-center gap-2">
@@ -10071,6 +10172,62 @@ export default function ProfilePage() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Profile picture: upload a photo (cropped to a square on the server), or fall back to the Discord avatar. */
+function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) {
+  const { me } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  if (!me) return null;
+
+  const upload = async (file: File) => {
+    setError('');
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) return setError('Нужна картинка PNG, JPG или WebP');
+    if (file.size > 3 * 1024 * 1024) return setError('Файл больше 3 МБ');
+    setBusy(true);
+    try {
+      const r = await fetch('/api/me/avatar', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
+      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить фото');
+      toast('Фото обновлено');
+      await onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    setBusy(true);
+    await api('/me/avatar', 'DELETE').then(() => toast(me.avatarSource === 'custom' && me.discordName ? 'Теперь показывается аватар Discord' : 'Фото удалено')).catch((e: Error) => setError(e.message));
+    await onChanged();
+    setBusy(false);
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <button
+        type="button"
+        onClick={() => input.current?.click()}
+        disabled={busy}
+        aria-label="Загрузить фото профиля"
+        className="group relative rounded-3xl"
+      >
+        <UserAvatar name={me.username} url={me.avatarUrl} size={72} tone="brand" className="!rounded-3xl" />
+        <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+          {busy ? '…' : 'Изменить'}
+        </span>
+      </button>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
+      <div className="flex gap-3 text-sm font-extrabold">
+        <button type="button" className="text-link hover:underline" onClick={() => input.current?.click()} disabled={busy}>Загрузить фото</button>
+        {me.avatarSource === 'custom' && <button type="button" className="text-mute hover:text-bad hover:underline" onClick={() => void remove()} disabled={busy}>{me.discordName ? 'Взять из Discord' : 'Убрать'}</button>}
+      </div>
+      {me.avatarSource === 'discord' && <p className="max-w-[12rem] text-center text-xs font-semibold text-mute">Сейчас аватар из Discord</p>}
+      {error && <p className="max-w-[12rem] text-center text-xs font-bold text-bad" role="alert">{error}</p>}
     </div>
   );
 }
