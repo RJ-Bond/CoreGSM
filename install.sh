@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ee7054c43f1f"
+COREGSM_BUILD="0687c4394158"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -1518,9 +1518,16 @@ const GAME_COLORS: Record<string, [string, string]> = {
   garrysmod: ['GM', '#3a8fd9'], teamfortress2: ['TF', '#c9533a'], l4d2: ['L4', '#b83a3a'], terraria: ['TR', '#46b86a'],
   sdtd: ['7D', '#b5483a'], dayz: ['DZ', '#6f8f4a'], ase: ['AK', '#3aa6a0'], asa: ['AS', '#2f9ea8'],
   conanexiles: ['CE', '#a8743a'], palworld: ['PW', '#2fc4bf'], factorio: ['FC', '#d98a3a'], unturned: ['UT', '#4aa86a'],
-  vrising: ['VR', '#a83a5a'], icarus: ['IC', '#2b3a52'], projectzomboid: ['PZ', '#7a8a4a'], gta5f: ['5M', '#f26a3d'], gtasam: ['SA', '#8a6ad9'],
+  vrising: ['VR', '#7c3aed'], icarus: ['IC', '#f5b01e'], projectzomboid: ['PZ', '#7a8a4a'], gta5f: ['5M', '#f26a3d'], gtasam: ['SA', '#8a6ad9'],
   teamspeak3: ['TS', '#3a7ad9'],
 };
+
+/** "#f5b01e" darkened by `k` (0..1) towards black */
+function mixToBlack(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v: number) => Math.round(v * (1 - k));
+  return `rgb(${f((n >> 16) & 255)}, ${f((n >> 8) & 255)}, ${f(n & 255)})`;
+}
 
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 const MONO = '"DejaVu Sans Mono", "Liberation Mono", monospace';
@@ -1587,12 +1594,12 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
 
   ctx.textBaseline = 'alphabetic';
 
-  // game avatar
-  ctx.fillStyle = accent;
+  // game avatar: the artwork sits on a deep tile of the game colour, a pictogram on the colour itself
+  const art = await gameImage(s.game);
+  ctx.fillStyle = art ? mixToBlack(accent, 0.62) : accent;
   ctx.beginPath();
   ctx.roundRect(64, 56, 84, 84, 26);
   ctx.fill();
-  const art = await gameImage(s.game);
   const iconPath = gameIconPath(s.game);
   if (art) {
     ctx.drawImage(art, 106 - 38, 98 - 38, 76, 76);
@@ -2211,6 +2218,9 @@ export interface EmbedExtra {
 
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
 
+/** the side stripe of an online server follows the colour of its game (others keep the status green) */
+const GAME_ACCENT: Record<string, number> = { vrising: 0x8b5cf6, icarus: 0xf5b01e };
+
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** games whose clients have a console with the "connect" command */
@@ -2255,7 +2265,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     return {
       title: cut(s.name, 256),
       description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
-      color: COLOR.unknown,
+      color: GAME_ACCENT[s.game] ?? COLOR.unknown,
       thumbnail,
       footer,
     };
@@ -2309,7 +2319,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   return {
     title: cut(s.name, 256),
     description: lines.length ? lines.join('\n') : undefined,
-    color: !s.online ? COLOR.offline : lag ? COLOR.lag : COLOR.online,
+    color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
     thumbnail,
     fields,
     footer,
@@ -3758,7 +3768,8 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
 
   const points = db
     .prepare(
-      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online
+      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online,
+              CAST(ROUND(AVG(CASE WHEN online = 1 THEN ping END)) AS INTEGER) AS ping
        FROM history WHERE server_id = ? AND ts > ?
        GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
     )
@@ -3781,12 +3792,15 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
          ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
       )
       .all(id, since) as { ts: number; online: number }[]
-  ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
+  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak', players: null as number | null }));
+  // the busiest moment of the period is shown in the event feed as well
+  if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
+  events.sort((a, b) => b.ts - a.ts);
 
   const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
 
   res.json({
-    server: isAdmin(req) ? server : publicServer(server),
+    server: { ...(isAdmin(req) ? server : publicServer(server)), countryCode: server.country || countryOf(id, server.host) || '' },
     hours,
     playersNow,
     points,
@@ -13512,11 +13526,14 @@ export interface TestResult {
 }
 
 export interface ServerDetails {
-  server: Server;
+  /** `countryCode`: two-letter ISO code or '' */
+  server: Server & { countryCode?: string };
   hours: number;
-  points: { ts: number; players: number; online: number }[];
+  /** `ping`: ms, null when unknown (or the server did not answer) */
+  points: { ts: number; players: number; online: number; ping: number | null }[];
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
-  events: { ts: number; type: 'up' | 'down' }[];
+  /** newest first; `players` is set for 'peak' */
+  events: { ts: number; type: 'up' | 'down' | 'peak'; players: number | null }[];
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }
@@ -14946,6 +14963,831 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
+import { connectGuide } from '../../connectGuides';
+import { CopyButton } from '../../ui';
+
+/** «Подключение»: numbered steps for the game, copyable values and a one-click link where the game has a protocol */
+export default function ConnectTab({ game, address }: { game: string; address: string }) {
+  const guide = connectGuide(game, address);
+  return (
+    <div className="grid gap-3.5 lg:grid-cols-12">
+      <section className="tile tile-in p-5 lg:col-span-7" style={{ ['--i' as string]: 0 }}>
+        <h2 className="mb-4 text-lg font-extrabold">{guide.title}</h2>
+        <ol className="space-y-3">
+          {guide.steps.map((s, i) => (
+            <li key={i} className="flex gap-3">
+              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-soft text-sm font-extrabold text-link" aria-hidden>{i + 1}</span>
+              <p className="min-w-0 break-words pt-0.5 font-semibold leading-snug">{s}</p>
+            </li>
+          ))}
+        </ol>
+        {guide.link && (
+          <a href={guide.link.href} className="btn mt-5 w-full sm:w-auto" data-magnetic>{guide.link.label}</a>
+        )}
+      </section>
+      <section className="tile tile-in p-5 lg:col-span-5" style={{ ['--i' as string]: 1 }}>
+        <h2 className="mb-3 text-base font-extrabold">Что понадобится</h2>
+        <ul className="space-y-2.5">
+          {guide.copy.map((c) => (
+            <li key={c.label} className="min-w-0">
+              <div className="mb-1 text-[13px] font-extrabold text-mute">{c.label}</div>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-xl bg-soft px-3 py-2 font-mono text-sm font-semibold">{c.value}</code>
+                <CopyButton text={c.value} label="Копировать" />
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/EventsFeed.tsx" << '__COREGSM_EOF__'
+import { useMemo, useState } from 'react';
+import type { ServerDetails } from '../../api';
+import { ago, plural } from '../../ui';
+import { fmtDuration } from './helpers';
+
+type Ev = ServerDetails['events'][number];
+type Filter = 'all' | 'fail' | 'peak';
+
+const dayKey = (ts: number) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+function dayTitle(ts: number): string {
+  const d = new Date(ts);
+  const t = new Date();
+  if (dayKey(ts) === dayKey(t.getTime())) return 'Сегодня';
+  const y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
+  if (dayKey(ts) === dayKey(y.getTime())) return 'Вчера';
+  return d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+const absTime = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+
+const ICON: Record<Ev['type'], { cls: string; path: string }> = {
+  up: { cls: 'bg-okbg text-ok', path: 'M5 12.5l4.5 4.5L19 7.5' },
+  down: { cls: 'bg-badbg text-bad', path: 'M12 5v10M7 12l5 5 5-5' },
+  peak: { cls: 'bg-soft text-link', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
+};
+
+function title(e: Ev, downFor: number | null, stillDown: boolean): string {
+  if (e.type === 'up') return 'Сервер вернулся';
+  if (e.type === 'peak') return `Пик игроков: ${e.players ?? '–'}`;
+  if (downFor != null) return `Сервер упал · был недоступен ${fmtDuration(downFor)}`;
+  return stillDown ? 'Сервер упал · недоступен до сих пор' : 'Сервер упал';
+}
+
+export default function EventsFeed({ events, online, limit, moreHref }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string }) {
+  const [filter, setFilter] = useState<Filter>('all');
+
+  // how long every outage lasted: the nearest later 'up'
+  const downFor = useMemo(() => {
+    const m = new Map<number, number>();
+    const ups = events.filter((e) => e.type === 'up').map((e) => e.ts).sort((a, b) => a - b);
+    for (const e of events) {
+      if (e.type !== 'down') continue;
+      const up = ups.find((t) => t > e.ts);
+      if (up != null) m.set(e.ts, up - e.ts);
+    }
+    return m;
+  }, [events]);
+  const newestDown = events.find((e) => e.type === 'down' || e.type === 'up');
+  const failCount = events.filter((e) => e.type === 'down').length;
+  const peakCount = events.filter((e) => e.type === 'peak').length;
+
+  const list = events.filter((e) => (filter === 'all' ? true : filter === 'peak' ? e.type === 'peak' : e.type !== 'peak'));
+  const shown = limit ? list.slice(0, limit) : list;
+
+  const groups: { key: string; title: string; items: Ev[] }[] = [];
+  for (const e of shown) {
+    const k = dayKey(e.ts);
+    const g = groups[groups.length - 1];
+    if (g && g.key === k) g.items.push(e);
+    else groups.push({ key: k, title: dayTitle(e.ts), items: [e] });
+  }
+
+  const chips: [Filter, string, number][] = [['all', 'Все', events.length], ['fail', 'Сбои', failCount], ['peak', 'Пики', peakCount]];
+
+  return (
+    <div>
+      {!limit && (
+        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label="Фильтр событий">
+          {chips.map(([k, label, n]) => (
+            <button key={k} type="button" className={`chip-filter ${filter === k ? 'on' : ''}`} aria-pressed={filter === k} onClick={() => setFilter(k)}>
+              {label}<span className="opacity-70"> {n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {shown.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+          <span className="grid h-12 w-12 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+          </span>
+          <p className="font-extrabold">{filter === 'peak' ? 'Пиков за период пока не было' : 'За период сбоев не было'}</p>
+          <p className="max-w-xs text-sm font-semibold text-mute">{filter === 'peak' ? 'Рекорд появится, когда на сервере соберутся игроки.' : 'Сервер отвечал всё время: событий для показа нет.'}</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {groups.map((g) => (
+            <section key={g.key} aria-label={g.title}>
+              <h3 className="mb-1.5 text-[13px] font-extrabold uppercase tracking-wide text-mute">{g.title}</h3>
+              <ol className="relative space-y-1 before:absolute before:bottom-3 before:left-[17px] before:top-3 before:w-px before:bg-line">
+                {g.items.map((e) => {
+                  const ic = ICON[e.type];
+                  return (
+                    <li key={`${e.type}-${e.ts}`} className="relative flex min-w-0 items-center gap-3 rounded-xl py-1.5">
+                      <span className={`relative z-[1] grid h-9 w-9 shrink-0 place-items-center rounded-full ${ic.cls}`} aria-hidden>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d={ic.path} /></svg>
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
+                        <time dateTime={new Date(e.ts).toISOString()} title={absTime(e.ts)} className="text-sm font-semibold text-mute">
+                          {ago(e.ts)} · {clock(e.ts)}
+                        </time>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          ))}
+        </div>
+      )}
+      {limit && list.length > 0 && moreHref && (
+        <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
+          Вся лента · {events.length} {plural(events.length, ['событие', 'события', 'событий'])} →
+        </a>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/HistoryChart.tsx" << '__COREGSM_EOF__'
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import type { ServerDetails } from '../../api';
+import { fmtDateTime, plural, smoothPath } from '../../ui';
+import { pingTone, TONE_TEXT } from './helpers';
+
+type Point = ServerDetails['points'][number];
+export type Series = 'players' | 'ping';
+
+/** 0..yMax with about four steps of a "nice" size (1, 2, 5 x 10^n); the scale follows the data, not the server slots */
+function niceScale(dataMax: number, minTop: number): { max: number; step: number; ticks: number[] } {
+  const top = Math.max(dataMax * 1.2, minTop);
+  const raw = top / 4;
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const n = raw / p;
+  const step = Math.max(1, (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p);
+  const max = Math.ceil(top / step - 1e-9) * step;
+  const ticks: number[] = [];
+  for (let v = 0; v <= max + 1e-9; v += step) ticks.push(Math.round(v * 100) / 100);
+  return { max, step, ticks };
+}
+
+const tickLabel = (ts: number, spanMs: number) =>
+  spanMs <= 36 * 3600_000
+    ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : new Date(ts).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+
+const fullTime = (ts: number) =>
+  new Date(ts).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Players (or ping) over time: smooth area, red bands where the server did not answer, a cursor with a tooltip
+ * that follows the mouse / finger / pen and the arrow keys, Y axis that fits the data.
+ */
+export default function HistoryChart({
+  points, hours, max, color, series = 'players', loading = false,
+}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean }) {
+  const L = 38, R = 10, T = 14, B = 28;
+  const [hover, setHover] = useState<number | null>(null);
+  const [kbd, setKbd] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const svg = useRef<SVGSVGElement>(null);
+  const gid = useId();
+  // the drawing is 1:1 with the screen, so labels keep a readable size on phones
+  const [W, setW] = useState(720);
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const measure = () => setW(Math.max(280, Math.round(el.clientWidth)));
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
+  }, []);
+  const H = W < 520 ? 210 : 260;
+
+  const now = Date.now();
+  const winStart = now - hours * 3600_000;
+  const first = points.length ? points[0].ts : now;
+  const sparse = points.length < 20;
+  // with only a few samples the window shrinks to them instead of leaving a lonely tail on the right
+  let t0 = winStart;
+  if (sparse) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
+  const span = now - t0;
+  const x = (ts: number) => L + ((ts - t0) / span) * (W - L - R);
+
+  const valueOf = (p: Point): number | null => {
+    if (!p.online) return null;
+    return series === 'ping' ? p.ping : p.players;
+  };
+  const vals = points.map(valueOf).filter((v): v is number => v != null);
+  const dataMax = Math.max(0, ...vals);
+  const scale = niceScale(dataMax, series === 'ping' ? 20 : 2);
+  const yMax = scale.max;
+  const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
+
+  // continuous runs of answered samples are separate curves; a gap is much wider than the usual spacing
+  const bucket = (hours * 3600_000) / 180;
+  const spacing = points.length > 1 ? [...points.slice(1).map((p, i) => p.ts - points[i].ts)].sort((a, b) => a - b)[Math.floor((points.length - 1) / 2)] : bucket;
+  const gap = Math.max(bucket * 2.5, spacing * 2.5);
+  const segments: { ts: number; v: number }[][] = [];
+  let cur: { ts: number; v: number }[] = [];
+  for (const p of points) {
+    const v = valueOf(p);
+    if (v != null) {
+      if (cur.length && p.ts - cur[cur.length - 1].ts > gap) { segments.push(cur); cur = []; }
+      cur.push({ ts: p.ts, v });
+    } else if (cur.length) { segments.push(cur); cur = []; }
+  }
+  if (cur.length) segments.push(cur);
+
+  const nearest = (clientX: number): number | null => {
+    const r = svg.current?.getBoundingClientRect();
+    if (!r || points.length === 0 || r.width === 0) return null;
+    const vx = ((clientX - r.left) / r.width) * W;
+    let best = 0;
+    points.forEach((p, i) => { if (Math.abs(x(p.ts) - vx) < Math.abs(x(points[best].ts) - vx)) best = i; });
+    return best;
+  };
+  const onPointer = (e: ReactPointerEvent) => {
+    setKbd(false);
+    const i = nearest(e.clientX);
+    if (i != null) setHover(i);
+  };
+  const onKey = (e: ReactKeyboardEvent) => {
+    if (points.length === 0) return;
+    const last = points.length - 1;
+    const at = hover == null ? last : Math.min(hover, last);
+    let next: number | null = null;
+    if (e.key === 'ArrowLeft') next = Math.max(0, at - 1);
+    else if (e.key === 'ArrowRight') next = Math.min(last, at + 1);
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = last;
+    else if (e.key === 'Escape') { setHover(null); setKbd(false); return; }
+    if (next == null) return;
+    e.preventDefault();
+    setKbd(true);
+    setHover(next);
+  };
+
+  const hp = hover != null ? points[Math.min(hover, points.length - 1)] ?? null : null;
+  const hv = hp ? valueOf(hp) : null;
+  const lastSeg = segments[segments.length - 1];
+  const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
+  const unit = series === 'ping' ? 'мс' : '';
+  const capLine = series === 'players' && max > 0 && max <= yMax;
+
+  const describe = (p: Point) => {
+    if (!p.online) return `${fullTime(p.ts)}: сервер не отвечал`;
+    const parts = [fullTime(p.ts), `игроков ${p.players}${max ? ` из ${max}` : ''}`];
+    if (p.ping != null) parts.push(`пинг ${p.ping} мс`);
+    return parts.join(', ');
+  };
+  const summary = vals.length
+    ? `График ${series === 'ping' ? 'пинга' : 'игроков'} за ${hours <= 24 ? 'сутки' : 'неделю'}: от ${Math.min(...vals)} до ${Math.max(...vals)}${series === 'ping' ? ' мс' : ''}. Стрелки влево и вправо перемещают курсор.`
+    : 'График пока пуст.';
+
+  // tooltip: keep it inside the chart
+  const TW = 188;
+  const tx = hp ? Math.min(W - TW / 2 - 2, Math.max(TW / 2 + 2, x(hp.ts))) : 0;
+  const seriesName = series === 'ping' ? 'Пинг' : 'Игроки';
+
+  return (
+    <div className={`transition-opacity duration-300 ${loading ? 'opacity-60' : ''}`}>
+      {sparse && points.length > 0 && (
+        <p className="mb-2 flex items-center gap-2 rounded-xl bg-soft px-3 py-1.5 text-sm font-bold text-mute">
+          <span aria-hidden className="live-dot !bg-warn" />
+          Данные накапливаются с {fmtDateTime(first)}
+        </p>
+      )}
+      <div
+        ref={wrap}
+        className="relative rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-brand/60"
+        role="group"
+        aria-label={summary}
+        tabIndex={0}
+        onKeyDown={onKey}
+        onFocus={() => { if (hover == null && points.length) { setKbd(true); setHover(points.length - 1); } }}
+        onBlur={() => { setHover(null); setKbd(false); }}
+      >
+        <svg
+          ref={svg}
+          viewBox={`0 0 ${W} ${H}`}
+          className="chart-reveal block h-auto w-full touch-pan-y select-none"
+          aria-hidden
+          onPointerDown={onPointer}
+          onPointerMove={onPointer}
+          onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHover(null); }}
+          onPointerCancel={() => setHover(null)}
+        >
+          <defs>
+            <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" style={{ stopColor: color }} stopOpacity="0.34" />
+              <stop offset="1" style={{ stopColor: color }} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          {scale.ticks.map((v) => (
+            <g key={v}>
+              <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" strokeDasharray={v === 0 ? undefined : '3 5'} />
+              <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{v}</text>
+            </g>
+          ))}
+          {[0, 1, 2, 3, 4].map((i) => {
+            const ts = t0 + (span * i) / 4;
+            return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{tickLabel(ts, span)}</text>;
+          })}
+          {capLine && <line x1={L} x2={W - R} y1={y(max)} y2={y(max)} className="stroke-mute" strokeDasharray="4 4" strokeWidth="1" opacity="0.5" />}
+          {points.filter((p) => !p.online && p.ts >= t0).map((p) => {
+            const bw = Math.max(3, ((W - L - R) * bucket) / span);
+            return <rect key={p.ts} x={Math.max(L, x(p.ts) - bw / 2)} y={T} width={bw} height={H - T - B} className="fill-bad" opacity="0.2" />;
+          })}
+          {segments.map((seg, i) => {
+            const pts = seg.map((p): [number, number] => [x(p.ts), y(p.v)]);
+            const d = smoothPath(pts);
+            return (
+              <g key={i}>
+                {seg.length === 1 && <circle cx={pts[0][0]} cy={pts[0][1]} r="3.5" style={{ fill: color }} />}
+                {seg.length > 1 && <path d={`${d} L${pts[pts.length - 1][0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z`} fill={`url(#${gid})`} />}
+                {seg.length > 1 && <path d={d} fill="none" style={{ stroke: color }} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
+              </g>
+            );
+          })}
+          {endPt && !hp && (
+            <>
+              <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="9" style={{ fill: color }} opacity="0.22" />
+              <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="4.5" style={{ fill: color }} className="stroke-card" strokeWidth="2" />
+            </>
+          )}
+          {hp && <line x1={x(hp.ts)} x2={x(hp.ts)} y1={T} y2={H - B} className="stroke-mute" strokeWidth="1.5" strokeDasharray="3 3" opacity="0.7" />}
+          {hp && hv != null && <circle cx={x(hp.ts)} cy={y(hv)} r="5.5" style={{ fill: color }} className="stroke-card" strokeWidth="2.5" />}
+          {hp && hv == null && <circle cx={x(hp.ts)} cy={y(0)} r="4.5" className="fill-bad stroke-card" strokeWidth="2" />}
+        </svg>
+        {hp && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-[13px] font-bold leading-snug text-page shadow-pop"
+            style={{ left: tx, width: TW }}
+          >
+            <div className="whitespace-nowrap text-[12px] font-semibold opacity-80">{fullTime(hp.ts)}</div>
+            {hp.online ? (
+              <>
+                <div className="whitespace-nowrap">
+                  <span className="opacity-80">Игроки </span>
+                  <span className="text-[15px] font-extrabold">{hp.players}</span>
+                  {max > 0 && <span className="opacity-80"> / {max}</span>}
+                </div>
+                <div className="whitespace-nowrap">
+                  <span className="opacity-80">Пинг </span>
+                  {hp.ping != null ? <span className="text-[15px] font-extrabold">{hp.ping} мс</span> : <span className="opacity-70">нет данных</span>}
+                </div>
+              </>
+            ) : (
+              <div className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-[#fca5a5]">
+                <span className="h-2 w-2 rounded-full bg-[#f87171]" />
+                сервер не отвечал
+              </div>
+            )}
+          </div>
+        )}
+        <span className="sr-only" aria-live="polite">{kbd && hp ? describe(hp) : ''}</span>
+      </div>
+      <p className="mt-1 text-xs font-bold text-mute">
+        {seriesName}{unit ? `, ${unit}` : ''}
+        {hp && hv != null && series === 'ping' && (
+          <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
+        )}
+        {series === 'players' && points.length > 0 && (
+          <span className="ml-2 font-semibold">максимум за период: {Math.max(...points.map((p) => p.players))} {plural(Math.max(...points.map((p) => p.players)), ['игрок', 'игрока', 'игроков'])}</span>
+        )}
+      </p>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/PlayersList.tsx" << '__COREGSM_EOF__'
+import { useMemo, useState } from 'react';
+import type { PlayerNow } from '../../api';
+import { plural } from '../../ui';
+import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow } from './helpers';
+
+function Avatar({ name, size = 36 }: { name: string; size?: number }) {
+  return (
+    <span
+      className="avatar-hue grid shrink-0 place-items-center rounded-[12px] font-extrabold"
+      style={{ ['--h' as string]: nickHue(name), width: size, height: size, fontSize: size * 0.42 }}
+      aria-hidden
+    >
+      {nickInitial(name)}
+    </span>
+  );
+}
+
+type Sort = 'time' | 'alpha';
+
+/**
+ * Players on the server. `limit`: overview mode (first N, no search, link to the full list via `moreHref`).
+ * `fresh`: names that appeared since the previous poll (a short highlight).
+ */
+export default function PlayersList({
+  online, players, names, list, fresh, limit, moreHref,
+}: { online: boolean; players: number; names: string[]; list: PlayerNow[]; fresh: Set<string>; limit?: number; moreHref?: string }) {
+  const now = useNow(30_000);
+  const [sort, setSort] = useState<Sort>('time');
+  const [query, setQuery] = useState('');
+
+  const total = list.length || names.length;
+  const hiddenCount = Math.max(0, players - total);
+  const rows = useMemo(() => {
+    let r = list.map((p) => ({ name: p.name || 'Без имени', since: p.since as number | null }));
+    if (!r.length) r = names.map((n) => ({ name: n || 'Без имени', since: null }));
+    const q = query.trim().toLowerCase();
+    if (q) r = r.filter((p) => p.name.toLowerCase().includes(q));
+    if (sort === 'alpha' || r.every((p) => p.since == null)) r.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    else r.sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
+    return r;
+  }, [list, names, query, sort]);
+  const shown = limit ? rows.slice(0, limit) : rows;
+  const showSearch = !limit && total > 8;
+  const hasTimes = list.length > 0;
+
+  if (!online) return <p className="py-6 text-center font-semibold text-mute">Сервер недоступен: список игроков появится, когда он вернётся.</p>;
+  if (total === 0) {
+    return (
+      <p className="py-6 text-center font-semibold text-mute">
+        {players > 0 ? `Сейчас ${players} ${plural(players, ['игрок', 'игрока', 'игроков'])}, но игра не передаёт имена.` : 'Пока никого нет. Будьте первым!'}
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      {(showSearch || (!limit && hasTimes && total > 1)) && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {showSearch && (
+            <input
+              type="search"
+              className="input !h-10 min-w-0 flex-1 basis-40"
+              placeholder="Поиск по нику"
+              aria-label="Поиск игрока по нику"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              autoComplete="off"
+            />
+          )}
+          {hasTimes && total > 1 && (
+            <div className="seg" role="group" aria-label="Сортировка">
+              {([['time', 'По времени в игре'], ['alpha', 'По алфавиту']] as [Sort, string][]).map(([k, label]) => (
+                <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {shown.length === 0 ? (
+        <p className="py-6 text-center font-semibold text-mute">Никого не нашли по запросу «{query}».</p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {shown.map((p, i) => {
+            const dur = p.since != null ? now - p.since : null;
+            return (
+              <li key={`${p.name}-${p.since ?? ''}-${i}`} className={`flex min-w-0 items-center gap-3 rounded-xl py-2 ${fresh.has(p.name) ? 'player-new' : ''}`}>
+                <Avatar name={p.name} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-bold" title={p.name}>{p.name}</span>
+                  {dur != null && (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      {dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-[11px]">новичок</span>}
+                      {dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-[11px]">ветеран</span>}
+                    </span>
+                  )}
+                </span>
+                {p.since != null && <span className="shrink-0 text-right text-sm font-semibold text-mute">{playedFor(p.since, now)}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {hiddenCount > 0 && !limit && <p className="mt-2 text-sm font-bold text-mute">и ещё {hiddenCount} без имени</p>}
+      {limit && (total > limit || hiddenCount > 0) && moreHref && (
+        <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
+          Показать всех {players > total ? players : total} →
+        </a>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/ServerTabs.tsx" << '__COREGSM_EOF__'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { tabHref, type TabId } from './helpers';
+
+export const TAB_LIST: { id: TabId; label: string }[] = [
+  { id: '', label: 'Обзор' },
+  { id: 'players', label: 'Игроки' },
+  { id: 'history', label: 'История' },
+  { id: 'events', label: 'События' },
+  { id: 'connect', label: 'Подключение' },
+];
+
+export const tabDomId = (id: TabId) => `srv-tab-${id || 'overview'}`;
+export const panelDomId = (id: TabId) => `srv-panel-${id || 'overview'}`;
+
+/**
+ * Tab strip of the server page: a sliding `.seg` capsule, sticky under the glass header, scrolls sideways on phones
+ * (the active tab is centred). Tabs are links, so the address bar and the back button work.
+ */
+export default function ServerTabs({ id, tab, counts }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>> }) {
+  const seg = useRef<HTMLElement>(null);
+  const sentinel = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  const [top, setTop] = useState(72);
+
+  // sticky offset = bottom edge of the (sticky) glass header
+  useLayoutEffect(() => {
+    const hdr = document.querySelector<HTMLElement>('header.glass');
+    if (!hdr) return;
+    const measure = () => setTop(Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(hdr);
+    window.addEventListener('resize', measure);
+    return () => { ro.disconnect(); window.removeEventListener('resize', measure); };
+  }, []);
+
+  // «stuck» styling: the sentinel above the bar scrolls under the header
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([e]) => setStuck(!e.isIntersecting), { rootMargin: `-${top}px 0px 0px 0px`, threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [top]);
+
+  // the active tab scrolls into view inside the strip
+  useEffect(() => {
+    const s = seg.current;
+    const on = s?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!s || !on || s.scrollWidth <= s.clientWidth) return;
+    const left = on.offsetLeft - (s.clientWidth - on.offsetWidth) / 2;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    s.scrollTo({ left: Math.max(0, left), behavior: reduce ? 'auto' : 'smooth' });
+  }, [tab]);
+
+  const onKey = (e: ReactKeyboardEvent) => {
+    const i = TAB_LIST.findIndex((t) => t.id === tab);
+    let n = -1;
+    if (e.key === 'ArrowRight') n = (i + 1) % TAB_LIST.length;
+    else if (e.key === 'ArrowLeft') n = (i - 1 + TAB_LIST.length) % TAB_LIST.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = TAB_LIST.length - 1;
+    if (n < 0) return;
+    e.preventDefault();
+    window.location.hash = tabHref(id, TAB_LIST[n].id);
+    // the focus follows the selected tab
+    requestAnimationFrame(() => document.getElementById(tabDomId(TAB_LIST[n].id))?.focus({ preventScroll: true }));
+  };
+
+  return (
+    <>
+      <div ref={sentinel} aria-hidden className="h-px" />
+      <div className={`srv-tabbar sticky z-20 -mx-3 px-3 py-2 sm:-mx-6 sm:px-6 ${stuck ? 'is-stuck' : ''}`} style={{ top }}>
+        <nav
+          ref={seg}
+          className="seg no-scrollbar flex w-fit max-w-full overflow-x-auto"
+          role="tablist"
+          aria-label="Разделы сервера"
+          onKeyDown={onKey}
+        >
+          {TAB_LIST.map((t) => {
+            const on = t.id === tab;
+            const n = counts[t.id];
+            return (
+              <a
+                key={t.id || 'overview'}
+                id={tabDomId(t.id)}
+                role="tab"
+                href={tabHref(id, t.id)}
+                aria-selected={on}
+                aria-controls={panelDomId(t.id)}
+                tabIndex={on ? 0 : -1}
+                className={`seg-item shrink-0 ${on ? 'on' : ''}`}
+              >
+                {t.label}
+                {n != null && n > 0 && <span className="tab-count">{n}</span>}
+              </a>
+            );
+          })}
+        </nav>
+      </div>
+    </>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Skeletons.tsx" << '__COREGSM_EOF__'
+import type { TabId } from './helpers';
+
+const sk = 'skeleton tile';
+
+export function BannerSkeleton() {
+  return <div className={`${sk} h-[300px] sm:h-[250px]`} />;
+}
+
+export function TabBarSkeleton() {
+  return <div className="skeleton h-[44px] w-full max-w-[26rem] rounded-full sm:h-[38px]" />;
+}
+
+/** the same blocks as the loaded tab, so nothing jumps when the data arrives */
+export function TabSkeleton({ tab }: { tab: TabId }) {
+  if (tab === 'players') {
+    return (
+      <div className={`${sk} p-5`}>
+        <div className="skeleton skel-line mb-4 !h-6 w-40" />
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} className="flex items-center gap-3 py-2">
+            <div className="skeleton h-9 w-9 rounded-xl" />
+            <div className="skeleton skel-line !h-4 flex-1" />
+            <div className="skeleton skel-line !h-4 w-16" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (tab === 'history') {
+    return (
+      <div className="space-y-3.5">
+        <div className={`${sk} h-[390px]`} />
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => <div key={i} className={`${sk} h-[106px]`} />)}
+        </div>
+      </div>
+    );
+  }
+  if (tab === 'events') return <div className={`${sk} h-[360px]`} />;
+  if (tab === 'connect') {
+    return (
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <div className={`${sk} h-[360px] lg:col-span-7`} />
+        <div className={`${sk} h-[220px] lg:col-span-5`} />
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3.5">
+      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => <div key={i} className={`${sk} h-[132px]`} />)}
+      </div>
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <div className={`${sk} h-[380px] lg:col-span-8`} />
+        <div className={`${sk} h-[380px] lg:col-span-4`} />
+        <div className={`${sk} h-52 lg:col-span-8`} />
+        <div className={`${sk} h-52 lg:col-span-4`} />
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/helpers.ts" << '__COREGSM_EOF__'
+import { useEffect, useState, type CSSProperties } from 'react';
+import { COUNTRIES } from '../../countries';
+
+export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
+export type TabId = '' | (typeof SERVER_TABS)[number];
+
+/** hash of a server page tab: '' = overview */
+export const tabHref = (id: number, tab: TabId) => `#/servers/${id}${tab ? `/${tab}` : ''}`;
+
+/** re-renders the caller every `ms` and returns the current time */
+export function useNow(ms: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+/** stagger index for `.tile-in` */
+export const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
+
+// ---------- country ----------
+export const flagEmoji = (code: string): string =>
+  /^[A-Za-z]{2}$/.test(code) ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '';
+
+export function countryName(code: string): string {
+  if (!/^[A-Za-z]{2}$/.test(code)) return '';
+  const up = code.toUpperCase();
+  try {
+    const n = new Intl.DisplayNames(['ru'], { type: 'region' }).of(up);
+    if (n && n !== up) return n;
+  } catch {
+    /* no Intl.DisplayNames */
+  }
+  return COUNTRIES.find(([c]) => c === up)?.[1] ?? up;
+}
+
+// ---------- mode guessed from the name ----------
+export type Mode = 'PvE' | 'PvP' | 'PvPvE' | 'RP' | 'Hardcore' | 'Vanilla' | 'Modded';
+
+// \b does not work for Cyrillic: the word borders are "not a letter or digit"
+const W = (src: string) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${src})(?![\\p{L}\\p{N}])`, 'iu');
+const MODE_RULES: [Mode, RegExp][] = [
+  ['PvPvE', W('pvpve|pve\\s*[+/&]\\s*pvp|pvp\\s*[+/&]\\s*pve|пвпве|пвп\\s*[+/&]\\s*пве|пве\\s*[+/&]\\s*пвп')],
+  ['PvE', W('pve|пве|пвэ')],
+  ['PvP', W('pvp|пвп')],
+  ['RP', W('rp|рп|roleplay|role-play|role\\s+play|ролевой|ролевая|ролевые|рол\\s*плей')],
+  ['Hardcore', W('hardcore|хардкор\\p{L}*')],
+  ['Modded', W('modded|mods?|modpack|модпак\\p{L}*|моды|модифицированн\\p{L}*')],
+  ['Vanilla', W('vanilla|ванил\\p{L}*|ванн?ила')],
+];
+
+/** PvE / PvP / PvPvE / RP / Hardcore / Vanilla / Modded, or null when the name says nothing certain */
+export function guessMode(name: string): Mode | null {
+  for (const [mode, re] of MODE_RULES) if (re.test(name)) return mode;
+  return null;
+}
+
+// ---------- players ----------
+/** stable 0..359 hue of a nick (FNV-1a) */
+export function nickHue(name: string): number {
+  let h = 0x811c9dc5;
+  for (const ch of name.trim().toLowerCase()) {
+    h ^= ch.codePointAt(0) as number;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h % 360;
+}
+
+/** first visible character (or grapheme where the browser can split them) in upper case */
+export function nickInitial(name: string): string {
+  const s = name.trim();
+  if (!s) return '?';
+  const Seg = (Intl as unknown as { Segmenter?: new (l?: string, o?: { granularity: string }) => { segment: (t: string) => Iterable<{ segment: string }> } }).Segmenter;
+  let first = '';
+  if (Seg) {
+    for (const g of new Seg(undefined, { granularity: 'grapheme' }).segment(s)) { first = g.segment; break; }
+  } else first = Array.from(s)[0] ?? '?';
+  return first.toUpperCase();
+}
+
+/** "1 ч 12 мин" */
+export function playedFor(since: number, now: number): string {
+  const m = Math.max(0, Math.floor((now - since) / 60_000));
+  if (m < 1) return 'меньше минуты';
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ч ${m % 60} мин`;
+  return `${Math.floor(h / 24)} д ${h % 24} ч`;
+}
+
+/** length of an outage: "3 мин", "1 ч 5 мин" */
+export function fmtDuration(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60_000));
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
+  return h % 24 ? `${Math.floor(h / 24)} д ${h % 24} ч` : `${Math.floor(h / 24)} д`;
+}
+
+export const NEWBIE_MS = 10 * 60_000;
+export const VETERAN_MS = 2 * 3600_000;
+
+// ---------- load / ping thresholds ----------
+export type Tone = 'ok' | 'warn' | 'bad';
+
+export function loadTone(pct: number): Tone {
+  return pct >= 85 ? 'bad' : pct >= 50 ? 'warn' : 'ok';
+}
+
+/** <= 60 ms good, <= 120 ms ok, more is bad */
+export function pingTone(ping: number): { tone: Tone; label: string } {
+  if (ping <= 60) return { tone: 'ok', label: 'отличный' };
+  if (ping <= 120) return { tone: 'warn', label: 'нормальный' };
+  return { tone: 'bad', label: 'высокий' };
+}
+
+export const TONE_TEXT: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' };
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/confirm.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
@@ -15187,6 +16029,256 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/connectGuides.ts" << '__COREGSM_EOF__'
+/** Step-by-step «how to connect» instructions per game (Russian). Used by the «Подключение» tab of the server page. */
+
+export interface ConnectGuide {
+  title: string;
+  steps: string[];
+  /** values the player has to paste somewhere; each one gets a copy button */
+  copy: { label: string; value: string }[];
+  /** a protocol link that starts the game (steam://, ts3server:// ...) */
+  link?: { label: string; href: string };
+}
+
+/** "host:27015" -> { host, port }; a bare host has an empty port; IPv6 in brackets is understood */
+export function splitAddress(address: string): { host: string; port: string } {
+  const a = address.trim();
+  const m6 = /^\[([^\]]+)\](?::(\d{1,5}))?$/.exec(a);
+  if (m6) return { host: m6[1], port: m6[2] ?? '' };
+  const i = a.lastIndexOf(':');
+  if (i > 0 && a.indexOf(':') === i && /^\d{1,5}$/.test(a.slice(i + 1))) return { host: a.slice(0, i), port: a.slice(i + 1) };
+  return { host: a, port: '' };
+}
+
+const SOURCE_CONSOLE = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
+const STEAM_LINK = new Set([...SOURCE_CONSOLE, 'rust', 'ase', 'dayz', 'unturned']);
+
+/** true when the game has a link that the browser can hand to the game / launcher */
+export const hasConnectLink = (game: string) => STEAM_LINK.has(game) || game === 'teamspeak3' || game === 'gta5f';
+
+export function connectGuide(game: string, address: string): ConnectGuide {
+  const addr = address.trim();
+  const { host, port } = splitAddress(addr);
+  const copy: ConnectGuide['copy'] = [{ label: 'Адрес', value: addr }];
+  if (port) copy.push({ label: 'Хост', value: host }, { label: 'Порт', value: port });
+  const portNote = port ? '' : ' Порт указывать не нужно: используется стандартный.';
+  let steps: string[];
+  let title: string;
+  let link: ConnectGuide['link'];
+
+  if (SOURCE_CONSOLE.has(game)) {
+    const names: Record<string, string> = {
+      counterstrike2: 'Counter-Strike 2', csgo: 'CS:GO', counterstrike16: 'Counter-Strike 1.6', css: 'Counter-Strike: Source',
+      teamfortress2: 'Team Fortress 2', garrysmod: "Garry's Mod", l4d2: 'Left 4 Dead 2',
+    };
+    title = `Как подключиться: ${names[game]}`;
+    copy.push({ label: 'Команда для консоли', value: `connect ${addr}` });
+    steps = [
+      'Запустите Steam и игру.',
+      game === 'counterstrike2'
+        ? 'В настройках игры включите консоль разработчика (Игра → Включить консоль разработчика) и откройте её клавишей ~ (Ё).'
+        : 'Откройте консоль клавишей ~ (Ё). Если консоль не открывается, включите её в настройках клавиатуры или параметрах запуска (-console).',
+      `Вставьте команду connect ${addr} и нажмите Enter.`,
+      'Либо нажмите кнопку «Подключиться» ниже: Steam сам запустит игру и присоединит вас к серверу.',
+    ];
+    link = { label: 'Подключиться через Steam', href: `steam://connect/${addr}` };
+  } else {
+    switch (game) {
+      case 'minecraft':
+        title = 'Как подключиться: Minecraft (Java Edition)';
+        steps = [
+          'Запустите Minecraft Java Edition и выберите версию игры, совпадающую с версией сервера.',
+          'Откройте «Сетевая игра» и нажмите «Добавить сервер» (или «Прямое подключение»).',
+          `Вставьте адрес сервера в поле «Адрес сервера».${portNote}`,
+          'Нажмите «Готово» и затем дважды щёлкните по серверу в списке.',
+        ];
+        break;
+      case 'mbe':
+        title = 'Как подключиться: Minecraft (Bedrock Edition)';
+        steps = [
+          'Запустите Minecraft Bedrock Edition (Windows, консоль или мобильная версия).',
+          'Откройте «Играть», вкладку «Серверы», прокрутите вниз и нажмите «Добавить сервер».',
+          'В поле «Имя сервера» напишите любое название, в поле «Адрес сервера» вставьте хост, в поле «Порт» вставьте порт (по умолчанию 19132).',
+          'Сохраните и выберите добавленный сервер в списке.',
+        ];
+        break;
+      case 'vrising':
+        title = 'Как подключиться: V Rising';
+        steps = [
+          'Запустите V Rising через Steam.',
+          'В главном меню нажмите «Play» → «Online Play» (или «Play Online»).',
+          'Откройте «Server Browser» и найдите сервер по названию: списку может понадобиться пара секунд, чтобы прогрузиться.',
+          `Либо нажмите «Direct Connect» и вставьте адрес ${addr}${port ? '' : ' с портом'}, затем введите пароль, если он есть.`,
+        ];
+        break;
+      case 'rust':
+        title = 'Как подключиться: Rust';
+        copy.push({ label: 'Команда для консоли', value: `client.connect ${addr}` });
+        steps = [
+          'Запустите Rust через Steam.',
+          'В главном меню нажмите F1 и откройте консоль.',
+          `Введите client.connect ${addr} и нажмите Enter.`,
+          'Или нажмите кнопку «Подключиться» ниже, либо найдите сервер по названию в списке «Modded» / «Community».',
+        ];
+        link = { label: 'Подключиться через Steam', href: `steam://connect/${addr}` };
+        break;
+      case 'valheim':
+        title = 'Как подключиться: Valheim';
+        steps = [
+          'Запустите Valheim, выберите персонажа и нажмите «Start».',
+          'В разделе «Join Game» откройте вкладку «Join IP» (внизу списка серверов) или нажмите «Add server».',
+          `Введите адрес ${addr}${port ? '' : ':2456'} и нажмите «Connect». Если спросит пароль, введите пароль сервера.`,
+          'Обратите внимание: у сервера открываются порты N, N+1 и N+2 по UDP, порт для входа указывают первым (по умолчанию 2456).',
+        ];
+        break;
+      case 'palworld':
+        title = 'Как подключиться: Palworld';
+        steps = [
+          'Запустите Palworld и нажмите «Join Multiplayer Game».',
+          'Внизу списка серверов найдите поле «Enter address to connect» и вставьте адрес сервера с портом (по умолчанию 8211).',
+          'Нажмите «Connect». Если нужен пароль, игра попросит его после подключения.',
+        ];
+        break;
+      case 'ase':
+        title = 'Как подключиться: ARK: Survival Evolved';
+        copy.push({ label: 'Команда для консоли', value: `open ${addr}` });
+        steps = [
+          'Запустите ARK: Survival Evolved через Steam.',
+          'Нажмите «Join ARK», слева выберите «Unofficial», включите фильтр «Show Player Servers» и найдите сервер по названию.',
+          `Или откройте консоль клавишей Tab, введите open ${addr} и нажмите Enter.`,
+          'Либо используйте кнопку «Подключиться» ниже.',
+        ];
+        link = { label: 'Подключиться через Steam', href: `steam://connect/${addr}` };
+        break;
+      case 'asa':
+        title = 'Как подключиться: ARK: Survival Ascended';
+        steps = [
+          'Запустите ARK: Survival Ascended.',
+          'Нажмите «Join Game», выберите «Unofficial» (или «Favorites» → добавьте сервер по IP).',
+          'В строке поиска введите название сервера, при необходимости снимите лишние фильтры (в том числе «Show Password Protected»).',
+          'Выберите сервер, нажмите «Join» и введите пароль, если он есть.',
+        ];
+        break;
+      case 'terraria':
+        title = 'Как подключиться: Terraria';
+        steps = [
+          'Запустите Terraria и выберите персонажа.',
+          'Нажмите «Multiplayer» → «Join via IP».',
+          'Введите IP-адрес сервера, затем порт (по умолчанию 7777).',
+          'Если сервер защищён паролем, игра попросит его при подключении.',
+        ];
+        break;
+      case 'factorio':
+        title = 'Как подключиться: Factorio';
+        steps = [
+          'Запустите Factorio и нажмите «Multiplayer».',
+          'Выберите «Connect to address».',
+          `Вставьте адрес ${addr}${port ? '' : ' (порт по умолчанию 34197)'} и нажмите «Connect».`,
+          'Версия игры и список модов должны совпадать с серверными.',
+        ];
+        break;
+      case 'sdtd':
+        title = 'Как подключиться: 7 Days to Die';
+        steps = [
+          'Запустите 7 Days to Die и откройте «Join A Game».',
+          'Нажмите «Connect to IP» и введите IP-адрес и порт сервера (по умолчанию 26900).',
+          'Если сервер с паролем, введите его. Нажмите «Connect».',
+          'Либо найдите сервер по названию во вкладке «Internet» и добавьте в избранное звёздочкой.',
+        ];
+        break;
+      case 'dayz':
+        title = 'Как подключиться: DayZ';
+        steps = [
+          'Запустите DayZ через Steam. Если сервер с модами, сначала установите все нужные моды из Steam Workshop (удобно через DZSA Launcher).',
+          'В игре откройте «Server Browser», найдите сервер по названию или откройте вкладку «Favorites» и добавьте адрес вручную.',
+          'Можно также добавить адрес в Steam: «Вид» → «Серверы» → «Избранное» → «Добавить сервер».',
+          'Нажмите «Connect».',
+        ];
+        link = { label: 'Подключиться через Steam', href: `steam://connect/${addr}` };
+        break;
+      case 'projectzomboid':
+        title = 'Как подключиться: Project Zomboid';
+        steps = [
+          'Запустите Project Zomboid и нажмите «Join».',
+          'Нажмите «Add server» и заполните поля: «Server name» (любое), «IP» (хост) и «Port» (по умолчанию 16261).',
+          'Введите имя пользователя и пароль (пароль нужно придумать при первом входе, если на сервере разрешена регистрация).',
+          'Сохраните, выберите сервер и нажмите «Join».',
+        ];
+        break;
+      case 'icarus':
+        title = 'Как подключиться: Icarus';
+        steps = [
+          'Запустите Icarus и войдите в «Open World» / «Join Game».',
+          'Откройте «Lobby Browser» и найдите сервер по названию (поиск по имени работает без учёта регистра).',
+          'Выберите сервер и нажмите «Join». Если у сервера пароль, введите его.',
+        ];
+        break;
+      case 'unturned':
+        title = 'Как подключиться: Unturned';
+        steps = [
+          'Запустите Unturned и нажмите «Play» → «Connect».',
+          'Выберите «Connect by IP» (или найдите сервер во вкладке «Internet» по названию).',
+          'Введите IP-адрес, порт (по умолчанию 27015) и пароль, если он есть.',
+          'Нажмите «Connect». Кнопка «Подключиться» ниже откроет Steam с тем же адресом.',
+        ];
+        link = { label: 'Подключиться через Steam', href: `steam://connect/${addr}` };
+        break;
+      case 'conanexiles':
+        title = 'Как подключиться: Conan Exiles';
+        steps = [
+          'Запустите Conan Exiles и нажмите «Online».',
+          'Нажмите «Direct Connect» (или откройте «Server Browser» и найдите сервер по названию).',
+          `Вставьте адрес ${addr}${port ? '' : ':7777'} (используется игровой порт) и нажмите «Connect».`,
+          'Если у сервера есть пароль, введите его.',
+        ];
+        break;
+      case 'gta5f': {
+        title = 'Как подключиться: FiveM (GTA V)';
+        copy.push({ label: 'Команда для консоли', value: `connect ${addr}` });
+        steps = [
+          'Установите и запустите FiveM (нужна лицензионная копия GTA V).',
+          'В главном меню FiveM нажмите «Direct Connect» и вставьте адрес сервера, либо найдите сервер в списке «Servers».',
+          `Можно открыть консоль клавишей F8 и ввести connect ${addr}.`,
+          'Нажмите «Подключиться» ниже, чтобы запустить FiveM автоматически.',
+        ];
+        link = { label: 'Подключиться через FiveM', href: `fivem://connect/${addr}` };
+        break;
+      }
+      case 'gtasam':
+        title = 'Как подключиться: SA-MP (GTA San Andreas)';
+        steps = [
+          'Установите GTA San Andreas и клиент SA-MP (или откройте лаунчер, например Open.MP).',
+          'Запустите SA-MP, перейдите на вкладку «Favorites» и нажмите «Add server».',
+          'Введите адрес сервера с портом (по умолчанию 7777) и в верхнем поле укажите свой ник.',
+          'Дважды щёлкните по серверу в списке или нажмите «Connect».',
+        ];
+        break;
+      case 'teamspeak3': {
+        title = 'Как подключиться: TeamSpeak 3';
+        steps = [
+          'Установите и запустите клиент TeamSpeak 3.',
+          'Нажмите «Подключения» → «Подключиться» (Ctrl+S).',
+          `Вставьте адрес в поле «Адрес сервера»${port ? ' (порт при необходимости можно указать после двоеточия)' : ''}, укажите ник и нажмите «Подключиться».`,
+          'Если сервер защищён паролем, введите его в поле «Пароль сервера».',
+        ];
+        link = { label: 'Подключиться через TeamSpeak', href: `ts3server://${host}${port && port !== '9987' ? `?port=${port}` : ''}` };
+        break;
+      }
+      default:
+        title = 'Как подключиться';
+        steps = [
+          'Запустите игру и убедитесь, что версия клиента совпадает с версией сервера.',
+          'Откройте список серверов или пункт «Прямое подключение» / «Connect by IP» в меню игры.',
+          'Вставьте адрес сервера и, если игра просит отдельно, порт.',
+          'Если сервер с паролем, введите его при подключении.',
+        ];
+    }
+  }
+  return { title, steps, copy, link };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/countries.ts" << '__COREGSM_EOF__'
 // Countries for the server form: ISO 3166-1 alpha-2 code + Russian name (from the browser's Intl data).
 const CODES = [
@@ -15294,8 +16386,8 @@ export const GAMES: Game[] = [
   { id: 'palworld', label: 'Palworld', port: 8211, abbr: 'PW', color: '#2fc4bf' },
   { id: 'factorio', label: 'Factorio', port: 34197, abbr: 'FC', color: '#d98a3a' },
   { id: 'unturned', label: 'Unturned', port: 27015, abbr: 'UT', color: '#4aa86a' },
-  { id: 'vrising', label: 'V Rising', port: 27015, abbr: 'VR', color: '#a83a5a' },
-  { id: 'icarus', label: 'Icarus', port: 27015, abbr: 'IC', color: '#2b3a52' },
+  { id: 'vrising', label: 'V Rising', port: 27015, abbr: 'VR', color: '#7c3aed' },
+  { id: 'icarus', label: 'Icarus', port: 27015, abbr: 'IC', color: '#f5b01e' },
   { id: 'projectzomboid', label: 'Project Zomboid', port: 16261, abbr: 'PZ', color: '#7a8a4a' },
   { id: 'gta5f', label: 'FiveM (GTA V)', port: 30120, abbr: '5M', color: '#f26a3d' },
   { id: 'gtasam', label: 'SA-MP', port: 7777, abbr: 'SA', color: '#8a6ad9' },
@@ -15839,9 +16931,8 @@ html { background-color: rgb(var(--page)); }
 @keyframes toast-out { to { opacity: 0; transform: translateY(8px) scale(.94); } }
 
 /* ---------- view transitions: route change and theme reveal ---------- */
-body header.glass { view-transition-name: app-header; }
-body nav.glass.fixed { view-transition-name: app-nav; }
-.vt-theme body header.glass, .vt-theme body nav.glass.fixed { view-transition-name: none; }
+/* the glass header and bottom bar must NOT be separate transition layers: a translucent backdrop-filter element is captured against black */
+body header.glass, body nav.glass.fixed { view-transition-name: none; }
 @keyframes vt-out { to { opacity: 0; transform: translateY(-5px); } }
 @keyframes vt-in { from { opacity: 0; transform: translateY(9px); } }
 ::view-transition-old(root) { animation: vt-out .16s ease-in both; }
@@ -16034,6 +17125,59 @@ body nav.glass.fixed { view-transition-name: app-nav; }
 .row-act:disabled { opacity: .55; pointer-events: none; }
 .row-act-danger:hover { background: rgb(var(--bad) / .14); color: rgb(var(--bad)); }
 @media (max-width: 639px) { .row-act { width: 44px; height: 44px; } }
+
+/* ---------- server page: banner, tabs, players, events ---------- */
+.chip-glass { display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; padding: 4px 11px; font-size: 13px; font-weight: 800; color: #fff; background: rgba(8, 10, 20, 0.34); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); max-width: 100%; }
+.btn-glass { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; border-radius: 9999px; padding: 0 16px; font-size: 14px; font-weight: 800; color: #fff; background: rgba(255, 255, 255, 0.18); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); transition: background .15s ease, transform .15s ease; white-space: nowrap; }
+.btn-glass:hover { background: rgba(255, 255, 255, 0.28); }
+.btn-glass:active { transform: scale(.98); }
+.btn-glass-quiet { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; border-radius: 9999px; padding: 0 12px; font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.92); background: rgba(8, 10, 20, 0.22); transition: background .15s ease; white-space: nowrap; }
+.btn-glass-quiet:hover { background: rgba(8, 10, 20, 0.4); }
+.btn-glass-quiet:disabled { opacity: .6; }
+.btn-glass-danger { color: #ffd6d6; }
+.btn-glass-danger:hover { background: rgba(220, 38, 38, 0.55); color: #fff; }
+.btn-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; border-radius: 9999px; padding: 0 22px; font-size: 15px; font-weight: 900; color: #12141a; background: #fff; box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.5); transition: transform .15s ease, box-shadow .15s ease; text-align: center; }
+.btn-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -6px rgba(0, 0, 0, 0.55); }
+.btn-cta:active { transform: scale(.98); }
+@media (max-width: 639px) { .btn-glass { min-height: 44px; } .btn-glass-quiet { min-height: 44px; padding: 0 8px; } }
+
+/* status glow around the banner: green online, amber lag, red offline; it follows the theme's status colours */
+.srv-glow { --g: var(--ok); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.5), 0 16px 46px -14px rgb(var(--g) / 0.6); }
+.srv-warn { --g: var(--warn); }
+.srv-bad { --g: var(--bad); }
+.srv-mute { --g: var(--mute); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.3), 0 16px 40px -18px rgb(var(--g) / 0.4); }
+.srv-ok { animation: srv-breathe 4.6s ease-in-out infinite; }
+@keyframes srv-breathe {
+  0%, 100% { box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.4), 0 14px 40px -14px rgb(var(--g) / 0.45); }
+  50% { box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 2px rgb(var(--g) / 0.6), 0 18px 56px -10px rgb(var(--g) / 0.7); }
+}
+@media (prefers-reduced-motion: reduce) { .srv-ok { animation: none; } }
+
+.srv-tabbar { transition: background-color .2s ease, box-shadow .2s ease; }
+.srv-tabbar.is-stuck { background: rgb(var(--page) / 0.78); -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3); box-shadow: 0 1px 0 rgb(var(--line)); }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.tab-count { margin-left: 6px; border-radius: 9999px; padding: 0 6px; font-size: 12px; font-weight: 800; background: rgb(var(--ink) / 0.08); font-variant-numeric: tabular-nums; }
+
+.meter.m-ok > i { background: rgb(var(--ok)); }
+.meter.m-warn > i { background: rgb(var(--warn)); }
+.meter.m-bad > i { background: rgb(var(--bad)); }
+
+.avatar-hue { background: hsl(var(--h) 72% 88%); color: hsl(var(--h) 62% 24%); }
+:root[data-theme='dark'] .avatar-hue { background: hsl(var(--h) 42% 26%); color: hsl(var(--h) 90% 86%); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .avatar-hue { background: hsl(var(--h) 42% 26%); color: hsl(var(--h) 90% 86%); } }
+
+.player-new { animation: player-new 2.6s ease-out both; }
+@keyframes player-new {
+  0% { background-color: rgb(var(--ok) / 0.28); box-shadow: 0 0 0 4px rgb(var(--ok) / 0.28); }
+  100% { background-color: rgb(var(--ok) / 0); box-shadow: 0 0 0 4px rgb(var(--ok) / 0); }
+}
+@media (prefers-reduced-motion: reduce) { .player-new { animation: none; background-color: rgb(var(--ok) / 0.14); } }
+
+.chip-filter { display: inline-flex; align-items: center; border-radius: 9999px; padding: 6px 14px; font-size: 14px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: color .15s ease, background .15s ease; }
+.chip-filter:hover { color: rgb(var(--ink)); }
+.chip-filter.on { color: rgb(var(--ink)); background: rgb(var(--seg-on)); box-shadow: 0 0 0 1px rgb(var(--line)), 0 2px 6px rgba(40, 50, 110, 0.1); }
+@media (max-width: 639px) { .chip-filter { min-height: 44px; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
@@ -18661,232 +19805,123 @@ export default function Register({ onDone }: { onDone: () => void }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type PlayerNow, type ServerDetails } from '../api';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { api, ApiError, type ServerDetails } from '../api';
 import { useAuth } from '../auth';
-import { COUNTRIES } from '../countries';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
-import { AnimatedNumber, CopyButton, ErrorLine, GameAvatar, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, plural, smoothPath, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { connectGuide } from '../connectGuides';
+import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
+import HistoryChart, { type Series } from '../components/server/HistoryChart';
+import PlayersList from '../components/server/PlayersList';
+import EventsFeed from '../components/server/EventsFeed';
+import ConnectTab from '../components/server/ConnectTab';
+import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
+import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
+import {
+  TONE_TEXT, countryName, flagEmoji, guessMode, loadTone, pingTone, stagger, tabHref, useNow, type TabId,
+} from '../components/server/helpers';
 
-type Point = ServerDetails['points'][number];
+export { SERVER_TABS } from '../components/server/helpers';
 
-const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2', 'rust', 'ase', 'dayz']);
-
-/** steam://connect link for Source-like games; other games have no universal "join" link. */
-function connectUrl(game: string, address: string, port: number): string | null {
-  if (!SOURCE_GAMES.has(game)) return null;
-  return `steam://connect/${address.includes(':') || !port ? address : `${address}:${port}`}`;
+/** key={id}: switching between servers starts from a clean state */
+export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
+  return <ServerDetailView key={id} id={id} tab={tab as TabId} />;
 }
 
-function niceMax(v: number): number {
-  const p = 10 ** Math.floor(Math.log10(v));
-  const n = v / p;
-  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
-  return Math.max(4, Math.ceil(nice * p));
-}
-
-const tickLabel = (ts: number, hours: number) =>
-  hours <= 24
-    ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-    : new Date(ts).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-
-/** Player count over time: smooth area, red bands where the server was unreachable, hover tooltip. */
-function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: number; max: number; color: string }) {
-  const L = 36, R = 8, T = 12, B = 28;
-  const [hover, setHover] = useState<number | null>(null);
-  const ref = useRef<SVGSVGElement>(null);
-  const wrap = useRef<HTMLDivElement>(null);
-  const gid = useId();
-  // the drawing is 1:1 with the screen, so labels keep a readable size on phones
-  const [W, setW] = useState(720);
-  useEffect(() => {
-    const el = wrap.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setW(Math.max(280, Math.round(el.clientWidth))));
-    ro.observe(el);
-    setW(Math.max(280, Math.round(el.clientWidth)));
-    return () => ro.disconnect();
-  }, []);
-  const H = W < 520 ? 200 : 250;
-
-  const now = Date.now();
-  const t0 = now - hours * 3600_000;
-  const x = (ts: number) => L + ((ts - t0) / (now - t0)) * (W - L - R);
-  const yMax = niceMax(Math.max(max, ...points.map((p) => p.players), 1));
-  const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
-  const bucket = (now - t0) / 180;
-
-  // continuous online runs become separate curves; a gap is much wider than the usual spacing of the samples
-  const spacing = points.length > 1 ? [...points.slice(1).map((p, i) => p.ts - points[i].ts)].sort((a, b) => a - b)[Math.floor((points.length - 1) / 2)] : bucket;
-  const gap = Math.max(bucket * 2.5, spacing * 2.5);
-  const segments: Point[][] = [];
-  let cur: Point[] = [];
-  for (const p of points) {
-    if (p.online) {
-      if (cur.length && p.ts - cur[cur.length - 1].ts > gap) { segments.push(cur); cur = []; }
-      cur.push(p);
-    } else if (cur.length) { segments.push(cur); cur = []; }
-  }
-  if (cur.length) segments.push(cur);
-  const xy = (seg: Point[]): [number, number][] => seg.map((p) => [x(p.ts), y(p.players)]);
-
-  const onMove = (e: React.PointerEvent) => {
-    const r = ref.current?.getBoundingClientRect();
-    if (!r || points.length === 0) return;
-    const vx = ((e.clientX - r.left) / r.width) * W;
-    let best = 0;
-    points.forEach((p, i) => { if (Math.abs(x(p.ts) - vx) < Math.abs(x(points[best].ts) - vx)) best = i; });
-    setHover(best);
-  };
-
-  const hp = hover != null ? points[hover] : null;
-  const gridVals = [0, 1, 2, 3, 4].map((i) => (yMax / 4) * i);
-  const lastSeg = segments[segments.length - 1];
-  const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
-
+/** a small "live" indicator: pulsing dot and how fresh the data is */
+function LiveBadge({ at }: { at: number | null }) {
+  useNow(5000);
+  if (!at) return null;
   return (
-    <div className="relative" ref={wrap}>
-      <svg
-        ref={ref}
-        viewBox={`0 0 ${W} ${H}`}
-        className="h-auto w-full touch-pan-y"
-        role="img"
-        aria-label={`Игроки за ${hours <= 24 ? 'сутки' : 'неделю'}`}
-        onPointerMove={onMove}
-        onPointerLeave={() => setHover(null)}
-      >
-        <defs>
-          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor={color} stopOpacity="0.34" />
-            <stop offset="1" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {gridVals.map((v) => (
-          <g key={v}>
-            <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" strokeDasharray={v === 0 ? undefined : '3 5'} />
-            <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{Math.round(v * 10) / 10}</text>
-          </g>
-        ))}
-        {[0, 1, 2, 3, 4].map((i) => {
-          const ts = t0 + ((now - t0) * i) / 4;
-          return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{tickLabel(ts, hours)}</text>;
-        })}
-        {max > 0 && max < yMax && <line x1={L} x2={W - R} y1={y(max)} y2={y(max)} className="stroke-mute" strokeDasharray="4 4" strokeWidth="1" opacity="0.5" />}
-        {points.filter((p) => !p.online).map((p) => (
-          <rect key={p.ts} x={x(p.ts) - (W - L - R) / 360} y={T} width={(W - L - R) / 180} height={H - T - B} className="fill-bad" opacity="0.2" />
-        ))}
-        {segments.map((seg, i) => {
-          const pts = xy(seg);
-          const d = smoothPath(pts);
-          return (
-            <g key={i}>
-              {seg.length === 1 && <circle cx={pts[0][0]} cy={pts[0][1]} r="3.5" fill={color} />}
-              {seg.length > 1 && <path d={`${d} L${pts[pts.length - 1][0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z`} fill={`url(#${gid})`} />}
-              {seg.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
-            </g>
-          );
-        })}
-        {endPt && !hp && (
-          <>
-            <circle cx={x(endPt.ts)} cy={y(endPt.players)} r="9" fill={color} opacity="0.22" />
-            <circle cx={x(endPt.ts)} cy={y(endPt.players)} r="4.5" fill={color} className="stroke-card" strokeWidth="2" />
-          </>
-        )}
-        {hp && <line x1={x(hp.ts)} x2={x(hp.ts)} y1={T} y2={H - B} className="stroke-mute" strokeWidth="1" opacity="0.6" />}
-        {hp && hp.online ? <circle cx={x(hp.ts)} cy={y(hp.players)} r="5" fill={color} className="stroke-card" strokeWidth="2.5" /> : null}
-      </svg>
-      {hp && (
-        <div
-          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 whitespace-nowrap rounded-xl bg-ink px-2.5 py-1 text-sm font-bold text-page shadow-pop"
-          style={{ left: `${Math.min(84, Math.max(16, (x(hp.ts) / W) * 100))}%` }}
-        >
-          {fmtDateTime(hp.ts)} · {hp.online ? `${hp.players} ${plural(hp.players, ['игрок', 'игрока', 'игроков'])}` : 'недоступен'}
-        </div>
-      )}
+    <span className="chip-glass" title="Страница обновляется сама">
+      <span className="live-dot" aria-hidden />
+      обновлено {ago(at)}
+    </span>
+  );
+}
+
+function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: () => void }) {
+  // pops only after the user's own click
+  const [pops, setPops] = useState(0);
+  return (
+    <button
+      type="button"
+      onClick={() => { if (!on) setPops((n) => n + 1); onClick(); }}
+      className="btn-glass !h-11 !w-11 shrink-0 !px-0 text-xl leading-none"
+      title={on ? 'Убрать из избранного' : 'В избранное'}
+      aria-label={`${on ? 'Убрать из избранного' : 'В избранное'}: ${name}`}
+      aria-pressed={on}
+    >
+      <span className="star-wrap">
+        <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
+        {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
+      </span>
+    </button>
+  );
+}
+
+function StatTile({ k, hint, i, children }: { k: string; hint?: ReactNode; i: number; children: ReactNode }) {
+  return (
+    <div className="tile tile-in p-4 sm:p-[18px]" style={stagger(i)}>
+      <div className="stat-k">{k}</div>
+      <div className={`stat-v mt-1 ${typeof children === 'string' ? 'truncate' : ''}`}>{children}</div>
+      {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
     </div>
   );
 }
 
-/** "1 ч 12 мин" */
-function playedFor(since: number, now: number): string {
-  const m = Math.max(0, Math.floor((now - since) / 60_000));
-  if (m < 1) return 'меньше минуты';
-  if (m < 60) return `${m} мин`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} ч ${m % 60} мин`;
-  return `${Math.floor(h / 24)} д ${h % 24} ч`;
-}
-
-function PlayersNow({ online, players, names, list }: { online: boolean; players: number; names: string[]; list: PlayerNow[] }) {
-  // the "in game for" labels advance while the page stays open
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
-  }, []);
-  const sorted = [...list].sort((a, b) => a.since - b.since);
-  const hiddenCount = Math.max(0, players - (sorted.length || names.length));
-
+function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) => void }) {
   return (
-    <section className="tile h-full p-5">
-      <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{online && <span className="ml-2 rounded-full bg-soft px-2.5 py-0.5 text-xs font-extrabold text-link">{players}</span>}</h2>
-      {!online ? (
-        <p className="font-semibold text-mute">Сервер недоступен.</p>
-      ) : sorted.length > 0 ? (
-        <>
-          <ul className="max-h-72 divide-y divide-line overflow-y-auto pr-1">
-            {sorted.map((p, i) => (
-              <li key={`${p.name}-${p.since}-${i}`} className="flex items-center gap-3 py-2">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-soft text-sm font-extrabold text-link" aria-hidden>
-                  {(Array.from(p.name.trim())[0] ?? '?').toUpperCase()}
-                </span>
-                <span className="min-w-0 flex-1 truncate font-bold">{p.name || 'Без имени'}</span>
-                <span className="shrink-0 text-sm font-semibold text-mute">в игре {playedFor(p.since, now)}</span>
-              </li>
-            ))}
-          </ul>
-          {hiddenCount > 0 && <p className="mt-2 text-sm font-bold text-mute">и ещё {hiddenCount}</p>}
-        </>
-      ) : names.length > 0 ? (
-        <div className="flex max-h-72 flex-wrap gap-2 overflow-y-auto">
-          {names.map((n, i) => <span key={`${n}-${i}`} className="rounded-full bg-soft px-3 py-1 text-sm font-bold">{n}</span>)}
-          {hiddenCount > 0 && <span className="px-1 py-1 text-sm font-bold text-mute">и ещё {hiddenCount}</span>}
-        </div>
-      ) : (
-        <p className="font-semibold text-mute">{players > 0 ? 'Игра не передаёт имена игроков.' : 'Пока никого нет.'}</p>
-      )}
-    </section>
+    <div className="seg" role="group" aria-label="Период">
+      {([[24, '24 ч'], [168, '7 дн']] as [number, string][]).map(([h, label]) => (
+        <button key={h} type="button" onClick={() => onChange(h)} aria-pressed={hours === h} className="seg-item">{label}</button>
+      ))}
+    </div>
   );
 }
 
-/** key={id}: switching between servers starts from a clean state */
-export default function ServerDetail({ id }: { id: number }) {
-  return <ServerDetailView key={id} id={id} />;
-}
-
-const FLAGS = (code: string) =>
-  code.length === 2 ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '';
-
-function ServerDetailView({ id }: { id: number }) {
-  const { isAdmin } = useAuth();
+function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
+  const { me, isAdmin } = useAuth();
   const [hours, setHours] = useState(24);
+  const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [favs, setFavs] = useState<number[] | null>(null);
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
   const seq = useRef(0);
   const firstHours = useRef(true);
+  const prevNames = useRef<Set<string> | null>(null);
+  const freshTimer = useRef(0);
 
-  // only the newest request may update the page
+  // only the newest request may update the page; ONE request feeds every tab
   const load = (h = hours) => {
     const n = ++seq.current;
     return api<ServerDetails>(`/servers/${id}/details?hours=${h}`)
-      .then((d) => { if (n !== seq.current) return; setData(d); setError(''); setMissing(false); })
+      .then((d) => {
+        if (n !== seq.current) return;
+        // players that were not in the previous poll get a short highlight (never on the first load)
+        const names = new Set((d.playersNow ?? []).map((p) => p.name));
+        const prev = prevNames.current;
+        if (prev) {
+          const added = [...names].filter((x) => !prev.has(x));
+          if (added.length) {
+            setFresh(new Set(added));
+            window.clearTimeout(freshTimer.current);
+            freshTimer.current = window.setTimeout(() => setFresh(new Set()), 4500);
+          }
+        }
+        prevNames.current = names;
+        setData(d);
+        setError('');
+        setMissing(false);
+      })
       .catch((e: Error) => {
         if (n !== seq.current) return;
         if (e instanceof ApiError && e.status === 404) setMissing(true);
@@ -18899,28 +19934,49 @@ function ServerDetailView({ id }: { id: number }) {
     if (firstHours.current) { firstHours.current = false; return; }
     void load(hours);
   }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => window.clearTimeout(freshTimer.current), []);
+
+  useEffect(() => {
+    if (!me) { setFavs(null); return; }
+    api<number[]>('/favorites').then(setFavs).catch(() => setFavs([]));
+  }, [me]);
+  const isFav = !!favs?.includes(id);
+  const toggleFav = async () => {
+    const cur = favs ?? [];
+    const on = cur.includes(id);
+    setFavs(on ? cur.filter((x) => x !== id) : [...cur, id]);
+    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
+  };
 
   const depth = useDepth<HTMLElement>();
   const [shared, setShared] = useState(false);
   // red ring once when the server goes online -> offline while this page is open
   const wentOffline = useFlashOnChange(data ? data.server.online || !data.server.hasStatus : true, (prev, next) => prev && !next);
 
+  // switching tabs: when the page was scrolled past the tab bar, show the top of the new content instead of the middle of it
+  const firstTab = useRef(true);
+  useEffect(() => {
+    if (firstTab.current) { firstTab.current = false; return; }
+    const bar = document.querySelector<HTMLElement>('.srv-tabbar');
+    const marker = bar?.previousElementSibling as HTMLElement | null;
+    if (!bar || !marker) return;
+    const offset = parseFloat(bar.style.top || '0');
+    const target = marker.getBoundingClientRect().top + window.scrollY - offset;
+    if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
+  }, [tab]);
+
   if (missing) return <NotFound kind="server" />;
+
+  const back = <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
+
   if (!data) {
-    // the same blocks as the loaded page: banner, four numbers, chart + players, log + about
     return (
       <div className="space-y-3.5" aria-busy="true" aria-label="Загрузка">
-        <div className="skel-line skeleton ml-1 !h-5 w-32" />
-        <div className="skeleton tile h-[188px] sm:h-[176px]" />
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton tile h-[106px]" />)}
-        </div>
-        <div className="grid gap-3.5 lg:grid-cols-12">
-          <div className="skeleton tile h-[340px] lg:col-span-8" />
-          <div className="skeleton tile h-[340px] lg:col-span-4" />
-          <div className="skeleton tile h-40 lg:col-span-8" />
-          <div className="skeleton tile h-40 lg:col-span-4" />
-        </div>
+        {back}
+        <BannerSkeleton />
+        <TabBarSkeleton />
+        <TabSkeleton tab={tab} />
+        <ErrorLine text={error} />
       </div>
     );
   }
@@ -18928,23 +19984,80 @@ function ServerDetailView({ id }: { id: number }) {
   const { server: s, stats, events, points } = data;
   const color = gameColor(s.game);
   const [c1, c2] = gameGradient(s.game);
-  const lag = s.ping != null && s.ping > 100;
-  const link = connectUrl(s.game, s.address, s.port);
+  const lag = isLag(s);
+  const guide = connectGuide(s.game, s.address);
   // placeholder versions such as 0.0.0.1 say nothing
   const realVersion = s.version && !/^0(\.0)*(\.\d+)?$/.test(s.version.trim()) ? s.version.trim() : null;
-  const tiles: [string, ReactNode, string?][] = [
-    ['Сейчас', s.online ? <><AnimatedNumber value={s.players} delta />/{s.maxPlayers}</> : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
-    ['Пик игроков', stats.peakPlayers == null ? '–' : String(stats.peakPlayers), stats.peakAt ? fmtDateTime(stats.peakAt) : undefined],
-    ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
-    ['В среднем', stats.avgPlayers == null ? '–' : String(stats.avgPlayers), 'пока сервер онлайн'],
+  const mode = guessMode(s.name);
+  const code = (s.countryCode || s.country || '').toUpperCase();
+  const cName = countryName(code);
+  const flag = flagEmoji(code);
+  const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
+  const windowLabel = data.hours <= 24 ? 'за 24 часа' : 'за 7 дней';
+  const chartLoading = data.hours !== hours;
+
+  const pct = s.maxPlayers > 0 ? Math.min(100, Math.round((s.players / s.maxPlayers) * 100)) : 0;
+  const lt = loadTone(pct);
+  const pt = s.ping != null ? pingTone(s.ping) : null;
+  const meterCls = { ok: 'm-ok', warn: 'm-warn', bad: 'm-bad' }[lt];
+
+  const nowTile = (i: number) => (
+    <div key="now" className="tile tile-in p-4 sm:p-[18px]" style={stagger(i)}>
+      <div className="stat-k">Сейчас</div>
+      <div className="stat-v mt-1">
+        {s.online ? <><AnimatedNumber value={s.players} delta />/{s.maxPlayers}</> : '–'}
+      </div>
+      {s.online && s.maxPlayers > 0 ? (
+        <>
+          <div
+            className={`meter mt-2 ${meterCls}`}
+            role="meter"
+            aria-label="Заполненность сервера"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct}
+            aria-valuetext={`заполнено ${pct} %`}
+          >
+            <i style={{ width: `${pct}%` }} />
+          </div>
+          <div className="stat-s mt-1.5 flex flex-wrap items-center gap-x-2">
+            <span className={TONE_TEXT[lt]}>заполнено {pct} %</span>
+            {s.ping != null && pt && (
+              <span className={`inline-flex items-center gap-1 ${TONE_TEXT[pt.tone]}`}>
+                <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
+                пинг {s.ping} мс · {pt.label}
+              </span>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="stat-s mt-1.5">{s.hasStatus ? 'сервер недоступен' : 'ожидаем первый ответ'}</div>
+      )}
+    </div>
+  );
+  const statTiles = (withNow: boolean, base = 0) => [
+    withNow ? nowTile(base) : null,
+    <StatTile key="peak" i={base + (withNow ? 1 : 0)} k="Пик игроков" hint={stats.peakAt ? fmtDateTime(stats.peakAt) : undefined}>
+      {stats.peakPlayers == null ? '–' : String(stats.peakPlayers)}
+    </StatTile>,
+    <StatTile key="up" i={base + (withNow ? 2 : 1)} k="Аптайм" hint={windowLabel}>
+      {stats.uptimePct == null ? '–' : `${stats.uptimePct}%`}
+    </StatTile>,
+    <StatTile key="avg" i={base + (withNow ? 3 : 2)} k="В среднем" hint="пока сервер онлайн">
+      {stats.avgPlayers == null ? '–' : String(stats.avgPlayers)}
+    </StatTile>,
+    withNow ? null : (
+      <StatTile key="n" i={base + 3} k="Измерений" hint={windowLabel}>{String(stats.samples)}</StatTile>
+    ),
   ];
-  const countryName = s.country ? COUNTRIES.find(([c]) => c === s.country)?.[1] ?? s.country : '';
+
   const info: [string, string][] = [
     ['Игра', gameLabel(s.game)],
     ['Адрес', s.address],
     ...(s.map && s.online ? [['Карта', s.map] as [string, string]] : []),
     ...(realVersion ? [['Версия', realVersion] as [string, string]] : []),
-    ...(countryName ? [['Страна', `${FLAGS(s.country)} ${countryName}`.trim()] as [string, string]] : []),
+    ...(mode ? [['Режим', mode] as [string, string]] : []),
+    ...(cName ? [['Страна', `${flag} ${cName}`.trim()] as [string, string]] : []),
     ['Обновлено', ago(s.updatedAt)],
   ];
 
@@ -18976,119 +20089,173 @@ function ServerDetailView({ id }: { id: number }) {
       setError((e as Error).message);
     }
   };
+  const copyAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(s.address);
+      toast('Адрес скопирован');
+    } catch {
+      toast(`Адрес: ${s.address}`, 'info', 8000);
+    }
+  };
+
+  const chartTile = (i: number, withSeries: boolean) => (
+    <section className={`tile tile-in p-4 sm:p-5 ${withSeries ? 'lg:col-span-12' : 'lg:col-span-8'}`} style={stagger(i)} aria-label="График">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-base font-extrabold">{withSeries ? (series === 'ping' ? 'Пинг' : 'Игроки') : 'Игроки'}</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          {withSeries && (
+            <div className="seg" role="group" aria-label="Показатель">
+              {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
+                <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{label}</button>
+              ))}
+            </div>
+          )}
+          <PeriodSeg hours={hours} onChange={setHours} />
+        </div>
+      </div>
+      {stats.samples < 2 ? (
+        <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
+      ) : (
+        <HistoryChart points={points} hours={data.hours} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
+      )}
+      {points.some((p) => !p.online) && stats.samples >= 2 && (
+        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+      )}
+    </section>
+  );
+
+  const aboutTile = (i: number) => (
+    <section className="tile tile-in p-5 lg:col-span-4" style={stagger(i)}>
+      <h2 className="mb-3 text-base font-extrabold">О сервере</h2>
+      <dl className="space-y-2.5">
+        {info.map(([k, v]) => (
+          <div key={k} className="flex items-baseline justify-between gap-4">
+            <dt className="shrink-0 text-sm font-bold text-mute">{k}</dt>
+            <dd className={`min-w-0 break-words text-right text-sm font-extrabold ${k === 'Адрес' ? 'break-all font-mono' : ''}`}>{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+
+  const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
+  const playerCountBadge = s.online ? <span className="ml-2 rounded-full bg-soft px-2.5 py-0.5 text-xs font-extrabold text-link">{s.players}</span> : null;
+
+  let panel: ReactNode;
+  if (tab === 'players') {
+    panel = (
+      <section className="tile tile-in p-4 sm:p-5">
+        <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+        <PlayersList {...playersProps} />
+      </section>
+    );
+  } else if (tab === 'history') {
+    panel = (
+      <div className="space-y-3.5">
+        <div className="grid gap-3.5 lg:grid-cols-12">
+          {chartTile(0, true)}
+        </div>
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(false, 1)}</div>
+      </div>
+    );
+  } else if (tab === 'events') {
+    panel = (
+      <section className="tile tile-in p-4 sm:p-5">
+        <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
+        <EventsFeed events={events} online={s.online} />
+      </section>
+    );
+  } else if (tab === 'connect') {
+    panel = <ConnectTab game={s.game} address={s.address} />;
+  } else {
+    panel = (
+      <div className="space-y-3.5">
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
+        <div className="grid gap-3.5 lg:grid-cols-12">
+          {chartTile(4, false)}
+          <section className="tile tile-in p-4 sm:p-5 lg:col-span-4" style={stagger(5)}>
+            <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+            <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
+          </section>
+          <section className="tile tile-in p-4 sm:p-5 lg:col-span-8" style={stagger(6)}>
+            <h2 className="mb-3 text-base font-extrabold">Последние события</h2>
+            <EventsFeed events={events} online={s.online} limit={5} moreHref={tabHref(id, 'events')} />
+          </section>
+          {aboutTile(7)}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3.5">
-      <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>
+      {back}
 
       <article
-        className="depth relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
-        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true, game: s.game }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+        className={`srv-banner srv-glow srv-${kind} depth relative overflow-hidden rounded-[26px] p-4 text-white sm:p-6`}
+        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true, game: s.game }) }}
         {...depth}
       >
         <span aria-hidden className="depth-l1 pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
         <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
         {wentOffline && <span className="flash-ring" aria-hidden />}
-        <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
-          <GameAvatar game={s.game} size={68} glass vtId={s.id} />
-          <div className="min-w-0 flex-1 basis-64">
-            <h1 className="break-words text-2xl font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-bold text-white/90">
-              <span>{gameLabel(s.game)}{realVersion ? ` · ${realVersion}` : ''}</span>
-              <code className="font-mono text-[13px] font-semibold">{s.address}</code>
+
+        {/* title row */}
+        <div className="relative flex items-start gap-3.5 sm:gap-4">
+          <GameAvatar game={s.game} size={64} glass vtId={s.id} />
+          <div className="min-w-0 flex-1">
+            <h1 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm font-bold text-white/90">
+              <span>{gameLabel(s.game)}</span>
+              <code className="min-w-0 break-all font-mono text-[13px] font-semibold">{s.address}</code>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
-            <CopyButton text={s.address} label="Скопировать адрес" tone="grad" />
-            <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>
-              {shared ? <IconCheckMark /> : <IconShare />}
-              Поделиться
-            </button>
-            {link && <a className="btn-ghost-on-grad" href={link}>Подключиться</a>}
-          </div>
+          {me && <FavStar on={isFav} name={s.name} onClick={() => void toggleFav()} />}
         </div>
+
+        {/* status row */}
+        <div className="relative mt-3.5 flex flex-wrap items-center gap-2">
+          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
+          <LiveBadge at={s.updatedAt} />
+          {cName && <span className="chip-glass" title="Страна сервера">{flag && <span aria-hidden>{flag}</span>}{cName}</span>}
+          {realVersion && <span className="chip-glass" title="Версия игры">v{realVersion.replace(/^v/i, '')}</span>}
+          {mode && <span className="chip-glass" title="Режим игры (по названию сервера)">{mode}</span>}
+          {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
+        </div>
+
         {!s.online && s.error && (
-          <p className="relative mt-4 rounded-2xl bg-black/20 px-4 py-2.5 text-sm font-bold">{s.error}</p>
+          <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
-        <div className="relative mt-4 flex flex-wrap items-center gap-2">
-          {isAdmin && (
-            <>
-              <button className="btn-ghost-on-grad" onClick={refresh} disabled={busy} aria-busy={busy || undefined}><IconRefresh spinning={busy} />{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
-              <button className="btn-ghost-on-grad" onClick={() => setEditing(true)}>Изменить</button>
-              <button className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#b42323] transition hover:bg-white/90 max-sm:min-h-[44px]" onClick={remove}>Удалить</button>
-            </>
-          )}
-          <span className="ml-auto text-sm font-bold text-white/90">обновлено {ago(s.updatedAt)}</span>
+
+        {/* buttons: the main one, then the two equal glass ones; admin tools are a quieter group */}
+        <div className="relative mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+          <a
+            className="btn-cta col-span-2 sm:col-auto"
+            href={guide.link?.href ?? tabHref(id, 'connect')}
+            onClick={tab === 'connect' && !guide.link ? (e) => { e.preventDefault(); void copyAddress(); } : undefined}
+          >
+            {tab === 'connect' && !guide.link ? 'Скопировать адрес для входа' : 'Подключиться'}
+          </a>
+          <CopyButton text={s.address} label="Скопировать адрес" tone="glass" />
+          <button type="button" className="btn-glass" onClick={() => void share()}>
+            {shared ? <IconCheckMark /> : <IconShare />}
+            Поделиться
+          </button>
         </div>
+        {isAdmin && (
+          <div className="relative mt-3 grid grid-cols-3 gap-2 border-t border-white/15 pt-3 sm:flex sm:flex-wrap sm:items-center" role="group" aria-label="Управление сервером">
+            <button className="btn-glass-quiet" onClick={refresh} disabled={busy} aria-busy={busy || undefined}><IconRefresh spinning={busy} />{busy ? 'Опрос…' : 'Опросить'}</button>
+            <button className="btn-glass-quiet" onClick={() => setEditing(true)}>Изменить</button>
+            <button className="btn-glass-quiet btn-glass-danger" onClick={remove}>Удалить</button>
+          </div>
+        )}
       </article>
       <ErrorLine text={error} />
 
-      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
-        {tiles.map(([k, v, hint]) => (
-          <div key={k} className="tile p-4 sm:p-[18px]">
-            <div className="stat-k">{k}</div>
-            <div className={`stat-v mt-1 ${typeof v === 'string' ? 'truncate' : ''}`}>{v}</div>
-            {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
-          </div>
-        ))}
-      </div>
+      <ServerTabs id={id} tab={tab} counts={{ events: events.length, players: s.online ? s.players : 0 }} />
 
-      <div className="grid gap-3.5 lg:grid-cols-12">
-        <section className="tile p-5 lg:col-span-8" aria-label="График игроков">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base font-extrabold">Игроки</h2>
-            <div className="seg" role="group" aria-label="Период">
-              {[[24, '24 ч'], [168, '7 дн']].map(([h, label]) => (
-                <button key={h} type="button" onClick={() => setHours(h as number)} aria-pressed={hours === h} className="seg-item">
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          {stats.samples < 2 ? (
-            <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
-          ) : (
-            <PlayersChart points={points} hours={hours} max={s.maxPlayers} color={color} />
-          )}
-          {points.some((p) => !p.online) && stats.samples >= 2 && (
-            <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
-          )}
-        </section>
-
-        <div className="lg:col-span-4">
-          <PlayersNow online={s.online} players={s.players} names={s.playerNames} list={data.playersNow ?? []} />
-        </div>
-
-        <section className="tile p-5 lg:col-span-8">
-          <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
-          {events.length === 0 ? (
-            <p className="font-semibold text-mute">За выбранный период сбоев не было.</p>
-          ) : (
-            <ul className="space-y-2">
-              {events.map((e) => (
-                <li key={e.ts} className="flex items-center gap-3">
-                  <span className={`pill ${e.type === 'down' ? 'pill-bad' : 'pill-ok'}`}>{e.type === 'down' ? 'ПАДЕНИЕ' : 'ВЕРНУЛСЯ'}</span>
-                  <span className="font-bold">{fmtDateTime(e.ts)}</span>
-                  <span className="ml-auto text-sm font-semibold text-mute">{ago(e.ts)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {events.length > 0 && <p className="mt-3 text-sm font-semibold text-mute">{events.length} {plural(events.length, ['событие', 'события', 'событий'])} за период</p>}
-        </section>
-
-        <section className="tile p-5 lg:col-span-4">
-          <h2 className="mb-3 text-base font-extrabold">О сервере</h2>
-          <dl className="space-y-2.5">
-            {info.map(([k, v]) => (
-              <div key={k} className="flex items-baseline justify-between gap-4">
-                <dt className="shrink-0 text-sm font-bold text-mute">{k}</dt>
-                <dd className={`min-w-0 break-words text-right text-sm font-extrabold ${k === 'Адрес' ? 'font-mono' : ''}`}>{v}</dd>
-              </div>
-            ))}
-          </dl>
-        </section>
+      <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
+        {panel}
       </div>
 
       {editing && (
@@ -19306,12 +20473,15 @@ import { coverBackground } from '../cover';
 import { ServersArt } from '../components/Illustrations';
 import { AnimatedNumber, Burst, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
-import ServerDetail from './ServerDetail';
+import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
 export default function ServersPage({ sub }: { sub: string }) {
-  const id = Number(sub);
-  if (sub && Number.isInteger(id) && id > 0) return <ServerDetail id={id} />;
-  // "#/servers/abc": not a server
+  // "12/players" -> server 12, tab "players"
+  const [idPart = '', tabPart = ''] = sub.split('/');
+  const id = Number(idPart);
+  const tab = (SERVER_TABS as readonly string[]).includes(tabPart) ? tabPart : '';
+  if (idPart && /^\d+$/.test(idPart) && Number.isInteger(id) && id > 0 && (!tabPart || tab)) return <ServerDetail id={id} tab={tab} />;
+  // "#/servers/abc" or an unknown tab: not a server page
   if (sub) return <NotFound kind="server" />;
   return <ServerList />;
 }
@@ -19619,7 +20789,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
   return (
     <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
       {flash && <span className="flash-ring" aria-hidden />}
-      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }) }}>
+      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
@@ -20944,7 +22114,7 @@ type HashState = { page: string; sub: string };
 let hashNow: HashState | null = null;
 const hashListeners = new Set<(h: HashState) => void>();
 
-const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub) ? h.sub : '');
+const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub.split('/')[0]) ? h.sub.split('/')[0] : '');
 
 /** gives the avatar of a server (tagged data-vt-avatar) the view-transition-name that pairs the old and the new page */
 const nameAvatars = (ids: string[]) => {
@@ -20960,15 +22130,21 @@ function onHashChange() {
   const prev = hashNow ?? parseHash();
   const next = parseHash();
   if (prev.page === next.page && prev.sub === next.sub) return;
-  const ids = [serverIdOf(prev), serverIdOf(next)];
-  withViewTransition(
-    () => {
-      hashNow = next;
-      hashListeners.forEach((l) => l(next));
-    },
-    { before: () => nameAvatars(ids), after: () => nameAvatars(ids), done: clearAvatarNames },
-  );
+  // switching tabs inside one server page ("12" -> "12/players") is not a page change: no cross-fade
+  if (prev.page === 'servers' && next.page === 'servers' && /^\d+(\/|$)/.test(next.sub) && prev.sub.split('/')[0] === next.sub.split('/')[0]) {
+    hashNow = next;
+    hashListeners.forEach((l) => l(next));
+    return;
+  }
+  // No View Transition here: the glass header and the bottom bar (backdrop-filter) were captured as separate
+  // layers and flashed as a black rectangle while switching sections. The page itself fades in via .pop / .fade-in.
+  hashNow = next;
+  hashListeners.forEach((l) => l(next));
 }
+void withViewTransition;
+void nameAvatars;
+void clearAvatarNames;
+void serverIdOf;
 
 export function useHash() {
   const [h, setH] = useState(parseHash);
@@ -21380,7 +22556,7 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
-export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' }) {
+export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
   const [done, setDone] = useState(false);
   const timer = useRef<number>();
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -21395,7 +22571,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
     }
   };
   return (
-    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
+    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : tone === 'glass' ? 'btn-glass' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
       <span className="copy-ico" data-done={done} aria-hidden>
         <span className="ico-copy inline-grid"><IconCopy /></span>
         <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">

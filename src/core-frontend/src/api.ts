@@ -210,11 +210,14 @@ export interface TestResult {
 }
 
 export interface ServerDetails {
-  server: Server;
+  /** `countryCode`: two-letter ISO code or '' */
+  server: Server & { countryCode?: string };
   hours: number;
-  points: { ts: number; players: number; online: number }[];
+  /** `ping`: ms, null when unknown (or the server did not answer) */
+  points: { ts: number; players: number; online: number; ping: number | null }[];
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
-  events: { ts: number; type: 'up' | 'down' }[];
+  /** newest first; `players` is set for 'peak' */
+  events: { ts: number; type: 'up' | 'down' | 'peak'; players: number | null }[];
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }

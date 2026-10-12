@@ -6,12 +6,15 @@ import { coverBackground } from '../cover';
 import { ServersArt } from '../components/Illustrations';
 import { AnimatedNumber, Burst, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
-import ServerDetail from './ServerDetail';
+import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
 export default function ServersPage({ sub }: { sub: string }) {
-  const id = Number(sub);
-  if (sub && Number.isInteger(id) && id > 0) return <ServerDetail id={id} />;
-  // "#/servers/abc": not a server
+  // "12/players" -> server 12, tab "players"
+  const [idPart = '', tabPart = ''] = sub.split('/');
+  const id = Number(idPart);
+  const tab = (SERVER_TABS as readonly string[]).includes(tabPart) ? tabPart : '';
+  if (idPart && /^\d+$/.test(idPart) && Number.isInteger(id) && id > 0 && (!tabPart || tab)) return <ServerDetail id={id} tab={tab} />;
+  // "#/servers/abc" or an unknown tab: not a server page
   if (sub) return <NotFound kind="server" />;
   return <ServerList />;
 }
@@ -319,7 +322,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
   return (
     <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
       {flash && <span className="flash-ring" aria-hidden />}
-      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }) }}>
+      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />

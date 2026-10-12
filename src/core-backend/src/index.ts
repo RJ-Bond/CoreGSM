@@ -1100,7 +1100,8 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
 
   const points = db
     .prepare(
-      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online
+      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online,
+              CAST(ROUND(AVG(CASE WHEN online = 1 THEN ping END)) AS INTEGER) AS ping
        FROM history WHERE server_id = ? AND ts > ?
        GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
     )
@@ -1123,12 +1124,15 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
          ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
       )
       .all(id, since) as { ts: number; online: number }[]
-  ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
+  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak', players: null as number | null }));
+  // the busiest moment of the period is shown in the event feed as well
+  if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
+  events.sort((a, b) => b.ts - a.ts);
 
   const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
 
   res.json({
-    server: isAdmin(req) ? server : publicServer(server),
+    server: { ...(isAdmin(req) ? server : publicServer(server)), countryCode: server.country || countryOf(id, server.host) || '' },
     hours,
     playersNow,
     points,
