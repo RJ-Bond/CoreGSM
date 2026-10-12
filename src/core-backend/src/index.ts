@@ -12,6 +12,7 @@ import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
+import { countryLabel, countryOf } from './geo.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -1091,7 +1092,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = getSetting('public_base');
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
