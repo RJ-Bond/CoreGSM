@@ -24,7 +24,7 @@ export const GAMES: Game[] = [
   { id: 'factorio', label: 'Factorio', port: 34197, abbr: 'FC', color: '#d98a3a' },
   { id: 'unturned', label: 'Unturned', port: 27015, abbr: 'UT', color: '#4aa86a' },
   { id: 'vrising', label: 'V Rising', port: 27015, abbr: 'VR', color: '#a83a5a' },
-  { id: 'icarus', label: 'Icarus', port: 27015, abbr: 'IC', color: '#e0692b' },
+  { id: 'icarus', label: 'Icarus', port: 27015, abbr: 'IC', color: '#2b3a52' },
   { id: 'projectzomboid', label: 'Project Zomboid', port: 16261, abbr: 'PZ', color: '#7a8a4a' },
   { id: 'gta5f', label: 'FiveM (GTA V)', port: 30120, abbr: '5M', color: '#f26a3d' },
   { id: 'gtasam', label: 'SA-MP', port: 7777, abbr: 'SA', color: '#8a6ad9' },
@@ -38,7 +38,7 @@ export const gameColor = (id: string) => findGame(id)?.color ?? FALLBACK;
 export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toUpperCase();
 
 /** artwork used instead of the line pictogram (files in public/games) */
-export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png' };
+export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png', icarus: '/games/icarus.png' };
 
 /** [deep, light] gradient colours of a game (tile covers, banners) */
 export const gameGradient = (id: string): [string, string] => gradientFor(gameColor(id));
