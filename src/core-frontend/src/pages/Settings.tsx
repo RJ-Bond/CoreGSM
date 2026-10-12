@@ -175,7 +175,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
           >
             {t.label}
-            {t.id === 'updates' && updateAvailable && <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />}
+            {t.id === 'updates' && updateAvailable && <span className="update-dot ml-1.5 align-middle" title="Доступно обновление" />}
           </a>
         ))}
       </nav>
@@ -489,54 +489,116 @@ function UpdateCard() {
   const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
+  const state: 'running' | 'available' | 'latest' | 'unknown' = running ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
+  const lastChecked = info?.checkedAt ?? null;
+
   return (
     <div className="space-y-5">
-      <div className="panel space-y-3.5 p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-black">Обновления</h2>
-          {running ? <span className="pill pill-warn">{rollingBack ? 'ОТКАТ' : 'ОБНОВЛЕНИЕ'}</span>
-            : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
-            : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
-            : <span className="pill pill-mute">ПРОВЕРКА</span>}
+      <section
+        aria-live="polite"
+        className={`relative overflow-hidden rounded-[26px] p-6 sm:p-7 ${
+          state === 'available'
+            ? 'update-hero text-white'
+            : state === 'running'
+              ? 'update-hero update-hero-run text-white'
+              : 'panel'
+        }`}
+      >
+        {(state === 'available' || state === 'running') && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
+        <div className="relative flex flex-wrap items-start gap-4">
+          <span
+            aria-hidden
+            className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${
+              state === 'available' || state === 'running' ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
+            }`}
+          >
+            {state === 'latest' ? (
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+            ) : state === 'running' ? (
+              <svg className="animate-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.55" /></svg>
+            ) : (
+              <svg className={state === 'available' ? 'update-bob' : ''} width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+            )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>
+              {state === 'running' ? (rollingBack ? 'Откат к предыдущей версии' : 'Идёт обновление')
+                : state === 'available' ? 'Доступно обновление'
+                : state === 'latest' ? 'Установлена последняя версия'
+                : 'Проверка обновлений'}
+            </h2>
+            <p className={`mt-1 font-semibold ${state === 'available' || state === 'running' ? 'text-white/90' : 'text-mute'}`}>
+              {state === 'running'
+                ? (offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
+                : state === 'available'
+                  ? 'Новая сборка уже в репозитории. Данные и настройки сохранятся, панель будет недоступна 1-3 минуты.'
+                  : state === 'latest'
+                    ? `Всё свежее${lastChecked ? `, проверено ${ago(lastChecked)}` : ''}.`
+                    : 'Узнаём, есть ли новая версия…'}
+            </p>
+
+            <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
+              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' || state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={state === 'available' || state === 'running' ? 'text-white/85' : 'text-mute'}>Установлена</dt>
+                <dd className="font-mono">{short(info?.current ?? null)}</dd>
+              </div>
+              {state === 'available' && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
+              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={state === 'available' ? 'text-mute' : state === 'running' ? 'text-white/85' : 'text-mute'}>В репозитории</dt>
+                <dd className="font-mono">{short(info?.latest ?? null)}</dd>
+              </div>
+            </dl>
+          </div>
         </div>
 
-        <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
-          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
-          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
-        </dl>
+        {state === 'running' && <div className="update-progress relative mt-5" aria-hidden><i /></div>}
 
-        {running && (
-          <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
-            {offline
-              ? (rollingBack ? 'Панель перезапускается после отката… страница обновится сама.' : 'Панель перезапускается… страница обновится сама.')
-              : info?.job?.state === 'running' ? info.job.message
-              : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…'}
+        <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
+          {state === 'available' && (
+            <>
+              <button className="btn-on-grad min-h-[46px] px-6 text-base shadow-pop" onClick={apply} disabled={busy || running || !info?.canApply}>
+                {busy ? 'Отправляю…' : 'Обновить сейчас'}
+              </button>
+              <a className="btn btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
+            </>
+          )}
+          {(state === 'latest' || state === 'unknown') && (
+            <button className="btn" onClick={check} disabled={busy || running}>{busy ? 'Проверяю…' : 'Проверить обновления'}</button>
+          )}
+          {state === 'available' && (
+            <button className="btn btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
+          )}
+          {info?.canRollback && state !== 'running' && (
+            <button className={`btn ${state === 'available' ? 'btn-ghost-on-grad' : 'btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
+          )}
+        </div>
+
+        {state === 'available' && info && !info.canApply && (
+          <p className="relative mt-3 rounded-2xl bg-black/15 px-4 py-2.5 text-sm font-bold">
+            Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.
           </p>
         )}
+        {state !== 'available' && info && !info.canApply && state !== 'running' && (
+          <p className="relative mt-3 text-sm font-semibold text-mute">Кнопка обновления недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>
+        )}
         {stuck && (
-          <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+          <p className="relative mt-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
             Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или {rollingBack ? 'выполните откат вручную' : <>обновите командой <span className="font-mono">sudo coregsm update</span></>}.
           </p>
         )}
-        {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
+        {info?.error && !running && <p className="relative mt-3 text-sm font-semibold text-mute">{info.error}</p>}
         {showOldFailure && info?.job && (
-          <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+          <div className="relative mt-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
             <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
             <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
           </div>
         )}
-        <ErrorLine text={error} />
+        <div className="relative"><ErrorLine text={error} /></div>
+      </section>
 
-        <div className="flex flex-wrap gap-2">
-          <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
-          {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
-          {info?.canRollback && <button className="btn btn-soft" onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей версии</button>}
-        </div>
-        {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
-      </div>
-
-      <div className="panel space-y-3 p-6">
+      <div id="update-changes" className="panel scroll-mt-24 space-y-3 p-6">
         <h2 className="text-lg font-black">Что нового</h2>
+
         {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
         {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
         {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">Список изменений пуст.</p>}

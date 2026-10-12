@@ -336,7 +336,7 @@ function ServerDetailView({ id }: { id: number }) {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+            <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
             <CopyButton text={s.address} label="Скопировать адрес" tone="grad" />
             <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>
               {shared ? <IconCheckMark /> : <IconShare />}

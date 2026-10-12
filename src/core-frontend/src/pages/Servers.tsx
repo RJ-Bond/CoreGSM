@@ -20,8 +20,7 @@ export default function ServersPage({ sub }: { sub: string }) {
 function greeting(name: string): string {
   const h = new Date().getHours();
   const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
-  const first = name.trim().split(/\s+/)[0] || name;
-  return `${hello}, ${first}`;
+  return `${hello}, ${name.trim() || name}`;
 }
 
 function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: string; onClick: () => void; className?: string }) {
@@ -279,7 +278,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
         </div>
       </div>
@@ -323,7 +322,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true }) }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
-          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
         </div>
       </div>

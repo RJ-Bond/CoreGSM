@@ -344,7 +344,7 @@ export default function App() {
   }
 
   const dot = (
-    <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление">
+    <span className="update-dot ml-1.5 align-middle" title="Доступно обновление">
       <span className="sr-only">(доступно обновление)</span>
     </span>
   );
@@ -450,7 +450,7 @@ export default function App() {
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {p.label}
                     {p.id === 'admin' && updateAvailable && (
-                      <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn"><span className="sr-only">Доступно обновление</span></span>
+                      <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">Доступно обновление</span></span>
                     )}
                   </a>
                 </li>
