@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8735b3d1c06e"
+COREGSM_BUILD="2b0967e31127"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18650,6 +18650,57 @@ export function coverBackground(
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/flashDebug.ts" << '__COREGSM_EOF__'
+/**
+ * Diagnostics for the "black square" report: open the panel as  https://host/?flashdebug=1#/  and switch to another
+ * browser tab (or press PrintScreen) and back. For ~1.5 s after the page becomes visible, the page is scanned for
+ * dark opaque boxes, canvases, videos and iframes; they get a red outline and are listed in a corner panel.
+ * An empty list means the square is not a DOM element (GPU / compositor), see the note in the panel.
+ */
+const dark = (c: string) => {
+  const m = c.match(/rgba?\(([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+))?\)/);
+  if (!m) return false;
+  const a = m[4] === undefined ? 1 : Number(m[4]);
+  return a > 0.5 && Number(m[1]) + Number(m[2]) + Number(m[3]) < 90;
+};
+
+export function installFlashDebug() {
+  let panel: HTMLDivElement | null = null;
+  const ensure = () => {
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.setAttribute('style', 'position:fixed;right:8px;bottom:8px;z-index:2147483647;max-width:min(420px,92vw);max-height:40vh;overflow:auto;background:#fff;color:#000;border:2px solid #e11;border-radius:8px;padding:8px;font:12px/1.35 monospace;white-space:pre-wrap');
+    document.body.appendChild(panel);
+    return panel;
+  };
+  const scan = (why: string) => {
+    const found: string[] = [];
+    document.querySelectorAll<HTMLElement>('body *').forEach((el) => {
+      if (panel?.contains(el)) return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8 || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.3) return;
+      const tag = el.tagName;
+      const media = tag === 'CANVAS' || tag === 'VIDEO' || tag === 'IFRAME';
+      if (media || dark(cs.backgroundColor)) {
+        el.style.outline = '2px solid red';
+        const cls = typeof el.className === 'string' ? el.className.slice(0, 60) : '';
+        found.push(`${tag.toLowerCase()}${cls ? '.' + cls.trim().replace(/\s+/g, '.') : ''} ${Math.round(r.width)}x${Math.round(r.height)} @${Math.round(r.left)},${Math.round(r.top)} bg=${cs.backgroundColor}`);
+      }
+    });
+    const p = ensure();
+    p.textContent = `[${new Date().toLocaleTimeString()}] ${why}\n` + (found.length ? found.slice(0, 25).join('\n') : 'тёмных DOM-элементов нет: квадрат рисует не страница, а GPU/композитор браузера (проверьте chrome://settings/system → «Использовать аппаратное ускорение» выкл.)');
+  };
+  const onShow = (why: string) => {
+    [0, 120, 400, 900, 1500].forEach((t) => window.setTimeout(() => scan(`${why} +${t}мс`), t));
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) onShow('вкладка видна'); });
+  window.addEventListener('focus', () => onShow('окно в фокусе'));
+  window.addEventListener('keyup', (e) => { if (e.key === 'PrintScreen') onShow('PrintScreen'); });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameIcons.ts" << '__COREGSM_EOF__'
 // Pictograms for the games (24x24 grid, drawn with a 2px round stroke). The same data is used by the PNG card
 // in the backend (core-backend/src/gameIcons.ts): keep both files in sync.
@@ -19593,6 +19644,8 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('focus', sync);
   sync();
 }
+
+if (/[?&]flashdebug=1/.test(location.search)) void import('./flashDebug').then((m) => m.installFlashDebug());
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
@@ -21192,7 +21245,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
   return (
     <div
       className="mt-1 rounded-md py-2 pl-3 pr-4"
-      style={{ background: theme.embed, borderLeft: `4px solid ${color}`, border: `1px solid ${theme.embedBorder}`, borderLeftWidth: 4, borderLeftColor: color, maxWidth: fill ? '100%' : 520, width: 'fit-content', minWidth: 'min(100%, 280px)' }}
+      style={{ background: theme.embed, borderLeft: `4px solid ${color}`, border: `1px solid ${theme.embedBorder}`, borderLeftWidth: 4, borderLeftColor: color, maxWidth: fill ? '100%' : 'min(520px, 100%)', width: 'fit-content', minWidth: 'min(100%, 280px)' }}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
@@ -21211,7 +21264,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
           )}
           {e.description && (
             <Part part="description" embed={index} onPick={onPick} bad={bad('description')} className="mb-2 text-sm">
-              <DiscordMd text={e.description} />
+              <DiscordMd text={e.description.replace(/⠀{8,}/g, '').replace(/\n+$/, '')} />
             </Part>
           )}
         </div>
@@ -21680,7 +21733,7 @@ function NewsList() {
         </span>
         {changingTest && (
           <div className="w-full">
-            <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} />
+            <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => { if (v) void setTestChannel(v); }} />
           </div>
         )}
       </div>

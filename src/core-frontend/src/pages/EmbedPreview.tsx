@@ -92,7 +92,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
   return (
     <div
       className="mt-1 rounded-md py-2 pl-3 pr-4"
-      style={{ background: theme.embed, borderLeft: `4px solid ${color}`, border: `1px solid ${theme.embedBorder}`, borderLeftWidth: 4, borderLeftColor: color, maxWidth: fill ? '100%' : 520, width: 'fit-content', minWidth: 'min(100%, 280px)' }}
+      style={{ background: theme.embed, borderLeft: `4px solid ${color}`, border: `1px solid ${theme.embedBorder}`, borderLeftWidth: 4, borderLeftColor: color, maxWidth: fill ? '100%' : 'min(520px, 100%)', width: 'fit-content', minWidth: 'min(100%, 280px)' }}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
@@ -111,7 +111,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
           )}
           {e.description && (
             <Part part="description" embed={index} onPick={onPick} bad={bad('description')} className="mb-2 text-sm">
-              <DiscordMd text={e.description} />
+              <DiscordMd text={e.description.replace(/⠀{8,}/g, '').replace(/\n+$/, '')} />
             </Part>
           )}
         </div>
