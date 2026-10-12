@@ -18,6 +18,7 @@ export default function DiscordPage() {
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
   const [tick, setTick] = useState(0);
+  const [picked, setPicked] = useState<number[]>([]);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
@@ -34,6 +35,16 @@ export default function DiscordPage() {
     await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
     load();
   };
+
+  const bulk = async (action: 'pause' | 'resume' | 'delete') => {
+    if (action === 'delete' && !window.confirm(`Удалить привязок: ${picked.length}? Сообщения в Discord останутся, но обновляться перестанут.`)) return;
+    await api('/bindings/bulk', 'POST', { ids: picked, action })
+      .then(() => toast(action === 'delete' ? 'Привязки удалены' : action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
+      .catch((e: Error) => setError(e.message));
+    setPicked([]);
+    load();
+  };
+  const pick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const toggle = async (b: Binding) => {
     await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
@@ -86,13 +97,30 @@ export default function DiscordPage() {
 
       {loaded && bindings.length === 0 && <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
 
+      {bindings.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-4 py-2.5">
+          <label className="flex items-center gap-2 font-bold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === bindings.length} onChange={(e) => setPicked(e.target.checked ? bindings.map((b) => b.id) : [])} />
+            {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
+          </label>
+          {picked.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-2">
+              <button className="btn btn-soft btn-sm" onClick={() => void bulk('pause')}>Пауза</button>
+              <button className="btn btn-soft btn-sm" onClick={() => void bulk('resume')}>Включить</button>
+              <button className="btn btn-danger btn-sm" onClick={() => void bulk('delete')}>Удалить</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         {bindings.map((b) => {
           const s = server(b.serverId);
           return (
-            <div key={b.id} className="panel space-y-3 p-5">
+            <div key={b.id} className={`panel space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
+                  {bindings.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
                     <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>

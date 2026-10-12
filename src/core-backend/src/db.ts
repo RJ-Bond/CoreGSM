@@ -5,6 +5,22 @@ import path from 'node:path';
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
+// a backup uploaded from the panel is put in place here, before the database is opened
+const pending = path.join(path.dirname(dbPath), 'restore-pending.db');
+if (fs.existsSync(pending)) {
+  try {
+    if (fs.existsSync(dbPath)) fs.copyFileSync(dbPath, `${dbPath}.before-restore`);
+    for (const ext of ['-wal', '-shm']) {
+      fs.rmSync(`${dbPath}${ext}`, { force: true });
+      fs.rmSync(`${pending}${ext}`, { force: true });
+    }
+    fs.renameSync(pending, dbPath);
+    console.log('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
+  } catch (e) {
+    console.error('Restore failed:', (e as Error).message);
+  }
+}
+
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -19,6 +35,13 @@ CREATE TABLE IF NOT EXISTS favorites (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   PRIMARY KEY (user_id, server_id)
+);
+CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,

@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="908572f09040"
+COREGSM_BUILD="d4464251f0f0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -799,6 +799,22 @@ import path from 'node:path';
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
+// a backup uploaded from the panel is put in place here, before the database is opened
+const pending = path.join(path.dirname(dbPath), 'restore-pending.db');
+if (fs.existsSync(pending)) {
+  try {
+    if (fs.existsSync(dbPath)) fs.copyFileSync(dbPath, `${dbPath}.before-restore`);
+    for (const ext of ['-wal', '-shm']) {
+      fs.rmSync(`${dbPath}${ext}`, { force: true });
+      fs.rmSync(`${pending}${ext}`, { force: true });
+    }
+    fs.renameSync(pending, dbPath);
+    console.log('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
+  } catch (e) {
+    console.error('Restore failed:', (e as Error).message);
+  }
+}
+
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -813,6 +829,13 @@ CREATE TABLE IF NOT EXISTS favorites (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   PRIMARY KEY (user_id, server_id)
+);
+CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -1325,6 +1348,7 @@ import { queryServer, refreshServer, startPoller } from './gsm.js';
 import { renderCard, renderGameIcon } from './card.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
+import { installAudit, registerOps } from './ops.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -1399,6 +1423,7 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
+installAudit(app);
 
 const wrap =
   (fn: (req: Request, res: Response) => unknown) =>
@@ -2295,6 +2320,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 });
 
 registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
+registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS });
 
 // ---------- errors ----------
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
@@ -2660,6 +2686,261 @@ export function registerNews(deps: {
       db.prepare('UPDATE news SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(row?.message_id ? 'sent' : 'error', b.data.error ?? 'Ошибка отправки', now, id);
     }
     res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/ops.ts" << '__COREGSM_EOF__'
+/**
+ * Operations for administrators: action log, bulk actions on Discord bindings,
+ * system health and diagnostics, database backup and restore.
+ */
+import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { z } from 'zod';
+import { db, getSetting } from './db.js';
+
+const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
+const DATA_DIR = path.dirname(DB_PATH);
+const startedAt = Date.now();
+
+// ---------- action log ----------
+interface Rule {
+  m: string;
+  re: RegExp;
+  label: string;
+  /** looked up before the handler runs (a deleted row can no longer be read afterwards) */
+  pre?: (id: string) => string | null;
+  detail?: (req: Request, pre: string | null) => string;
+  /** the user is not signed in yet: take the name from the body */
+  anon?: boolean;
+}
+
+const nameOf = (sql: string) => (id: string) => (db.prepare(sql).get(Number(id)) as { n: string } | undefined)?.n ?? null;
+const serverName = nameOf("SELECT COALESCE(NULLIF(name, ''), host || ':' || port) AS n FROM servers WHERE id = ?");
+const userName = nameOf('SELECT username AS n FROM users WHERE id = ?');
+const s = (v: unknown, n = 80) => (typeof v === 'string' ? v.slice(0, n) : '');
+
+const RULES: Rule[] = [
+  { m: 'POST', re: /^\/api\/servers$/, label: 'Добавлен сервер', detail: (r) => s(r.body?.name) || `${s(r.body?.host)}:${Number(r.body?.port) || ''}` },
+  { m: 'PUT', re: /^\/api\/servers\/(\d+)$/, label: 'Изменён сервер', pre: serverName },
+  { m: 'DELETE', re: /^\/api\/servers\/(\d+)$/, label: 'Удалён сервер', pre: serverName },
+  { m: 'POST', re: /^\/api\/bindings$/, label: 'Создана привязка Discord', detail: (r) => `сервер #${Number(r.body?.serverId) || '?'}` },
+  { m: 'PUT', re: /^\/api\/bindings\/(\d+)$/, label: 'Изменена привязка Discord', pre: (id) => `#${id}` },
+  { m: 'DELETE', re: /^\/api\/bindings\/(\d+)$/, label: 'Удалена привязка Discord', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/bindings\/bulk$/, label: 'Массовое действие с привязками', detail: (r) => `${s(r.body?.action, 12)} × ${Array.isArray(r.body?.ids) ? r.body.ids.length : 0}` },
+  { m: 'PUT', re: /^\/api\/settings$/, label: 'Изменены настройки бота', detail: (r) => [r.body?.discordToken !== undefined ? 'токен' : '', r.body?.proxyUrl !== undefined ? 'прокси' : ''].filter(Boolean).join(', ') },
+  { m: 'POST', re: /^\/api\/news$/, label: 'Создана новость', detail: (r) => s(r.body?.payload?.embed?.title) || s(r.body?.payload?.content, 60) },
+  { m: 'PUT', re: /^\/api\/news\/(\d+)$/, label: 'Изменена новость', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/news\/(\d+)\/publish$/, label: 'Новость отправлена в Discord', pre: (id) => `#${id}` },
+  { m: 'DELETE', re: /^\/api\/news\/(\d+)$/, label: 'Удалена новость', pre: (id) => `#${id}` },
+  { m: 'PUT', re: /^\/api\/news\/settings$/, label: 'Изменён канал новостей' },
+  { m: 'PUT', re: /^\/api\/users\/(\d+)$/, label: 'Изменена роль пользователя', pre: userName, detail: (r, p) => `${p ?? ''} → ${s(r.body?.role, 10)}` },
+  { m: 'PUT', re: /^\/api\/users\/(\d+)\/password$/, label: 'Сброшен пароль пользователя', pre: userName },
+  { m: 'DELETE', re: /^\/api\/users\/(\d+)$/, label: 'Удалён пользователь', pre: userName },
+  { m: 'PUT', re: /^\/api\/access$/, label: 'Изменён доступ к панели', detail: (r) => [r.body?.publicPanel !== undefined ? `открыта: ${r.body.publicPanel ? 'да' : 'нет'}` : '', r.body?.registration !== undefined ? `регистрация: ${r.body.registration ? 'да' : 'нет'}` : ''].filter(Boolean).join(', ') },
+  { m: 'PUT', re: /^\/api\/branding$/, label: 'Изменено оформление', detail: (r) => s(r.body?.name, 32) },
+  { m: 'PUT', re: /^\/api\/branding\/logo$/, label: 'Загружен логотип' },
+  { m: 'DELETE', re: /^\/api\/branding\/logo$/, label: 'Сброшен логотип' },
+  { m: 'POST', re: /^\/api\/update\/apply$/, label: 'Запущено обновление панели' },
+  { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
+  { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
+  { m: 'POST', re: /^\/api\/auth\/register$/, label: 'Регистрация', anon: true },
+  { m: 'POST', re: /^\/api\/auth\/password$/, label: 'Смена пароля' },
+];
+
+/** records every successful change made through the panel; must be installed before the routes */
+export function installAudit(app: Express): void {
+  const insert = db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)');
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    const url = req.originalUrl.split('?')[0];
+    let match: RegExpExecArray | null = null;
+    const rule = RULES.find((r) => r.m === req.method && (match = r.re.exec(url)) !== null);
+    if (!rule || !match) return next();
+    const id = (match as RegExpExecArray)[1] ?? '';
+    const pre = rule.pre ? rule.pre(id) : null;
+    res.on('finish', () => {
+      if (res.statusCode >= 400) return;
+      try {
+        const user = (req as Request & { user?: { username: string } }).user;
+        const actor = user?.username ?? (rule.anon ? s(req.body?.username, 40) : '') ?? '';
+        const detail = rule.detail ? rule.detail(req, pre) : (pre ?? '');
+        insert.run(Date.now(), actor || '—', rule.label, detail.trim());
+        db.prepare('DELETE FROM audit WHERE id <= (SELECT MAX(id) - 2000 FROM audit)').run();
+      } catch (e) {
+        console.error('audit failed', (e as Error).message);
+      }
+    });
+    next();
+  });
+}
+
+interface Ctx {
+  app: Express;
+  admin: RequestHandler;
+  getBot: () => { state: string; tag: string | null; error: string | null; updatedAt: number };
+  guildCount: () => number;
+  version: string;
+  pollMs: number;
+}
+
+export function registerOps({ app, admin, getBot, guildCount, version, pollMs }: Ctx): void {
+  // ----- log -----
+  app.get('/api/audit', admin, (req, res) => {
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    res.json(db.prepare('SELECT id, ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT ?').all(limit));
+  });
+
+  // ----- bulk actions on bindings -----
+  app.post('/api/bindings/bulk', admin, (req, res) => {
+    const b = z
+      .object({ ids: z.array(z.number().int()).min(1).max(500), action: z.enum(['pause', 'resume', 'delete']) })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Выберите привязки и действие' });
+    const marks = b.data.ids.map(() => '?').join(',');
+    const r =
+      b.data.action === 'delete'
+        ? db.prepare(`DELETE FROM bindings WHERE id IN (${marks})`).run(...b.data.ids)
+        : db.prepare(`UPDATE bindings SET enabled = ? WHERE id IN (${marks})`).run(b.data.action === 'resume' ? 1 : 0, ...b.data.ids);
+    res.json({ changed: r.changes });
+  });
+
+  // ----- health -----
+  const freeSpace = () => {
+    try {
+      const st = fs.statfsSync(DATA_DIR);
+      return { free: Number(st.bavail) * Number(st.bsize), total: Number(st.blocks) * Number(st.bsize) };
+    } catch {
+      return { free: null, total: null };
+    }
+  };
+  const count = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
+
+  app.get('/api/system', admin, (_req, res) => {
+    const space = freeSpace();
+    const dbBytes = (() => {
+      try {
+        return fs.statSync(DB_PATH).size;
+      } catch {
+        return null;
+      }
+    })();
+    res.json({
+      version: version || null,
+      uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+      node: process.version,
+      dbBytes,
+      diskFree: space.free,
+      diskTotal: space.total,
+      memoryMb: Math.round(process.memoryUsage().rss / 1048576),
+      counts: {
+        servers: count('SELECT COUNT(*) AS c FROM servers'),
+        online: count('SELECT COUNT(*) AS c FROM status WHERE online = 1'),
+        bindings: count('SELECT COUNT(*) AS c FROM bindings'),
+        users: count('SELECT COUNT(*) AS c FROM users'),
+        history: count('SELECT COUNT(*) AS c FROM history'),
+      },
+      bot: getBot(),
+      guilds: guildCount(),
+      publicBase: getSetting('public_base') || null,
+    });
+  });
+
+  type Check = { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string };
+  const probe = async (url: string): Promise<boolean> => {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(6000), headers: { 'User-Agent': 'CoreGSM' } });
+      return r.status < 500;
+    } catch {
+      return false;
+    }
+  };
+
+  app.post('/api/system/run', admin, async (_req, res) => {
+    const checks: Check[] = [];
+    const add = (id: string, label: string, status: Check['status'], detail: string) => checks.push({ id, label, status, detail });
+
+    try {
+      const q = db.pragma('quick_check', { simple: true });
+      add('db', 'База данных', q === 'ok' ? 'ok' : 'fail', q === 'ok' ? 'Целостность в порядке' : `Проверка вернула: ${String(q)}`);
+    } catch (e) {
+      add('db', 'База данных', 'fail', (e as Error).message);
+    }
+
+    const sp = freeSpace();
+    if (sp.free == null) add('disk', 'Место на диске', 'warn', 'Не удалось определить');
+    else {
+      const gb = (sp.free / 1073741824).toFixed(1);
+      add('disk', 'Место на диске', sp.free < 300 * 1048576 ? 'fail' : sp.free < 1073741824 ? 'warn' : 'ok', `Свободно ${gb} ГБ`);
+    }
+
+    const bot = getBot();
+    const tokenSet = !!getSetting('discord_token');
+    if (!tokenSet) add('token', 'Токен Discord-бота', 'warn', 'Не задан: Настройки → Discord-бот');
+    else add('token', 'Токен Discord-бота', 'ok', 'Задан');
+    if (tokenSet) {
+      const stale = Date.now() - bot.updatedAt > 45_000;
+      if (stale) add('bot', 'Discord-бот', 'fail', 'Не отвечает. На сервере: sudo coregsm logs bot');
+      else if (bot.state === 'online') add('bot', 'Discord-бот', 'ok', `Подключён${bot.tag ? ` как ${bot.tag}` : ''}`);
+      else add('bot', 'Discord-бот', bot.state === 'error' ? 'fail' : 'warn', bot.error ?? `Состояние: ${bot.state}`);
+      const g = guildCount();
+      add('guilds', 'Серверы Discord, где есть бот', g > 0 ? 'ok' : 'warn', g > 0 ? `Найдено: ${g}` : 'Бот пока нигде не добавлен: используйте кнопку приглашения');
+    }
+
+    const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+    const total = count('SELECT COUNT(*) AS c FROM servers');
+    if (total === 0) add('poll', 'Опрос игровых серверов', 'warn', 'Серверов ещё нет');
+    else if (!last || Date.now() - last > Math.max(pollMs * 5, 120_000)) add('poll', 'Опрос игровых серверов', 'fail', 'Давно не было ответов: проверьте журнал backend');
+    else add('poll', 'Опрос игровых серверов', 'ok', `Последний опрос ${Math.round((Date.now() - last) / 1000)} с назад`);
+
+    const base = getSetting('public_base');
+    add('public', 'Публичный адрес (значки в Discord)', base ? 'ok' : 'warn', base ? base : 'Откройте панель по домену с https, и значки игр появятся в сообщениях');
+
+    const [gh, ds] = await Promise.all([probe('https://api.github.com'), getSetting('proxy_url') ? Promise.resolve(true) : probe('https://discord.com/api/v10/gateway')]);
+    add('github', 'Доступ к GitHub (обновления)', gh ? 'ok' : 'warn', gh ? 'Доступен' : 'Нет ответа: проверка обновлений не сработает');
+    add('discord-net', 'Доступ к Discord', ds ? 'ok' : 'fail', getSetting('proxy_url') ? 'Работа идёт через прокси' : ds ? 'Доступен напрямую' : 'Нет ответа. Включите прокси в настройках бота');
+    res.json({ at: Date.now(), checks });
+  });
+
+  // ----- backup -----
+  app.get('/api/backup', admin, async (_req, res) => {
+    const tmp = path.join(os.tmpdir(), `coregsm-backup-${Date.now()}.db`);
+    try {
+      await db.backup(tmp);
+    } catch (e) {
+      return res.status(500).json({ error: `Не удалось создать копию: ${(e as Error).message}` });
+    }
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    const name = `coregsm-backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.db`;
+    res.download(tmp, name, () => fs.rmSync(tmp, { force: true }));
+  });
+
+  app.post('/api/backup/restore', admin, express.raw({ type: 'application/octet-stream', limit: '300mb' }), (req, res) => {
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length < 4096 || body.subarray(0, 15).toString('latin1') !== 'SQLite format 3') {
+      return res.status(400).json({ error: 'Это не файл резервной копии CoreGSM (.db)' });
+    }
+    const pending = path.join(DATA_DIR, 'restore-pending.db');
+    try {
+      fs.writeFileSync(pending, body);
+      const t = new Database(pending, { readonly: true });
+      const tables = (t.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((x) => x.name);
+      const ok = ['users', 'servers', 'settings'].every((n) => tables.includes(n)) && t.pragma('quick_check', { simple: true }) === 'ok';
+      t.close();
+      for (const ext of ['-wal', '-shm']) fs.rmSync(`${pending}${ext}`, { force: true });
+      if (!ok) throw new Error('bad');
+    } catch {
+      fs.rmSync(pending, { force: true });
+      return res.status(400).json({ error: 'Файл повреждён или это копия не от CoreGSM' });
+    }
+    // the swap happens at start-up (see db.ts); the container restarts by itself
+    res.json({ ok: true, restarting: true });
+    setTimeout(() => process.exit(0), 800);
   });
 }
 __COREGSM_EOF__
@@ -4931,13 +5212,26 @@ import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
+import JournalPage from './Journal';
 import SettingsPage, { UsersTab } from './Settings';
+import SystemPage from './System';
 
 const IconUsers = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
     <circle cx="9" cy="7" r="4" />
     <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+
+const IconJournal = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+  </svg>
+);
+const IconSystem = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
   </svg>
 );
 
@@ -4949,6 +5243,8 @@ export const ADMIN_SECTIONS: Section[] = [
   { id: 'news', label: 'Новости', icon: IconNews },
   { id: 'cards', label: 'Карточки', icon: IconCards },
   { id: 'users', label: 'Пользователи', icon: IconUsers },
+  { id: 'journal', label: 'Журнал', icon: IconJournal },
+  { id: 'system', label: 'Система', icon: IconSystem },
   { id: 'settings', label: 'Настройки', icon: IconSettings },
 ];
 
@@ -4981,6 +5277,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'news' && <NewsPage sub={tail} />}
         {current === 'cards' && <CardsPage />}
         {current === 'users' && <UsersTab />}
+        {current === 'journal' && <JournalPage />}
+        {current === 'system' && <SystemPage />}
         {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
     </div>
@@ -5138,6 +5436,7 @@ export default function DiscordPage() {
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
   const [tick, setTick] = useState(0);
+  const [picked, setPicked] = useState<number[]>([]);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
@@ -5154,6 +5453,16 @@ export default function DiscordPage() {
     await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
     load();
   };
+
+  const bulk = async (action: 'pause' | 'resume' | 'delete') => {
+    if (action === 'delete' && !window.confirm(`Удалить привязок: ${picked.length}? Сообщения в Discord останутся, но обновляться перестанут.`)) return;
+    await api('/bindings/bulk', 'POST', { ids: picked, action })
+      .then(() => toast(action === 'delete' ? 'Привязки удалены' : action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
+      .catch((e: Error) => setError(e.message));
+    setPicked([]);
+    load();
+  };
+  const pick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const toggle = async (b: Binding) => {
     await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
@@ -5206,13 +5515,30 @@ export default function DiscordPage() {
 
       {loaded && bindings.length === 0 && <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера." />}
 
+      {bindings.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-4 py-2.5">
+          <label className="flex items-center gap-2 font-bold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === bindings.length} onChange={(e) => setPicked(e.target.checked ? bindings.map((b) => b.id) : [])} />
+            {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
+          </label>
+          {picked.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-2">
+              <button className="btn btn-soft btn-sm" onClick={() => void bulk('pause')}>Пауза</button>
+              <button className="btn btn-soft btn-sm" onClick={() => void bulk('resume')}>Включить</button>
+              <button className="btn btn-danger btn-sm" onClick={() => void bulk('delete')}>Удалить</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         {bindings.map((b) => {
           const s = server(b.serverId);
           return (
-            <div key={b.id} className="panel space-y-3 p-5">
+            <div key={b.id} className={`panel space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
+                  {bindings.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
                     <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
@@ -5467,6 +5793,46 @@ export default function EmbedPreview({ serverId, intervalSec }: { serverId: numb
   }, 30_000);
   if (!embed) return <div className="skeleton h-48 rounded-2xl bg-soft" />;
   return <EmbedView embed={embed} />;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { Empty, ErrorLine, IconNews, PageHead, fmtDateTime, usePoll } from '../ui';
+
+interface Row { id: number; ts: number; actor: string; action: string; detail: string }
+
+/** Who changed what and when (the last 2000 actions). */
+export default function JournalPage() {
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const [q, setQ] = useState('');
+  const [error, setError] = useState('');
+  usePoll(() => api<Row[]>('/audit?limit=300').then((r) => { setRows(r); setError(''); }).catch((e: Error) => setError(e.message)), 20_000);
+
+  const needle = q.trim().toLowerCase();
+  const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
+
+  return (
+    <div className="space-y-5">
+      <PageHead icon={<IconNews />} title="Журнал" subtitle="Кто и что менял в панели" />
+      <ErrorLine text={error} />
+      <input className="input max-w-sm" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
+      {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
+      {shown.length > 0 && (
+        <ul className="panel divide-y divide-line overflow-hidden">
+          {shown.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-5 py-3">
+              <span className="w-40 shrink-0 text-sm font-semibold tabular-nums text-mute">{fmtDateTime(r.ts)}</span>
+              <span className="font-extrabold">{r.action}</span>
+              {r.detail && <span className="min-w-0 break-words font-semibold text-mute">{r.detail}</span>}
+              <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
@@ -7481,6 +7847,164 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   );
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/System.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api, getToken } from '../api';
+import { ErrorLine, IconSettings, PageHead, ago, fmtDateTime, plural, toast, usePoll } from '../ui';
+
+interface Health {
+  version: string | null;
+  uptimeSec: number;
+  node: string;
+  dbBytes: number | null;
+  diskFree: number | null;
+  diskTotal: number | null;
+  memoryMb: number;
+  counts: { servers: number; online: number; bindings: number; users: number; history: number };
+  bot: { state: string; tag: string | null; error: string | null; updatedAt: number };
+  guilds: number;
+  publicBase: string | null;
+}
+interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }
+
+const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : `${(n / 1048576).toFixed(1)} МБ`);
+const dur = (s: number) => (s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч ${Math.floor((s % 3600) / 60)} мин` : `${Math.floor(s / 86400)} д ${Math.floor((s % 86400) / 3600)} ч`);
+
+/** Health, diagnostics and backups. */
+export default function SystemPage() {
+  const [h, setH] = useState<Health | null>(null);
+  const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+  const [restoring, setRestoring] = useState(false);
+
+  usePoll(() => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message)), 15_000);
+
+  const run = async () => {
+    setRunning(true);
+    await api<{ at: number; checks: Check[] }>('/system/run', 'POST').then((r) => setChecks({ at: r.at, list: r.checks })).catch((e: Error) => setError(e.message));
+    setRunning(false);
+  };
+
+  const download = async () => {
+    try {
+      const r = await fetch('/api/backup', { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
+      if (!r.ok) throw new Error('Не удалось создать копию');
+      const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? 'coregsm-backup.db';
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Копия скачана');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const restore = async (file: File) => {
+    if (!window.confirm(`Заменить все данные панели копией «${file.name}»? Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`)) return;
+    setRestoring(true);
+    setError('');
+    try {
+      const r = await fetch('/api/backup/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      const j = (await r.json().catch(() => null)) as { error?: string } | null;
+      if (!r.ok) throw new Error(j?.error ?? 'Не удалось восстановить копию');
+      toast('Копия принята, панель перезапускается…');
+      // wait until the backend is back, then reload (the old session may no longer be valid)
+      for (let i = 0; i < 40; i++) {
+        await new Promise((res) => setTimeout(res, 1500));
+        const ok = await fetch('/api/access').then((x) => x.ok).catch(() => false);
+        if (ok && i > 1) break;
+      }
+      window.location.reload();
+    } catch (e) {
+      setError((e as Error).message);
+      setRestoring(false);
+    }
+  };
+
+  const tiles: [string, string, string?][] = h
+    ? [
+        ['Версия', h.version ? h.version.slice(0, 7) : 'не задана', `Node ${h.node}`],
+        ['Работает', dur(h.uptimeSec), `память ${h.memoryMb} МБ`],
+        ['База данных', mb(h.dbBytes), `${h.counts.history.toLocaleString('ru-RU')} точек истории`],
+        ['Свободно на диске', mb(h.diskFree), h.diskTotal ? `из ${mb(h.diskTotal)}` : undefined],
+        ['Серверы', `${h.counts.online} из ${h.counts.servers}`, 'онлайн'],
+        ['Привязки Discord', String(h.counts.bindings), `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`],
+        ['Пользователи', String(h.counts.users)],
+        ['Бот', h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined)],
+      ]
+    : [];
+  const dot = { ok: 'bg-ok', warn: 'bg-warn', fail: 'bg-bad' } as const;
+
+  return (
+    <div className="space-y-5">
+      <PageHead icon={<IconSettings />} title="Система" subtitle="Состояние панели, диагностика и резервные копии" />
+      <ErrorLine text={error} />
+
+      {h ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {tiles.map(([k, v, hint]) => (
+            <div key={k} className="panel px-5 py-4">
+              <div className="text-sm font-extrabold text-mute">{k}</div>
+              <div className="truncate text-2xl font-black tabular-nums text-link">{v}</div>
+              {hint && <div className="truncate text-sm font-semibold text-mute">{hint}</div>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="skeleton panel h-40" />
+      )}
+
+      <div className="panel space-y-4 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black">Диагностика</h2>
+            <p className="font-semibold text-mute">Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.</p>
+          </div>
+          <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+        </div>
+        {checks && (
+          <>
+            <ul className="divide-y divide-line rounded-2xl border border-line">
+              {checks.list.map((c) => (
+                <li key={c.id} className="flex items-start gap-3 px-4 py-2.5">
+                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} aria-label={c.status} />
+                  <div className="min-w-0">
+                    <div className="font-extrabold">{c.label}</div>
+                    <div className="break-words text-sm font-semibold text-mute">{c.detail}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p className="text-sm font-semibold text-mute">Проверено {fmtDateTime(checks.at)}</p>
+          </>
+        )}
+      </div>
+
+      <div className="panel space-y-4 p-6">
+        <div>
+          <h2 className="text-lg font-black">Резервные копии</h2>
+          <p className="font-semibold text-mute">
+            В копию входят серверы, привязки, пользователи, новости и настройки, в том числе токен бота и хэши паролей. Храните файл так же бережно, как пароль.
+            Картинки новостей и логотип в копию не входят.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button className="btn" onClick={() => void download()}>Скачать копию</button>
+          <label className={`btn btn-soft cursor-pointer ${restoring ? 'pointer-events-none opacity-50' : ''}`}>
+            {restoring ? 'Восстанавливаю…' : 'Восстановить из файла'}
+            <input type="file" accept=".db,application/octet-stream" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void restore(f); e.target.value = ''; }} />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -8179,6 +8703,19 @@ server {
     # brute-force protection for login and first-run setup
     location ~ ^/api/(auth/login|auth/register|setup)$ {
         limit_req zone=login burst=5 nodelay;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # restoring a backup uploads the whole database
+    location = /api/backup/restore {
+        client_max_body_size 300m;
+        proxy_request_buffering off;
+        proxy_read_timeout 120s;
         set $backend http://backend:3000;
         proxy_pass $backend;
         proxy_set_header Host $host;
