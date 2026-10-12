@@ -147,7 +147,7 @@ type HashState = { page: string; sub: string };
 let hashNow: HashState | null = null;
 const hashListeners = new Set<(h: HashState) => void>();
 
-const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub) ? h.sub : '');
+const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub.split('/')[0]) ? h.sub.split('/')[0] : '');
 
 /** gives the avatar of a server (tagged data-vt-avatar) the view-transition-name that pairs the old and the new page */
 const nameAvatars = (ids: string[]) => {
@@ -163,15 +163,21 @@ function onHashChange() {
   const prev = hashNow ?? parseHash();
   const next = parseHash();
   if (prev.page === next.page && prev.sub === next.sub) return;
-  const ids = [serverIdOf(prev), serverIdOf(next)];
-  withViewTransition(
-    () => {
-      hashNow = next;
-      hashListeners.forEach((l) => l(next));
-    },
-    { before: () => nameAvatars(ids), after: () => nameAvatars(ids), done: clearAvatarNames },
-  );
+  // switching tabs inside one server page ("12" -> "12/players") is not a page change: no cross-fade
+  if (prev.page === 'servers' && next.page === 'servers' && /^\d+(\/|$)/.test(next.sub) && prev.sub.split('/')[0] === next.sub.split('/')[0]) {
+    hashNow = next;
+    hashListeners.forEach((l) => l(next));
+    return;
+  }
+  // No View Transition here: the glass header and the bottom bar (backdrop-filter) were captured as separate
+  // layers and flashed as a black rectangle while switching sections. The page itself fades in via .pop / .fade-in.
+  hashNow = next;
+  hashListeners.forEach((l) => l(next));
 }
+void withViewTransition;
+void nameAvatars;
+void clearAvatarNames;
+void serverIdOf;
 
 export function useHash() {
   const [h, setH] = useState(parseHash);
@@ -583,7 +589,7 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
-export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' }) {
+export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
   const [done, setDone] = useState(false);
   const timer = useRef<number>();
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -598,7 +604,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
     }
   };
   return (
-    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
+    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : tone === 'glass' ? 'btn-glass' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
       <span className="copy-ico" data-done={done} aria-hidden>
         <span className="ico-copy inline-grid"><IconCopy /></span>
         <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">

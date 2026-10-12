@@ -39,9 +39,16 @@ const GAME_COLORS: Record<string, [string, string]> = {
   garrysmod: ['GM', '#3a8fd9'], teamfortress2: ['TF', '#c9533a'], l4d2: ['L4', '#b83a3a'], terraria: ['TR', '#46b86a'],
   sdtd: ['7D', '#b5483a'], dayz: ['DZ', '#6f8f4a'], ase: ['AK', '#3aa6a0'], asa: ['AS', '#2f9ea8'],
   conanexiles: ['CE', '#a8743a'], palworld: ['PW', '#2fc4bf'], factorio: ['FC', '#d98a3a'], unturned: ['UT', '#4aa86a'],
-  vrising: ['VR', '#a83a5a'], icarus: ['IC', '#2b3a52'], projectzomboid: ['PZ', '#7a8a4a'], gta5f: ['5M', '#f26a3d'], gtasam: ['SA', '#8a6ad9'],
+  vrising: ['VR', '#7c3aed'], icarus: ['IC', '#f5b01e'], projectzomboid: ['PZ', '#7a8a4a'], gta5f: ['5M', '#f26a3d'], gtasam: ['SA', '#8a6ad9'],
   teamspeak3: ['TS', '#3a7ad9'],
 };
+
+/** "#f5b01e" darkened by `k` (0..1) towards black */
+function mixToBlack(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v: number) => Math.round(v * (1 - k));
+  return `rgb(${f((n >> 16) & 255)}, ${f((n >> 8) & 255)}, ${f(n & 255)})`;
+}
 
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 const MONO = '"DejaVu Sans Mono", "Liberation Mono", monospace';
@@ -108,12 +115,12 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
 
   ctx.textBaseline = 'alphabetic';
 
-  // game avatar
-  ctx.fillStyle = accent;
+  // game avatar: the artwork sits on a deep tile of the game colour, a pictogram on the colour itself
+  const art = await gameImage(s.game);
+  ctx.fillStyle = art ? mixToBlack(accent, 0.62) : accent;
   ctx.beginPath();
   ctx.roundRect(64, 56, 84, 84, 26);
   ctx.fill();
-  const art = await gameImage(s.game);
   const iconPath = gameIconPath(s.game);
   if (art) {
     ctx.drawImage(art, 106 - 38, 98 - 38, 76, 76);

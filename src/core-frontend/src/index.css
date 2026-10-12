@@ -521,9 +521,8 @@ html { background-color: rgb(var(--page)); }
 @keyframes toast-out { to { opacity: 0; transform: translateY(8px) scale(.94); } }
 
 /* ---------- view transitions: route change and theme reveal ---------- */
-body header.glass { view-transition-name: app-header; }
-body nav.glass.fixed { view-transition-name: app-nav; }
-.vt-theme body header.glass, .vt-theme body nav.glass.fixed { view-transition-name: none; }
+/* the glass header and bottom bar must NOT be separate transition layers: a translucent backdrop-filter element is captured against black */
+body header.glass, body nav.glass.fixed { view-transition-name: none; }
 @keyframes vt-out { to { opacity: 0; transform: translateY(-5px); } }
 @keyframes vt-in { from { opacity: 0; transform: translateY(9px); } }
 ::view-transition-old(root) { animation: vt-out .16s ease-in both; }
@@ -716,3 +715,56 @@ body nav.glass.fixed { view-transition-name: app-nav; }
 .row-act:disabled { opacity: .55; pointer-events: none; }
 .row-act-danger:hover { background: rgb(var(--bad) / .14); color: rgb(var(--bad)); }
 @media (max-width: 639px) { .row-act { width: 44px; height: 44px; } }
+
+/* ---------- server page: banner, tabs, players, events ---------- */
+.chip-glass { display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; padding: 4px 11px; font-size: 13px; font-weight: 800; color: #fff; background: rgba(8, 10, 20, 0.34); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); max-width: 100%; }
+.btn-glass { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; border-radius: 9999px; padding: 0 16px; font-size: 14px; font-weight: 800; color: #fff; background: rgba(255, 255, 255, 0.18); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); transition: background .15s ease, transform .15s ease; white-space: nowrap; }
+.btn-glass:hover { background: rgba(255, 255, 255, 0.28); }
+.btn-glass:active { transform: scale(.98); }
+.btn-glass-quiet { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; border-radius: 9999px; padding: 0 12px; font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.92); background: rgba(8, 10, 20, 0.22); transition: background .15s ease; white-space: nowrap; }
+.btn-glass-quiet:hover { background: rgba(8, 10, 20, 0.4); }
+.btn-glass-quiet:disabled { opacity: .6; }
+.btn-glass-danger { color: #ffd6d6; }
+.btn-glass-danger:hover { background: rgba(220, 38, 38, 0.55); color: #fff; }
+.btn-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; border-radius: 9999px; padding: 0 22px; font-size: 15px; font-weight: 900; color: #12141a; background: #fff; box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.5); transition: transform .15s ease, box-shadow .15s ease; text-align: center; }
+.btn-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -6px rgba(0, 0, 0, 0.55); }
+.btn-cta:active { transform: scale(.98); }
+@media (max-width: 639px) { .btn-glass { min-height: 44px; } .btn-glass-quiet { min-height: 44px; padding: 0 8px; } }
+
+/* status glow around the banner: green online, amber lag, red offline; it follows the theme's status colours */
+.srv-glow { --g: var(--ok); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.5), 0 16px 46px -14px rgb(var(--g) / 0.6); }
+.srv-warn { --g: var(--warn); }
+.srv-bad { --g: var(--bad); }
+.srv-mute { --g: var(--mute); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.3), 0 16px 40px -18px rgb(var(--g) / 0.4); }
+.srv-ok { animation: srv-breathe 4.6s ease-in-out infinite; }
+@keyframes srv-breathe {
+  0%, 100% { box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.4), 0 14px 40px -14px rgb(var(--g) / 0.45); }
+  50% { box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 2px rgb(var(--g) / 0.6), 0 18px 56px -10px rgb(var(--g) / 0.7); }
+}
+@media (prefers-reduced-motion: reduce) { .srv-ok { animation: none; } }
+
+.srv-tabbar { transition: background-color .2s ease, box-shadow .2s ease; }
+.srv-tabbar.is-stuck { background: rgb(var(--page) / 0.78); -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3); box-shadow: 0 1px 0 rgb(var(--line)); }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.tab-count { margin-left: 6px; border-radius: 9999px; padding: 0 6px; font-size: 12px; font-weight: 800; background: rgb(var(--ink) / 0.08); font-variant-numeric: tabular-nums; }
+
+.meter.m-ok > i { background: rgb(var(--ok)); }
+.meter.m-warn > i { background: rgb(var(--warn)); }
+.meter.m-bad > i { background: rgb(var(--bad)); }
+
+.avatar-hue { background: hsl(var(--h) 72% 88%); color: hsl(var(--h) 62% 24%); }
+:root[data-theme='dark'] .avatar-hue { background: hsl(var(--h) 42% 26%); color: hsl(var(--h) 90% 86%); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .avatar-hue { background: hsl(var(--h) 42% 26%); color: hsl(var(--h) 90% 86%); } }
+
+.player-new { animation: player-new 2.6s ease-out both; }
+@keyframes player-new {
+  0% { background-color: rgb(var(--ok) / 0.28); box-shadow: 0 0 0 4px rgb(var(--ok) / 0.28); }
+  100% { background-color: rgb(var(--ok) / 0); box-shadow: 0 0 0 4px rgb(var(--ok) / 0); }
+}
+@media (prefers-reduced-motion: reduce) { .player-new { animation: none; background-color: rgb(var(--ok) / 0.14); } }
+
+.chip-filter { display: inline-flex; align-items: center; border-radius: 9999px; padding: 6px 14px; font-size: 14px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: color .15s ease, background .15s ease; }
+.chip-filter:hover { color: rgb(var(--ink)); }
+.chip-filter.on { color: rgb(var(--ink)); background: rgb(var(--seg-on)); box-shadow: 0 0 0 1px rgb(var(--line)), 0 2px 6px rgba(40, 50, 110, 0.1); }
+@media (max-width: 639px) { .chip-filter { min-height: 44px; } }

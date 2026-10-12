@@ -1,0 +1,119 @@
+import { useEffect, useState, type CSSProperties } from 'react';
+import { COUNTRIES } from '../../countries';
+
+export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
+export type TabId = '' | (typeof SERVER_TABS)[number];
+
+/** hash of a server page tab: '' = overview */
+export const tabHref = (id: number, tab: TabId) => `#/servers/${id}${tab ? `/${tab}` : ''}`;
+
+/** re-renders the caller every `ms` and returns the current time */
+export function useNow(ms: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+/** stagger index for `.tile-in` */
+export const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
+
+// ---------- country ----------
+export const flagEmoji = (code: string): string =>
+  /^[A-Za-z]{2}$/.test(code) ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '';
+
+export function countryName(code: string): string {
+  if (!/^[A-Za-z]{2}$/.test(code)) return '';
+  const up = code.toUpperCase();
+  try {
+    const n = new Intl.DisplayNames(['ru'], { type: 'region' }).of(up);
+    if (n && n !== up) return n;
+  } catch {
+    /* no Intl.DisplayNames */
+  }
+  return COUNTRIES.find(([c]) => c === up)?.[1] ?? up;
+}
+
+// ---------- mode guessed from the name ----------
+export type Mode = 'PvE' | 'PvP' | 'PvPvE' | 'RP' | 'Hardcore' | 'Vanilla' | 'Modded';
+
+// \b does not work for Cyrillic: the word borders are "not a letter or digit"
+const W = (src: string) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${src})(?![\\p{L}\\p{N}])`, 'iu');
+const MODE_RULES: [Mode, RegExp][] = [
+  ['PvPvE', W('pvpve|pve\\s*[+/&]\\s*pvp|pvp\\s*[+/&]\\s*pve|пвпве|пвп\\s*[+/&]\\s*пве|пве\\s*[+/&]\\s*пвп')],
+  ['PvE', W('pve|пве|пвэ')],
+  ['PvP', W('pvp|пвп')],
+  ['RP', W('rp|рп|roleplay|role-play|role\\s+play|ролевой|ролевая|ролевые|рол\\s*плей')],
+  ['Hardcore', W('hardcore|хардкор\\p{L}*')],
+  ['Modded', W('modded|mods?|modpack|модпак\\p{L}*|моды|модифицированн\\p{L}*')],
+  ['Vanilla', W('vanilla|ванил\\p{L}*|ванн?ила')],
+];
+
+/** PvE / PvP / PvPvE / RP / Hardcore / Vanilla / Modded, or null when the name says nothing certain */
+export function guessMode(name: string): Mode | null {
+  for (const [mode, re] of MODE_RULES) if (re.test(name)) return mode;
+  return null;
+}
+
+// ---------- players ----------
+/** stable 0..359 hue of a nick (FNV-1a) */
+export function nickHue(name: string): number {
+  let h = 0x811c9dc5;
+  for (const ch of name.trim().toLowerCase()) {
+    h ^= ch.codePointAt(0) as number;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h % 360;
+}
+
+/** first visible character (or grapheme where the browser can split them) in upper case */
+export function nickInitial(name: string): string {
+  const s = name.trim();
+  if (!s) return '?';
+  const Seg = (Intl as unknown as { Segmenter?: new (l?: string, o?: { granularity: string }) => { segment: (t: string) => Iterable<{ segment: string }> } }).Segmenter;
+  let first = '';
+  if (Seg) {
+    for (const g of new Seg(undefined, { granularity: 'grapheme' }).segment(s)) { first = g.segment; break; }
+  } else first = Array.from(s)[0] ?? '?';
+  return first.toUpperCase();
+}
+
+/** "1 ч 12 мин" */
+export function playedFor(since: number, now: number): string {
+  const m = Math.max(0, Math.floor((now - since) / 60_000));
+  if (m < 1) return 'меньше минуты';
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ч ${m % 60} мин`;
+  return `${Math.floor(h / 24)} д ${h % 24} ч`;
+}
+
+/** length of an outage: "3 мин", "1 ч 5 мин" */
+export function fmtDuration(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60_000));
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
+  return h % 24 ? `${Math.floor(h / 24)} д ${h % 24} ч` : `${Math.floor(h / 24)} д`;
+}
+
+export const NEWBIE_MS = 10 * 60_000;
+export const VETERAN_MS = 2 * 3600_000;
+
+// ---------- load / ping thresholds ----------
+export type Tone = 'ok' | 'warn' | 'bad';
+
+export function loadTone(pct: number): Tone {
+  return pct >= 85 ? 'bad' : pct >= 50 ? 'warn' : 'ok';
+}
+
+/** <= 60 ms good, <= 120 ms ok, more is bad */
+export function pingTone(ping: number): { tone: Tone; label: string } {
+  if (ping <= 60) return { tone: 'ok', label: 'отличный' };
+  if (ping <= 120) return { tone: 'warn', label: 'нормальный' };
+  return { tone: 'bad', label: 'высокий' };
+}
+
+export const TONE_TEXT: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' };

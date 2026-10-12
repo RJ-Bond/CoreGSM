@@ -53,6 +53,9 @@ export interface EmbedExtra {
 
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
 
+/** the side stripe of an online server follows the colour of its game (others keep the status green) */
+const GAME_ACCENT: Record<string, number> = { vrising: 0x8b5cf6, icarus: 0xf5b01e };
+
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** games whose clients have a console with the "connect" command */
@@ -97,7 +100,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     return {
       title: cut(s.name, 256),
       description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
-      color: COLOR.unknown,
+      color: GAME_ACCENT[s.game] ?? COLOR.unknown,
       thumbnail,
       footer,
     };
@@ -151,7 +154,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   return {
     title: cut(s.name, 256),
     description: lines.length ? lines.join('\n') : undefined,
-    color: !s.online ? COLOR.offline : lag ? COLOR.lag : COLOR.online,
+    color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
     thumbnail,
     fields,
     footer,
