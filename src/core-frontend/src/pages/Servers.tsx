@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
@@ -26,6 +26,28 @@ function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: s
   );
 }
 
+type Filter = 'all' | 'online' | 'offline' | 'fav';
+const FILTER_KEY = 'coregsm_server_filter';
+
+/** staggered entrance: the tile number goes to the --i custom property */
+const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
+
+/** a small "live" indicator: pulsing dot and how fresh the data is */
+function LiveBadge({ at }: { at: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => tick((n) => n + 1), 5000);
+    return () => window.clearInterval(t);
+  }, []);
+  if (!at) return null;
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full bg-soft px-3 py-1 text-xs font-extrabold text-mute" title="Страница обновляется сама">
+      <span className="live-dot" aria-hidden />
+      обновлено {ago(at)}
+    </span>
+  );
+}
+
 function ServerList() {
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
@@ -42,10 +64,27 @@ function ServerList() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [uptime, setUptime] = useState<Map<number, number>>(new Map());
+  const [updatedAt, setUpdatedAt] = useState(0);
+  const [filter, setFilterState] = useState<Filter>(() => {
+    try {
+      const v = localStorage.getItem(FILTER_KEY);
+      return v === 'online' || v === 'offline' || v === 'fav' ? v : 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  const setFilter = (f: Filter) => {
+    setFilterState(f);
+    try {
+      localStorage.setItem(FILTER_KEY, f);
+    } catch {
+      /* not remembered */
+    }
+  };
 
   const load = () =>
     api<Server[]>('/servers')
-      .then((s) => { setServers(s); setError(''); })
+      .then((s) => { setServers(s); setError(''); setUpdatedAt(Date.now()); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 10_000);
@@ -79,17 +118,23 @@ function ServerList() {
     return busiest ?? sorted[0];
   }, [sorted, favs, online]);
   const rest = sorted.filter((s) => s.id !== hero?.id);
+  const offlineCount = servers.filter((s) => !s.online).length;
+  const favCount = servers.filter((s) => favs.includes(s.id)).length;
+  // a filter other than "all" turns the bento into a plain grid of the matching servers
+  const effFilter: Filter = filter === 'fav' && !me ? 'all' : filter;
+  const filtered = effFilter === 'all' ? [] : sorted.filter((s) => (effFilter === 'online' ? s.online : effFilter === 'offline' ? !s.online : favs.includes(s.id)));
 
   const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
-  const stats: { k: string; v: ReactNode; s: string; i: string }[] = [
-    { i: 'M3 6h18M3 12h18M3 18h18', k: plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), v: <AnimatedNumber value={servers.length} />, s: `${online.length} онлайн` },
-    { i: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8', k: 'Игроков сейчас', v: <AnimatedNumber value={players} pulse />, s: slots > 0 ? `из ${slots} мест` : 'нет серверов онлайн' },
+  const stats: { k: string; v: ReactNode; s: string; i: string; r?: number }[] = [
+    { i: 'M3 6h18M3 12h18M3 18h18', k: plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), v: <AnimatedNumber value={servers.length} />, s: `${online.length} онлайн`, r: servers.length ? online.length / servers.length : 0 },
+    { i: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8', k: 'Игроков сейчас', v: <AnimatedNumber value={players} pulse />, s: slots > 0 ? `из ${slots} мест` : 'нет серверов онлайн', r: slots > 0 ? players / slots : 0 },
     {
       i: 'M22 12h-4l-3 9L9 3l-3 9H2',
       k: 'Средний пинг',
       v: avg == null ? '–' : <><AnimatedNumber value={avg} /><small> мс</small></>,
       s: avg == null ? 'нет данных' : avg > LAG_PING ? 'высокий' : 'в норме',
+      r: avg == null ? 0 : Math.min(1, avg / 200),
     },
   ];
   if (upAvg != null) {
@@ -98,14 +143,29 @@ function ServerList() {
       k: 'Аптайм 30 дн',
       v: <>{(Math.round(upAvg * 10) / 10).toLocaleString('ru-RU')}<small>%</small></>,
       s: upLow === 0 ? 'без сбоев' : `${upLow} ${plural(upLow, ['сервер', 'сервера', 'серверов'])} ниже 99%`,
+      r: upAvg / 100,
     });
   }
 
   return (
     <div className="space-y-5">
       <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени" icon={<IconServers />}>
+        <LiveBadge at={updatedAt} />
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers">Управление серверами</a>}
       </PageHead>
+
+      {servers.length > 1 && (
+        <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+          {([
+            ['all', `Все · ${servers.length}`],
+            ['online', `Онлайн · ${online.length}`],
+            ['offline', `Недоступные · ${offlineCount}`],
+            ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
+          ] as [Filter, string][]).map(([id, label]) => (
+            <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
+          ))}
+        </nav>
+      )}
       <ErrorLine text={error} />
 
       {!loaded && (
@@ -122,14 +182,24 @@ function ServerList() {
         </Empty>
       )}
 
-      {servers.length > 0 && (
+      {servers.length > 0 && effFilter !== 'all' && (
         <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {hero && <HeroTile s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
+          {filtered.map((s, i) => (
+            <SmallTile key={s.id} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
+          ))}
+          {filtered.length === 0 && <p className="tile col-span-2 p-6 text-center font-bold text-mute lg:col-span-12">Подходящих серверов нет</p>}
+        </div>
+      )}
+
+      {servers.length > 0 && effFilter === 'all' && (
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+          {hero && <HeroTile idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
 
           {stats.map((t, i) => (
             <div
               key={t.k}
-              className={`tile flex flex-col gap-1 p-4 sm:p-[18px] ${stats.length === 3 && i === 2 ? 'col-span-2 lg:col-span-6' : 'col-span-1 lg:col-span-3'}`}
+              style={stagger(i + 1)}
+              className={`tile tile-in flex flex-col gap-1 p-4 sm:p-[18px] ${stats.length === 3 && i === 2 ? 'col-span-2 lg:col-span-6' : 'col-span-1 lg:col-span-3'}`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="stat-k">{t.k}</div>
@@ -140,12 +210,13 @@ function ServerList() {
               <div className="mt-auto">
                 <div className="stat-v">{t.v}</div>
                 <div className="stat-s mt-0.5">{t.s}</div>
+                {t.r != null && <div className="meter mt-2.5" aria-hidden><i style={{ width: `${Math.round(Math.max(0, Math.min(1, t.r)) * 100)}%` }} /></div>}
               </div>
             </div>
           ))}
 
-          {rest.map((s) => (
-            <SmallTile key={s.id} s={s} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
+          {rest.map((s, i) => (
+            <SmallTile key={s.id} s={s} idx={i + 1 + stats.length} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
           ))}
         </div>
       )}
@@ -153,13 +224,13 @@ function ServerList() {
   );
 }
 
-function HeroTile({ s, uptime, fav, onFav, onOpen }: { s: Server; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   return (
     <article
-      className="tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
-      style={{ background: `linear-gradient(140deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
+      className="tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
+      style={{ ...stagger(idx), background: `linear-gradient(140deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
       onClick={onOpen}
     >
       <span aria-hidden className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
@@ -212,12 +283,12 @@ function HeroTile({ s, uptime, fav, onFav, onOpen }: { s: Server; uptime?: numbe
   );
 }
 
-function SmallTile({ s, fav, onFav, onOpen }: { s: Server; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   return (
-    <article className="tile tile-hover pop col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" onClick={onOpen}>
-      <div className="flex h-[88px] items-start justify-between rounded-[18px] p-2.5" style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
+    <article className="tile tile-in tile-hover col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
+      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
         <GameAvatar game={s.game} size={40} glass />
         <div className="flex items-center gap-0.5">
           <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
@@ -243,8 +314,9 @@ function SmallTile({ s, fav, onFav, onOpen }: { s: Server; fav: boolean | null; 
         </>
       ) : (
         s.hasStatus ? (
-          <div className="mx-1.5 rounded-xl bg-badbg px-3 py-2.5" title={s.error ?? undefined}>
-            <p className="line-clamp-2 text-[13px] font-bold leading-snug text-bad">{s.error ?? 'Сервер не отвечает'}</p>
+          <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
+            <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
+            <p className="truncate text-[13px] font-bold leading-snug text-bad">Не отвечает · {ago(s.updatedAt)}</p>
           </div>
         ) : (
           <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-[13px] font-bold text-mute">Ожидаем первый ответ</div>
