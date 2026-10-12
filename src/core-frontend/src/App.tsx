@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
 import { BLACK, WHITE, contrast, ensureContrast, mix, parseHex, parseTriplet, triplet, type RGB } from './colors';
+import CommandPalette from './components/CommandPalette';
 import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -75,6 +76,8 @@ function useBrand(b: Access['brand']) {
 
       root.style.setProperty('--brand', triplet(fill));
       root.style.setProperty('--brand-hover', triplet(hover));
+      // darker end of the gradients (buttons, active nav, icon tiles); white text stays >= 4.5:1 because it only gets darker
+      root.style.setProperty('--brand-2', triplet(mix(fill, BLACK, 0.24)));
       root.style.setProperty('--link', triplet(link));
     };
     apply();
@@ -93,6 +96,13 @@ function useBrand(b: Access['brand']) {
 
 interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
 
+const IconSearch = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.3-4.3" />
+  </svg>
+);
+
 const IconLogout = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
@@ -104,6 +114,10 @@ export default function App() {
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [authing, setAuthing] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const paletteRef = useRef(false);
+  const shellOk = useRef(false);
+  paletteRef.current = paletteOpen;
   const mainRef = useRef<HTMLElement>(null);
 
   // who is signed in, what is open to guests, and whether the first-run wizard is still pending
@@ -233,12 +247,26 @@ export default function App() {
 
   useBrand(access.brand);
 
+  // Ctrl/Cmd+K: the command palette (not over another dialog, not on the sign-in screens)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'k') return;
+      if (!shellOk.current) return;
+      if (!paletteRef.current && document.querySelector('[aria-modal="true"]')) return;
+      e.preventDefault();
+      setPaletteOpen((o) => !o);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const isStaff = isAdmin || me?.role === 'moderator';
   const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, isStaff, access, reload: load, logout }), [me, isAdmin, isStaff, access, load, logout]);
 
   // ---- document title and focus follow the route ----
   const visible = PAGES.filter((p) => !p.admin || isStaff);
   const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
+  shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   const sectionTitle = boot.needsSetup
@@ -334,45 +362,50 @@ export default function App() {
       >
         Перейти к содержимому
       </a>
-      <div className="mx-auto min-h-full max-w-6xl px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-5 sm:px-6 md:pb-16">
-        <header className="mb-6 flex items-center gap-x-3 md:mb-8 md:gap-x-4">
-          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-2xl font-black tracking-tight max-md:flex-1">
+      <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
+        <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
+          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px]">
             <Logo size={34} alt="" />
             <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
-          <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
+          <nav className="seg ml-2 hidden md:inline-flex" aria-label="Разделы">
             {visible.map((p) => (
-              <a
-                key={p.id}
-                href={`#/${p.id}`}
-                aria-current={page === p.id ? 'page' : undefined}
-                className={`whitespace-nowrap rounded-full px-4 py-1.5 font-extrabold transition ${
-                  page === p.id ? 'bg-brand text-white shadow-pop' : 'bg-card text-ink shadow-pop hover:text-link'
-                }`}
-              >
+              <a key={p.id} href={`#/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
                 {p.label}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
           </nav>
-          <div className="flex shrink-0 items-center gap-2 md:ml-auto">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 md:ml-auto">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10 md:inline-flex md:w-auto md:items-center md:gap-2.5 md:pl-3.5 md:pr-2"
+              aria-label="Поиск по панели (Ctrl K)"
+              aria-haspopup="dialog"
+              title="Поиск (Ctrl K)"
+            >
+              <IconSearch />
+              <span className="hidden md:inline">Поиск</span>
+              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute md:inline">Ctrl K</kbd>
+            </button>
             <ThemeToggle />
             {me ? (
               <>
                 <a
                   href="#/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold shadow-pop transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1.5 sm:pl-1.5 sm:pr-3.5 ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
+                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
                   title={`Профиль: ${me.username}`}
                   aria-label={`Профиль: ${me.username}`}
                 >
-                  <UserAvatar name={me.username} url={me.avatarUrl} size={28} className="!rounded-full" />
+                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="!rounded-full" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
                 <button
                   onClick={() => void logout()}
-                  className="grid place-items-center rounded-full bg-card font-extrabold text-mute shadow-pop transition hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-4 sm:py-2"
+                  className="grid place-items-center rounded-full font-extrabold text-mute transition hover:bg-soft hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-3.5 sm:py-2"
                   aria-label="Выйти"
                   title="Выйти"
                 >
@@ -382,7 +415,7 @@ export default function App() {
               </>
             ) : (
               <>
-                <a href="#/login" className="inline-flex items-center rounded-full bg-card px-4 py-2 font-extrabold text-ink shadow-pop hover:text-link max-sm:min-h-[44px]">Войти</a>
+                <a href="#/login" className="inline-flex items-center rounded-full bg-soft px-4 py-2 font-extrabold text-ink hover:text-link max-sm:min-h-[44px]">Войти</a>
                 {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">Регистрация</a>}
               </>
             )}
@@ -400,13 +433,14 @@ export default function App() {
         <Toaster />
         <ConfirmHost />
         {isAdmin && <Tour />}
+        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
 
         <nav
-          className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card/95 backdrop-blur md:hidden"
-          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+          className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"
+          style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
           aria-label="Разделы"
         >
-          <ul className="mx-auto flex max-w-md">
+          <ul className="flex px-1.5">
             {visible.map((p) => {
               const active = page === p.id;
               return (
@@ -414,9 +448,9 @@ export default function App() {
                   <a
                     href={`#/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
-                    <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
+                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {p.label}
                     {p.id === 'admin' && updateAvailable && (
                       <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn"><span className="sr-only">Доступно обновление</span></span>
@@ -427,8 +461,8 @@ export default function App() {
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold text-link">
-                  <span className="grid h-8 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
+                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
+                  <span className="grid h-7 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   Войти
                 </a>
               </li>

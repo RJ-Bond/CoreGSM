@@ -1,0 +1,216 @@
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { api, type Server } from '../api';
+import { useAuth } from '../auth';
+import { useBackdropClose, useDialogFocus } from '../confirm';
+import { gameLabel } from '../games';
+import { ADMIN_SECTIONS } from '../pages/Admin';
+import { GameAvatar, IconNews, IconServers } from '../ui';
+
+interface Item {
+  key: string;
+  group: 'Серверы' | 'Разделы';
+  label: string;
+  hint: string;
+  href: string;
+  icon: ReactNode;
+  /** lower-case text the query is matched against */
+  hay: string;
+}
+
+const IconPulse = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </svg>
+);
+const IconUser = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </svg>
+);
+
+const sectionItem = (key: string, label: string, hint: string, href: string, icon: ReactNode): Item => ({
+  key, group: 'Разделы', label, hint, href, icon, hay: `${label} ${hint}`.toLowerCase(),
+});
+
+/**
+ * Ctrl/Cmd+K: jump to a server or a section. A modal combobox: focus stays in the input, the list is driven with
+ * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
+ */
+export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
+  const { me } = useAuth();
+  const box = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const uid = useId();
+  const listId = `${uid}-list`;
+  const [q, setQ] = useState('');
+  const [servers, setServers] = useState<Server[] | null>(null);
+  const [active, setActive] = useState(0);
+
+  useDialogFocus(box, onClose, () => input.current);
+  const bd = useBackdropClose(onClose);
+
+  // the list of servers is loaded once, when the palette opens
+  useEffect(() => {
+    let alive = true;
+    api<Server[]>('/servers').then((s) => { if (alive) setServers(s); }).catch(() => { if (alive) setServers([]); });
+    return () => { alive = false; };
+  }, []);
+
+  const items = useMemo(() => {
+    const out: Item[] = [];
+    for (const s of servers ?? []) {
+      out.push({
+        key: `s${s.id}`,
+        group: 'Серверы',
+        label: s.name,
+        hint: `${gameLabel(s.game)} · ${s.address}`,
+        href: `#/servers/${s.id}`,
+        icon: <GameAvatar game={s.game} size={32} />,
+        hay: `${s.name} ${gameLabel(s.game)} ${s.address}`.toLowerCase(),
+      });
+    }
+    out.push(
+      sectionItem('p-servers', 'Серверы', 'Список серверов', '#/servers', <IconServers />),
+      sectionItem('p-news', 'Новости', 'Лента новостей', '#/news', <IconNews />),
+      sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '#/status', <IconPulse />),
+    );
+    if (isStaff) {
+      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
+      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, 'Админка', `#/admin/${sec.id}`, sec.icon()));
+    }
+    if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
+    return out;
+  }, [servers, isStaff, isAdmin, me]);
+
+  const results = useMemo(() => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items;
+    const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
+    const secs = hit.filter((i) => i.group === 'Разделы');
+    return [...servs, ...secs];
+  }, [items, q]);
+
+  useEffect(() => setActive(0), [q]);
+  const safeActive = Math.min(active, Math.max(0, results.length - 1));
+
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>(`[data-idx="${safeActive}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [safeActive, results]);
+
+  const go = (it: Item | undefined) => {
+    if (!it) return;
+    onClose();
+    window.location.hash = it.href;
+  };
+
+  const onKey = (e: React.KeyboardEvent) => {
+    const n = results.length;
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (n) setActive((safeActive + 1) % n); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (n) setActive((safeActive - 1 + n) % n); }
+    else if (e.key === 'Home') { e.preventDefault(); setActive(0); }
+    else if (e.key === 'End') { e.preventDefault(); setActive(Math.max(0, n - 1)); }
+    else if (e.key === 'Enter') { e.preventDefault(); go(results[safeActive]); }
+  };
+
+  const groups: ('Серверы' | 'Разделы')[] = ['Серверы', 'Разделы'];
+  const optId = (i: number) => `${uid}-opt-${i}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-3 pt-[8dvh] backdrop-blur-sm sm:pt-[12dvh]" {...bd}>
+      <div
+        ref={box}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Поиск по панели"
+        tabIndex={-1}
+        className="pop panel w-full max-w-xl overflow-hidden outline-none"
+      >
+        <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0 text-mute">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+          <input
+            ref={input}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onKey}
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={results.length ? optId(safeActive) : undefined}
+            aria-label="Поиск серверов и разделов"
+            placeholder="Найти сервер или раздел…"
+            autoComplete="off"
+            spellCheck={false}
+            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-[16px] focus-visible:ring-0 font-bold text-ink outline-none placeholder:font-semibold placeholder:text-mute"
+          />
+          <button
+            type="button"
+            onClick={onClose}
+            className="hidden rounded-lg bg-soft px-2 py-1 text-xs font-extrabold text-mute hover:text-ink sm:inline"
+            aria-label="Закрыть поиск"
+          >
+            Esc
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute hover:text-ink sm:hidden"
+            aria-label="Закрыть поиск"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+
+        <div ref={list} id={listId} role="listbox" aria-label="Результаты" className="max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain p-2">
+          {groups.map((g) => {
+            const rows = results.map((it, idx) => ({ it, idx })).filter((r) => r.it.group === g);
+            if (!rows.length) return null;
+            const gid = `${uid}-g-${g}`;
+            return (
+              <div key={g} role="group" aria-labelledby={gid}>
+                <div id={gid} className="px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute">{g}</div>
+                {rows.map(({ it, idx }) => (
+                  <div
+                    key={it.key}
+                    id={optId(idx)}
+                    role="option"
+                    aria-selected={idx === safeActive}
+                    data-idx={idx}
+                    onMouseMove={() => idx !== safeActive && setActive(idx)}
+                    onClick={() => go(it)}
+                    className={`flex min-h-[48px] cursor-pointer items-center gap-3 rounded-2xl px-3 py-2 ${idx === safeActive ? 'bg-soft' : ''}`}
+                  >
+                    <span className={`grid h-8 w-8 shrink-0 place-items-center ${it.group === 'Серверы' ? '' : 'rounded-xl bg-card text-link shadow-pop'}`}>{it.icon}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-extrabold leading-tight">{it.label}</span>
+                      <span className="block truncate text-sm font-semibold text-mute">{it.hint}</span>
+                    </span>
+                    {idx === safeActive && <span aria-hidden className="hidden rounded-md bg-card px-1.5 py-0.5 text-[11px] font-extrabold text-mute sm:inline">Enter</span>}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {results.length === 0 && (
+            <p className="px-4 py-8 text-center font-semibold text-mute">
+              {servers === null ? 'Загрузка…' : 'Ничего не найдено. Попробуйте другое слово.'}
+            </p>
+          )}
+        </div>
+
+        <div className="hidden items-center gap-4 border-t border-line px-4 py-2 text-xs font-bold text-mute sm:flex">
+          <span>↑ ↓ выбрать</span>
+          <span>Enter открыть</span>
+          <span>Esc закрыть</span>
+          <span className="ml-auto">Ctrl K</span>
+        </div>
+        <p className="sr-only" role="status">{results.length ? `Найдено: ${results.length}` : 'Ничего не найдено'}</p>
+      </div>
+    </div>
+  );
+}

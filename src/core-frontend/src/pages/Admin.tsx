@@ -57,15 +57,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const tail = current === section ? rest.join('/') : '';
 
   return (
-    <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
-      <nav className="flex gap-1 overflow-x-auto rounded-3xl border border-line bg-card p-1.5 shadow-soft md:sticky md:top-4 md:flex-col md:self-start md:overflow-visible md:p-2" aria-label="Разделы админки">
-        <div className="hidden px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute md:block">Админка</div>
+    <div className="grid gap-4 md:grid-cols-[13.5rem_minmax(0,1fr)]">
+      <nav className="tile flex gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:flex-col md:self-start md:overflow-visible md:p-2.5" aria-label="Разделы админки">
+        <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
         {sections.map((s) => (
           <a
             key={s.id}
             href={`#/admin/${s.id}`}
             aria-current={current === s.id ? 'page' : undefined}
-            className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-2xl px-3.5 py-2 font-bold transition ${current === s.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+            className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
           >
             {s.icon()}
             {s.label}
@@ -165,10 +165,10 @@ function ServersManage() {
         </Empty>
       )}
 
-      <div className="space-y-2.5">
+      <div className="space-y-3">
         {servers.map((s) => (
-          <div key={s.id} className="panel flex flex-wrap items-center gap-x-4 gap-y-2 p-4">
-            <GameAvatar game={s.game} size={40} />
+          <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
+            <GameAvatar game={s.game} size={44} />
             <div className="min-w-0 flex-1 basis-56">
               <a href={`#/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
               <div className="truncate text-sm font-semibold text-mute">
@@ -176,7 +176,7 @@ function ServersManage() {
                 {s.displayAddress ? <> · показывается как <span className="font-mono">{s.displayAddress}</span></> : null}
               </div>
             </div>
-            <div className="text-sm font-bold tabular-nums text-mute">{s.online ? `${s.players}/${s.maxPlayers}` : ''}</div>
+            <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="flex gap-2">

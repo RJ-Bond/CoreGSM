@@ -1,3 +1,4 @@
+import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
 export interface Game { id: string; label: string; port: number; abbr: string; color: string }
 
@@ -38,3 +39,6 @@ export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toU
 
 /** artwork used instead of the line pictogram (files in public/games) */
 export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png' };
+
+/** [deep, light] gradient colours of a game (tile covers, banners) */
+export const gameGradient = (id: string): [string, string] => gradientFor(gameColor(id));

@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, typ
 import { useAuth } from './auth';
 import { getToken, type Server } from './api';
 import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
-import { GAME_IMAGE, gameAbbr, gameColor } from './games';
+import { GAME_IMAGE, gameAbbr, gameGradient } from './games';
 import { gameIconPath, ICON_PATHS } from './gameIcons';
 
 /**
@@ -253,13 +253,21 @@ export function StatusPill({ online, known, lag }: { online: boolean; known: boo
   return lag ? <span className="pill pill-warn">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
 }
 
-export function GameAvatar({ game, size = 44 }: { game: string; size?: number }) {
+/** `glass`: translucent white square, for use on top of a game-coloured cover */
+export function GameAvatar({ game, size = 44, glass = false }: { game: string; size?: number; glass?: boolean }) {
   const icon = gameIconPath(game);
-  const color = gameColor(game);
+  const [c1, c2] = gameGradient(game);
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-2xl font-black text-white shadow-pop"
-      style={{ width: size, height: size, background: `linear-gradient(145deg, ${color}, ${color}cc)`, fontSize: size * 0.34 }}
+      className="grid shrink-0 place-items-center font-black text-white"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.3),
+        background: glass ? 'rgba(255,255,255,0.24)' : `linear-gradient(135deg, ${c1}, ${c2})`,
+        fontSize: size * 0.34,
+        boxShadow: glass ? 'inset 0 0 0 1px rgba(255,255,255,0.25)' : `0 4px 12px -4px ${c1}99`,
+      }}
       aria-hidden
     >
       {GAME_IMAGE[game] ? (
@@ -292,7 +300,7 @@ const SPARK_EVERY = 3 * 60_000;
  * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
  * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
  */
-export function Spark({ serverId, color }: { serverId: number; color: string }) {
+export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
   const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
 
   useEffect(() => {
@@ -332,7 +340,7 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
     const cached = sparkCache.get(serverId);
     const age = cached ? Date.now() - cached.at : Infinity;
     // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
-    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : 150 + Math.random() * 2500);
+    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : variant === 'hero' ? 0 : 150 + Math.random() * 2500);
 
     const onVisible = () => {
       if (document.hidden) return;
@@ -346,20 +354,67 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
       ctl?.abort();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [serverId]);
+  }, [serverId, variant]);
 
-  if (pts.length < 2) return <div className="h-9 rounded-xl bg-soft/60" aria-hidden />;
-  const w = 240, h = 36;
-  const max = Math.max(1, ...pts);
-  const xy = pts.map((v, i) => [(i / (pts.length - 1)) * w, h - 3 - (v / max) * (h - 6)]);
-  const d = 'M' + xy.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L');
-  const last = xy[xy.length - 1];
+  if (pts.length < 2) return <div className={`${variant === 'hero' ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} rounded-2xl`} aria-hidden />;
+  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}`;
+  return variant === 'hero'
+    ? <SmoothArea values={pts} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    : <SmoothArea values={pts} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+}
+
+/** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
+export function smoothPath(pts: [number, number][]): string {
+  if (pts.length === 0) return '';
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const cx = (x0 + x1) / 2;
+    d += ` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
+  }
+  return d;
+}
+
+/**
+ * Smooth area chart of a player-count series: gradient fill, line, optional dashed grid and an end dot with a halo.
+ * The drawing stretches (preserveAspectRatio none, non-scaling stroke); the dot is an HTML element so it stays round.
+ */
+export function SmoothArea({
+  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax,
+}: {
+  values: number[]; color: string; w?: number; h?: number; grid?: boolean; dot?: boolean; strokeWidth?: number; fill?: number;
+  className?: string; label?: string; max?: number;
+}) {
+  const gid = useId();
+  const pad = 3;
+  const max = Math.max(1, fixedMax ?? 0, ...values) * 1.12;
+  const pts: [number, number][] = values.map((v, i) => [pad + (i / Math.max(1, values.length - 1)) * (w - pad * 2), h - pad - (v / max) * (h - pad * 2)]);
+  const line = smoothPath(pts);
+  const last = pts[pts.length - 1];
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-9 w-full" preserveAspectRatio="none" role="img" aria-label={`Игроков за 24 часа: от ${Math.min(...pts)} до ${max}`}>
-      <path d={`${d} L${w} ${h} L0 ${h}Z`} fill={color} opacity="0.14" />
-      <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      <circle cx={last[0]} cy={last[1]} r="3.5" fill={color} />
-    </svg>
+    <div className={`relative w-full ${className}`}>
+      <svg viewBox={`0 0 ${w} ${h}`} className="absolute inset-0 h-full w-full overflow-visible" preserveAspectRatio="none" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={color} stopOpacity={fill} />
+            <stop offset="1" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {grid && [1, 2, 3].map((k) => (
+          <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
+        ))}
+        <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
+        <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      {dot && (
+        <span
+          aria-hidden
+          className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+          style={{ left: `${(last[0] / w) * 100}%`, top: `${(last[1] / h) * 100}%`, background: color, boxShadow: `0 0 0 4px ${color}40` }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -367,9 +422,9 @@ export function PageHead({ title, subtitle, icon, children }: { title: string; s
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div className="flex min-w-0 items-center gap-3.5">
-        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-soft text-link">{icon}</span>}
+        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
         <div className="min-w-0">
-          <h1 className="text-2xl font-black tracking-tight sm:text-3xl">{title}</h1>
+          <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
           {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
         </div>
       </div>
@@ -394,7 +449,7 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
-export function CopyButton({ text, label = 'Копировать', className = '' }: { text: string; label?: string; className?: string }) {
+export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' }) {
   const [done, setDone] = useState(false);
   const timer = useRef<number>();
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -409,7 +464,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
     }
   };
   return (
-    <button type="button" className={`btn btn-soft btn-sm ${className}`} onClick={copy} title={label}>
+    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
       <IconCopy />
       {done ? 'Скопировано' : label}
     </button>
@@ -625,16 +680,16 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
     { id: 'register', label: 'Регистрация' },
   ] as const;
   return (
-    <div className="auth-card w-full max-w-sm rounded-3xl border bg-card/90 p-6 backdrop-blur sm:p-7">
+    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur sm:p-7">
       <AuthBrand subtitle={mode === 'login' ? 'Войдите в свой аккаунт' : 'Создайте аккаунт игрока'} />
       {access.registration && (
-        <nav className="mb-5 flex gap-1 rounded-full bg-soft p-1" aria-label="Вход или регистрация">
+        <nav className="seg mb-5 flex w-full" aria-label="Вход или регистрация">
           {tabs.map((t) => (
             <a
               key={t.id}
               href={`#/${t.id}`}
               aria-current={mode === t.id ? 'page' : undefined}
-              className={`flex flex-1 items-center justify-center rounded-full px-3 py-1.5 text-center font-extrabold transition max-sm:min-h-[44px] ${mode === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+              className="seg-item flex-1"
             >
               {t.label}
             </a>
@@ -790,7 +845,7 @@ export function PasswordStrength({ password }: { password: string }) {
 }
 
 /** avatar from Discord, or the first letter when there is none (or the image failed to load) */
-export function UserAvatar({ name, url, size = 28, tone = 'soft', className = '' }: { name: string; url?: string | null; size?: number; tone?: 'soft' | 'brand'; className?: string }) {
+export function UserAvatar({ name, url, size = 28, tone = 'soft', className = '' }: { name: string; url?: string | null; size?: number; tone?: 'soft' | 'brand' | 'grad'; className?: string }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [url]);
   if (url && !failed) {
@@ -799,7 +854,7 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   return (
     <span
       aria-hidden
-      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : 'bg-soft text-link'} ${className}`}
+      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-gradient-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
       style={{ width: size, height: size, fontSize: size * 0.48 }}
     >
       {name.slice(0, 1).toUpperCase()}

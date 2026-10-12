@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7f63d3712025"
+COREGSM_BUILD="499f75320c08"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -9146,6 +9146,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
 import { BLACK, WHITE, contrast, ensureContrast, mix, parseHex, parseTriplet, triplet, type RGB } from './colors';
+import CommandPalette from './components/CommandPalette';
 import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -9219,6 +9220,8 @@ function useBrand(b: Access['brand']) {
 
       root.style.setProperty('--brand', triplet(fill));
       root.style.setProperty('--brand-hover', triplet(hover));
+      // darker end of the gradients (buttons, active nav, icon tiles); white text stays >= 4.5:1 because it only gets darker
+      root.style.setProperty('--brand-2', triplet(mix(fill, BLACK, 0.24)));
       root.style.setProperty('--link', triplet(link));
     };
     apply();
@@ -9237,6 +9240,13 @@ function useBrand(b: Access['brand']) {
 
 interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
 
+const IconSearch = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.3-4.3" />
+  </svg>
+);
+
 const IconLogout = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
@@ -9248,6 +9258,10 @@ export default function App() {
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [authing, setAuthing] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const paletteRef = useRef(false);
+  const shellOk = useRef(false);
+  paletteRef.current = paletteOpen;
   const mainRef = useRef<HTMLElement>(null);
 
   // who is signed in, what is open to guests, and whether the first-run wizard is still pending
@@ -9377,12 +9391,26 @@ export default function App() {
 
   useBrand(access.brand);
 
+  // Ctrl/Cmd+K: the command palette (not over another dialog, not on the sign-in screens)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'k') return;
+      if (!shellOk.current) return;
+      if (!paletteRef.current && document.querySelector('[aria-modal="true"]')) return;
+      e.preventDefault();
+      setPaletteOpen((o) => !o);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const isStaff = isAdmin || me?.role === 'moderator';
   const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, isStaff, access, reload: load, logout }), [me, isAdmin, isStaff, access, load, logout]);
 
   // ---- document title and focus follow the route ----
   const visible = PAGES.filter((p) => !p.admin || isStaff);
   const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
+  shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   const sectionTitle = boot.needsSetup
@@ -9478,45 +9506,50 @@ export default function App() {
       >
         Перейти к содержимому
       </a>
-      <div className="mx-auto min-h-full max-w-6xl px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-5 sm:px-6 md:pb-16">
-        <header className="mb-6 flex items-center gap-x-3 md:mb-8 md:gap-x-4">
-          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-2xl font-black tracking-tight max-md:flex-1">
+      <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
+        <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
+          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px]">
             <Logo size={34} alt="" />
             <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
-          <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
+          <nav className="seg ml-2 hidden md:inline-flex" aria-label="Разделы">
             {visible.map((p) => (
-              <a
-                key={p.id}
-                href={`#/${p.id}`}
-                aria-current={page === p.id ? 'page' : undefined}
-                className={`whitespace-nowrap rounded-full px-4 py-1.5 font-extrabold transition ${
-                  page === p.id ? 'bg-brand text-white shadow-pop' : 'bg-card text-ink shadow-pop hover:text-link'
-                }`}
-              >
+              <a key={p.id} href={`#/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
                 {p.label}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
           </nav>
-          <div className="flex shrink-0 items-center gap-2 md:ml-auto">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 md:ml-auto">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10 md:inline-flex md:w-auto md:items-center md:gap-2.5 md:pl-3.5 md:pr-2"
+              aria-label="Поиск по панели (Ctrl K)"
+              aria-haspopup="dialog"
+              title="Поиск (Ctrl K)"
+            >
+              <IconSearch />
+              <span className="hidden md:inline">Поиск</span>
+              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute md:inline">Ctrl K</kbd>
+            </button>
             <ThemeToggle />
             {me ? (
               <>
                 <a
                   href="#/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold shadow-pop transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1.5 sm:pl-1.5 sm:pr-3.5 ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
+                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
                   title={`Профиль: ${me.username}`}
                   aria-label={`Профиль: ${me.username}`}
                 >
-                  <UserAvatar name={me.username} url={me.avatarUrl} size={28} className="!rounded-full" />
+                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="!rounded-full" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
                 <button
                   onClick={() => void logout()}
-                  className="grid place-items-center rounded-full bg-card font-extrabold text-mute shadow-pop transition hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-4 sm:py-2"
+                  className="grid place-items-center rounded-full font-extrabold text-mute transition hover:bg-soft hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-3.5 sm:py-2"
                   aria-label="Выйти"
                   title="Выйти"
                 >
@@ -9526,7 +9559,7 @@ export default function App() {
               </>
             ) : (
               <>
-                <a href="#/login" className="inline-flex items-center rounded-full bg-card px-4 py-2 font-extrabold text-ink shadow-pop hover:text-link max-sm:min-h-[44px]">Войти</a>
+                <a href="#/login" className="inline-flex items-center rounded-full bg-soft px-4 py-2 font-extrabold text-ink hover:text-link max-sm:min-h-[44px]">Войти</a>
                 {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">Регистрация</a>}
               </>
             )}
@@ -9544,13 +9577,14 @@ export default function App() {
         <Toaster />
         <ConfirmHost />
         {isAdmin && <Tour />}
+        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
 
         <nav
-          className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card/95 backdrop-blur md:hidden"
-          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+          className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"
+          style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
           aria-label="Разделы"
         >
-          <ul className="mx-auto flex max-w-md">
+          <ul className="flex px-1.5">
             {visible.map((p) => {
               const active = page === p.id;
               return (
@@ -9558,9 +9592,9 @@ export default function App() {
                   <a
                     href={`#/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
-                    <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
+                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {p.label}
                     {p.id === 'admin' && updateAvailable && (
                       <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn"><span className="sr-only">Доступно обновление</span></span>
@@ -9571,8 +9605,8 @@ export default function App() {
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold text-link">
-                  <span className="grid h-8 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
+                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
+                  <span className="grid h-7 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   Войти
                 </a>
               </li>
@@ -10028,6 +10062,21 @@ export const mix = (a: RGB, b: RGB, k: number): RGB => a.map((v, i) => Math.roun
 export const triplet = (c: RGB) => c.join(' ');
 export const WHITE: RGB = [255, 255, 255];
 export const BLACK: RGB = [0, 0, 0];
+
+const hex = (c: RGB) => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
+
+/**
+ * Two-stop gradient for a tile cover from a game colour: c1 is the deeper end (white text keeps >= 4.5:1),
+ * c2 a lighter, slightly warmer end (large white text keeps >= 3:1).
+ */
+export function gradientFor(color: string): [string, string] {
+  const base = parseHex(color) ?? [90, 75, 209];
+  const c1 = ensureContrast(mix(base, BLACK, 0.1), [WHITE], 4.5, 'darken');
+  const [h, s, l] = toHsl(mix(base, WHITE, 0.22));
+  const warm = fromHsl([(h + 14) % 360, clamp(s, 0, 0.95), l]);
+  const c2 = ensureContrast(warm, [WHITE], 3, 'darken');
+  return [hex(c1), hex(c2)];
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
@@ -10105,6 +10154,225 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
       <div className="flex gap-4 text-sm font-extrabold">
         {hasList && <button type="button" className="text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
         <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/CommandPalette.tsx" << '__COREGSM_EOF__'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { api, type Server } from '../api';
+import { useAuth } from '../auth';
+import { useBackdropClose, useDialogFocus } from '../confirm';
+import { gameLabel } from '../games';
+import { ADMIN_SECTIONS } from '../pages/Admin';
+import { GameAvatar, IconNews, IconServers } from '../ui';
+
+interface Item {
+  key: string;
+  group: 'Серверы' | 'Разделы';
+  label: string;
+  hint: string;
+  href: string;
+  icon: ReactNode;
+  /** lower-case text the query is matched against */
+  hay: string;
+}
+
+const IconPulse = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </svg>
+);
+const IconUser = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </svg>
+);
+
+const sectionItem = (key: string, label: string, hint: string, href: string, icon: ReactNode): Item => ({
+  key, group: 'Разделы', label, hint, href, icon, hay: `${label} ${hint}`.toLowerCase(),
+});
+
+/**
+ * Ctrl/Cmd+K: jump to a server or a section. A modal combobox: focus stays in the input, the list is driven with
+ * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
+ */
+export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
+  const { me } = useAuth();
+  const box = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const uid = useId();
+  const listId = `${uid}-list`;
+  const [q, setQ] = useState('');
+  const [servers, setServers] = useState<Server[] | null>(null);
+  const [active, setActive] = useState(0);
+
+  useDialogFocus(box, onClose, () => input.current);
+  const bd = useBackdropClose(onClose);
+
+  // the list of servers is loaded once, when the palette opens
+  useEffect(() => {
+    let alive = true;
+    api<Server[]>('/servers').then((s) => { if (alive) setServers(s); }).catch(() => { if (alive) setServers([]); });
+    return () => { alive = false; };
+  }, []);
+
+  const items = useMemo(() => {
+    const out: Item[] = [];
+    for (const s of servers ?? []) {
+      out.push({
+        key: `s${s.id}`,
+        group: 'Серверы',
+        label: s.name,
+        hint: `${gameLabel(s.game)} · ${s.address}`,
+        href: `#/servers/${s.id}`,
+        icon: <GameAvatar game={s.game} size={32} />,
+        hay: `${s.name} ${gameLabel(s.game)} ${s.address}`.toLowerCase(),
+      });
+    }
+    out.push(
+      sectionItem('p-servers', 'Серверы', 'Список серверов', '#/servers', <IconServers />),
+      sectionItem('p-news', 'Новости', 'Лента новостей', '#/news', <IconNews />),
+      sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '#/status', <IconPulse />),
+    );
+    if (isStaff) {
+      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
+      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, 'Админка', `#/admin/${sec.id}`, sec.icon()));
+    }
+    if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
+    return out;
+  }, [servers, isStaff, isAdmin, me]);
+
+  const results = useMemo(() => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items;
+    const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
+    const secs = hit.filter((i) => i.group === 'Разделы');
+    return [...servs, ...secs];
+  }, [items, q]);
+
+  useEffect(() => setActive(0), [q]);
+  const safeActive = Math.min(active, Math.max(0, results.length - 1));
+
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>(`[data-idx="${safeActive}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [safeActive, results]);
+
+  const go = (it: Item | undefined) => {
+    if (!it) return;
+    onClose();
+    window.location.hash = it.href;
+  };
+
+  const onKey = (e: React.KeyboardEvent) => {
+    const n = results.length;
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (n) setActive((safeActive + 1) % n); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (n) setActive((safeActive - 1 + n) % n); }
+    else if (e.key === 'Home') { e.preventDefault(); setActive(0); }
+    else if (e.key === 'End') { e.preventDefault(); setActive(Math.max(0, n - 1)); }
+    else if (e.key === 'Enter') { e.preventDefault(); go(results[safeActive]); }
+  };
+
+  const groups: ('Серверы' | 'Разделы')[] = ['Серверы', 'Разделы'];
+  const optId = (i: number) => `${uid}-opt-${i}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-3 pt-[8dvh] backdrop-blur-sm sm:pt-[12dvh]" {...bd}>
+      <div
+        ref={box}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Поиск по панели"
+        tabIndex={-1}
+        className="pop panel w-full max-w-xl overflow-hidden outline-none"
+      >
+        <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0 text-mute">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+          <input
+            ref={input}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onKey}
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={results.length ? optId(safeActive) : undefined}
+            aria-label="Поиск серверов и разделов"
+            placeholder="Найти сервер или раздел…"
+            autoComplete="off"
+            spellCheck={false}
+            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-[16px] focus-visible:ring-0 font-bold text-ink outline-none placeholder:font-semibold placeholder:text-mute"
+          />
+          <button
+            type="button"
+            onClick={onClose}
+            className="hidden rounded-lg bg-soft px-2 py-1 text-xs font-extrabold text-mute hover:text-ink sm:inline"
+            aria-label="Закрыть поиск"
+          >
+            Esc
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute hover:text-ink sm:hidden"
+            aria-label="Закрыть поиск"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+
+        <div ref={list} id={listId} role="listbox" aria-label="Результаты" className="max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain p-2">
+          {groups.map((g) => {
+            const rows = results.map((it, idx) => ({ it, idx })).filter((r) => r.it.group === g);
+            if (!rows.length) return null;
+            const gid = `${uid}-g-${g}`;
+            return (
+              <div key={g} role="group" aria-labelledby={gid}>
+                <div id={gid} className="px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute">{g}</div>
+                {rows.map(({ it, idx }) => (
+                  <div
+                    key={it.key}
+                    id={optId(idx)}
+                    role="option"
+                    aria-selected={idx === safeActive}
+                    data-idx={idx}
+                    onMouseMove={() => idx !== safeActive && setActive(idx)}
+                    onClick={() => go(it)}
+                    className={`flex min-h-[48px] cursor-pointer items-center gap-3 rounded-2xl px-3 py-2 ${idx === safeActive ? 'bg-soft' : ''}`}
+                  >
+                    <span className={`grid h-8 w-8 shrink-0 place-items-center ${it.group === 'Серверы' ? '' : 'rounded-xl bg-card text-link shadow-pop'}`}>{it.icon}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-extrabold leading-tight">{it.label}</span>
+                      <span className="block truncate text-sm font-semibold text-mute">{it.hint}</span>
+                    </span>
+                    {idx === safeActive && <span aria-hidden className="hidden rounded-md bg-card px-1.5 py-0.5 text-[11px] font-extrabold text-mute sm:inline">Enter</span>}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {results.length === 0 && (
+            <p className="px-4 py-8 text-center font-semibold text-mute">
+              {servers === null ? 'Загрузка…' : 'Ничего не найдено. Попробуйте другое слово.'}
+            </p>
+          )}
+        </div>
+
+        <div className="hidden items-center gap-4 border-t border-line px-4 py-2 text-xs font-bold text-mute sm:flex">
+          <span>↑ ↓ выбрать</span>
+          <span>Enter открыть</span>
+          <span>Esc закрыть</span>
+          <span className="ml-auto">Ctrl K</span>
+        </div>
+        <p className="sr-only" role="status">{results.length ? `Найдено: ${results.length}` : 'Ничего не найдено'}</p>
       </div>
     </div>
   );
@@ -10857,6 +11125,7 @@ export const gameIconPath = (game: string): string | null => {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
+import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
 export interface Game { id: string; label: string; port: number; abbr: string; color: string }
 
@@ -10897,6 +11166,9 @@ export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toU
 
 /** artwork used instead of the line pictogram (files in public/games) */
 export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png' };
+
+/** [deep, light] gradient colours of a game (tile covers, banners) */
+export const gameGradient = (id: string): [string, string] => gradientFor(gameColor(id));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/index.css" << '__COREGSM_EOF__'
@@ -10904,21 +11176,24 @@ __COREGSM_EOF__
 @tailwind components;
 @tailwind utilities;
 
-/* Palette as space-separated RGB so Tailwind can apply opacity (bg-brand/20).
+/* "Bento 2.0": soft washes on the page, white 26px tiles, gradient accents derived from --brand.
+   Palette as space-separated RGB so Tailwind can apply opacity (bg-brand/20).
    Light is the default; dark applies with the system setting unless a theme is chosen explicitly.
    Contrast (WCAG 2.1, checked for both themes): text tokens (mute, link, ok, warn, bad on page/card/soft and on their pill
-   backgrounds) >= 4.5:1; white on brand / badsolid >= 4.5:1; --field (input borders) >= 3:1 on card, soft and page.
-   --line is decorative only (panel borders, dividers). */
+   backgrounds) >= 4.5:1; white on brand / brand-2 / badsolid >= 4.5:1; --field (input borders) >= 3:1 on card, soft and page.
+   --line is decorative only (tile borders, dividers).
+   --brand-2 (the darker end of every brand gradient) is set by useBrand() from the chosen brand colour. */
 :root {
-  --page: 244 245 247;
+  --page: 243 244 248;
   --card: 255 255 255;
-  --ink: 20 22 26;
+  --ink: 18 20 26;
   --mute: 92 99 114;
-  --line: 232 234 238;
-  --field: 130 137 150;
-  --soft: 238 240 244;
+  --line: 231 233 240;
+  --field: 122 129 143;
+  --soft: 236 238 246;
   --brand: 79 70 229;
   --brand-hover: 67 56 202;
+  --brand-2: 61 51 190;
   --link: 79 70 229;
   --ok: 18 120 66;
   --okbg: 220 247 232;
@@ -10927,22 +11202,29 @@ __COREGSM_EOF__
   --bad: 185 40 40;
   --badbg: 254 226 226;
   --badsolid: 185 40 40;
-  --shadow-soft: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow-pop: 0 1px 2px rgba(16, 24, 40, 0.08);
-  --page-glow: 0.04;
+  --seg-on: 255 255 255;
+  --tile-border: rgb(231 233 240);
+  --glass: rgb(255 255 255 / 0.74);
+  --glass-border: rgb(255 255 255 / 0.9);
+  --glass-shadow: 0 8px 30px rgba(40, 50, 110, 0.08);
+  --shadow-soft: 0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
+  --shadow-pop: 0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
+  --wash-a: rgb(var(--brand) / 0.15);
+  --wash-b: rgb(70 190 235 / 0.14);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --page: 13 14 17;
-    --card: 23 24 29;
-    --ink: 236 236 239;
-    --mute: 150 155 166;
-    --line: 46 48 56;
-    --field: 108 114 128;
-    --soft: 33 34 41;
+    --page: 11 12 17;
+    --card: 21 23 30;
+    --ink: 236 237 242;
+    --mute: 152 158 172;
+    --line: 42 45 57;
+    --field: 110 116 132;
+    --soft: 33 36 47;
     --brand: 88 91 235;
     --brand-hover: 76 79 214;
+    --brand-2: 66 58 196;
     --link: 165 170 255;
     --ok: 74 222 128;
     --okbg: 20 56 38;
@@ -10951,22 +11233,29 @@ __COREGSM_EOF__
     --bad: 248 113 113;
     --badbg: 62 26 31;
     --badsolid: 214 48 48;
-    --shadow-soft: 0 0 0 1px rgb(255 255 255 / 0.025) inset, 0 12px 28px -18px rgba(0, 0, 0, 0.85);
-    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.55);
-    --page-glow: 0.13;
+    --seg-on: 58 62 80;
+    --tile-border: rgb(255 255 255 / 0.075);
+    --glass: rgb(24 26 34 / 0.72);
+    --glass-border: rgb(255 255 255 / 0.09);
+    --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+    --shadow-soft: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.75);
+    --shadow-pop: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 2px 8px rgba(0, 0, 0, 0.45);
+    --wash-a: rgb(var(--brand) / 0.22);
+    --wash-b: rgb(40 170 210 / 0.10);
     color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
-  --page: 13 14 17;
-  --card: 23 24 29;
-  --ink: 236 236 239;
-  --mute: 150 155 166;
-  --line: 46 48 56;
-  --field: 108 114 128;
-  --soft: 33 34 41;
+  --page: 11 12 17;
+  --card: 21 23 30;
+  --ink: 236 237 242;
+  --mute: 152 158 172;
+  --line: 42 45 57;
+  --field: 110 116 132;
+  --soft: 33 36 47;
   --brand: 88 91 235;
   --brand-hover: 76 79 214;
+  --brand-2: 66 58 196;
   --link: 165 170 255;
   --ok: 74 222 128;
   --okbg: 20 56 38;
@@ -10975,9 +11264,15 @@ __COREGSM_EOF__
   --bad: 248 113 113;
   --badbg: 62 26 31;
   --badsolid: 214 48 48;
-  --shadow-soft: 0 0 0 1px rgb(255 255 255 / 0.025) inset, 0 12px 28px -18px rgba(0, 0, 0, 0.85);
-  --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.55);
-  --page-glow: 0.13;
+  --seg-on: 58 62 80;
+  --tile-border: rgb(255 255 255 / 0.075);
+  --glass: rgb(24 26 34 / 0.72);
+  --glass-border: rgb(255 255 255 / 0.09);
+  --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.75);
+  --shadow-pop: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 2px 8px rgba(0, 0, 0, 0.45);
+  --wash-a: rgb(var(--brand) / 0.22);
+  --wash-b: rgb(40 170 210 / 0.10);
   color-scheme: dark;
 }
 
@@ -10985,9 +11280,15 @@ __COREGSM_EOF__
   html, body, #root { min-height: 100%; }
   body {
     @apply bg-page text-ink font-sans text-[15px] antialiased;
-    background-image: radial-gradient(64rem 26rem at 50% -8rem, rgb(var(--brand) / var(--page-glow)), transparent 70%);
-    background-repeat: no-repeat;
     -webkit-text-size-adjust: 100%;
+  }
+  /* two soft colour washes behind everything: brand (top right) and cyan (top left) */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(56rem 25rem at 85% -9rem, var(--wash-a), transparent 70%),
+      radial-gradient(44rem 22rem at -4% -4rem, var(--wash-b), transparent 70%);
   }
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }
@@ -10996,21 +11297,72 @@ __COREGSM_EOF__
 }
 
 @layer components {
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full bg-brand px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-brand-hover active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none max-sm:min-h-[44px]; }
-  .btn-soft { @apply bg-soft text-link shadow-none hover:bg-line; }
-  .btn-danger { @apply bg-badbg text-bad shadow-none hover:bg-bad/20; }
+  /* primary: gradient pill with a soft coloured shadow */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 font-extrabold text-white transition active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none max-sm:min-h-[44px];
+    background-image: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2)));
+    box-shadow: 0 1px 2px rgb(var(--brand) / 0.25), 0 6px 16px -4px rgb(var(--brand) / 0.45);
+  }
+  .btn:hover { filter: brightness(1.07) saturate(1.05); }
+  .btn-soft { @apply bg-soft text-link hover:bg-line; background-image: none; box-shadow: none; }
+  .btn-soft:hover { filter: none; }
+  .btn-danger { @apply bg-badbg text-bad hover:bg-bad/20; background-image: none; box-shadow: none; }
+  .btn-danger:hover { filter: none; }
   .btn-sm { @apply px-3 py-1 text-sm max-sm:min-h-[44px] max-sm:px-4; }
   /* square icon button; 44px on phones */
-  .btn-icon { @apply inline-grid h-10 w-10 place-items-center rounded-full bg-card text-mute shadow-pop transition hover:text-link max-sm:h-11 max-sm:w-11; }
+  .btn-icon { @apply inline-grid h-10 w-10 place-items-center rounded-full bg-soft text-mute transition hover:text-link max-sm:h-11 max-sm:w-11; }
   .input { @apply w-full rounded-2xl border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-none disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px]; }
   .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
-  .panel { @apply rounded-3xl border border-line bg-card shadow-soft; }
+  /* the tile: white card, 26px radius, layered soft shadow */
+  .panel { @apply rounded-[26px] bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-soft); }
+  .tile { @apply rounded-[26px] bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-soft); }
   .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
   .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
   .pill-ok { @apply bg-okbg text-ok; }
   .pill-warn { @apply bg-warnbg text-warn; }
   .pill-bad { @apply bg-badbg text-bad; }
   .pill-mute { @apply bg-soft text-mute; }
+
+  /* segmented control: soft capsule with a white (lifted) active pill. Works for links and buttons. */
+  .seg { @apply inline-flex gap-0.5 rounded-full bg-soft p-[3px]; }
+  .seg-item {
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px];
+  }
+  .seg-item[aria-pressed='true'], .seg-item[aria-current='page'], .seg-item.on {
+    color: rgb(var(--ink));
+    background: rgb(var(--seg-on));
+    box-shadow: 0 1px 2px rgba(20, 24, 40, 0.1), 0 2px 8px rgba(40, 50, 110, 0.1);
+  }
+  :root[data-theme='dark'] .seg-item[aria-pressed='true'], :root[data-theme='dark'] .seg-item[aria-current='page'], :root[data-theme='dark'] .seg-item.on {
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+
+  /* the sticky glass header and the floating bottom bar */
+  .glass {
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    backdrop-filter: blur(18px) saturate(1.4);
+  }
+
+  /* tiles with a game gradient (--c1 -> --c2, set inline); white text on top, gradients are kept dark enough */
+  .cover-grad { background: linear-gradient(135deg, var(--c1), var(--c2)); color: #fff; }
+  .stat-k { @apply text-[13px] font-extrabold text-mute; }
+  .stat-v { @apply text-[34px] font-extrabold leading-[1.05] tabular-nums sm:text-[40px]; letter-spacing: -0.03em; }
+  .stat-v small { @apply text-lg font-bold text-mute; letter-spacing: 0; }
+  .stat-s { @apply text-[13px] font-bold text-mute; }
+  /* translucent chip on a gradient tile */
+  .chip-on-grad { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold text-white; background: rgba(255, 255, 255, 0.22); }
+  .btn-on-grad { @apply inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#12141a] transition hover:bg-white/90 active:scale-[.98] max-sm:min-h-[44px]; }
+  .btn-ghost-on-grad { @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-extrabold text-white transition hover:brightness-90 active:scale-[.98] max-sm:min-h-[44px]; background: rgba(0, 0, 0, 0.22); }
+  .tile-hover { transition: transform .18s ease, box-shadow .18s ease; }
+  .tile-hover:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.05), 0 18px 38px rgba(40, 50, 110, 0.13); }
+  :root[data-theme='dark'] .tile-hover:hover { box-shadow: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 20px 40px -16px rgba(0, 0, 0, 0.85); }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) .tile-hover:hover { box-shadow: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 20px 40px -16px rgba(0, 0, 0, 0.85); }
+  }
+  @media (prefers-reduced-motion: reduce) { .tile-hover:hover { transform: none; } }
 }
 
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
@@ -11210,15 +11562,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const tail = current === section ? rest.join('/') : '';
 
   return (
-    <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
-      <nav className="flex gap-1 overflow-x-auto rounded-3xl border border-line bg-card p-1.5 shadow-soft md:sticky md:top-4 md:flex-col md:self-start md:overflow-visible md:p-2" aria-label="Разделы админки">
-        <div className="hidden px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute md:block">Админка</div>
+    <div className="grid gap-4 md:grid-cols-[13.5rem_minmax(0,1fr)]">
+      <nav className="tile flex gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:flex-col md:self-start md:overflow-visible md:p-2.5" aria-label="Разделы админки">
+        <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
         {sections.map((s) => (
           <a
             key={s.id}
             href={`#/admin/${s.id}`}
             aria-current={current === s.id ? 'page' : undefined}
-            className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-2xl px-3.5 py-2 font-bold transition ${current === s.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+            className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
           >
             {s.icon()}
             {s.label}
@@ -11318,10 +11670,10 @@ function ServersManage() {
         </Empty>
       )}
 
-      <div className="space-y-2.5">
+      <div className="space-y-3">
         {servers.map((s) => (
-          <div key={s.id} className="panel flex flex-wrap items-center gap-x-4 gap-y-2 p-4">
-            <GameAvatar game={s.game} size={40} />
+          <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
+            <GameAvatar game={s.game} size={44} />
             <div className="min-w-0 flex-1 basis-56">
               <a href={`#/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
               <div className="truncate text-sm font-semibold text-mute">
@@ -11329,7 +11681,7 @@ function ServersManage() {
                 {s.displayAddress ? <> · показывается как <span className="font-mono">{s.displayAddress}</span></> : null}
               </div>
             </div>
-            <div className="text-sm font-bold tabular-nums text-mute">{s.online ? `${s.players}/${s.maxPlayers}` : ''}</div>
+            <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="flex gap-2">
@@ -13617,11 +13969,12 @@ export default function Register({ onDone }: { onDone: () => void }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { api, ApiError, type PlayerNow, type ServerDetails } from '../api';
 import { useAuth } from '../auth';
-import { gameColor, gameLabel } from '../games';
-import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, toast, usePoll } from '../ui';
+import { COUNTRIES } from '../countries';
+import { gameColor, gameGradient, gameLabel } from '../games';
+import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, smoothPath, toast, usePoll } from '../ui';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 
@@ -13647,23 +14000,24 @@ const tickLabel = (ts: number, hours: number) =>
     ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
     : new Date(ts).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 
-/** Player count over time with red bands where the server was unreachable. */
+/** Player count over time: smooth area, red bands where the server was unreachable, hover tooltip. */
 function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: number; max: number; color: string }) {
-  const L = 40, R = 10, T = 12, B = 28;
+  const L = 36, R = 8, T = 12, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const ref = useRef<SVGSVGElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
+  const gid = useId();
   // the drawing is 1:1 with the screen, so labels keep a readable size on phones
   const [W, setW] = useState(720);
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setW(Math.max(300, Math.round(el.clientWidth))));
+    const ro = new ResizeObserver(() => setW(Math.max(280, Math.round(el.clientWidth))));
     ro.observe(el);
-    setW(Math.max(300, Math.round(el.clientWidth)));
+    setW(Math.max(280, Math.round(el.clientWidth)));
     return () => ro.disconnect();
   }, []);
-  const H = W < 520 ? 200 : 240;
+  const H = W < 520 ? 200 : 250;
 
   const now = Date.now();
   const t0 = now - hours * 3600_000;
@@ -13672,7 +14026,7 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
   const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
   const bucket = (now - t0) / 180;
 
-  // continuous online runs become separate line segments; a gap is much wider than the usual spacing of the samples
+  // continuous online runs become separate curves; a gap is much wider than the usual spacing of the samples
   const spacing = points.length > 1 ? [...points.slice(1).map((p, i) => p.ts - points[i].ts)].sort((a, b) => a - b)[Math.floor((points.length - 1) / 2)] : bucket;
   const gap = Math.max(bucket * 2.5, spacing * 2.5);
   const segments: Point[][] = [];
@@ -13684,7 +14038,7 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
     } else if (cur.length) { segments.push(cur); cur = []; }
   }
   if (cur.length) segments.push(cur);
-  const path = (seg: Point[]) => seg.map((p, i) => `${i ? 'L' : 'M'}${x(p.ts).toFixed(1)} ${y(p.players).toFixed(1)}`).join(' ');
+  const xy = (seg: Point[]): [number, number][] => seg.map((p) => [x(p.ts), y(p.players)]);
 
   const onMove = (e: React.PointerEvent) => {
     const r = ref.current?.getBoundingClientRect();
@@ -13697,6 +14051,8 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
 
   const hp = hover != null ? points[hover] : null;
   const gridVals = [0, 1, 2, 3, 4].map((i) => (yMax / 4) * i);
+  const lastSeg = segments[segments.length - 1];
+  const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
 
   return (
     <div className="relative" ref={wrap}>
@@ -13709,36 +14065,52 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={color} stopOpacity="0.34" />
+            <stop offset="1" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
         {gridVals.map((v) => (
           <g key={v}>
-            <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" />
-            <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12">{Math.round(v * 10) / 10}</text>
+            <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" strokeDasharray={v === 0 ? undefined : '3 5'} />
+            <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{Math.round(v * 10) / 10}</text>
           </g>
         ))}
         {[0, 1, 2, 3, 4].map((i) => {
           const ts = t0 + ((now - t0) * i) / 4;
-          return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12">{tickLabel(ts, hours)}</text>;
+          return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{tickLabel(ts, hours)}</text>;
         })}
         {max > 0 && max < yMax && <line x1={L} x2={W - R} y1={y(max)} y2={y(max)} className="stroke-mute" strokeDasharray="4 4" strokeWidth="1" opacity="0.5" />}
         {points.filter((p) => !p.online).map((p) => (
-          <rect key={p.ts} x={x(p.ts) - (W - L - R) / 360} y={T} width={(W - L - R) / 180} height={H - T - B} className="fill-bad" opacity="0.18" />
+          <rect key={p.ts} x={x(p.ts) - (W - L - R) / 360} y={T} width={(W - L - R) / 180} height={H - T - B} className="fill-bad" opacity="0.2" />
         ))}
-        {segments.map((seg, i) => (
-          <g key={i}>
-            {seg.length === 1 && <circle cx={x(seg[0].ts)} cy={y(seg[0].players)} r="3.5" fill={color} />}
-            {seg.length > 1 && <path d={`${path(seg)} L${x(seg[seg.length - 1].ts)} ${y(0)} L${x(seg[0].ts)} ${y(0)} Z`} fill={color} opacity="0.14" />}
-            <path d={path(seg)} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-          </g>
-        ))}
+        {segments.map((seg, i) => {
+          const pts = xy(seg);
+          const d = smoothPath(pts);
+          return (
+            <g key={i}>
+              {seg.length === 1 && <circle cx={pts[0][0]} cy={pts[0][1]} r="3.5" fill={color} />}
+              {seg.length > 1 && <path d={`${d} L${pts[pts.length - 1][0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z`} fill={`url(#${gid})`} />}
+              {seg.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
+            </g>
+          );
+        })}
+        {endPt && !hp && (
+          <>
+            <circle cx={x(endPt.ts)} cy={y(endPt.players)} r="9" fill={color} opacity="0.22" />
+            <circle cx={x(endPt.ts)} cy={y(endPt.players)} r="4.5" fill={color} className="stroke-card" strokeWidth="2" />
+          </>
+        )}
         {hp && <line x1={x(hp.ts)} x2={x(hp.ts)} y1={T} y2={H - B} className="stroke-mute" strokeWidth="1" opacity="0.6" />}
-        {hp && hp.online ? <circle cx={x(hp.ts)} cy={y(hp.players)} r="4.5" fill={color} className="stroke-card" strokeWidth="2" /> : null}
+        {hp && hp.online ? <circle cx={x(hp.ts)} cy={y(hp.players)} r="5" fill={color} className="stroke-card" strokeWidth="2.5" /> : null}
       </svg>
       {hp && (
         <div
-          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-xl bg-ink px-2.5 py-1 text-sm font-bold text-page shadow-pop"
-          style={{ left: `${Math.min(88, Math.max(12, (x(hp.ts) / W) * 100))}%` }}
+          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 whitespace-nowrap rounded-xl bg-ink px-2.5 py-1 text-sm font-bold text-page shadow-pop"
+          style={{ left: `${Math.min(84, Math.max(16, (x(hp.ts) / W) * 100))}%` }}
         >
-          {fmtDateTime(hp.ts)} · {hp.online ? `${hp.players} игроков` : 'недоступен'}
+          {fmtDateTime(hp.ts)} · {hp.online ? `${hp.players} ${plural(hp.players, ['игрок', 'игрока', 'игроков'])}` : 'недоступен'}
         </div>
       )}
     </div>
@@ -13766,16 +14138,16 @@ function PlayersNow({ online, players, names, list }: { online: boolean; players
   const hiddenCount = Math.max(0, players - (sorted.length || names.length));
 
   return (
-    <div className="panel p-5">
-      <h2 className="mb-3 text-lg font-black">Сейчас в игре{online ? `: ${players}` : ''}</h2>
+    <section className="tile h-full p-5">
+      <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{online && <span className="ml-2 rounded-full bg-soft px-2.5 py-0.5 text-xs font-extrabold text-link">{players}</span>}</h2>
       {!online ? (
         <p className="font-semibold text-mute">Сервер недоступен.</p>
       ) : sorted.length > 0 ? (
         <>
-          <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+          <ul className="max-h-72 divide-y divide-line overflow-y-auto pr-1">
             {sorted.map((p, i) => (
-              <li key={`${p.name}-${p.since}-${i}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-card text-sm font-black text-link" aria-hidden>
+              <li key={`${p.name}-${p.since}-${i}`} className="flex items-center gap-3 py-2">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-soft text-sm font-extrabold text-link" aria-hidden>
                   {(Array.from(p.name.trim())[0] ?? '?').toUpperCase()}
                 </span>
                 <span className="min-w-0 flex-1 truncate font-bold">{p.name || 'Без имени'}</span>
@@ -13793,7 +14165,7 @@ function PlayersNow({ online, players, names, list }: { online: boolean; players
       ) : (
         <p className="font-semibold text-mute">{players > 0 ? 'Игра не передаёт имена игроков.' : 'Пока никого нет.'}</p>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -13801,6 +14173,9 @@ function PlayersNow({ online, players, names, list }: { online: boolean; players
 export default function ServerDetail({ id }: { id: number }) {
   return <ServerDetailView key={id} id={id} />;
 }
+
+const FLAGS = (code: string) =>
+  code.length === 2 ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '';
 
 function ServerDetailView({ id }: { id: number }) {
   const { isAdmin } = useAuth();
@@ -13838,17 +14213,29 @@ function ServerDetailView({ id }: { id: number }) {
       </Empty>
     );
   }
-  if (!data) return <div className="skeleton panel h-64" />;
+  if (!data) return <div className="skeleton tile h-64" />;
 
   const { server: s, stats, events, points } = data;
   const color = gameColor(s.game);
+  const [c1, c2] = gameGradient(s.game);
   const lag = s.ping != null && s.ping > 100;
   const link = connectUrl(s.game, s.address, s.port);
+  // placeholder versions such as 0.0.0.1 say nothing
+  const realVersion = s.version && !/^0(\.0)*(\.\d+)?$/.test(s.version.trim()) ? s.version.trim() : null;
   const tiles: [string, string, string?][] = [
     ['Сейчас', s.online ? `${s.players}/${s.maxPlayers}` : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
-    ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
     ['Пик игроков', stats.peakPlayers == null ? '–' : String(stats.peakPlayers), stats.peakAt ? fmtDateTime(stats.peakAt) : undefined],
+    ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
     ['В среднем', stats.avgPlayers == null ? '–' : String(stats.avgPlayers), 'пока сервер онлайн'],
+  ];
+  const countryName = s.country ? COUNTRIES.find(([c]) => c === s.country)?.[1] ?? s.country : '';
+  const info: [string, string][] = [
+    ['Игра', gameLabel(s.game)],
+    ['Адрес', s.address],
+    ...(s.map && s.online ? [['Карта', s.map] as [string, string]] : []),
+    ...(realVersion ? [['Версия', realVersion] as [string, string]] : []),
+    ...(countryName ? [['Страна', `${FLAGS(s.country)} ${countryName}`.trim()] as [string, string]] : []),
+    ['Обновлено', ago(s.updatedAt)],
   ];
 
   const refresh = async () => {
@@ -13879,78 +14266,84 @@ function ServerDetailView({ id }: { id: number }) {
   };
 
   return (
-    <div className="space-y-5">
-      <a href="#/servers" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все серверы</a>
+    <div className="space-y-3.5">
+      <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>
 
-      <div className="panel flex flex-wrap items-start justify-between gap-4 p-5">
-        <div className="flex min-w-0 items-center gap-4">
-          <GameAvatar game={s.game} size={56} />
-          <div className="min-w-0">
-            <h1 className="break-words text-2xl font-black leading-tight">{s.name}</h1>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-bold text-mute">
-              <span>{gameLabel(s.game)}{s.version ? ` · ${s.version}` : ''}</span>
-              <span className="font-mono text-sm">{s.address}</span>
+      <article
+        className="relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
+        style={{ background: `linear-gradient(120deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+      >
+        <span aria-hidden className="pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+        <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
+          <GameAvatar game={s.game} size={68} glass />
+          <div className="min-w-0 flex-1 basis-64">
+            <h1 className="break-words text-2xl font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-bold text-white/90">
+              <span>{gameLabel(s.game)}{realVersion ? ` · ${realVersion}` : ''}</span>
+              <code className="font-mono text-[13px] font-semibold">{s.address}</code>
             </div>
           </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
-          <CopyButton text={s.address} label="Адрес" />
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => void share()}>Поделиться</button>
-          {link && <a className="btn btn-soft btn-sm" href={link}>Подключиться</a>}
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+            <CopyButton text={s.address} label="Скопировать адрес" tone="grad" />
+            <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>Поделиться</button>
+            {link && <a className="btn-ghost-on-grad" href={link}>Подключиться</a>}
+          </div>
         </div>
         {!s.online && s.error && (
-          <p className="w-full rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{s.error}</p>
+          <p className="relative mt-4 rounded-2xl bg-black/20 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
-        <div className="flex w-full flex-wrap gap-2">
+        <div className="relative mt-4 flex flex-wrap items-center gap-2">
           {isAdmin && (
             <>
-              <button className="btn btn-soft btn-sm" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing(true)}>Изменить</button>
-              <button className="btn btn-danger btn-sm" onClick={remove}>Удалить</button>
+              <button className="btn-ghost-on-grad" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
+              <button className="btn-ghost-on-grad" onClick={() => setEditing(true)}>Изменить</button>
+              <button className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#b42323] transition hover:bg-white/90 max-sm:min-h-[44px]" onClick={remove}>Удалить</button>
             </>
           )}
-          <span className="ml-auto self-center text-sm font-semibold text-mute">обновлено {ago(s.updatedAt)}</span>
+          <span className="ml-auto text-sm font-bold text-white/90">обновлено {ago(s.updatedAt)}</span>
         </div>
-      </div>
+      </article>
       <ErrorLine text={error} />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
         {tiles.map(([k, v, hint]) => (
-          <div key={k} className="panel px-5 py-4">
-            <div className="text-sm font-extrabold text-mute">{k}</div>
-            <div className="text-3xl font-black tabular-nums text-link">{v}</div>
-            {hint && <div className="text-sm font-semibold text-mute">{hint}</div>}
+          <div key={k} className="tile p-4 sm:p-[18px]">
+            <div className="stat-k">{k}</div>
+            <div className="stat-v mt-1 truncate">{v}</div>
+            {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
           </div>
         ))}
       </div>
 
-      <div className="panel p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-black">Игроки</h2>
-          <div className="flex rounded-full bg-soft p-1" role="group" aria-label="Период">
-            {[[24, '24 часа'], [168, '7 дней']].map(([h, label]) => (
-              <button key={h} onClick={() => setHours(h as number)} aria-pressed={hours === h} className={`rounded-full px-3.5 py-1 text-sm font-extrabold transition ${hours === h ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}>
-                {label}
-              </button>
-            ))}
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <section className="tile p-5 lg:col-span-8" aria-label="График игроков">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-extrabold">Игроки</h2>
+            <div className="seg" role="group" aria-label="Период">
+              {[[24, '24 ч'], [168, '7 дн']].map(([h, label]) => (
+                <button key={h} type="button" onClick={() => setHours(h as number)} aria-pressed={hours === h} className="seg-item">
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
+          {stats.samples < 2 ? (
+            <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
+          ) : (
+            <PlayersChart points={points} hours={hours} max={s.maxPlayers} color={color} />
+          )}
+          {points.some((p) => !p.online) && stats.samples >= 2 && (
+            <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+          )}
+        </section>
+
+        <div className="lg:col-span-4">
+          <PlayersNow online={s.online} players={s.players} names={s.playerNames} list={data.playersNow ?? []} />
         </div>
-        {stats.samples < 2 ? (
-          <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
-        ) : (
-          <PlayersChart points={points} hours={hours} max={s.maxPlayers} color={color} />
-        )}
-        {points.some((p) => !p.online) && stats.samples >= 2 && (
-          <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
-        )}
-      </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <PlayersNow online={s.online} players={s.players} names={s.playerNames} list={data.playersNow ?? []} />
-
-        <div className="panel p-5">
-          <h2 className="mb-3 text-lg font-black">Журнал событий</h2>
+        <section className="tile p-5 lg:col-span-8">
+          <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
           {events.length === 0 ? (
             <p className="font-semibold text-mute">За выбранный период сбоев не было.</p>
           ) : (
@@ -13965,7 +14358,19 @@ function ServerDetailView({ id }: { id: number }) {
             </ul>
           )}
           {events.length > 0 && <p className="mt-3 text-sm font-semibold text-mute">{events.length} {plural(events.length, ['событие', 'события', 'событий'])} за период</p>}
-        </div>
+        </section>
+
+        <section className="tile p-5 lg:col-span-4">
+          <h2 className="mb-3 text-base font-extrabold">О сервере</h2>
+          <dl className="space-y-2.5">
+            {info.map(([k, v]) => (
+              <div key={k} className="flex items-baseline justify-between gap-4">
+                <dt className="shrink-0 text-sm font-bold text-mute">{k}</dt>
+                <dd className={`min-w-0 break-words text-right text-sm font-extrabold ${k === 'Адрес' ? 'font-mono' : ''}`}>{v}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
       </div>
 
       {editing && (
@@ -14125,18 +14530,32 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState, type ReactNode } from 'react';
-import { api, type Server } from '../api';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
-import { gameColor, gameLabel } from '../games';
+import { gameColor, gameGradient, gameLabel } from '../games';
 import { ServersArt } from '../components/Illustrations';
-import { AnimatedNumber, Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, usePoll } from '../ui';
+import { AnimatedNumber, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, usePoll } from '../ui';
 import ServerDetail from './ServerDetail';
 
 export default function ServersPage({ sub }: { sub: string }) {
   const id = Number(sub);
   if (sub && Number.isInteger(id) && id > 0) return <ServerDetail id={id} />;
   return <ServerList />;
+}
+
+function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: string; onClick: () => void; className?: string }) {
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${className}`}
+      title={on ? 'Убрать из избранного' : 'В избранное'}
+      aria-label={`В избранное: ${name}`}
+      aria-pressed={on}
+    >
+      {on ? '★' : '☆'}
+    </button>
+  );
 }
 
 function ServerList() {
@@ -14154,6 +14573,7 @@ function ServerList() {
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
+  const [uptime, setUptime] = useState<Map<number, number>>(new Map());
 
   const load = () =>
     api<Server[]>('/servers')
@@ -14161,49 +14581,70 @@ function ServerList() {
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 10_000);
+  // 30-day availability comes from the public status endpoint; the tile is simply hidden when it has no data
+  usePoll(
+    () => api<StatusInfo>('/status')
+      .then((r) => setUptime(new Map(r.servers.filter((x) => x.uptime30 != null).map((x) => [x.id, x.uptime30 as number]))))
+      .catch(() => undefined),
+    5 * 60_000,
+  );
 
-  const sorted = [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)) || Number(b.online) - Number(a.online));
+  const sorted = useMemo(
+    () => [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)) || Number(b.online) - Number(a.online)),
+    [servers, favs],
+  );
   const online = servers.filter((s) => s.online);
   const players = online.reduce((n, s) => n + s.players, 0);
+  const slots = online.reduce((n, s) => n + s.maxPlayers, 0);
   const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
   const avg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
+  const upVals = servers.map((s) => uptime.get(s.id)).filter((v): v is number => v != null);
+  const upAvg = upVals.length ? upVals.reduce((a, b) => a + b, 0) / upVals.length : null;
+  const upLow = upVals.filter((v) => v < 99).length;
+
+  // the hero: the first favourite (online ones first), otherwise the busiest online server
+  const hero = useMemo(() => {
+    if (sorted.length === 0) return null;
+    const fav = sorted.find((s) => favs.includes(s.id));
+    if (fav) return fav;
+    const busiest = [...online].sort((a, b) => b.players - a.players)[0];
+    return busiest ?? sorted[0];
+  }, [sorted, favs, online]);
+  const rest = sorted.filter((s) => s.id !== hero?.id);
 
   const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
+  const stats: { k: string; v: ReactNode; s: string; i: string }[] = [
+    { i: 'M3 6h18M3 12h18M3 18h18', k: plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), v: <AnimatedNumber value={servers.length} />, s: `${online.length} онлайн` },
+    { i: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8', k: 'Игроков сейчас', v: <AnimatedNumber value={players} pulse />, s: slots > 0 ? `из ${slots} мест` : 'нет серверов онлайн' },
+    {
+      i: 'M22 12h-4l-3 9L9 3l-3 9H2',
+      k: 'Средний пинг',
+      v: avg == null ? '–' : <><AnimatedNumber value={avg} /><small> мс</small></>,
+      s: avg == null ? 'нет данных' : avg > LAG_PING ? 'высокий' : 'в норме',
+    },
+  ];
+  if (upAvg != null) {
+    stats.push({
+      i: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+      k: 'Аптайм 30 дн',
+      v: <>{(Math.round(upAvg * 10) / 10).toLocaleString('ru-RU')}<small>%</small></>,
+      s: upLow === 0 ? 'без сбоев' : `${upLow} ${plural(upLow, ['сервер', 'сервера', 'серверов'])} ниже 99%`,
+    });
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHead title="Серверы" subtitle="Состояние ваших игровых серверов в реальном времени" icon={<IconServers />}>
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers">Управление серверами</a>}
       </PageHead>
       <ErrorLine text={error} />
 
-      {servers.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {([
-            [plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), <AnimatedNumber value={servers.length} />],
-            ['Онлайн', <><AnimatedNumber value={online.length} /> из {servers.length}</>],
-            [plural(players, ['Игрок', 'Игрока', 'Игроков']), <AnimatedNumber value={players} pulse />],
-            ['Средний пинг', avg == null ? '–' : <><AnimatedNumber value={avg} /> мс</>],
-          ] as [string, ReactNode][]).map(([k, v]) => (
-            <div key={k} className="panel px-5 py-4">
-              <div className="text-sm font-extrabold text-mute">{k}</div>
-              <div className="text-2xl font-black tabular-nums text-link sm:text-3xl">{v}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {servers.length > 0 && (
-        <FleetBar
-          online={servers.filter((x) => x.online && !isLag(x)).length}
-          lag={servers.filter(isLag).length}
-          offline={servers.filter((x) => x.hasStatus && !x.online).length}
-        />
-      )}
-
       {!loaded && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[0, 1, 2].map((i) => <div key={i} className="skeleton panel h-56" />)}
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
+          <div className="skeleton tile col-span-2 h-72 lg:col-span-6 lg:row-span-2 lg:h-auto" />
+          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton tile h-32 lg:col-span-3" />)}
+          {[0, 1, 2].map((i) => <div key={i} className="skeleton tile col-span-2 h-60 sm:col-span-1 lg:col-span-3" />)}
         </div>
       )}
 
@@ -14213,72 +14654,140 @@ function ServerList() {
         </Empty>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {sorted.map((s, i) => {
-          const color = gameColor(s.game);
-          const lag = isLag(s);
-          return (
-            <article
-              key={s.id}
-              className={`pop panel flex cursor-pointer flex-col gap-3 p-5 transition hover:-translate-y-0.5 hover:ring-2 hover:ring-brand/30 ${i === 0 && sorted.length > 2 ? 'lg:col-span-2' : ''}`}
-              onClick={() => open(s)}
+      {servers.length > 0 && (
+        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+          {hero && <HeroTile s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
+
+          {stats.map((t, i) => (
+            <div
+              key={t.k}
+              className={`tile flex flex-col gap-1 p-4 sm:p-[18px] ${stats.length === 3 && i === 2 ? 'col-span-2 lg:col-span-6' : 'col-span-1 lg:col-span-3'}`}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <GameAvatar game={s.game} />
-                  <div className="min-w-0">
-                    <h3 className="line-clamp-3 break-words font-black leading-tight" title={s.name}>
-                      <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-link">{s.name}</a>
-                    </h3>
-                    <div className="truncate text-sm font-bold text-mute">{gameLabel(s.game)}</div>
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-2">
-                  <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
-                  {me && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); void toggleFav(s.id); }}
-                      className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${favs.includes(s.id) ? 'text-warn' : 'text-mute'}`}
-                      title={favs.includes(s.id) ? 'Убрать из избранного' : 'В избранное'}
-                      aria-label={`В избранное: ${s.name}`}
-                      aria-pressed={favs.includes(s.id)}
-                    >{favs.includes(s.id) ? '★' : '☆'}</button>
-                  )}
-                </div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="stat-k">{t.k}</div>
+                <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-soft text-link">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={t.i} /></svg>
+                </span>
               </div>
-
-              {s.online ? (
-                <>
-                  <div className="flex items-baseline gap-1.5">
-                    <AnimatedNumber value={s.players} pulse className="text-4xl font-black" />
-                    <span className="font-extrabold text-mute">/ {s.maxPlayers}</span>
-                    <span className="ml-auto text-sm font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
-                  </div>
-                  <FillBar value={s.players} max={s.maxPlayers} color={color} />
-                  <Spark serverId={s.id} color={color} />
-                </>
-              ) : (
-                s.hasStatus && (
-                  <div className="rounded-2xl bg-badbg px-3.5 py-2.5" title={s.error ?? undefined}>
-                    <p className="line-clamp-2 text-sm font-bold leading-snug text-bad">{s.error ?? 'Сервер не отвечает'}</p>
-                  </div>
-                )
-              )}
-
-              <div className="flex items-center justify-between gap-2 text-sm font-bold text-mute">
-                <span className="truncate font-mono text-sm" title={s.address}>{s.address}</span>
-                <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
+              <div className="mt-auto">
+                <div className="stat-v">{t.v}</div>
+                <div className="stat-s mt-0.5">{t.s}</div>
               </div>
+            </div>
+          ))}
 
-              <div className="mt-auto flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
-                <a className="btn btn-soft btn-sm" href={`#/servers/${s.id}`}>Подробнее</a>
-              </div>
-            </article>
-          );
-        })}
+          {rest.map((s) => (
+            <SmallTile key={s.id} s={s} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HeroTile({ s, uptime, fav, onFav, onOpen }: { s: Server; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+  const [c1, c2] = gameGradient(s.game);
+  const lag = isLag(s);
+  return (
+    <article
+      className="tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
+      style={{ background: `linear-gradient(140deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
+      onClick={onOpen}
+    >
+      <span aria-hidden className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
+      <span aria-hidden className="pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
+
+      <div className="relative flex items-start gap-3">
+        <GameAvatar game={s.game} size={48} glass />
+        <div className="min-w-0 flex-1">
+          <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
+            <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{s.name}</a>
+          </h2>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
+            <span>{gameLabel(s.game)}</span>
+            <span aria-hidden>·</span>
+            <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
+        </div>
       </div>
 
-    </div>
+      {s.online ? (
+        <>
+          <div className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
+            <AnimatedNumber value={s.players} pulse className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" />
+            <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
+            {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
+          </div>
+          <div className="relative mt-auto pt-2">
+            <Spark serverId={s.id} color="#ffffff" variant="hero" />
+          </div>
+        </>
+      ) : (
+        s.hasStatus && (
+          <div className="relative mt-4 rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
+            <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
+            <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
+          </div>
+        )
+      )}
+
+      <div className="relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
+        <span>за 24 часа</span>
+        {uptime != null && <span>аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+        <span className="truncate">{s.online && s.map ? `карта ${s.map}` : `обновлено ${ago(s.updatedAt)}`}</span>
+      </div>
+    </article>
+  );
+}
+
+function SmallTile({ s, fav, onFav, onOpen }: { s: Server; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+  const [c1, c2] = gameGradient(s.game);
+  const lag = isLag(s);
+  return (
+    <article className="tile tile-hover pop col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" onClick={onOpen}>
+      <div className="flex h-[88px] items-start justify-between rounded-[18px] p-2.5" style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
+        <GameAvatar game={s.game} size={40} glass />
+        <div className="flex items-center gap-0.5">
+          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
+        </div>
+      </div>
+
+      <div className="px-1.5">
+        <h3 className="line-clamp-2 break-words text-[14.5px] font-extrabold leading-tight" title={s.name}>
+          <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-link">{s.name}</a>
+        </h3>
+        <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
+      </div>
+
+      {s.online ? (
+        <>
+          <div className="flex items-baseline gap-1.5 px-1.5">
+            <AnimatedNumber value={s.players} pulse className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" />
+            <span className="font-bold text-mute">/ {s.maxPlayers}</span>
+            <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
+          </div>
+          <div className="px-1.5"><Spark serverId={s.id} color={gameColor(s.game)} /></div>
+        </>
+      ) : (
+        s.hasStatus ? (
+          <div className="mx-1.5 rounded-xl bg-badbg px-3 py-2.5" title={s.error ?? undefined}>
+            <p className="line-clamp-2 text-[13px] font-bold leading-snug text-bad">{s.error ?? 'Сервер не отвечает'}</p>
+          </div>
+        ) : (
+          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-[13px] font-bold text-mute">Ожидаем первый ответ</div>
+        )
+      )}
+
+      <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
+        <span className="truncate font-mono" title={s.address}>{s.address}</span>
+        <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
+      </div>
+    </article>
   );
 }
 __COREGSM_EOF__
@@ -15285,7 +15794,7 @@ import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, typ
 import { useAuth } from './auth';
 import { getToken, type Server } from './api';
 import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
-import { GAME_IMAGE, gameAbbr, gameColor } from './games';
+import { GAME_IMAGE, gameAbbr, gameGradient } from './games';
 import { gameIconPath, ICON_PATHS } from './gameIcons';
 
 /**
@@ -15536,13 +16045,21 @@ export function StatusPill({ online, known, lag }: { online: boolean; known: boo
   return lag ? <span className="pill pill-warn">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
 }
 
-export function GameAvatar({ game, size = 44 }: { game: string; size?: number }) {
+/** `glass`: translucent white square, for use on top of a game-coloured cover */
+export function GameAvatar({ game, size = 44, glass = false }: { game: string; size?: number; glass?: boolean }) {
   const icon = gameIconPath(game);
-  const color = gameColor(game);
+  const [c1, c2] = gameGradient(game);
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-2xl font-black text-white shadow-pop"
-      style={{ width: size, height: size, background: `linear-gradient(145deg, ${color}, ${color}cc)`, fontSize: size * 0.34 }}
+      className="grid shrink-0 place-items-center font-black text-white"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.3),
+        background: glass ? 'rgba(255,255,255,0.24)' : `linear-gradient(135deg, ${c1}, ${c2})`,
+        fontSize: size * 0.34,
+        boxShadow: glass ? 'inset 0 0 0 1px rgba(255,255,255,0.25)' : `0 4px 12px -4px ${c1}99`,
+      }}
       aria-hidden
     >
       {GAME_IMAGE[game] ? (
@@ -15575,7 +16092,7 @@ const SPARK_EVERY = 3 * 60_000;
  * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
  * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
  */
-export function Spark({ serverId, color }: { serverId: number; color: string }) {
+export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
   const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
 
   useEffect(() => {
@@ -15615,7 +16132,7 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
     const cached = sparkCache.get(serverId);
     const age = cached ? Date.now() - cached.at : Infinity;
     // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
-    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : 150 + Math.random() * 2500);
+    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : variant === 'hero' ? 0 : 150 + Math.random() * 2500);
 
     const onVisible = () => {
       if (document.hidden) return;
@@ -15629,20 +16146,67 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
       ctl?.abort();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [serverId]);
+  }, [serverId, variant]);
 
-  if (pts.length < 2) return <div className="h-9 rounded-xl bg-soft/60" aria-hidden />;
-  const w = 240, h = 36;
-  const max = Math.max(1, ...pts);
-  const xy = pts.map((v, i) => [(i / (pts.length - 1)) * w, h - 3 - (v / max) * (h - 6)]);
-  const d = 'M' + xy.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L');
-  const last = xy[xy.length - 1];
+  if (pts.length < 2) return <div className={`${variant === 'hero' ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} rounded-2xl`} aria-hidden />;
+  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}`;
+  return variant === 'hero'
+    ? <SmoothArea values={pts} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    : <SmoothArea values={pts} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+}
+
+/** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
+export function smoothPath(pts: [number, number][]): string {
+  if (pts.length === 0) return '';
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const cx = (x0 + x1) / 2;
+    d += ` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
+  }
+  return d;
+}
+
+/**
+ * Smooth area chart of a player-count series: gradient fill, line, optional dashed grid and an end dot with a halo.
+ * The drawing stretches (preserveAspectRatio none, non-scaling stroke); the dot is an HTML element so it stays round.
+ */
+export function SmoothArea({
+  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax,
+}: {
+  values: number[]; color: string; w?: number; h?: number; grid?: boolean; dot?: boolean; strokeWidth?: number; fill?: number;
+  className?: string; label?: string; max?: number;
+}) {
+  const gid = useId();
+  const pad = 3;
+  const max = Math.max(1, fixedMax ?? 0, ...values) * 1.12;
+  const pts: [number, number][] = values.map((v, i) => [pad + (i / Math.max(1, values.length - 1)) * (w - pad * 2), h - pad - (v / max) * (h - pad * 2)]);
+  const line = smoothPath(pts);
+  const last = pts[pts.length - 1];
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-9 w-full" preserveAspectRatio="none" role="img" aria-label={`Игроков за 24 часа: от ${Math.min(...pts)} до ${max}`}>
-      <path d={`${d} L${w} ${h} L0 ${h}Z`} fill={color} opacity="0.14" />
-      <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      <circle cx={last[0]} cy={last[1]} r="3.5" fill={color} />
-    </svg>
+    <div className={`relative w-full ${className}`}>
+      <svg viewBox={`0 0 ${w} ${h}`} className="absolute inset-0 h-full w-full overflow-visible" preserveAspectRatio="none" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={color} stopOpacity={fill} />
+            <stop offset="1" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {grid && [1, 2, 3].map((k) => (
+          <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
+        ))}
+        <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
+        <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      {dot && (
+        <span
+          aria-hidden
+          className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+          style={{ left: `${(last[0] / w) * 100}%`, top: `${(last[1] / h) * 100}%`, background: color, boxShadow: `0 0 0 4px ${color}40` }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -15650,9 +16214,9 @@ export function PageHead({ title, subtitle, icon, children }: { title: string; s
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div className="flex min-w-0 items-center gap-3.5">
-        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-soft text-link">{icon}</span>}
+        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
         <div className="min-w-0">
-          <h1 className="text-2xl font-black tracking-tight sm:text-3xl">{title}</h1>
+          <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
           {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
         </div>
       </div>
@@ -15677,7 +16241,7 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
-export function CopyButton({ text, label = 'Копировать', className = '' }: { text: string; label?: string; className?: string }) {
+export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' }) {
   const [done, setDone] = useState(false);
   const timer = useRef<number>();
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -15692,7 +16256,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
     }
   };
   return (
-    <button type="button" className={`btn btn-soft btn-sm ${className}`} onClick={copy} title={label}>
+    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
       <IconCopy />
       {done ? 'Скопировано' : label}
     </button>
@@ -15908,16 +16472,16 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
     { id: 'register', label: 'Регистрация' },
   ] as const;
   return (
-    <div className="auth-card w-full max-w-sm rounded-3xl border bg-card/90 p-6 backdrop-blur sm:p-7">
+    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur sm:p-7">
       <AuthBrand subtitle={mode === 'login' ? 'Войдите в свой аккаунт' : 'Создайте аккаунт игрока'} />
       {access.registration && (
-        <nav className="mb-5 flex gap-1 rounded-full bg-soft p-1" aria-label="Вход или регистрация">
+        <nav className="seg mb-5 flex w-full" aria-label="Вход или регистрация">
           {tabs.map((t) => (
             <a
               key={t.id}
               href={`#/${t.id}`}
               aria-current={mode === t.id ? 'page' : undefined}
-              className={`flex flex-1 items-center justify-center rounded-full px-3 py-1.5 text-center font-extrabold transition max-sm:min-h-[44px] ${mode === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+              className="seg-item flex-1"
             >
               {t.label}
             </a>
@@ -16073,7 +16637,7 @@ export function PasswordStrength({ password }: { password: string }) {
 }
 
 /** avatar from Discord, or the first letter when there is none (or the image failed to load) */
-export function UserAvatar({ name, url, size = 28, tone = 'soft', className = '' }: { name: string; url?: string | null; size?: number; tone?: 'soft' | 'brand'; className?: string }) {
+export function UserAvatar({ name, url, size = 28, tone = 'soft', className = '' }: { name: string; url?: string | null; size?: number; tone?: 'soft' | 'brand' | 'grad'; className?: string }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [url]);
   if (url && !failed) {
@@ -16082,7 +16646,7 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   return (
     <span
       aria-hidden
-      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : 'bg-soft text-link'} ${className}`}
+      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-gradient-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
       style={{ width: size, height: size, fontSize: size * 0.48 }}
     >
       {name.slice(0, 1).toUpperCase()}
@@ -16161,8 +16725,8 @@ export default {
         // input borders: >= 3:1 against the card (line is decorative only)
         field: c('field'),
         soft: c('soft'),
-        // brand: fills and buttons; link: brand-coloured text (lighter in the dark theme for contrast)
-        brand: { DEFAULT: c('brand'), hover: c('brand-hover') },
+        // brand: fills and buttons; brand-2: the darker end of brand gradients; link: brand-coloured text (lighter in the dark theme for contrast)
+        brand: { DEFAULT: c('brand'), hover: c('brand-hover'), 2: c('brand-2') },
         link: c('link'),
         ok: c('ok'),
         okbg: c('okbg'),
@@ -16177,7 +16741,7 @@ export default {
         sans: ['"Manrope Variable"', 'Manrope', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
-      borderRadius: { '4xl': '2rem' },
+      borderRadius: { '4xl': '2rem', tile: '26px' },
       boxShadow: {
         soft: 'var(--shadow-soft)',
         pop: 'var(--shadow-pop)',
