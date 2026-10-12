@@ -137,6 +137,13 @@ try {
   /* column already exists */
 }
 
+// older databases: country override (ISO code, '' = detect automatically)
+try {
+  db.exec("ALTER TABLE servers ADD COLUMN country TEXT NOT NULL DEFAULT ''");
+} catch {
+  /* column already exists */
+}
+
 // older databases: add the column once
 try {
   db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
@@ -162,6 +169,8 @@ export interface ServerRow {
   id: number;
   /** address shown to people (public IP or domain); '' = show host:port */
   display_address: string;
+  /** country shown in Discord (ISO 3166-1 alpha-2); '' = detected from the IP */
+  country: string;
   name: string;
   game: string;
   host: string;

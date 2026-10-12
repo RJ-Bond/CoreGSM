@@ -276,7 +276,7 @@ export default function ServerDetail({ id }: { id: number }) {
 
       {editing && (
         <ServerForm
-          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress }}
+          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }}
           id={s.id}
           onClose={() => setEditing(false)}
           onSaved={() => { setEditing(false); void load(); }}

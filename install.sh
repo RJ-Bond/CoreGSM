@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9f8b43766155"
+COREGSM_BUILD="8cdcbc6db5e0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -1159,6 +1159,13 @@ try {
   /* column already exists */
 }
 
+// older databases: country override (ISO code, '' = detect automatically)
+try {
+  db.exec("ALTER TABLE servers ADD COLUMN country TEXT NOT NULL DEFAULT ''");
+} catch {
+  /* column already exists */
+}
+
 // older databases: add the column once
 try {
   db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
@@ -1184,6 +1191,8 @@ export interface ServerRow {
   id: number;
   /** address shown to people (public IP or domain); '' = show host:port */
   display_address: string;
+  /** country shown in Discord (ISO 3166-1 alpha-2); '' = detected from the IP */
+  country: string;
   name: string;
   game: string;
   host: string;
@@ -2505,6 +2514,8 @@ const serverSchema = z.object({
     .max(100)
     .regex(/^[^\s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
     .optional(),
+  // two-letter country code shown in the Discord message; empty = detect from the address
+  country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
 });
 
 /** What a non-admin may see: the display address, never the internal host/port used for querying. */
@@ -2526,6 +2537,7 @@ function serialize(r: ServerJoin) {
     port: r.port,
     queryPort: r.query_port,
     displayAddress: r.display_address,
+    country: r.country ?? '',
     // the address shown in the panel and on cards
     address: r.display_address || `${r.host}:${r.port}`,
     hasStatus: r.has_status != null,
@@ -2564,8 +2576,8 @@ app.post(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const info = db
-      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', Date.now());
+      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
@@ -2580,8 +2592,8 @@ app.put(
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
     const r = db
-      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=? WHERE id=?')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', id);
+      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=? WHERE id=?')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));
@@ -2605,6 +2617,7 @@ app.post(
       id: 0,
       name: '',
       display_address: '',
+      country: '',
       game: b.data.game,
       host: b.data.host,
       port: b.data.port,
@@ -2768,7 +2781,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = getSetting('public_base');
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -5122,6 +5135,8 @@ export interface Server {
   queryPort: number | null;
   /** what people see instead of host:port ('' = not set) */
   displayAddress: string;
+  /** country shown in Discord ('' = detected automatically) */
+  country: string;
   /** the address shown in the panel and on cards */
   address: string;
   hasStatus: boolean;
@@ -5159,6 +5174,8 @@ export interface ServerInput {
   port: number;
   queryPort: number | null;
   displayAddress: string;
+  /** ISO country code shown in Discord; '' = detect automatically */
+  country: string;
 }
 
 /** an error answer from the API; `data` is the whole JSON body (retryAfter, attemptsLeft, pending ...) */
@@ -5676,6 +5693,26 @@ export function Markdown({ text }: { text: string }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/countries.ts" << '__COREGSM_EOF__'
+// Countries for the server form: ISO 3166-1 alpha-2 code + Russian name (from the browser's Intl data).
+const CODES = [
+  'RU', 'UA', 'BY', 'KZ', 'PL', 'DE', 'FR', 'GB', 'NL', 'US', 'CA', 'FI', 'SE', 'NO', 'DK', 'CZ', 'SK', 'HU', 'RO', 'BG', 'RS', 'HR', 'SI',
+  'AT', 'CH', 'IT', 'ES', 'PT', 'BE', 'LU', 'IE', 'IS', 'GR', 'TR', 'LT', 'LV', 'EE', 'MD', 'GE', 'AM', 'AZ', 'UZ', 'KG', 'TJ', 'TM', 'MN',
+  'IL', 'AE', 'SA', 'QA', 'EG', 'ZA', 'NG', 'MA', 'IN', 'PK', 'BD', 'CN', 'JP', 'KR', 'TW', 'HK', 'SG', 'MY', 'TH', 'VN', 'ID', 'PH',
+  'AU', 'NZ', 'MX', 'BR', 'AR', 'CL', 'CO', 'PE', 'CY', 'MT', 'AL', 'MK', 'BA', 'ME',
+];
+
+const names = (() => {
+  try {
+    return new Intl.DisplayNames(['ru'], { type: 'region' });
+  } catch {
+    return null;
+  }
+})();
+
+export const COUNTRIES: [string, string][] = CODES.map((c): [string, string] => [c, names?.of(c) ?? c]).sort((a, b) => a[1].localeCompare(b[1], 'ru'));
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameIcons.ts" << '__COREGSM_EOF__'
 // Pictograms for the games (24x24 grid, drawn with a 2px round stroke). The same data is used by the PNG card
 // in the backend (core-backend/src/gameIcons.ts): keep both files in sync.
@@ -6083,7 +6120,7 @@ function ServersManage() {
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="flex gap-2">
               <button className="btn btn-soft btn-sm" onClick={() => void refresh(s)} disabled={busyId === s.id}>{busyId === s.id ? '…' : 'Опросить'}</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress } })}>Изменить</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country } })}>Изменить</button>
               <button className="btn btn-danger btn-sm" onClick={() => void remove(s)}>Удалить</button>
             </div>
           </div>
@@ -8248,7 +8285,7 @@ export default function ServerDetail({ id }: { id: number }) {
 
       {editing && (
         <ServerForm
-          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress }}
+          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }}
           id={s.id}
           onClose={() => setEditing(false)}
           onSaved={() => { setEditing(false); void load(); }}
@@ -8264,8 +8301,9 @@ import { useState, type FormEvent } from 'react';
 import { api, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import { ErrorLine, Field, Modal } from '../ui';
+import { COUNTRIES } from '../countries';
 
-export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '' };
+export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
 export default function ServerForm({ initial, id, onClose, onSaved }: { initial: ServerInput; id?: number; onClose: () => void; onSaved: () => void }) {
@@ -8277,7 +8315,7 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
   const [test, setTest] = useState<TestResult | null>(null);
 
   // "advanced" is open when it already holds something (editing)
-  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress);
+  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country);
 
   const pickGame = (v: string) => {
     setTest(null);
@@ -8379,6 +8417,13 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
             <Field label="Адрес для отображения">
               <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
             </Field>
+            <Field label="Страна (для сообщения в Discord)">
+              <select id="srv-country" className="input" value={f.country} onChange={(e) => change({ country: e.target.value })}>
+                <option value="">Определить автоматически по адресу</option>
+                {COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              </select>
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.</p>
             <p className="-mt-2 text-sm font-semibold text-mute">Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.</p>
           </div>
         </details>
