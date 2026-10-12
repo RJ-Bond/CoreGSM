@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8707ca0cbd93"
+COREGSM_BUILD="8735b3d1c06e"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2229,6 +2229,7 @@ export interface EmbedServer {
 
 export interface DiscordEmbed {
   title?: string;
+  url?: string;
   description?: string;
   color?: number;
   author?: { name: string };
@@ -2239,6 +2240,8 @@ export interface DiscordEmbed {
 }
 
 export interface EmbedExtra {
+  /** panel server id: the title and the "all players" link point to its page */
+  serverId?: number | null;
   /** last time the server answered (for the offline note) */
   lastOnlineAt?: number | null;
   /** public URL of the game icon (needs a public domain; omitted otherwise) */
@@ -2320,22 +2323,31 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   const ping = s.online && s.ping != null ? ` · ${s.ping} мс` : '';
   const pct = s.maxPlayers ? ` (${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%)` : '';
 
-  // third column: the country; without one, the game version when it says something, else the 24 h uptime
+  // third row, last column: the country; without one, the game version when it says something
   const ver = (s.version ?? '').trim();
   const realVersion = ver && !/^0(\.0)*(\.\d+)?$/.test(ver) ? ver : null;
-  const third: { name: string; value: string; inline: boolean } = extra.country
+  const third: { name: string; value: string; inline: boolean } | null = extra.country
     ? { name: '🌍 Страна', value: extra.country, inline: true }
     : realVersion
       ? { name: '🔖 Версия', value: cut(realVersion, 100), inline: true }
-      : { name: '⏱️ Аптайм 24 ч', value: uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`, inline: true };
+      : null;
+
+  // players with a fill bar: ▰▰▰▰▰▰▰▱▱▱
+  const bar = (() => {
+    if (!s.online || !s.maxPlayers) return '';
+    const n = Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 10);
+    return '\n' + '▰'.repeat(n) + '▱'.repeat(10 - n);
+  })();
+  const uptime = uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`;
 
   const fields: NonNullable<DiscordEmbed['fields']> = [
     { name: '📶 Статус', value: `${status}${ping}`, inline: true },
-    { name: '📍 Адрес:порт', value: addr, inline: true },
-    third,
+    { name: '👥 Игроки', value: s.online ? `**${s.players}**/${s.maxPlayers || '?'}${pct}${bar}` : '—', inline: true },
+    { name: '⏱️ Аптайм 24 ч', value: uptime, inline: true },
+    { name: '📍 Адрес', value: addr, inline: false },
     { name: '🎮 Игра', value: cut(gameLabel(s.game), 100), inline: true },
-    { name: '🗺️ Текущая карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
-    { name: '👥 Игроки', value: s.online ? `**${s.players}**/${s.maxPlayers || '?'}${pct}` : '—', inline: true },
+    { name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
+    ...(third ? [third] : []),
   ];
 
   if (s.online) {
@@ -2343,7 +2355,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       const shown = s.playerNames.slice(0, 18);
       const rest = s.players - shown.length;
       let list = nameRows(shown);
-      if (rest > 0) list += `\n… и ещё ${rest}`;
+      if (rest > 0) list += extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
       fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list, 1000) });
     } else if (s.players === 0) {
       fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
@@ -2362,6 +2374,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   return {
     title: cut(s.name, 256),
+    url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/#/servers/${extra.serverId}` : undefined,
     description: [...lines, WIDTH_PAD].join('\n'),
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
     thumbnail,
@@ -4107,7 +4120,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -18834,12 +18847,12 @@ __COREGSM_EOF__
     -webkit-text-size-adjust: 100%;
   }
   /* two soft colour washes behind everything: brand (top right) and cyan (top left) */
-  body::before {
-    content: '';
-    position: fixed; inset: 0; z-index: -1; pointer-events: none;
-    background:
+  /* the washes are part of the body background: a fixed full-screen layer is what Chrome showed as a black tile */
+  body {
+    background-image:
       radial-gradient(56rem 25rem at 85% -9rem, var(--wash-a), transparent 70%),
       radial-gradient(44rem 22rem at -4% -4rem, var(--wash-b), transparent 70%);
+    background-repeat: no-repeat;
   }
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }
@@ -19066,7 +19079,7 @@ main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #000
 .live-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: rgb(var(--ok)); animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 @keyframes live-ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
 
-.offline-cover { filter: saturate(.3) brightness(.97); }
+.offline-cover { opacity: .78; }
 
 .skeleton { background-image: linear-gradient(100deg, rgb(var(--soft)) 30%, rgb(var(--card)) 50%, rgb(var(--soft)) 70%); background-size: 220% 100%; animation: skeleton-sweep 1.5s ease-in-out infinite; }
 @keyframes skeleton-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
@@ -19312,7 +19325,7 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
    the column of 0..9 is absolute and slides under the clip */
 .roll-d { display: inline-block; position: relative; line-height: 1; overflow: hidden; overflow: clip; user-select: none; }
 .roll-g { visibility: hidden; }
-.roll-col { position: absolute; left: 0; top: 0; display: block; transition: transform .75s cubic-bezier(.2, .85, .2, 1); will-change: transform; }
+.roll-col { position: absolute; left: 0; top: 0; display: block; transition: transform .75s cubic-bezier(.2, .85, .2, 1); }
 .roll-col > span { display: block; height: 1em; line-height: 1; }
 .roll-d.new { animation: roll-in .45s ease-out both; }
 @keyframes roll-in { from { opacity: 0; transform: translateY(.35em); } }

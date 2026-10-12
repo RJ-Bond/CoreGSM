@@ -109,12 +109,12 @@
     -webkit-text-size-adjust: 100%;
   }
   /* two soft colour washes behind everything: brand (top right) and cyan (top left) */
-  body::before {
-    content: '';
-    position: fixed; inset: 0; z-index: -1; pointer-events: none;
-    background:
+  /* the washes are part of the body background: a fixed full-screen layer is what Chrome showed as a black tile */
+  body {
+    background-image:
       radial-gradient(56rem 25rem at 85% -9rem, var(--wash-a), transparent 70%),
       radial-gradient(44rem 22rem at -4% -4rem, var(--wash-b), transparent 70%);
+    background-repeat: no-repeat;
   }
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }
@@ -341,7 +341,7 @@ main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #000
 .live-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: rgb(var(--ok)); animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 @keyframes live-ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
 
-.offline-cover { filter: saturate(.3) brightness(.97); }
+.offline-cover { opacity: .78; }
 
 .skeleton { background-image: linear-gradient(100deg, rgb(var(--soft)) 30%, rgb(var(--card)) 50%, rgb(var(--soft)) 70%); background-size: 220% 100%; animation: skeleton-sweep 1.5s ease-in-out infinite; }
 @keyframes skeleton-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
@@ -587,7 +587,7 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
    the column of 0..9 is absolute and slides under the clip */
 .roll-d { display: inline-block; position: relative; line-height: 1; overflow: hidden; overflow: clip; user-select: none; }
 .roll-g { visibility: hidden; }
-.roll-col { position: absolute; left: 0; top: 0; display: block; transition: transform .75s cubic-bezier(.2, .85, .2, 1); will-change: transform; }
+.roll-col { position: absolute; left: 0; top: 0; display: block; transition: transform .75s cubic-bezier(.2, .85, .2, 1); }
 .roll-col > span { display: block; height: 1em; line-height: 1; }
 .roll-d.new { animation: roll-in .45s ease-out both; }
 @keyframes roll-in { from { opacity: 0; transform: translateY(.35em); } }

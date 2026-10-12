@@ -24,6 +24,7 @@ export interface EmbedServer {
 
 export interface DiscordEmbed {
   title?: string;
+  url?: string;
   description?: string;
   color?: number;
   author?: { name: string };
@@ -34,6 +35,8 @@ export interface DiscordEmbed {
 }
 
 export interface EmbedExtra {
+  /** panel server id: the title and the "all players" link point to its page */
+  serverId?: number | null;
   /** last time the server answered (for the offline note) */
   lastOnlineAt?: number | null;
   /** public URL of the game icon (needs a public domain; omitted otherwise) */
@@ -115,22 +118,31 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   const ping = s.online && s.ping != null ? ` · ${s.ping} мс` : '';
   const pct = s.maxPlayers ? ` (${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%)` : '';
 
-  // third column: the country; without one, the game version when it says something, else the 24 h uptime
+  // third row, last column: the country; without one, the game version when it says something
   const ver = (s.version ?? '').trim();
   const realVersion = ver && !/^0(\.0)*(\.\d+)?$/.test(ver) ? ver : null;
-  const third: { name: string; value: string; inline: boolean } = extra.country
+  const third: { name: string; value: string; inline: boolean } | null = extra.country
     ? { name: '🌍 Страна', value: extra.country, inline: true }
     : realVersion
       ? { name: '🔖 Версия', value: cut(realVersion, 100), inline: true }
-      : { name: '⏱️ Аптайм 24 ч', value: uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`, inline: true };
+      : null;
+
+  // players with a fill bar: ▰▰▰▰▰▰▰▱▱▱
+  const bar = (() => {
+    if (!s.online || !s.maxPlayers) return '';
+    const n = Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 10);
+    return '\n' + '▰'.repeat(n) + '▱'.repeat(10 - n);
+  })();
+  const uptime = uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`;
 
   const fields: NonNullable<DiscordEmbed['fields']> = [
     { name: '📶 Статус', value: `${status}${ping}`, inline: true },
-    { name: '📍 Адрес:порт', value: addr, inline: true },
-    third,
+    { name: '👥 Игроки', value: s.online ? `**${s.players}**/${s.maxPlayers || '?'}${pct}${bar}` : '—', inline: true },
+    { name: '⏱️ Аптайм 24 ч', value: uptime, inline: true },
+    { name: '📍 Адрес', value: addr, inline: false },
     { name: '🎮 Игра', value: cut(gameLabel(s.game), 100), inline: true },
-    { name: '🗺️ Текущая карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
-    { name: '👥 Игроки', value: s.online ? `**${s.players}**/${s.maxPlayers || '?'}${pct}` : '—', inline: true },
+    { name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
+    ...(third ? [third] : []),
   ];
 
   if (s.online) {
@@ -138,7 +150,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       const shown = s.playerNames.slice(0, 18);
       const rest = s.players - shown.length;
       let list = nameRows(shown);
-      if (rest > 0) list += `\n… и ещё ${rest}`;
+      if (rest > 0) list += extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
       fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list, 1000) });
     } else if (s.players === 0) {
       fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
@@ -157,6 +169,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   return {
     title: cut(s.name, 256),
+    url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/#/servers/${extra.serverId}` : undefined,
     description: [...lines, WIDTH_PAD].join('\n'),
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
     thumbnail,
