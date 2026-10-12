@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { WHITE, brandVars, parseTriplet, triplet, type RGB } from '../colors';
 import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { useAuth } from '../auth';
 import { Switch as ToggleSwitch } from '../components/Switch';
-import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
+import { CopyButton, ErrorLine, Field, GoLink, IconKey, IconSettings, IconTrash, IconUsers, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
+import BackupsCard from './Backups';
+import { SETTINGS_TABS } from './adminNav';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -89,7 +91,7 @@ function BrandCard() {
   const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
 
   return (
-    <form onSubmit={save} className="panel space-y-5 p-6">
+    <form onSubmit={save} className="panel space-y-5 p-6" data-tour="brand">
       <div>
         <h2 className="text-lg font-black">Оформление</h2>
         <p className="font-semibold text-mute">Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord.</p>
@@ -154,19 +156,44 @@ function BrandCard() {
   );
 }
 
-const TABS = [
-  { id: 'bot', label: 'Discord-бот' },
-  { id: 'brand', label: 'Оформление' },
-  { id: 'security', label: 'Безопасность' },
-  { id: 'updates', label: 'Обновления' },
-] as const;
+// the ids stay the canonical hashes (#/admin/settings/bot|brand|security|updates); only the labels are friendlier
+const TABS = SETTINGS_TABS;
+
+const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
+  bot: {
+    hint: 'Здесь вы подключаете Discord-бота: он публикует сообщения и новости. Токен берётся в Discord Developer Portal.',
+    help: (
+      <>
+        <p>Как получить токен:</p>
+        <ol>
+          <li>Откройте discord.com/developers, раздел Applications, и создайте приложение.</li>
+          <li>На вкладке Bot нажмите Reset Token и скопируйте токен.</li>
+          <li>Вставьте его ниже и сохраните, затем нажмите «Пригласить бота на сервер».</li>
+        </ol>
+        <p>Прокси нужен только если Discord недоступен с вашего сервера.</p>
+      </>
+    ),
+  },
+  brand: {
+    hint: 'Название, цвет и логотип сообщества: их видят все посетители панели и участники в подвале сообщений Discord.',
+    help: <p>Готовые темы меняют цвета всей панели сразу. Пока вы не нажали «Сохранить», изменения видны только вам как предпросмотр.</p>,
+  },
+  security: {
+    hint: 'Пароль администратора и сведения о доступе: кто может входить в панель и регистрироваться.',
+    help: <p>Пароль нужно менять, если им делились. Переключатели регистрации и правила сообщества находятся в разделе «Пользователи».</p>,
+  },
+  updates: {
+    hint: 'Установка новых версий панели и резервные копии данных. Перед обновлением сохраняется копия базы, поэтому его можно откатить.',
+    help: <p>Копия содержит серверы, привязки, пользователей, новости и токен бота, поэтому храните файлы бережно. Автоматические копии включаются расписанием ниже.</p>,
+  },
+};
 
 export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
   const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconSettings />} title="Настройки" subtitle="Discord-бот, оформление, безопасность и обновления" />
-      <nav className="flex w-full max-w-xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
+    <div className="space-y-5">
+      <PageHead key={tab} icon={<IconSettings />} title="Настройки" subtitle="Бот, оформление, безопасность, обновления и копии" hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />
+      <nav className="flex w-full max-w-2xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
             key={t.id}
@@ -185,12 +212,26 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         {tab === 'security' && (
           <>
             <PasswordCard />
+            <div className="panel space-y-3 p-6">
+              <h2 className="text-lg font-black">Вход и доступ</h2>
+              <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
+              <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
+              <div className="flex flex-wrap gap-x-5 gap-y-1">
+                <GoLink href="#/admin/users">Пользователи и доступ</GoLink>
+                <GoLink href="#/profile">Мои сеансы в профиле</GoLink>
+              </div>
+            </div>
             <p className="font-semibold text-mute">
               Домен и порты задаются при установке и хранятся в <span className="font-mono text-sm text-ink">/app/.env</span>. Изменить их можно командой <span className="font-mono text-sm text-ink">sudo coregsm</span> на сервере (пункт «Домен и прокси»).
             </p>
           </>
         )}
-        {tab === 'updates' && <UpdateCard />}
+        {tab === 'updates' && (
+          <>
+            <UpdateCard />
+            <BackupsCard />
+          </>
+        )}
       </div>
     </div>
   );
@@ -263,13 +304,14 @@ function BotCard() {
   return (
     <form onSubmit={save} className="panel space-y-3.5 p-6">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-black">Discord-бот</h2>
+        <h2 className="text-lg font-black">Бот и вход через Discord</h2>
         <BotPill status={status} tokenSet={tokenSet} />
       </div>
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
       )}
 
+      <div data-tour="bot-token">
       <Field label="Токен бота">
         <input
           id="set-token"
@@ -281,6 +323,7 @@ function BotCard() {
           placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
         />
       </Field>
+      </div>
       {tokenSet && (
         <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
       )}
@@ -413,26 +456,40 @@ function UpdateCard() {
       .catch((e: Error) => setLogError(e.message));
   }, []);
 
+  // percent of the running job: only grows while the same job runs (never goes backwards between polls)
+  const [pct, setPct] = useState<number | null>(null);
+  const pctJob = useRef<number | null>(null);
+  const [finished, setFinished] = useState<'update' | 'rollback' | null>(null);
+  const running = !!waiting || info?.job?.state === 'running';
+
   usePoll(() => {
     api<UpdateInfo>('/update/status')
       .then((r) => {
         setOffline(false);
         setInfo(r);
-        if (!waiting || !r.job || r.job.time === waiting.baseTime) return;
-        if (r.job.state === 'done') {
+        const j = r.job;
+        const current = !!j && (j.state === 'running' || (!!waiting && j.time !== waiting.baseTime));
+        if (j && current && typeof j.progress === 'number') {
+          const p = Math.max(0, Math.min(100, Math.round(j.progress)));
+          if (pctJob.current !== j.time) { pctJob.current = j.time; setPct(p); } else setPct((c) => Math.max(c ?? 0, p));
+        }
+        if (!waiting || !j || j.time === waiting.baseTime) return;
+        if (j.state === 'done') {
+          setFinished(waiting.kind);
+          setPct(100);
           setWaiting(null);
           // new frontend files are served now: reload to pick them up
           setTimeout(() => window.location.reload(), 1500);
-        } else if (r.job.state === 'error') {
+        } else if (j.state === 'error') {
           setWaiting(null);
-          setError(r.job.message);
+          setError(j.message);
         }
       })
       .catch(() => {
         // the backend restarts during an update
-        if (waiting) setOffline(true);
+        if (waiting || info?.job?.state === 'running') setOffline(true);
       });
-  }, waiting ? 3_000 : 30_000);
+  }, running && !finished ? 2_000 : 30_000);
 
   const check = async () => {
     setBusy(true);
@@ -453,6 +510,8 @@ function UpdateCard() {
     try {
       const r = await api<UpdateInfo>('/update/apply', 'POST');
       setInfo(r);
+      setPct(null);
+      setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
     } catch (e) {
       setError((e as Error).message);
@@ -474,6 +533,8 @@ function UpdateCard() {
     try {
       const r = await api<UpdateInfo>('/update/rollback', 'POST');
       setInfo(r);
+      setPct(null);
+      setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
       setError((e as Error).message);
@@ -482,14 +543,13 @@ function UpdateCard() {
     }
   };
 
-  const running = !!waiting || info?.job?.state === 'running';
-  const rollingBack = waiting?.kind === 'rollback';
+  const rollingBack = (waiting?.kind ?? finished) === 'rollback';
   // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
   const [dismissed, setDismissed] = useState<number>(readDismissed);
   const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
-  const state: 'running' | 'available' | 'latest' | 'unknown' = running ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
+  const state: 'running' | 'available' | 'latest' | 'unknown' = running || finished ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
   const lastChecked = info?.checkedAt ?? null;
 
   return (
@@ -529,7 +589,7 @@ function UpdateCard() {
             </h2>
             <p className={`mt-1 font-semibold ${state === 'available' || state === 'running' ? 'text-white/90' : 'text-mute'}`}>
               {state === 'running'
-                ? (offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
+                ? (finished ? 'Готово! Панель обновится сама' : offline ? 'Панель перезапускается…' : info?.job?.state === 'running' && info.job.message ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
                 : state === 'available'
                   ? 'Новая сборка уже в репозитории. Данные и настройки сохранятся, панель будет недоступна 1-3 минуты.'
                   : state === 'latest'
@@ -551,7 +611,26 @@ function UpdateCard() {
           </div>
         </div>
 
-        {state === 'running' && <div className="update-progress relative mt-5" aria-hidden><i /></div>}
+        {state === 'running' && (
+          <div className="relative mt-5 flex items-center gap-3">
+            <div
+              className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
+              role="progressbar"
+              aria-label={rollingBack ? 'Ход отката' : 'Ход обновления'}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct ?? undefined}
+            >
+              <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
+            </div>
+            {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
+            {finished && (
+              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
           {state === 'available' && (
@@ -686,7 +765,17 @@ export function UsersTab() {
   const pendingUsers = users.filter((u) => u.status === 'pending');
 
   return (
-    <>
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconUsers />}
+        title="Пользователи"
+        subtitle="Аккаунты, роли, регистрация и правила"
+        hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
+        help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
+      >
+        <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
+      </PageHead>
+
       <div className="panel space-y-4 p-6">
         <h2 className="text-lg font-black">Кто видит панель</h2>
         {access && (
@@ -752,12 +841,13 @@ export function UsersTab() {
                 <option value="moderator">Модератор</option>
                 <option value="admin">Администратор</option>
               </select>
-              <button className="btn btn-soft btn-sm" onClick={() => void resetPassword(u)}>Пароль</button>
-              <button className="btn btn-danger btn-sm" onClick={() => void remove(u)} disabled={u.username === me?.username}>Удалить</button>
+              <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
+              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
             </li>
           ))}
         </ul>
+        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="#/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
       </div>
-    </>
+    </div>
   );
 }

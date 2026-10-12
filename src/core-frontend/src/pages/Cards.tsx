@@ -42,8 +42,14 @@ export default function CardsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconCards />} title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно.">
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconCards />}
+        title="Карточки"
+        subtitle="Картинки состояния серверов"
+        hint="Карточка — это картинка с онлайном сервера, которая обновляется сама. Ссылку на неё можно вставить на сайт или в чат."
+        help={<p>Ссылка открыта: картинку видят все, у кого она есть. Бот использует такие же карточки в сообщениях Discord, если выбран стиль «Картинка» (раздел «Discord»).</p>}
+      >
         <button className="btn btn-soft" onClick={refresh} aria-busy={spin || undefined}><IconRefresh spinning={spin} />Обновить</button>
       </PageHead>
       <ErrorLine text={error} />
@@ -54,7 +60,7 @@ export default function CardsPage() {
       )}
       {loaded && servers.length === 0 && (
         <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»: для каждого появится своя картинка.">
-          <a className="btn mt-3" href="#/admin/servers">Добавить сервер</a>
+          <a className="btn mt-3" href="#/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
       <div className="fade-in grid gap-5 xl:grid-cols-2">

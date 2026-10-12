@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { Button, ErrorLine, Field, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -9,7 +9,7 @@ export const fmtSize = (n: number) =>
 const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
-async function downloadFile(path: string, fallbackName: string) {
+export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
   if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось получить копию');
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
@@ -280,10 +280,10 @@ export default function BackupsCard() {
                 </div>
                 <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? 'АВТО' : 'ВРУЧНУЮ'}</span>
                 {isEncrypted(b.name) && <span className="pill pill-warn">ЗАШИФРОВАНА</span>}
-                <div className="flex gap-2">
-                  <button className="btn btn-soft btn-sm" onClick={() => void download(b)} disabled={disabled}>Скачать</button>
-                  <button className="btn btn-soft btn-sm" onClick={() => void restoreStored(b)} disabled={disabled}>Восстановить</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => void remove(b)} disabled={disabled}>Удалить</button>
+                <div className="flex items-center gap-1.5" role="group" aria-label={`Действия: ${b.name}`}>
+                  <button type="button" className="row-act" title="Скачать" aria-label="Скачать" onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
+                  <button type="button" className="row-act" title="Восстановить из этой копии" aria-label="Восстановить из этой копии" onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
+                  <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
                 </div>
               </li>
             ))}

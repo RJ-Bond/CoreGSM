@@ -41,6 +41,8 @@ export interface Server {
 export interface Binding {
   id: number;
   serverId: number;
+  /** every server shown in the message: the main one first, then the extras */
+  serverIds: number[];
   channelId: string;
   /** resolved by the bot when it can see the channel */
   channelName: string | null;
@@ -127,7 +129,7 @@ export interface UpdateInfo {
   /** a previous version and a database copy exist, so the update can be undone */
   canRollback: boolean;
   pending: boolean;
-  job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
+  job: { state: 'running' | 'done' | 'error'; message: string; time: number; /** 0..100, absent on older managers */ progress?: number } | null;
 }
 
 export interface ChangelogItem {

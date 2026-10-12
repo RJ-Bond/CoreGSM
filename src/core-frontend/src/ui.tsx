@@ -558,17 +558,65 @@ export function SmoothArea({
   );
 }
 
-export function PageHead({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon?: ReactNode; children?: ReactNode }) {
+/**
+ * Page title row: icon, title, subtitle and the page actions on the right (one primary action, the rest soft).
+ * `hint`: one sentence under the title (what this page is and why); `help`: longer text behind a «Подробнее» disclosure.
+ */
+export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const helpId = useId();
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-3.5">
-        {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
-        <div className="min-w-0">
-          <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
-          {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3.5">
+          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
+            {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+          </div>
         </div>
+        {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
       </div>
-      <div className="flex flex-wrap gap-2">{children}</div>
+      {(hint || help) && (
+        <div className="hint-strip">
+          <span aria-hidden className="hint-ico">i</span>
+          <div className="min-w-0 flex-1">
+            <p>
+              {hint}
+              {help && (
+                <>
+                  {hint ? ' ' : ''}
+                  <button type="button" className="hint-more" aria-expanded={open} aria-controls={helpId} onClick={() => setOpen((v) => !v)}>
+                    {open ? 'Скрыть' : 'Подробнее'}
+                  </button>
+                </>
+              )}
+            </p>
+            {help && open && <div id={helpId} className="hint-help">{help}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** a link with the arrow used for "go to that section" hints */
+export function GoLink({ href, children, className = '' }: { href: string; children: ReactNode; className?: string }) {
+  return (
+    <a href={href} className={`inline-flex items-center gap-1 font-extrabold text-link hover:underline ${className}`}>
+      {children}
+      <span aria-hidden>→</span>
+    </a>
+  );
+}
+
+/** a coloured strip with a message and an optional action (usually a GoLink) */
+export function Notice({ tone = 'warn', children, action, role }: { tone?: 'warn' | 'info' | 'bad'; children: ReactNode; action?: ReactNode; role?: 'status' | 'alert' }) {
+  const cls = tone === 'bad' ? 'bg-badbg text-bad' : tone === 'info' ? 'bg-soft text-ink' : 'bg-warnbg text-warn';
+  return (
+    <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-2xl px-4 py-2.5 text-sm font-bold ${cls}`} role={role ?? (tone === 'bad' ? 'alert' : 'status')}>
+      <span className="min-w-0 flex-1 basis-60">{children}</span>
+      {action && <span className="shrink-0 [&_a]:text-current [&_a]:underline">{action}</span>}
     </div>
   );
 }
@@ -707,18 +755,18 @@ export function Wordmark({ className = '' }: { className?: string }) {
 
 // ---------- toasts: short confirmations that do not interrupt ----------
 type ToastKind = 'ok' | 'err' | 'info';
-interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean }
+interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: { label: string; href: string } }
 let toasts: ToastItem[] = [];
 let toastSeq = 0;
 const toastListeners = new Set<(t: ToastItem[]) => void>();
 const emitToasts = () => toastListeners.forEach((l) => l(toasts));
 
 /** `ms`: how long it stays; errors stay longer (8 s) by default. Every toast can also be dismissed by hand. */
-export function toast(text: string, kind: ToastKind = 'ok', ms?: number) {
-  const t = { id: ++toastSeq, text, kind };
+export function toast(text: string, kind: ToastKind = 'ok', ms?: number, action?: { label: string; href: string }) {
+  const t: ToastItem = { id: ++toastSeq, text, kind, action };
   toasts = [...toasts, t].slice(-4);
   emitToasts();
-  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : 3500));
+  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : action ? 8000 : 3500));
 }
 
 export function dismissToast(id: number) {
@@ -748,6 +796,7 @@ export function Toaster() {
     <div key={t.id} className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
       <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
+      {t.action && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
       <button
         type="button"
         onClick={() => dismissToast(t.id)}
@@ -1069,3 +1118,27 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
     </div>
   );
 }
+
+// ---------- small action icons (18 px) shared by the admin pages ----------
+const I18 = ({ children }: { children: ReactNode }) => <Icon size={18}>{children}</Icon>;
+export const IconEdit = () => <I18><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></I18>;
+export const IconTrash = () => <I18><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></I18>;
+export const IconPause = () => <I18><path d="M8 5v14M16 5v14" /></I18>;
+export const IconPlay = () => <I18><path d="M7 4.5v15l12-7.5z" /></I18>;
+export const IconKey = () => <I18><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M16 7l3 3" /></I18>;
+export const IconDownload = () => <I18><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></I18>;
+export const IconRestore = () => <I18><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" /><path d="M12 8v4l3 2" /></I18>;
+export const IconCopyPlus = () => <I18><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></I18>;
+export const IconLinkOut = () => <I18><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></I18>;
+export const IconUsers = () => (
+  <Icon size={22}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></Icon>
+);
+export const IconJournal = () => (
+  <Icon size={22}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></Icon>
+);
+export const IconSystem = () => (
+  <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>
+);
+export const IconStart = () => (
+  <Icon size={22}><path d="M5 21V4M5 4h11l-2 4 2 4H5" /></Icon>
+);

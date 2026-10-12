@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { api, type CertInfo } from '../api';
-import { ErrorLine, IconSettings, PageHead, ago, fmtDateTime, plural, usePoll } from '../ui';
-import BackupsCard from './Backups';
+import { ErrorLine, GoLink, IconSystem, PageHead, ago, fmtDateTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -31,7 +30,7 @@ const certTile = (c: CertInfo): [string, string, string | undefined, string | un
   return ['Сертификат HTTPS', value, note, tone];
 };
 
-/** Health, diagnostics and backups. */
+/** Health, diagnostics and the certificate; the backups live under Settings → «Обновления и копии». */
 export default function SystemPage() {
   const [h, setH] = useState<Health | null>(null);
   const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
@@ -63,7 +62,15 @@ export default function SystemPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconSettings />} title="Система" subtitle="Состояние панели, диагностика и резервные копии" />
+      <PageHead
+        icon={<IconSystem />}
+        title="Система"
+        subtitle="Состояние панели и диагностика"
+        hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
+        help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
+      >
+        <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+      </PageHead>
       <ErrorLine text={error} />
 
       {h ? (
@@ -81,13 +88,11 @@ export default function SystemPage() {
       )}
 
       <div className="panel space-y-4 p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-black">Диагностика</h2>
-            <p className="font-semibold text-mute">Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.</p>
-          </div>
-          <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+        <div>
+          <h2 className="text-lg font-black">Диагностика</h2>
+          <p className="font-semibold text-mute">Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.</p>
         </div>
+        {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}
         {checks && (
           <>
             <ul className="divide-y divide-line rounded-2xl border border-line">
@@ -106,7 +111,13 @@ export default function SystemPage() {
         )}
       </div>
 
-      <BackupsCard />
+      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-5">
+        <div className="min-w-0">
+          <h2 className="text-lg font-black">Резервные копии</h2>
+          <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
+        </div>
+        <GoLink href="#/admin/settings/updates">Обновления и копии</GoLink>
+      </div>
     </div>
   );
 }

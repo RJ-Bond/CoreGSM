@@ -1,16 +1,17 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
 
 type Style = 'embed' | 'card' | 'both';
-interface Draft { id?: number; serverId: number; channelId: string; intervalSec: number; enabled: boolean; style: Style }
+interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style }
 
-export default function DiscordPage() {
+/** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
+export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [servers, setServers] = useState<Server[]>([]);
   const [bindings, setBindings] = useState<Binding[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -26,6 +27,21 @@ export default function DiscordPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
+
+  // #/admin/discord/new[/<serverId>]: open the form once the servers are known
+  const openedFor = useRef('');
+  useEffect(() => {
+    if (!sub.startsWith('new')) { openedFor.current = ''; return; }
+    if (!loaded || openedFor.current === sub || servers.length === 0) return;
+    openedFor.current = sub;
+    const want = Number(sub.split('/')[1]);
+    const target = servers.find((x) => x.id === want) ?? servers[0];
+    setDraft({ serverId: target.id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' });
+  }, [sub, loaded, servers]);
+  const closeDraft = () => {
+    setDraft(null);
+    if (sub.startsWith('new')) window.location.hash = '#/admin/discord';
+  };
 
   const server = (id: number) => servers.find((s) => s.id === id);
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
@@ -51,7 +67,7 @@ export default function DiscordPage() {
   const pick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const toggle = async (b: Binding) => {
-    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
     load();
   };
 
@@ -63,18 +79,33 @@ export default function DiscordPage() {
   const allDone = steps.every((s) => s.done);
 
   return (
-    <div className="space-y-6">
-      <PageHead icon={<IconDiscord />} title="Discord" subtitle="Куда бот публикует состояние серверов">
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconDiscord />}
+        title="Discord"
+        subtitle="Куда бот публикует состояние серверов"
+        hint="Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов."
+        help={<p>Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.</p>}
+      >
         <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
+      {loaded && settings && !settings.discordTokenSet && (
+        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
+          Бот не подключён: без токена он не сможет писать в Discord.
+        </Notice>
+      )}
+      {loaded && servers.length === 0 && (
+        <Notice tone="info" action={<GoLink href="#/admin/servers/new">Добавить сервер</GoLink>}>
+          Сначала добавьте сервер: привязывать пока нечего.
+        </Notice>
+      )}
 
       <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-3">
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
-        {!settings?.discordTokenSet && <a href="#/admin/settings/bot" className="font-extrabold text-link hover:underline">Указать токен в настройках</a>}
         {settings?.discordTokenSet && bot?.state === 'online' && typeof bot.guildCount === 'number' && (
           <span className="text-sm font-bold text-mute">
             Серверов Discord: {bot.guildCount}
@@ -105,7 +136,7 @@ export default function DiscordPage() {
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
-            : <a className="btn mt-3" href="#/admin/servers">Сначала добавьте сервер</a>}
+            : <a className="btn mt-3" href="#/admin/servers/new">Сначала добавьте сервер</a>}
         </Empty>
       )}
 
@@ -144,7 +175,23 @@ export default function DiscordPage() {
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
 
+              {(b.serverIds ?? []).length > 1 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">
+                  <span className="flex -space-x-2">
+                    {(b.serverIds ?? []).slice(0, 5).map((id) => {
+                      const x = server(id);
+                      return x ? <span key={id} className="rounded-xl ring-2 ring-[rgb(var(--soft))]" title={x.name}><GameAvatar game={x.game} size={28} /></span> : null;
+                    })}
+                  </span>
+                  <span className="min-w-0 text-sm font-extrabold text-mute">
+                    {(b.serverIds ?? []).length} {plural((b.serverIds ?? []).length, ['сервер', 'сервера', 'серверов'])} в одном сообщении
+                  </span>
+                </div>
+              )}
               {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
+              {b.style !== 'card' && (b.serverIds ?? []).length > 1 && (
+                <p className="-mt-1 text-sm font-semibold text-mute">В предпросмотре показан первый сервер, остальные идут следом в том же сообщении.</p>
+              )}
               {b.style !== 'embed' && (
                 <img
                   src={`/api/card/${b.serverId}.png?v=${s?.updatedAt ?? 0}`}
@@ -159,22 +206,41 @@ export default function DiscordPage() {
                 <span>Каждые {b.intervalSec} с</span>
                 <span>Обновлено: {ago(b.lastUpdate)}</span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button className="btn btn-soft btn-sm" onClick={() => toggle(b)}>{b.enabled ? 'Пауза' : 'Включить'}</button>
-                <button className="btn btn-soft btn-sm" onClick={() => setDraft({ id: b.id, serverId: b.serverId, channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>Изменить</button>
-                <button className="btn btn-danger btn-sm" onClick={() => remove(b)}>Удалить</button>
+              <div className="flex items-center justify-end gap-1.5" role="group" aria-label="Действия с привязкой">
+                <button type="button" className="row-act" title={b.enabled ? 'Поставить на паузу' : 'Включить'} aria-label={b.enabled ? 'Поставить на паузу' : 'Включить'} onClick={() => void toggle(b)}>
+                  {b.enabled ? <IconPause /> : <IconPlay />}
+                </button>
+                <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>
+                  <IconEdit />
+                </button>
+                <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(b)}>
+                  <IconTrash />
+                </button>
               </div>
             </div>
           );
         })}
       </div>
 
-      {draft && <BindingForm servers={servers} initial={draft} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); toast('Привязка сохранена'); load(); }} />}
+      {draft && (
+        <BindingForm
+          servers={servers}
+          initial={draft}
+          onClose={closeDraft}
+          onSaved={(url) => {
+            const first = bindings.length === 0 && !draft.id;
+            closeDraft();
+            if (first && url) toast('Привязка сохранена. Бот отправит сообщение в течение минуты', 'ok', undefined, { label: 'Открыть канал в Discord', href: url });
+            else toast('Привязка сохранена');
+            void load();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]; initial: Draft; onClose: () => void; onSaved: () => void }) {
+function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]; initial: Draft; onClose: () => void; onSaved: (channelUrl?: string) => void }) {
   const [f, setF] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -203,6 +269,8 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
   useEffect(() => { void loadChannels(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = async () => { setRefreshing(true); await loadChannels(); setRefreshing(false); };
 
+  const extras = (f.extraServerIds ?? []).filter((x) => x !== f.serverId && servers.some((s) => s.id === x));
+  const others = servers.filter((s) => s.id !== f.serverId);
   const hasList = !!guilds && guilds.length > 0;
   const guild = guilds?.find((g) => g.id === guildId);
 
@@ -211,10 +279,13 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
     if (!/^\d{15,25}$/.test(f.channelId)) return setError('Выберите канал из списка или введите его ID');
     setBusy(true);
     setError('');
-    const { id, ...body } = f;
+    const { id, ...rest } = f;
+    const body = { ...rest, extraServerIds: extras };
     try {
       await api(id ? `/bindings/${id}` : '/bindings', id ? 'PUT' : 'POST', body);
-      onSaved();
+      // a link to the channel is known only when it was picked from the bot's own list (then the Discord server id is known)
+      const picked = !manual && guild?.channels.some((c) => c.id === f.channelId);
+      onSaved(picked && guild ? `https://discord.com/channels/${guild.id}/${f.channelId}` : undefined);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -225,10 +296,35 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
     <Modal title={f.id ? 'Изменить привязку' : 'Новая привязка'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
         <Field label="Сервер">
-          <select id="bind-server" className="input" value={f.serverId} onChange={(e) => setF({ ...f, serverId: Number(e.target.value) })}>
+          <select id="bind-server" className="input" value={f.serverId} onChange={(e) => setF({ ...f, serverId: Number(e.target.value), extraServerIds: extras.filter((x) => x !== Number(e.target.value)) })}>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
+        {others.length > 0 && (
+          <fieldset className="space-y-2">
+            <legend className="label">Показать в этом же сообщении ещё серверы</legend>
+            <div className="max-h-48 space-y-1 overflow-y-auto rounded-2xl bg-soft p-2">
+              {others.map((s) => {
+                const on = extras.includes(s.id);
+                const full = !on && extras.length >= 9;
+                return (
+                  <label key={s.id} className={`flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-card ${full ? 'opacity-50' : ''}`}>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 shrink-0 accent-brand"
+                      checked={on}
+                      disabled={full}
+                      onChange={(e) => setF({ ...f, extraServerIds: e.target.checked ? [...extras, s.id] : extras.filter((x) => x !== s.id) })}
+                    />
+                    <GameAvatar game={s.game} size={28} />
+                    <span className="min-w-0 flex-1 truncate font-bold">{s.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="text-sm font-semibold text-mute">Все выбранные серверы будут в одном сообщении. Максимум 10.</p>
+          </fieldset>
+        )}
 
         {hasList && !manual ? (
           <>

@@ -25,13 +25,13 @@ const SETTINGS_NAV = 'nav[aria-label="Разделы настроек"]';
 const STEPS: Step[] = [
   {
     title: 'Добавьте игровой сервер',
-    text: 'Добро пожаловать! Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
+    text: 'Добро пожаловать! Прогресс всегда виден в «Админка → Начало работы». Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
     route: '#/admin/servers',
     anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="#/admin/servers"]`],
   },
   {
     title: 'Подключите Discord-бота',
-    text: 'В «Настройки → Discord-бот» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
+    text: 'В «Настройки → Бот и Discord» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
     route: '#/admin/settings/bot',
     anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="#/admin/settings/bot"]`],
   },

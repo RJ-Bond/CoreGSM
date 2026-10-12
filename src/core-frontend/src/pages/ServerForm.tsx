@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
+import GamePicker from '../components/GamePicker';
 import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
 
@@ -94,12 +95,10 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   return (
     <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
-        <Field label="Игра">
-          <select id="srv-game" className="input" value={custom ? '__custom' : f.game} onChange={(e) => pickGame(e.target.value)} autoFocus>
-            {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
-            <option value="__custom">Другая (ввести GameDig ID)…</option>
-          </select>
-        </Field>
+        <div>
+          <span className="label">Игра</span>
+          <GamePicker id="srv-game" value={f.game} custom={custom} onPick={pickGame} autoFocus />
+        </div>
         {custom && (
           <Field label="GameDig ID">
             <input id="srv-gameid" className="input" value={f.game} onChange={(e) => change({ game: e.target.value.trim() })} placeholder="например, arma3" required pattern="[A-Za-z0-9_]+" />

@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { api } from '../api';
+import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
-import { ErrorLine, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { ErrorLine, GoLink, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -32,8 +32,12 @@ export default function AlertsPage() {
   const [info, setInfo] = useState<AlertsInfo | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [tokenSet, setTokenSet] = useState<boolean | null>(null);
 
-  const load = () => api<AlertsInfo>('/alerts').then((a) => { setInfo(a); setError(''); }).catch((e: Error) => setError(e.message));
+  const load = () => {
+    api<SettingsInfo>('/settings').then((s) => setTokenSet(s.discordTokenSet)).catch(() => undefined);
+    return api<AlertsInfo>('/alerts').then((a) => { setInfo(a); setError(''); }).catch((e: Error) => setError(e.message));
+  };
   usePoll(load, 10_000);
 
   const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention'>>, done?: string) => {
@@ -47,8 +51,21 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconBell />} title="Оповещения" subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся" />
+      <PageHead
+        icon={<IconBell />}
+        title="Оповещения"
+        subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся"
+        hint="Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся."
+        help={<p>Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.</p>}
+      >
+        <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>Отправить тестовое сообщение</button>
+      </PageHead>
       <ErrorLine text={error} />
+      {tokenSet === false && (
+        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
+          Оповещения не дойдут: у бота нет токена, он не подключён к Discord.
+        </Notice>
+      )}
 
       {info && (
         <div className="panel space-y-5 p-6">
@@ -64,7 +81,7 @@ export default function AlertsPage() {
             <span className="label">Канал для оповещений</span>
             <div className="flex flex-wrap items-center gap-3">
               <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : `Канал ${info.channelId}`) : 'не выбран'}</span>
-              <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)}>{info.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+              <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{info.channelId ? 'Изменить' : 'Выбрать канал'}</button>
             </div>
             {changing && (
               <div className="mt-3">
@@ -92,9 +109,6 @@ export default function AlertsPage() {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button className="btn btn-soft" onClick={() => void test()} disabled={!info.channelId}>Отправить тестовое сообщение</button>
-          </div>
         </div>
       )}
 

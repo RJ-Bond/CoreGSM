@@ -3,7 +3,7 @@ import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
-import { ADMIN_SECTIONS } from '../pages/Admin';
+import { ADMIN_LINKS, ADMIN_SECTIONS } from '../pages/adminNav';
 import { GameAvatar, IconNews, IconServers, toast, useDensity } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
@@ -19,7 +19,12 @@ interface Item {
   icon: ReactNode;
   /** lower-case text the query is matched against */
   hay: string;
+  /** found only by typing: not listed while the query is empty */
+  searchOnly?: boolean;
 }
+
+/** lower case, «ё» as «е»: a query matches either way */
+const norm = (t: string) => t.toLowerCase().replace(/ё/g, 'е');
 
 const IconPulse = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -39,8 +44,8 @@ const IconDensity = () => (
   </svg>
 );
 
-const sectionItem = (key: string, label: string, hint: string, href: string, icon: ReactNode): Item => ({
-  key, group: 'Разделы', label, hint, href, icon, hay: `${label} ${hint}`.toLowerCase(),
+const sectionItem = (key: string, label: string, hint: string, href: string, icon: ReactNode, keywords = '', searchOnly = false): Item => ({
+  key, group: 'Разделы', label, hint, href, icon, hay: norm(`${label} ${hint} ${keywords}`), searchOnly,
 });
 
 /**
@@ -79,7 +84,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         hint: `${gameLabel(s.game)} · ${s.address}`,
         href: `#/servers/${s.id}`,
         icon: <GameAvatar game={s.game} size={32} />,
-        hay: `${s.name} ${gameLabel(s.game)} ${s.address}`.toLowerCase(),
+        hay: norm(`${s.name} ${gameLabel(s.game)} ${s.address}`),
       });
     }
     out.push(
@@ -89,7 +94,12 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     );
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
-      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, 'Админка', `#/admin/${sec.id}`, sec.icon()));
+      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `#/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
+      if (isAdmin) {
+        ADMIN_LINKS.forEach((l, i) => out.push(sectionItem(`l-${i}`, l.label, `Админка · ${l.hint}`, l.href, l.icon(), `${l.keywords} админка`, true)));
+      } else {
+        out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '#/admin/news/new', <IconNews />, 'новость объявление', true));
+      }
     }
     if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
     const compact = density === 'compact';
@@ -101,14 +111,14 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       href: '',
       run: () => { setDensity(compact ? 'normal' : 'compact'); toast(compact ? 'Плотность: обычная' : 'Плотность: компактная'); },
       icon: <IconDensity />,
-      hay: 'сменить плотность компактная обычная вид отступы density',
+      hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
   }, [servers, isStaff, isAdmin, me, density]);
 
   const results = useMemo(() => {
-    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items;
+    const words = norm(q).split(/\s+/).filter(Boolean);
+    const hit = words.length ? items.filter((it) => words.every((w) => it.hay.includes(w))) : items.filter((it) => !it.searchOnly);
     const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
     const secs = hit.filter((i) => i.group === 'Разделы');
     const acts = hit.filter((i) => i.group === 'Действия');

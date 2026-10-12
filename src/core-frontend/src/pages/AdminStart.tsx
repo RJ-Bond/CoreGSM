@@ -1,0 +1,315 @@
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { api, type BotStatus, type SettingsInfo } from '../api';
+import { useAuth } from '../auth';
+import { PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
+import { ADMIN_GROUPS, START_SECTION } from './adminNav';
+import { downloadFile } from './Backups';
+
+type StepId = 'server' | 'bot' | 'channel' | 'news' | 'brand';
+type StepState = 'done' | 'todo' | 'unknown';
+
+interface StepView {
+  id: StepId;
+  short: string;
+  title: string;
+  why: string;
+  href: string;
+  cta: string;
+  state: StepState;
+  note?: string;
+}
+
+const skipKey = (u: string) => `coregsm_start_skipped_${u}`;
+const readSkipped = (u: string): StepId[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(skipKey(u)) ?? '[]') as unknown;
+    return Array.isArray(v) ? (v.filter((x) => typeof x === 'string') as StepId[]) : [];
+  } catch {
+    return [];
+  }
+};
+const writeSkipped = (u: string, list: StepId[]) => {
+  try { localStorage.setItem(skipKey(u), JSON.stringify(list)); } catch { /* not remembered */ }
+};
+
+interface Raw {
+  servers: number | null;
+  settings: SettingsInfo | null;
+  bot: BotStatus | null;
+  bindings: number | null;
+  news: number | null;
+}
+
+const len = (v: unknown) => (Array.isArray(v) ? v.length : null);
+
+/** Reads the real state of the panel and turns it into the checklist. A failing request only marks its step «неизвестно». */
+function useStartSteps() {
+  const { me, access } = useAuth();
+  const username = me?.username ?? '';
+  const [raw, setRaw] = useState<Raw | null>(null);
+  const [skipped, setSkipped] = useState<StepId[]>(() => readSkipped(username));
+
+  usePoll(async () => {
+    const [s, st, b, bi, n] = await Promise.allSettled([
+      api<unknown[]>('/servers'),
+      api<SettingsInfo>('/settings'),
+      api<BotStatus>('/bot/status'),
+      api<unknown[]>('/bindings'),
+      api<unknown[]>('/news'),
+    ]);
+    setRaw({
+      servers: s.status === 'fulfilled' ? len(s.value) : null,
+      settings: st.status === 'fulfilled' ? st.value : null,
+      bot: b.status === 'fulfilled' ? b.value : null,
+      bindings: bi.status === 'fulfilled' ? len(bi.value) : null,
+      news: n.status === 'fulfilled' ? len(n.value) : null,
+    });
+  }, 15_000);
+
+  const brand = access.brand;
+  const brandDone = brand.name.trim().toLowerCase() !== 'coregsm' || brand.color.toLowerCase() !== '#4f46e5' || brand.hasLogo || !!brand.color2 || !!brand.preset;
+
+  const steps = useMemo<StepView[] | null>(() => {
+    if (!raw) return null;
+    const st = (n: number | null): StepState => (n === null ? 'unknown' : n > 0 ? 'done' : 'todo');
+    let bot: StepState = 'unknown';
+    let botNote: string | undefined;
+    if (raw.settings) {
+      if (!raw.settings.discordTokenSet) bot = 'todo';
+      else if (!raw.bot) bot = 'done';
+      else if (raw.bot.state === 'online') bot = 'done';
+      else {
+        bot = 'todo';
+        botNote = raw.bot.state === 'error' && raw.bot.error ? `Токен сохранён, но бот не подключился: ${raw.bot.error}` : 'Токен сохранён, бот ещё подключается. Если так долго, проверьте токен.';
+      }
+    }
+    return [
+      { id: 'server', short: 'сервер', title: 'Добавьте игровой сервер', why: 'Без сервера панели нечего показывать: онлайн, карту и пинг она берёт у вашего игрового сервера.', href: '#/admin/servers/new', cta: 'Добавить сервер', state: st(raw.servers) },
+      { id: 'bot', short: 'бот', title: 'Подключите Discord-бота', why: 'Бот публикует состояние серверов и новости в Discord. Ему нужен токен из Discord Developer Portal.', href: '#/admin/settings/bot', cta: 'Указать токен', state: bot, note: botNote },
+      { id: 'channel', short: 'канал', title: 'Привяжите канал для сообщений', why: 'Привязка говорит боту, в какой канал писать. Он отправит одно сообщение и будет обновлять его само.', href: '#/admin/discord', cta: 'Привязать канал', state: st(raw.bindings) },
+      { id: 'news', short: 'новость', title: 'Напишите первую новость', why: 'Новости видят и игроки в панели, и участники в Discord: так удобно сообщать о вайпах и работах.', href: '#/admin/news/new', cta: 'Написать новость', state: st(raw.news) },
+      { id: 'brand', short: 'оформление', title: 'Настройте оформление', why: 'Название, цвет и логотип делают панель вашей: их видят посетители и участники Discord.', href: '#/admin/settings/brand', cta: 'Настроить', state: brandDone ? 'done' : 'todo' },
+    ];
+  }, [raw, brandDone]);
+
+  const skip = (id: StepId) => setSkipped((cur) => { const n = cur.includes(id) ? cur : [...cur, id]; writeSkipped(username, n); return n; });
+  const unskip = (id: StepId) => setSkipped((cur) => { const n = cur.filter((x) => x !== id); writeSkipped(username, n); return n; });
+
+  const doneCount = steps ? steps.filter((s) => s.state === 'done').length : 0;
+  // «resolved»: finished or consciously skipped: the start page then stops being the default
+  const resolved = steps ? steps.every((s) => s.state === 'done' || skipped.includes(s.id)) : false;
+  return { loading: steps === null, steps: steps ?? [], skipped, skip, unskip, doneCount, total: 5, resolved };
+}
+
+/** `#/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
+export function AdminHome() {
+  const s = useStartSteps();
+  useEffect(() => {
+    if (s.loading) return;
+    const target = s.resolved ? '#/admin/servers' : '#/admin/start';
+    window.location.replace(`${window.location.pathname}${window.location.search}${target}`);
+  }, [s.loading, s.resolved]);
+  return <StartSkeleton />;
+}
+
+function StartSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
+      <div className="skeleton h-14 w-72 rounded-2xl" />
+      <div className="skeleton tile h-28" />
+      {[0, 1, 2].map((i) => <div key={i} className="skeleton tile h-24" />)}
+    </div>
+  );
+}
+
+const Check = ({ size = 22 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M5 12.5l4.5 4.5L19 7.5" />
+  </svg>
+);
+
+function Ring({ done, total }: { done: number; total: number }) {
+  const r = 30;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="relative grid h-[76px] w-[76px] shrink-0 place-items-center" aria-hidden>
+      <svg width="76" height="76" viewBox="0 0 76 76" className="-rotate-90">
+        <circle cx="38" cy="38" r={r} fill="none" stroke="rgb(var(--soft))" strokeWidth="8" />
+        <circle
+          cx="38" cy="38" r={r} fill="none" stroke="rgb(var(--brand))" strokeWidth="8" strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={c * (1 - done / total)}
+          style={{ transition: 'stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1)' }}
+          className="motion-reduce:!transition-none"
+        />
+      </svg>
+      <span className="absolute text-lg font-black tabular-nums">{done}/{total}</span>
+    </div>
+  );
+}
+
+export default function AdminStart() {
+  const { me } = useAuth();
+  const s = useStartSteps();
+  const [busy, setBusy] = useState(false);
+
+  const firstTodo = s.steps.find((x) => x.state !== 'done' && !s.skipped.includes(x.id));
+  const allDone = !s.loading && s.doneCount === s.total;
+  const left = s.steps.filter((x) => x.state !== 'done');
+
+  const backup = async () => {
+    setBusy(true);
+    try {
+      await downloadFile('/backup', 'coregsm-backup.tar.gz');
+      toast('Копия скачана');
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const quick: { key: string; label: string; text: string; icon: ReactNode; href?: string; onClick?: () => void }[] = [
+    { key: 'server', label: 'Добавить сервер', text: 'Игра, адрес и порт', icon: <IconServers />, href: '#/admin/servers/new' },
+    { key: 'news', label: 'Написать новость', text: 'С шаблоном и предпросмотром', icon: <IconNews />, href: '#/admin/news/new' },
+    { key: 'backup', label: busy ? 'Готовлю копию…' : 'Скачать копию', text: 'Все данные одним файлом', icon: <IconDownload />, onClick: () => void backup() },
+    { key: 'system', label: 'Проверить систему', text: 'Диск, бот, сертификат', icon: <IconSystem />, href: '#/admin/system' },
+    { key: 'player', label: 'Открыть панель как игрок', text: 'Так её видят посетители', icon: <IconStart />, href: '#/servers' },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <PageHead
+        icon={<IconStart />}
+        title="Начало работы"
+        subtitle={me ? `Здравствуйте, ${me.username}! Пять шагов, и панель готова` : 'Пять шагов, и панель готова'}
+        hint="Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели."
+        help={<p>Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.</p>}
+      />
+
+      {s.loading ? (
+        <StartSkeleton />
+      ) : (
+        <>
+          {allDone ? (
+            <div className="tile fade-in flex flex-wrap items-center gap-4 p-5" role="status">
+              <span className="pop grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-okbg text-ok"><Check size={30} /></span>
+              <div className="min-w-0 flex-1 basis-60">
+                <h2 className="text-xl font-extrabold leading-tight">Завершено: всё настроено</h2>
+                <p className="font-semibold text-mute">Панель работает сама: бот обновляет сообщения, оповещения следят за серверами. Вернуться сюда можно из меню слева.</p>
+              </div>
+              <a className="btn" href="#/admin/servers">Перейти к серверам</a>
+            </div>
+          ) : (
+            <div className="tile flex flex-wrap items-center gap-4 p-5">
+              <Ring done={s.doneCount} total={s.total} />
+              <div className="min-w-0 flex-1 basis-60">
+                <h2 className="text-xl font-extrabold leading-tight">{s.doneCount} из {s.total} шагов выполнено</h2>
+                <p className="font-semibold text-mute">
+                  {left.length > 0 ? `Осталось: ${left.map((x) => x.short).join(', ')}.` : ''}
+                </p>
+              </div>
+              {firstTodo && <a className="btn" href={firstTodo.href}>Продолжить: {firstTodo.cta.toLowerCase()}</a>}
+            </div>
+          )}
+
+          <ol className="space-y-3" aria-label="Шаги настройки">
+            {s.steps.map((st, i) => {
+              const skipped = s.skipped.includes(st.id) && st.state !== 'done';
+              const current = firstTodo?.id === st.id;
+              return (
+                <li key={st.id} className={`tile flex flex-wrap items-center gap-x-4 gap-y-3 p-4 sm:p-5 ${current ? 'ring-2 ring-brand/50' : ''}`}>
+                  <span
+                    className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-xl font-black ${
+                      st.state === 'done' ? 'bg-okbg text-ok' : st.state === 'unknown' || skipped ? 'bg-soft text-mute' : 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop'
+                    }`}
+                    aria-hidden
+                  >
+                    {st.state === 'done' ? <Check /> : st.state === 'unknown' ? '?' : i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1 basis-60">
+                    <h3 className="flex flex-wrap items-center gap-2 font-extrabold leading-tight">
+                      <span>{st.title}</span>
+                      {st.state === 'done' && <span className="pill pill-ok">ГОТОВО</span>}
+                      {st.state === 'unknown' && <span className="pill pill-mute">НЕ УДАЛОСЬ ПРОВЕРИТЬ</span>}
+                      {skipped && <span className="pill pill-mute">ПРОПУЩЕНО</span>}
+                    </h3>
+                    <p className="text-sm font-semibold text-mute">{st.why}</p>
+                    {st.note && st.state !== 'done' && <p className="mt-1 text-sm font-bold text-warn">{st.note}</p>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
+                    <a className={`btn ${current || st.state === 'unknown' ? '' : 'btn-soft'} ${st.state === 'done' ? 'btn-sm' : ''}`} href={st.href}>
+                      {st.state === 'done' ? 'Открыть' : st.cta}
+                    </a>
+                    {st.state !== 'done' && !skipped && (
+                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px]" onClick={() => s.skip(st.id)}>
+                        Пропустить
+                      </button>
+                    )}
+                    {skipped && (
+                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-link hover:underline max-sm:min-h-[44px]" onClick={() => s.unskip(st.id)}>
+                        Вернуть шаг
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </>
+      )}
+
+      <section aria-labelledby="start-quick">
+        <h2 id="start-quick" className="mb-3 text-lg font-black">Быстрые действия</h2>
+        <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3">
+          {quick.map((q) => {
+            const inner = (
+              <>
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-soft text-link">{q.icon}</span>
+                <span className="min-w-0">
+                  <span className="block font-extrabold leading-tight">{q.label}</span>
+                  <span className="block text-sm font-semibold text-mute">{q.text}</span>
+                </span>
+              </>
+            );
+            const cls = 'tile tile-hover flex items-center gap-3 p-3.5 text-left';
+            return q.href ? (
+              <a key={q.key} className={cls} href={q.href}>{inner}</a>
+            ) : (
+              <button key={q.key} type="button" className={cls} onClick={q.onClick} disabled={busy}>{inner}</button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section aria-labelledby="start-map" className="tile p-5 sm:p-6">
+        <h2 id="start-map" className="text-lg font-black">Где что находится</h2>
+        <p className="mb-4 font-semibold text-mute">Меню слева разделено на четыре группы. Вот зачем нужен каждый раздел.</p>
+        <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
+          {ADMIN_GROUPS.map((g, gi) => (
+            <div key={g.title}>
+              <div className="adm-group-title !px-0">{g.title}</div>
+              <ul className="space-y-1">
+                {gi === 0 && <MapRow id={START_SECTION.id} label={START_SECTION.label} desc={START_SECTION.desc} icon={START_SECTION.icon()} />}
+                {g.sections.map((sec) => <MapRow key={sec.id} id={sec.id} label={sec.label} desc={sec.desc} icon={sec.icon()} />)}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MapRow({ id, label, desc, icon }: { id: string; label: string; desc: string; icon: ReactNode }) {
+  return (
+    <li>
+      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-2xl px-2 py-2 transition hover:bg-soft">
+        <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-soft text-link">{icon}</span>
+        <span className="min-w-0">
+          <span className="block font-extrabold leading-tight">{label}</span>
+          <span className="block text-sm font-semibold text-mute">{desc}</span>
+        </span>
+      </a>
+    </li>
+  );
+}

@@ -33,6 +33,7 @@ const PAGES: PageDef[] = [
 ];
 
 const ADMIN_TITLES: Record<string, string> = {
+  start: 'Начало работы',
   servers: 'Серверы',
   discord: 'Discord',
   news: 'Новости',
@@ -272,7 +273,7 @@ export default function App() {
         : page === 'profile'
         ? 'Профиль'
         : page === 'admin'
-          ? `Админка · ${ADMIN_TITLES[adminSection] ?? ADMIN_TITLES.servers}`
+          ? (ADMIN_TITLES[adminSection] ? `Админка · ${ADMIN_TITLES[adminSection]}` : 'Админка')
           : PAGES.find((p) => p.id === page)?.label ?? '';
   useEffect(() => {
     document.title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
