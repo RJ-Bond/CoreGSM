@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { api, ApiError, type PlayerNow, type ServerDetails } from '../api';
 import { useAuth } from '../auth';
-import { gameColor, gameLabel } from '../games';
-import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, toast, usePoll } from '../ui';
+import { COUNTRIES } from '../countries';
+import { gameColor, gameGradient, gameLabel } from '../games';
+import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, smoothPath, toast, usePoll } from '../ui';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 
@@ -28,23 +29,24 @@ const tickLabel = (ts: number, hours: number) =>
     ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
     : new Date(ts).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 
-/** Player count over time with red bands where the server was unreachable. */
+/** Player count over time: smooth area, red bands where the server was unreachable, hover tooltip. */
 function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: number; max: number; color: string }) {
-  const L = 40, R = 10, T = 12, B = 28;
+  const L = 36, R = 8, T = 12, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const ref = useRef<SVGSVGElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
+  const gid = useId();
   // the drawing is 1:1 with the screen, so labels keep a readable size on phones
   const [W, setW] = useState(720);
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setW(Math.max(300, Math.round(el.clientWidth))));
+    const ro = new ResizeObserver(() => setW(Math.max(280, Math.round(el.clientWidth))));
     ro.observe(el);
-    setW(Math.max(300, Math.round(el.clientWidth)));
+    setW(Math.max(280, Math.round(el.clientWidth)));
     return () => ro.disconnect();
   }, []);
-  const H = W < 520 ? 200 : 240;
+  const H = W < 520 ? 200 : 250;
 
   const now = Date.now();
   const t0 = now - hours * 3600_000;
@@ -53,7 +55,7 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
   const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
   const bucket = (now - t0) / 180;
 
-  // continuous online runs become separate line segments; a gap is much wider than the usual spacing of the samples
+  // continuous online runs become separate curves; a gap is much wider than the usual spacing of the samples
   const spacing = points.length > 1 ? [...points.slice(1).map((p, i) => p.ts - points[i].ts)].sort((a, b) => a - b)[Math.floor((points.length - 1) / 2)] : bucket;
   const gap = Math.max(bucket * 2.5, spacing * 2.5);
   const segments: Point[][] = [];
@@ -65,7 +67,7 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
     } else if (cur.length) { segments.push(cur); cur = []; }
   }
   if (cur.length) segments.push(cur);
-  const path = (seg: Point[]) => seg.map((p, i) => `${i ? 'L' : 'M'}${x(p.ts).toFixed(1)} ${y(p.players).toFixed(1)}`).join(' ');
+  const xy = (seg: Point[]): [number, number][] => seg.map((p) => [x(p.ts), y(p.players)]);
 
   const onMove = (e: React.PointerEvent) => {
     const r = ref.current?.getBoundingClientRect();
@@ -78,6 +80,8 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
 
   const hp = hover != null ? points[hover] : null;
   const gridVals = [0, 1, 2, 3, 4].map((i) => (yMax / 4) * i);
+  const lastSeg = segments[segments.length - 1];
+  const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
 
   return (
     <div className="relative" ref={wrap}>
@@ -90,36 +94,52 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={color} stopOpacity="0.34" />
+            <stop offset="1" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
         {gridVals.map((v) => (
           <g key={v}>
-            <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" />
-            <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12">{Math.round(v * 10) / 10}</text>
+            <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" strokeDasharray={v === 0 ? undefined : '3 5'} />
+            <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{Math.round(v * 10) / 10}</text>
           </g>
         ))}
         {[0, 1, 2, 3, 4].map((i) => {
           const ts = t0 + ((now - t0) * i) / 4;
-          return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12">{tickLabel(ts, hours)}</text>;
+          return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{tickLabel(ts, hours)}</text>;
         })}
         {max > 0 && max < yMax && <line x1={L} x2={W - R} y1={y(max)} y2={y(max)} className="stroke-mute" strokeDasharray="4 4" strokeWidth="1" opacity="0.5" />}
         {points.filter((p) => !p.online).map((p) => (
-          <rect key={p.ts} x={x(p.ts) - (W - L - R) / 360} y={T} width={(W - L - R) / 180} height={H - T - B} className="fill-bad" opacity="0.18" />
+          <rect key={p.ts} x={x(p.ts) - (W - L - R) / 360} y={T} width={(W - L - R) / 180} height={H - T - B} className="fill-bad" opacity="0.2" />
         ))}
-        {segments.map((seg, i) => (
-          <g key={i}>
-            {seg.length === 1 && <circle cx={x(seg[0].ts)} cy={y(seg[0].players)} r="3.5" fill={color} />}
-            {seg.length > 1 && <path d={`${path(seg)} L${x(seg[seg.length - 1].ts)} ${y(0)} L${x(seg[0].ts)} ${y(0)} Z`} fill={color} opacity="0.14" />}
-            <path d={path(seg)} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-          </g>
-        ))}
+        {segments.map((seg, i) => {
+          const pts = xy(seg);
+          const d = smoothPath(pts);
+          return (
+            <g key={i}>
+              {seg.length === 1 && <circle cx={pts[0][0]} cy={pts[0][1]} r="3.5" fill={color} />}
+              {seg.length > 1 && <path d={`${d} L${pts[pts.length - 1][0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z`} fill={`url(#${gid})`} />}
+              {seg.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
+            </g>
+          );
+        })}
+        {endPt && !hp && (
+          <>
+            <circle cx={x(endPt.ts)} cy={y(endPt.players)} r="9" fill={color} opacity="0.22" />
+            <circle cx={x(endPt.ts)} cy={y(endPt.players)} r="4.5" fill={color} className="stroke-card" strokeWidth="2" />
+          </>
+        )}
         {hp && <line x1={x(hp.ts)} x2={x(hp.ts)} y1={T} y2={H - B} className="stroke-mute" strokeWidth="1" opacity="0.6" />}
-        {hp && hp.online ? <circle cx={x(hp.ts)} cy={y(hp.players)} r="4.5" fill={color} className="stroke-card" strokeWidth="2" /> : null}
+        {hp && hp.online ? <circle cx={x(hp.ts)} cy={y(hp.players)} r="5" fill={color} className="stroke-card" strokeWidth="2.5" /> : null}
       </svg>
       {hp && (
         <div
-          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-xl bg-ink px-2.5 py-1 text-sm font-bold text-page shadow-pop"
-          style={{ left: `${Math.min(88, Math.max(12, (x(hp.ts) / W) * 100))}%` }}
+          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 whitespace-nowrap rounded-xl bg-ink px-2.5 py-1 text-sm font-bold text-page shadow-pop"
+          style={{ left: `${Math.min(84, Math.max(16, (x(hp.ts) / W) * 100))}%` }}
         >
-          {fmtDateTime(hp.ts)} · {hp.online ? `${hp.players} игроков` : 'недоступен'}
+          {fmtDateTime(hp.ts)} · {hp.online ? `${hp.players} ${plural(hp.players, ['игрок', 'игрока', 'игроков'])}` : 'недоступен'}
         </div>
       )}
     </div>
@@ -147,16 +167,16 @@ function PlayersNow({ online, players, names, list }: { online: boolean; players
   const hiddenCount = Math.max(0, players - (sorted.length || names.length));
 
   return (
-    <div className="panel p-5">
-      <h2 className="mb-3 text-lg font-black">Сейчас в игре{online ? `: ${players}` : ''}</h2>
+    <section className="tile h-full p-5">
+      <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{online && <span className="ml-2 rounded-full bg-soft px-2.5 py-0.5 text-xs font-extrabold text-link">{players}</span>}</h2>
       {!online ? (
         <p className="font-semibold text-mute">Сервер недоступен.</p>
       ) : sorted.length > 0 ? (
         <>
-          <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+          <ul className="max-h-72 divide-y divide-line overflow-y-auto pr-1">
             {sorted.map((p, i) => (
-              <li key={`${p.name}-${p.since}-${i}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-card text-sm font-black text-link" aria-hidden>
+              <li key={`${p.name}-${p.since}-${i}`} className="flex items-center gap-3 py-2">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-soft text-sm font-extrabold text-link" aria-hidden>
                   {(Array.from(p.name.trim())[0] ?? '?').toUpperCase()}
                 </span>
                 <span className="min-w-0 flex-1 truncate font-bold">{p.name || 'Без имени'}</span>
@@ -174,7 +194,7 @@ function PlayersNow({ online, players, names, list }: { online: boolean; players
       ) : (
         <p className="font-semibold text-mute">{players > 0 ? 'Игра не передаёт имена игроков.' : 'Пока никого нет.'}</p>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -182,6 +202,9 @@ function PlayersNow({ online, players, names, list }: { online: boolean; players
 export default function ServerDetail({ id }: { id: number }) {
   return <ServerDetailView key={id} id={id} />;
 }
+
+const FLAGS = (code: string) =>
+  code.length === 2 ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '';
 
 function ServerDetailView({ id }: { id: number }) {
   const { isAdmin } = useAuth();
@@ -219,17 +242,29 @@ function ServerDetailView({ id }: { id: number }) {
       </Empty>
     );
   }
-  if (!data) return <div className="skeleton panel h-64" />;
+  if (!data) return <div className="skeleton tile h-64" />;
 
   const { server: s, stats, events, points } = data;
   const color = gameColor(s.game);
+  const [c1, c2] = gameGradient(s.game);
   const lag = s.ping != null && s.ping > 100;
   const link = connectUrl(s.game, s.address, s.port);
+  // placeholder versions such as 0.0.0.1 say nothing
+  const realVersion = s.version && !/^0(\.0)*(\.\d+)?$/.test(s.version.trim()) ? s.version.trim() : null;
   const tiles: [string, string, string?][] = [
     ['Сейчас', s.online ? `${s.players}/${s.maxPlayers}` : '–', s.online && s.ping != null ? `пинг ${s.ping} мс` : undefined],
-    ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
     ['Пик игроков', stats.peakPlayers == null ? '–' : String(stats.peakPlayers), stats.peakAt ? fmtDateTime(stats.peakAt) : undefined],
+    ['Аптайм', stats.uptimePct == null ? '–' : `${stats.uptimePct}%`, hours <= 24 ? 'за 24 часа' : 'за 7 дней'],
     ['В среднем', stats.avgPlayers == null ? '–' : String(stats.avgPlayers), 'пока сервер онлайн'],
+  ];
+  const countryName = s.country ? COUNTRIES.find(([c]) => c === s.country)?.[1] ?? s.country : '';
+  const info: [string, string][] = [
+    ['Игра', gameLabel(s.game)],
+    ['Адрес', s.address],
+    ...(s.map && s.online ? [['Карта', s.map] as [string, string]] : []),
+    ...(realVersion ? [['Версия', realVersion] as [string, string]] : []),
+    ...(countryName ? [['Страна', `${FLAGS(s.country)} ${countryName}`.trim()] as [string, string]] : []),
+    ['Обновлено', ago(s.updatedAt)],
   ];
 
   const refresh = async () => {
@@ -260,78 +295,84 @@ function ServerDetailView({ id }: { id: number }) {
   };
 
   return (
-    <div className="space-y-5">
-      <a href="#/servers" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все серверы</a>
+    <div className="space-y-3.5">
+      <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>
 
-      <div className="panel flex flex-wrap items-start justify-between gap-4 p-5">
-        <div className="flex min-w-0 items-center gap-4">
-          <GameAvatar game={s.game} size={56} />
-          <div className="min-w-0">
-            <h1 className="break-words text-2xl font-black leading-tight">{s.name}</h1>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-bold text-mute">
-              <span>{gameLabel(s.game)}{s.version ? ` · ${s.version}` : ''}</span>
-              <span className="font-mono text-sm">{s.address}</span>
+      <article
+        className="relative overflow-hidden rounded-[26px] p-5 text-white sm:p-6"
+        style={{ background: `linear-gradient(120deg, ${c1}, ${c2})`, boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -14px ${c1}88` }}
+      >
+        <span aria-hidden className="pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+        <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
+          <GameAvatar game={s.game} size={68} glass />
+          <div className="min-w-0 flex-1 basis-64">
+            <h1 className="break-words text-2xl font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-bold text-white/90">
+              <span>{gameLabel(s.game)}{realVersion ? ` · ${realVersion}` : ''}</span>
+              <code className="font-mono text-[13px] font-semibold">{s.address}</code>
             </div>
           </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
-          <CopyButton text={s.address} label="Адрес" />
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => void share()}>Поделиться</button>
-          {link && <a className="btn btn-soft btn-sm" href={link}>Подключиться</a>}
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
+            <CopyButton text={s.address} label="Скопировать адрес" tone="grad" />
+            <button type="button" className="btn-ghost-on-grad" onClick={() => void share()}>Поделиться</button>
+            {link && <a className="btn-ghost-on-grad" href={link}>Подключиться</a>}
+          </div>
         </div>
         {!s.online && s.error && (
-          <p className="w-full rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{s.error}</p>
+          <p className="relative mt-4 rounded-2xl bg-black/20 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
-        <div className="flex w-full flex-wrap gap-2">
+        <div className="relative mt-4 flex flex-wrap items-center gap-2">
           {isAdmin && (
             <>
-              <button className="btn btn-soft btn-sm" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
-              <button className="btn btn-soft btn-sm" onClick={() => setEditing(true)}>Изменить</button>
-              <button className="btn btn-danger btn-sm" onClick={remove}>Удалить</button>
+              <button className="btn-ghost-on-grad" onClick={refresh} disabled={busy}>{busy ? 'Опрашиваю…' : 'Опросить сейчас'}</button>
+              <button className="btn-ghost-on-grad" onClick={() => setEditing(true)}>Изменить</button>
+              <button className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#b42323] transition hover:bg-white/90 max-sm:min-h-[44px]" onClick={remove}>Удалить</button>
             </>
           )}
-          <span className="ml-auto self-center text-sm font-semibold text-mute">обновлено {ago(s.updatedAt)}</span>
+          <span className="ml-auto text-sm font-bold text-white/90">обновлено {ago(s.updatedAt)}</span>
         </div>
-      </div>
+      </article>
       <ErrorLine text={error} />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
         {tiles.map(([k, v, hint]) => (
-          <div key={k} className="panel px-5 py-4">
-            <div className="text-sm font-extrabold text-mute">{k}</div>
-            <div className="text-3xl font-black tabular-nums text-link">{v}</div>
-            {hint && <div className="text-sm font-semibold text-mute">{hint}</div>}
+          <div key={k} className="tile p-4 sm:p-[18px]">
+            <div className="stat-k">{k}</div>
+            <div className="stat-v mt-1 truncate">{v}</div>
+            {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
           </div>
         ))}
       </div>
 
-      <div className="panel p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-black">Игроки</h2>
-          <div className="flex rounded-full bg-soft p-1" role="group" aria-label="Период">
-            {[[24, '24 часа'], [168, '7 дней']].map(([h, label]) => (
-              <button key={h} onClick={() => setHours(h as number)} aria-pressed={hours === h} className={`rounded-full px-3.5 py-1 text-sm font-extrabold transition ${hours === h ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}>
-                {label}
-              </button>
-            ))}
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <section className="tile p-5 lg:col-span-8" aria-label="График игроков">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-extrabold">Игроки</h2>
+            <div className="seg" role="group" aria-label="Период">
+              {[[24, '24 ч'], [168, '7 дн']].map(([h, label]) => (
+                <button key={h} type="button" onClick={() => setHours(h as number)} aria-pressed={hours === h} className="seg-item">
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
+          {stats.samples < 2 ? (
+            <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
+          ) : (
+            <PlayersChart points={points} hours={hours} max={s.maxPlayers} color={color} />
+          )}
+          {points.some((p) => !p.online) && stats.samples >= 2 && (
+            <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+          )}
+        </section>
+
+        <div className="lg:col-span-4">
+          <PlayersNow online={s.online} players={s.players} names={s.playerNames} list={data.playersNow ?? []} />
         </div>
-        {stats.samples < 2 ? (
-          <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
-        ) : (
-          <PlayersChart points={points} hours={hours} max={s.maxPlayers} color={color} />
-        )}
-        {points.some((p) => !p.online) && stats.samples >= 2 && (
-          <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
-        )}
-      </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <PlayersNow online={s.online} players={s.players} names={s.playerNames} list={data.playersNow ?? []} />
-
-        <div className="panel p-5">
-          <h2 className="mb-3 text-lg font-black">Журнал событий</h2>
+        <section className="tile p-5 lg:col-span-8">
+          <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
           {events.length === 0 ? (
             <p className="font-semibold text-mute">За выбранный период сбоев не было.</p>
           ) : (
@@ -346,7 +387,19 @@ function ServerDetailView({ id }: { id: number }) {
             </ul>
           )}
           {events.length > 0 && <p className="mt-3 text-sm font-semibold text-mute">{events.length} {plural(events.length, ['событие', 'события', 'событий'])} за период</p>}
-        </div>
+        </section>
+
+        <section className="tile p-5 lg:col-span-4">
+          <h2 className="mb-3 text-base font-extrabold">О сервере</h2>
+          <dl className="space-y-2.5">
+            {info.map(([k, v]) => (
+              <div key={k} className="flex items-baseline justify-between gap-4">
+                <dt className="shrink-0 text-sm font-bold text-mute">{k}</dt>
+                <dd className={`min-w-0 break-words text-right text-sm font-extrabold ${k === 'Адрес' ? 'font-mono' : ''}`}>{v}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
       </div>
 
       {editing && (

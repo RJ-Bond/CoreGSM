@@ -71,3 +71,18 @@ export const mix = (a: RGB, b: RGB, k: number): RGB => a.map((v, i) => Math.roun
 export const triplet = (c: RGB) => c.join(' ');
 export const WHITE: RGB = [255, 255, 255];
 export const BLACK: RGB = [0, 0, 0];
+
+const hex = (c: RGB) => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
+
+/**
+ * Two-stop gradient for a tile cover from a game colour: c1 is the deeper end (white text keeps >= 4.5:1),
+ * c2 a lighter, slightly warmer end (large white text keeps >= 3:1).
+ */
+export function gradientFor(color: string): [string, string] {
+  const base = parseHex(color) ?? [90, 75, 209];
+  const c1 = ensureContrast(mix(base, BLACK, 0.1), [WHITE], 4.5, 'darken');
+  const [h, s, l] = toHsl(mix(base, WHITE, 0.22));
+  const warm = fromHsl([(h + 14) % 360, clamp(s, 0, 0.95), l]);
+  const c2 = ensureContrast(warm, [WHITE], 3, 'darken');
+  return [hex(c1), hex(c2)];
+}
