@@ -2,7 +2,8 @@
 # coregsm: CoreGSM manager (menu + commands). Installed to /usr/local/bin/coregsm by install.sh.
 #
 #   coregsm                 interactive menu
-#   coregsm update [--check|--force|--yes|--auto]
+#   coregsm update [--check|--force|--yes|--auto]   (--from-panel: reads the request file; "rollback" = roll back)
+#   coregsm rollback [--yes]                         previous version + database from the pre-update backup
 #   coregsm status | doctor | logs [service] | start | stop | restart
 #   coregsm backup | restore [file] | domain | reset-password | uninstall
 set -uo pipefail
@@ -59,6 +60,38 @@ need_installed() { installed || { bad "CoreGSM не установлен. Зап
 
 envget() { grep -E "^$1=" "$APP_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true; }
 dc() { (cd "$APP_DIR" && docker compose "$@"); }
+
+env_set() { # env_set KEY VALUE  -> replaces or appends the line in .env, keeping everything else (and the file mode)
+  local f="$APP_DIR/.env" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp)"
+  if grep -qE "^$1=" "$f"; then
+    K="$1" V="$2" awk 'BEGIN{k=ENVIRON["K"]; v=ENVIRON["V"]} index($0, k "=") == 1 {print k "=" v; next} {print}' "$f" > "$tmp"
+  else
+    { cat "$f"; printf '%s=%s\n' "$1" "$2"; } > "$tmp"
+  fi
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
+}
+
+is_local_name() { # IPv4, localhost or a private suffix: Let's Encrypt is impossible for these
+  [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && return 0
+  [[ "$1" =~ (^localhost$|\.(local|lan|home|internal|test|localdomain)$|\.home\.arpa$) ]] && return 0
+  return 1
+}
+
+# days until the panel certificate expires (fails when there is no certificate)
+cert_days() {
+  local d crt end ts
+  d="$(envget DOMAIN)"; crt="$APP_DIR/certbot/conf/live/$d/fullchain.pem"
+  [ -f "$crt" ] || return 1
+  end="$(openssl x509 -enddate -noout -in "$crt" 2>/dev/null | cut -d= -f2)"; [ -n "$end" ] || return 1
+  ts="$(date -d "$end" +%s 2>/dev/null)" || return 1
+  echo $(( (ts - $(date +%s)) / 86400 ))
+}
+cert_kind() { # letsencrypt | selfsigned
+  [ -f "$APP_DIR/certbot/conf/live/$(envget DOMAIN)/.selfsigned" ] && echo selfsigned || echo letsencrypt
+}
 
 PROXY_ARGS=()
 _p="$(envget PROXY_URL)"; [ -n "$_p" ] && PROXY_ARGS=(--proxy "${_p/#socks5:/socks5h:}")
@@ -147,14 +180,13 @@ cmd_status() {
   done < <(dc ps -a --format '{{.Service}}\t{{.State}}' 2>/dev/null | sort)
   hr
   if healthy 3; then kv "Панель" "${OKC}отвечает${NC}"; else kv "Панель" "${BAD}не отвечает${NC}"; fi
-  local d crt end days
-  d="$(envget DOMAIN)"; crt="$APP_DIR/certbot/conf/live/$d/fullchain.pem"
-  if [ -f "$crt" ]; then
-    end="$(openssl x509 -enddate -noout -in "$crt" 2>/dev/null | cut -d= -f2)"
-    days=$(( ( $(date -d "$end" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
-    if [ -f "$(dirname "$crt")/.selfsigned" ]; then kv "Сертификат" "самоподписанный"; else kv "Сертификат" "Let's Encrypt, ещё ${days} дн."; fi
+  local days kind lbl
+  if days="$(cert_days)"; then
+    kind="$(cert_kind)"; lbl="Let's Encrypt"; [ "$kind" = selfsigned ] && lbl="самоподписанный"
+    if [ "$days" -lt 14 ]; then kv "Сертификат" "${WRN}${lbl}, осталось ${days} дн. — скоро истечёт${NC}"; else kv "Сертификат" "${lbl}, ещё ${days} дн."; fi
   fi
   kv "Версия" "$(cur_build | cut -c1-7)"
+  if rollback_available; then kv "Откат" "возможен (coregsm rollback)"; fi
   local latest; latest="$(remote_build)"
   if [ -n "$latest" ] && [ "$latest" != "$(cur_build)" ]; then kv "Обновление" "${WRN}⬆ ${latest:0:7}${NC}  (coregsm update)"; fi
   local last; last="$(ls -1t "$BACKUPS" 2>/dev/null | head -n1)"
@@ -178,7 +210,7 @@ cmd_doctor() {
     curl -sk --noproxy "*" --max-time 5 --resolve "${d}:443:127.0.0.1" "https://${d}/api/health" || echo "no answer"
     echo; echo "== dns ($d)"; getent ahostsv4 "$d" 2>&1 | head -n 2
     local crt="$APP_DIR/certbot/conf/live/$d/fullchain.pem"
-    if [ -f "$crt" ]; then echo; echo "== certificate"; openssl x509 -noout -subject -enddate -in "$crt" 2>&1; [ -f "$(dirname "$crt")/.selfsigned" ] && echo "self-signed"; fi
+    if [ -f "$crt" ]; then echo; echo "== certificate"; openssl x509 -noout -subject -enddate -in "$crt" 2>&1; [ -f "$(dirname "$crt")/.selfsigned" ] && echo "self-signed"; echo "days left: $(cert_days)   local_mode: $(envget LOCAL_MODE)   cert_mode: $(envget CERT_MODE)"; fi
     echo; echo "== updater"; systemctl is-active coregsm-update.path 2>&1; ls -la "$UPD" 2>&1 | head -n 8
     local s; for s in backend bot nginx-proxy; do echo; echo "== log: $s (last 25)"; dc logs --no-color --tail=25 "$s" 2>&1; done
   } > "$out" 2>&1
@@ -190,11 +222,41 @@ cmd_doctor() {
   healthy 3 && ok "Панель отвечает на запросы" || { bad "Панель не отвечает"; problems=$((problems + 1)); }
   ss -ltn 2>/dev/null | grep -qE ':443\b' && ok "Порт 443 слушается" || { bad "Порт 443 не слушается"; problems=$((problems + 1)); }
   ufw status 2>/dev/null | grep -q "443" && ok "Файрвол пропускает 80 и 443" || warn "В UFW не видно правил для 443"
+  local cdays
+  if cdays="$(cert_days)"; then
+    if [ "$cdays" -lt 14 ]; then warn "Сертификат истекает через ${cdays} дн."; problems=$((problems + 1)); else ok "Сертификат действует ещё ${cdays} дн."; fi
+  fi
   local free; free="$(df -P "$APP_DIR" | awk 'NR==2{print int($4/1024)}')"
   [ "$free" -gt 1024 ] && ok "Свободно места: ${free} МБ" || { warn "Мало места на диске: ${free} МБ"; problems=$((problems + 1)); }
   hr
   if [ "$problems" -eq 0 ]; then ok "Проблем не найдено"; else warn "Найдено проблем: $problems"; fi
   dim "Полный отчёт для поддержки: $out"
+}
+
+# Daily check (coregsm-health.timer): a warning in the journal and in /var/log/coregsm-health.log when the
+# certificate expires in less than 14 days (renewal does not work) or the panel does not answer.
+cmd_health() {
+  installed || return 0
+  local days msg f=/var/log/coregsm-health.log
+  if days="$(cert_days)"; then
+    if [ "$days" -lt 14 ]; then
+      msg="Сертификат $(envget DOMAIN) истекает через ${days} дн. Проверьте: docker compose logs certbot (cd $APP_DIR)"
+      [ "$(cert_kind)" = selfsigned ] && msg="$msg; для самоподписанного: sudo bash install.sh --install"
+      printf '%s WARN %s\n' "$(date '+%F %T')" "$msg" >> "$f"
+      warn "$msg"
+      command -v logger >/dev/null 2>&1 && logger -t coregsm -p daemon.warning "$msg"
+    else
+      dim "Сертификат действует ещё ${days} дн."
+    fi
+  fi
+  if ! healthy 6; then
+    msg="Панель не отвечает на https://$(envget DOMAIN)/api/health"
+    printf '%s WARN %s\n' "$(date '+%F %T')" "$msg" >> "$f"
+    warn "$msg"
+    command -v logger >/dev/null 2>&1 && logger -t coregsm -p daemon.warning "$msg"
+  fi
+  [ -f "$f" ] && chmod 600 "$f"
+  return 0
 }
 
 # ---------- logs / start / stop ----------
@@ -261,8 +323,18 @@ remote_meta() { # sets R_BUILD R_SHA
 # ---------- backups ----------
 data_volume() { docker volume ls -q 2>/dev/null | grep -E 'coregsm-data$' | head -n1; }
 
+# Image for one-off commands on the data volume: busybox, or (offline) the backend image itself.
+helper_image() {
+  if docker image inspect busybox >/dev/null 2>&1; then echo busybox; return; fi
+  if docker pull -q busybox >/dev/null 2>&1; then echo busybox; return; fi
+  echo coregsm-backend
+}
+
+# An archive "coregsm-[TAG-]DATE.tgz" holds: coregsm.db (consistent copy), env, certs.tgz, and (new)
+# files.tgz + files.list with the news pictures and the brand logo from the data volume. The panel's own
+# scheduled backups (/data/backups) and *.db-wal/-shm files are not part of it.
 backup_create() { # backup_create [tag]  -> prints the archive path
-  local tag="${1:-}" tmp name vol
+  local tag="${1:-}" tmp name vol pat
   mkdir -p "$BACKUPS"; chmod 700 "$BACKUPS"
   tmp="$(mktemp -d)"; vol="$(data_volume)"
   name="coregsm-${tag:+$tag-}$(date +%Y%m%d-%H%M%S).tgz"
@@ -273,18 +345,46 @@ backup_create() { # backup_create [tag]  -> prints the archive path
       && docker cp "$(dc ps -q backend):/data/.backup.db" "$tmp/coregsm.db" >/dev/null 2>&1
     dc exec -T backend rm -f /data/.backup.db >/dev/null 2>&1
   fi
+  if [ ! -f "$tmp/coregsm.db" ] && [ -n "$vol" ] && docker image inspect coregsm-backend >/dev/null 2>&1; then
+    # backend stopped: let SQLite merge the write-ahead log into the copy (the backend image has the driver)
+    docker run --rm -u 0 --entrypoint node -v "$vol:/data:ro" -v "$tmp:/out" coregsm-backend \
+      -e "const D=require('better-sqlite3');const s=new D('/data/coregsm.db',{readonly:true});s.backup('/out/coregsm.db').then(()=>process.exit(0),e=>{console.error(e);process.exit(1)})" >/dev/null 2>&1 \
+      || rm -f "$tmp/coregsm.db"
+  fi
   if [ ! -f "$tmp/coregsm.db" ] && [ -n "$vol" ]; then
-    docker run --rm -v "$vol:/data:ro" -v "$tmp:/out" busybox sh -c 'cp /data/coregsm.db /out/coregsm.db' >/dev/null 2>&1
+    docker run --rm -u 0 --entrypoint sh -v "$vol:/data:ro" -v "$tmp:/out" "$(helper_image)" -c 'cp /data/coregsm.db /out/coregsm.db' >/dev/null 2>&1
   fi
   [ -f "$tmp/coregsm.db" ] || { rm -rf "$tmp"; return 1; }
+
+  if [ -n "$vol" ]; then
+    # news pictures and brand logo; files.list is kept only when the archive really holds them
+    docker run --rm -u 0 --entrypoint sh -v "$vol:/data:ro" -v "$tmp:/out" "$(helper_image)" -c \
+      'cd /data && ls -d news brand-logo.* 2>/dev/null > /out/files.list; if [ -s /out/files.list ]; then tar czf /out/files.tgz -T /out/files.list || rm -f /out/files.list /out/files.tgz; fi; exit 0' >/dev/null 2>&1 || true
+  fi
 
   cp "$APP_DIR/.env" "$tmp/env"
   [ -d "$APP_DIR/certbot/conf" ] && tar czf "$tmp/certs.tgz" -C "$APP_DIR" certbot/conf 2>/dev/null
   tar czf "$BACKUPS/$name" -C "$tmp" . && chmod 600 "$BACKUPS/$name"
   rm -rf "$tmp"
-  # keep the newest $KEEP_BACKUPS archives
-  ls -1t "$BACKUPS"/coregsm-*.tgz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -f
+  # keep the newest $KEEP_BACKUPS archives of each kind (auto, pre-update, before-restore, manual, ...)
+  if [ -n "$tag" ]; then pat="coregsm-$tag-[0-9]*.tgz"; else pat="coregsm-[0-9]*.tgz"; fi
+  ls -1t "$BACKUPS"/$pat 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -f
   printf '%s' "$BACKUPS/$name"
+}
+
+# Writes data from an extracted archive (DIR) into the data volume.
+#   MODE db   : only coregsm.db (rollback)
+#   MODE full : the database, news/ and brand-logo.* (restore); an old archive without files.list leaves
+#               the current pictures alone
+# The caller stops backend and bot first.
+restore_volume() { # restore_volume DIR db|full
+  local vol script
+  vol="$(data_volume)"; [ -n "$vol" ] || return 1
+  script='cp /in/coregsm.db /data/coregsm.db && rm -f /data/coregsm.db-wal /data/coregsm.db-shm && chown 1000:1000 /data/coregsm.db || exit 1'
+  if [ "$2" = full ]; then
+    script="$script"'; if [ -f /in/files.list ]; then rm -rf /data/news; rm -f /data/brand-logo.*; if [ -f /in/files.tgz ]; then tar xzf /in/files.tgz -C /data || exit 1; fi; fi; chown -R 1000:1000 /data/news /data/brand-logo.* 2>/dev/null; exit 0'
+  fi
+  docker run --rm -u 0 --entrypoint sh -v "$vol:/data" -v "$1:/in:ro" "$(helper_image)" -c "$script" >/dev/null 2>&1
 }
 
 cmd_backup() {
@@ -312,19 +412,40 @@ cmd_restore() {
   local file="${1:-}" tmp vol
   if [ -z "$file" ]; then title "Восстановление"; file="$(pick_backup)" || return 0; fi
   [ -f "$file" ] || { bad "Файл не найден: $file"; return 1; }
-  say "Будут заменены база данных и .env из копии."
-  ask_yn "Восстановить из $(basename "$file")?" || { dim "Отменено"; return 0; }
-  spin "Страховочная копия текущего состояния" backup_create before-restore || warn "Страховочная копия не создана"
-
-  tmp="$(mktemp -d)"; vol="$(data_volume)"
+  tmp="$(mktemp -d)"
   tar xzf "$file" -C "$tmp" || { bad "Архив повреждён"; rm -rf "$tmp"; return 1; }
   [ -f "$tmp/coregsm.db" ] || { bad "В архиве нет базы данных"; rm -rf "$tmp"; return 1; }
+  say "Будут заменены: база данных, картинки новостей и логотип (если они есть в копии),"
+  say "а также секреты JWT_SECRET и INTERNAL_TOKEN (они должны совпадать с базой)."
+  say "Домен, версия и сертификаты этого сервера не меняются."
+  ask_yn "Восстановить из $(basename "$file")?" || { dim "Отменено"; rm -rf "$tmp"; return 0; }
+  local with_certs=0
+  if [ -f "$tmp/certs.tgz" ]; then
+    echo; say "В копии есть сертификаты и адрес (домен) прежнего сервера."
+    dim "Нужны только при возврате на тот же адрес. При переносе на другой сервер ответьте «нет»."
+    ask_yn "Восстановить также сертификаты и домен из копии?" && with_certs=1
+  fi
+  spin "Страховочная копия текущего состояния" backup_create before-restore || warn "Страховочная копия не создана"
+
   spin "Останавливаю сервисы" dc stop backend bot
-  docker run --rm -v "$vol:/data" -v "$tmp:/in:ro" busybox sh -c \
-    'cp /in/coregsm.db /data/coregsm.db && rm -f /data/coregsm.db-wal /data/coregsm.db-shm && chown 1000:1000 /data/coregsm.db' \
-    && ok "База данных восстановлена" || { bad "Не удалось записать базу"; rm -rf "$tmp"; return 1; }
-  [ -f "$tmp/env" ] && cp "$tmp/env" "$APP_DIR/.env" && chmod 600 "$APP_DIR/.env" && ok "Файл .env восстановлен"
-  [ -f "$tmp/certs.tgz" ] && tar xzf "$tmp/certs.tgz" -C "$APP_DIR" && ok "Сертификаты восстановлены"
+  restore_volume "$tmp" full && ok "База данных и файлы восстановлены" || { bad "Не удалось записать данные"; rm -rf "$tmp"; return 1; }
+  if [ -f "$tmp/env" ]; then
+    local k v
+    for k in JWT_SECRET INTERNAL_TOKEN; do
+      v="$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"
+      [ -n "$v" ] && env_set "$k" "$v"
+    done
+    ok "Секреты JWT_SECRET и INTERNAL_TOKEN восстановлены"
+    if [ "$with_certs" = 1 ]; then
+      for k in DOMAIN LE_EMAIL LOCAL_MODE CERT_MODE; do
+        grep -qE "^$k=" "$tmp/env" && env_set "$k" "$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"
+      done
+      if ! grep -qE '^LOCAL_MODE=' "$tmp/env"; then
+        if is_local_name "$(envget DOMAIN)"; then env_set LOCAL_MODE 1; else env_set LOCAL_MODE 0; fi
+      fi
+    fi
+  fi
+  if [ "$with_certs" = 1 ] && [ -f "$tmp/certs.tgz" ]; then tar xzf "$tmp/certs.tgz" -C "$APP_DIR" && ok "Сертификаты и домен восстановлены"; fi
   rm -rf "$tmp"
   spin "Запускаю сервисы" dc up -d
 }
@@ -354,7 +475,7 @@ screen_backups() {
     kv "Хранится" "$(ls -1 "$BACKUPS"/coregsm-*.tgz 2>/dev/null | wc -l) шт. из $KEEP_BACKUPS"
     kv "Последняя" "$(ls -1t "$BACKUPS" 2>/dev/null | head -n1 | sed 's/^coregsm-//; s/\.tgz$//')"
     echo
-    item 1 "Создать копию" "база, .env, сертификаты"
+    item 1 "Создать копию" "база, картинки, .env, сертификаты"
     item 2 "Восстановить" "из выбранной копии"
     item 3 "Копия каждую ночь" "$(flag backup)"
     printf '\n  %sВыбор:%s ' "$DIM" "$NC"; local k; tty_read -n1 k; echo
@@ -368,34 +489,126 @@ screen_backups() {
 }
 
 # ---------- update (with rollback) ----------
+# Rollback is possible while the previous images (:prev tags), the source snapshot and the pre-update backup
+# exist. They are taken by snapshot_create before an update and consumed by a successful rollback.
+rollback_available() {
+  [ -f "$PREV/src.tgz" ] || return 1
+  local b; b="$(cat "$PREV/pre_backup" 2>/dev/null)"
+  [ -n "$b" ] && [ -f "$b" ] || return 1
+  docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE '^coregsm-.*:prev$'
+}
+
+# status.json: {"state":"running|done|error","message":"...","time":<ms>,"rollback_available":true|false}
 status_file() { # status_file STATE MESSAGE  (the panel shows this)
-  local msg; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+  local msg rb=false; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+  rollback_available && rb=true
   mkdir -p "$UPD"
-  printf '{"state":"%s","message":"%s","time":%s000}\n' "$1" "$msg" "$(date +%s)" > "$UPD/status.json.tmp"
+  printf '{"state":"%s","message":"%s","time":%s000,"rollback_available":%s}\n' "$1" "$msg" "$(date +%s)" "$rb" > "$UPD/status.json.tmp"
   mv -f "$UPD/status.json.tmp" "$UPD/status.json"; chmod 644 "$UPD/status.json"
 }
 
+prev_images() { docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^coregsm-.*:prev$'; }
+
 snapshot_create() {
   mkdir -p "$PREV"
+  rm -f "$PREV/pre_backup"
+  # drop the :prev tags of an older snapshot, so old and new images never mix
+  prev_images | xargs -r docker rmi >/dev/null 2>&1
   cur_build > "$PREV/version"
   cp -f "$APP_DIR/.env" "$PREV/env"
   tar czf "$PREV/src.tgz" -C "$APP_DIR" docker-compose.yml core-backend core-frontend core-bot nginx 2>/dev/null
-  local img
+  local img f
   for img in $(dc config --images 2>/dev/null | grep '^coregsm-'); do
     docker image inspect "$img" >/dev/null 2>&1 && docker tag "$img" "${img%%:*}:prev"
   done
-  backup_create pre-update >/dev/null 2>&1 || true
+  f="$(backup_create pre-update 2>/dev/null)" && [ -f "$f" ] && printf '%s' "$f" > "$PREV/pre_backup"
+  return 0
 }
 
+# the sources of the version that is still running (after a failed build the new ones are on disk already)
+restore_sources() { [ -f "$PREV/src.tgz" ] && tar xzf "$PREV/src.tgz" -C "$APP_DIR" 2>/dev/null; return 0; }
+
+RB_ERR=""; RB_DB=0
+# Back to the previous version: sources and APP_VERSION, :prev images, the database from the pre-update backup
+# (only coregsm.db: .env, certificates, news pictures and the logo stay as they are), then start.
 rollback_apply() {
-  [ -f "$PREV/src.tgz" ] || return 1
-  tar xzf "$PREV/src.tgz" -C "$APP_DIR" && cp -f "$PREV/env" "$APP_DIR/.env" && chmod 600 "$APP_DIR/.env" || return 1
+  RB_ERR=""; RB_DB=0
+  [ -f "$PREV/src.tgz" ] || { RB_ERR="нет снимка предыдущей версии"; return 1; }
+  tar xzf "$PREV/src.tgz" -C "$APP_DIR" || { RB_ERR="не удалось распаковать снимок файлов"; return 1; }
+  env_set APP_VERSION "$(cat "$PREV/version" 2>/dev/null)"
   local img
-  for img in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^coregsm-.*:prev$'); do
+  for img in $(prev_images); do
     docker tag "$img" "${img%:prev}:latest"
   done
+  local pre; pre="$(cat "$PREV/pre_backup" 2>/dev/null)"
+  if [ -n "$pre" ] && [ -f "$pre" ]; then
+    status_file running "Откат к предыдущей версии: восстанавливаю базу данных…"
+    local tmp; tmp="$(mktemp -d)"
+    tar xzf "$pre" -C "$tmp" ./coregsm.db 2>/dev/null || tar xzf "$pre" -C "$tmp" 2>/dev/null
+    if [ ! -f "$tmp/coregsm.db" ]; then
+      rm -rf "$tmp"; RB_ERR="копия базы перед обновлением повреждена"; return 1
+    fi
+    dc stop backend bot >/dev/null 2>&1
+    if restore_volume "$tmp" db; then RB_DB=1; say "База данных восстановлена из $(basename "$pre")"
+    else rm -rf "$tmp"; RB_ERR="не удалось записать базу данных"; return 1; fi
+    rm -rf "$tmp"
+  else
+    warn "Копия базы перед обновлением не найдена: база не изменена"
+  fi
+  status_file running "Откат к предыдущей версии: запускаю прежние контейнеры…"
   dc up -d --no-build >/dev/null 2>&1
-  healthy 90
+  if ! healthy 90; then RB_ERR="прежняя версия не отвечает после запуска"; return 1; fi
+  # the snapshot is used up: rolling back twice would only bring the old database back again
+  rm -f "$PREV/src.tgz" "$PREV/pre_backup"
+  prev_images | xargs -r docker rmi >/dev/null 2>&1
+  return 0
+}
+
+acquire_lock() {
+  mkdir -p "$UPD"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9> "$UPD/.lock"; flock -n 9 || { say "Обновление уже выполняется"; return 1; }
+  fi
+  return 0
+}
+
+# Rollback to the previous version (panel button: request file "rollback"; or "coregsm rollback").
+# rollback_flow ASK: ASK=1 asks for a confirmation first (terminal)
+rollback_flow() {
+  local ask="${1:-0}" prev
+  if ! rollback_available; then
+    bad "Откат невозможен: нет снимка предыдущей версии или копии базы (создаются при обновлении)"
+    status_file error "Откат не удался: нет сохранённого снимка предыдущей версии или копии базы. Откат доступен только после обновления"
+    return 1
+  fi
+  prev="$(cat "$PREV/version" 2>/dev/null)"
+  if [ "$ask" = 1 ]; then
+    title "Откат"
+    kv "Установлено" "$(cur_build | cut -c1-7)"; kv "Вернуть" "${prev:0:7}"
+    warn "База данных вернётся к состоянию перед обновлением: изменения после него будут потеряны."
+    ask_yn "Откатить?" || { dim "Отменено"; return 0; }
+  fi
+  status_file running "Откат к предыдущей версии…"
+  : > "$LOG"
+  rollback_apply >> "$LOG" 2>&1; local rc=$?
+  [ "$ask" = 1 ] && sed 's/\x1b\[[0-9;]*m//g' "$LOG"
+  if [ "$rc" -eq 0 ]; then
+    status_file done "Откат выполнен: работает версия ${prev:0:7}"
+    ok "Откат выполнен: работает версия ${prev:0:7}"; return 0
+  fi
+  status_file error "Откат не удался: ${RB_ERR:-причина в журнале}. Запустите: coregsm doctor"
+  bad "Откат не удался: ${RB_ERR:-причина в журнале}. Запустите: coregsm doctor"
+  return 1
+}
+
+cmd_rollback() {
+  local a ask=1
+  for a in "$@"; do
+    case "$a" in --yes|-y) ask=0 ;; *) bad "Неизвестный параметр: $a"; return 2 ;; esac
+  done
+  need_root; need_installed
+  acquire_lock || return 0
+  rollback_flow "$ask"
 }
 
 cmd_update() {
@@ -408,11 +621,16 @@ cmd_update() {
   done
   need_root; need_installed
   mkdir -p "$UPD"
-  # the request flag must go first, otherwise the systemd path unit would fire again
-  [ "$panel" = 1 ] && rm -f "$UPD/request"
-  if command -v flock >/dev/null 2>&1; then
-    exec 9> "$UPD/.lock"; flock -n 9 || { say "Обновление уже выполняется"; return 0; }
+  # The request file tells what the panel wants: the word "rollback" = roll back to the previous version,
+  # anything else (a timestamp, empty) = update. It is consumed first, otherwise the systemd path unit
+  # would fire again.
+  local req=""
+  if [ "$panel" = 1 ]; then
+    req="$(head -c 256 "$UPD/request" 2>/dev/null | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    rm -f "$UPD/request"
   fi
+  acquire_lock || return 0
+  if [ "$panel" = 1 ] && [ "$req" = rollback ]; then rollback_flow 0; return $?; fi
   local quiet=0; { [ "$panel" = 1 ] || [ "$auto" = 1 ]; } && quiet=1
   fail() { bad "$1"; [ "$check" = 1 ] || status_file error "$1"; return 1; }
 
@@ -453,26 +671,34 @@ cmd_update() {
   rm -f "$tmp"
 
   if [ "$rc" -eq 0 ] && healthy 120; then
+    # the new build id is stamped only now, after the health check
+    env_set APP_VERSION "$latest"
+    docker image prune -f >/dev/null 2>&1
     status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
     # pull the actual cause out of the installer output so it is visible in the panel and on screen
     local reason
-    reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
-    status_file error "Установка не удалась (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
-    bad "Установка не удалась (код $rc), прежняя версия работает."
+    reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | sed 's/\. Полный журнал:.*//' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
+    # still the old version: it keeps its build id, and if the build failed the new sources go back as well
+    [ -n "$current" ] && env_set APP_VERSION "$current"
+    grep -q 'Запуск контейнеров' "$LOG" 2>/dev/null || restore_sources
+    status_file error "Обновление не удалось (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
+    bad "Обновление не удалось (код $rc), прежняя версия работает."
     [ -n "$reason" ] && say "Причина: $reason"
     dim "Последние строки журнала:"; tail -n 12 "$LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g; s/^/    /'
     dim "Полный журнал: /var/log/coregsm-install.log"
     return "$rc"
   fi
   warn "Новая версия не запустилась. Возвращаю предыдущую…"
+  status_file running "Новая версия не запустилась. Откат к предыдущей версии…"
   if rollback_apply; then
-    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}. Журнал: /var/log/coregsm-install.log"
+    local dbnote=""; [ "$RB_DB" = 1 ] && dbnote=" (база данных восстановлена из копии перед обновлением)"
+    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}${dbnote}. Журнал: /var/log/coregsm-install.log"
     ok "Откат выполнен: работает версия ${current:0:7}"
   else
-    status_file error "Обновление не удалось и откат не помог. Запустите: coregsm doctor"
-    bad "Откат не удался. Запустите: coregsm doctor"
+    status_file error "Обновление не удалось и откат не помог: ${RB_ERR:-причина неизвестна}. Запустите: coregsm doctor"
+    bad "Откат не удался: ${RB_ERR:-причина неизвестна}. Запустите: coregsm doctor"
   fi
   return 1
 }
@@ -486,9 +712,11 @@ screen_update() {
     ok "У вас последняя версия"
     echo; item 1 "Переустановить файлы" "вернёт изменённые вручную"
     item 2 "Автообновление по ночам" "$(flag autoupdate)"
+    rollback_available && item 3 "Откатить обновление" "версия $(cat "$PREV/version" 2>/dev/null | cut -c1-7), вместе с базой"
     printf '\n  %sВыбор:%s ' "$DIM" "$NC"; local k; tty_read -n1 k; echo
     case "$k" in
       1) cmd_update --force --yes ;;
+      3) cmd_rollback ;;
       2) if timer_on autoupdate; then timer_set autoupdate off; ok "Автообновление выключено"; else timer_set autoupdate on; ok "Проверка и обновление каждую ночь в 04:30"; fi ;;
       *) return 0 ;;
     esac
@@ -549,11 +777,20 @@ cmd_reset_password() {
   [ "${#p1}" -ge 10 ] || { bad "Пароль слишком короткий"; return 1; }
   printf '  Повторите пароль: '; tty_read -s p2; echo
   [ "$p1" = "$p2" ] || { bad "Пароли не совпадают"; return 1; }
-  if dc exec -T -e NEWPW="$p1" backend node -e "
-    const db=require('better-sqlite3')('/data/coregsm.db'); const b=require('bcryptjs');
-    const r=db.prepare('UPDATE users SET password_hash=? WHERE id=(SELECT MIN(id) FROM users)').run(b.hashSync(process.env.NEWPW,12));
-    if(!r.changes){console.error('no user');process.exit(1)}" >/dev/null 2>&1; then
-    ok "Пароль изменён"
+  # the first administrator (lowest id with role admin); all of their sessions are closed, nothing else is touched
+  local js
+  js="$(cat << 'JS'
+const db = require('better-sqlite3')('/data/coregsm.db');
+const b = require('bcryptjs');
+const row = db.prepare("SELECT MIN(id) AS id FROM users WHERE role='admin'").get();
+if (!row || !row.id) { console.error('no admin'); process.exit(1); }
+const r = db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(b.hashSync(process.env.NEWPW, 12), row.id);
+if (!r.changes) { console.error('no user'); process.exit(1); }
+db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.id);
+JS
+)"
+  if dc exec -T -e NEWPW="$p1" backend node -e "$js" >/dev/null 2>&1; then
+    ok "Пароль изменён, все сеансы администратора закрыты"
   else
     bad "Не удалось изменить пароль (панель ещё не настроена или backend остановлен)"; return 1
   fi
@@ -578,7 +815,14 @@ cmd_uninstall() {
   [ "$w" = "УДАЛИТЬ" ] || { dim "Отменено"; return 0; }
 
   if [ "$k" -ge 2 ] && installed; then
-    local f; f="$(backup_create final 2>/dev/null)" && { mv "$f" "/root/$(basename "$f")"; ok "Последняя копия: /root/$(basename "$f")"; } || warn "Копию создать не удалось"
+    local f; f="$(backup_create final 2>/dev/null)"
+    if [ -n "$f" ] && [ -f "$f" ] && mv "$f" "/root/$(basename "$f")"; then
+      ok "Последняя копия: /root/$(basename "$f")"
+    else
+      warn "Последнюю копию создать не удалось: данные будут удалены безвозвратно."
+      say "Чтобы всё равно удалить без копии, введите ${BLD}БЕЗ КОПИИ${NC}:"; printf '  > '; local w2; tty_read w2
+      [ "$w2" = "БЕЗ КОПИИ" ] || { dim "Отменено, ничего не удалено"; return 0; }
+    fi
   fi
 
   if installed; then
@@ -589,8 +833,12 @@ cmd_uninstall() {
 
   if [ "$k" -ge 2 ]; then
     local t
-    for t in coregsm-update.path coregsm-backup.timer coregsm-autoupdate.timer; do systemctl disable --now "$t" >/dev/null 2>&1; done
-    rm -f /etc/systemd/system/coregsm-* /etc/bash_completion.d/coregsm /usr/local/bin/coregsm-update
+    for t in coregsm-update.path coregsm-backup.timer coregsm-autoupdate.timer coregsm-health.timer; do systemctl disable --now "$t" >/dev/null 2>&1; done
+    rm -f /etc/systemd/system/coregsm-* /etc/bash_completion.d/coregsm /usr/local/bin/coregsm-update /var/log/coregsm-health.log
+    # proxy settings the installer wrote (Docker picks the drop-in removal up at its next restart)
+    grep -qs "managed by CoreGSM installer" /etc/apt/apt.conf.d/99coregsm-proxy && rm -f /etc/apt/apt.conf.d/99coregsm-proxy
+    grep -qs "managed by CoreGSM installer" /etc/systemd/system/docker.service.d/coregsm-proxy.conf && rm -f /etc/systemd/system/docker.service.d/coregsm-proxy.conf
+    rmdir /etc/systemd/system/docker.service.d 2>/dev/null
     systemctl daemon-reload
     rm -rf "$APP_DIR"
     ok "Файлы приложения удалены"
@@ -646,6 +894,7 @@ usage() {
   cat << 'HELP'
   coregsm                     меню управления
   coregsm update              обновить (--check, --force, --yes)
+  coregsm rollback            откатить последнее обновление вместе с базой (--yes)
   coregsm status              состояние сервисов
   coregsm doctor              диагностика и отчёт для поддержки
   coregsm logs [сервис]       журналы (backend, bot, nginx-proxy)
@@ -663,6 +912,8 @@ main() {
   case "$cmd" in
     menu) menu ;;
     update) cmd_update "$@" ;;
+    rollback) cmd_rollback "$@" ;;
+    health) cmd_health ;;
     status) cmd_status ;;
     doctor) cmd_doctor ;;
     logs) cmd_logs "$@" ;;

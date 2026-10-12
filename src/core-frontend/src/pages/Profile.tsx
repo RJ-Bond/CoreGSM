@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
 import { useAuth } from '../auth';
-import { ago, ErrorLine, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast } from '../ui';
+import { restartTour } from '../components/Tour';
+import { confirmDialog } from '../confirm';
+import { ago, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast } from '../ui';
 
 /** "Chrome · Windows" from a User-Agent string */
 function deviceName(ua: string): string {
@@ -43,7 +45,7 @@ export default function ProfilePage() {
         <div className="panel flex flex-wrap items-center gap-4 p-5 md:col-span-2">
           <UserAvatar name={me.username} url={me.avatarUrl} size={64} tone="brand" className="!rounded-3xl" />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-2xl font-black">{me.username}</div>
+            <div className="line-clamp-2 break-words text-2xl font-black leading-tight">{me.username}</div>
             <div className="flex flex-wrap items-center gap-2">
               <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{isAdmin ? 'АДМИНИСТРАТОР' : 'ИГРОК'}</span>
               {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}
@@ -56,6 +58,16 @@ export default function ProfilePage() {
         <DiscordCard onChanged={reload} />
         <SessionsCard />
 
+        {isAdmin && (
+          <div className="panel flex flex-wrap items-center justify-between gap-3 p-6 md:col-span-2">
+            <div className="min-w-0">
+              <h2 className="text-lg font-black">Подсказки для администратора</h2>
+              <p className="font-semibold text-mute">Короткий тур по первым шагам: сервер, Discord-бот, канал, новости и оформление.</p>
+            </div>
+            <button className="btn btn-soft" onClick={() => restartTour(me.username)}>Показать подсказки заново</button>
+          </div>
+        )}
+
         <div className="panel space-y-3 p-6">
           <h2 className="text-lg font-black">Избранные серверы</h2>
           {favs === null && <div className="skeleton h-20 rounded-2xl bg-soft" />}
@@ -64,7 +76,7 @@ export default function ProfilePage() {
             <a key={s.id} href={`#/servers/${s.id}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5 transition hover:ring-2 hover:ring-brand/30">
               <GameAvatar game={s.game} size={36} />
               <span className="min-w-0 flex-1 truncate font-bold">{s.name}</span>
-              <StatusPill online={s.online} known={s.hasStatus} />
+              <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} />
             </a>
           ))}
         </div>
@@ -125,7 +137,8 @@ function DiscordCard({ onChanged }: { onChanged: () => Promise<void> }) {
   if (!me) return null;
 
   const unlink = async () => {
-    if (!window.confirm('Отвязать Discord от аккаунта?')) return;
+    const ok = await confirmDialog({ title: 'Отвязать Discord?', text: 'Вход через Discord для этого аккаунта перестанет работать, пока вы не привяжете его снова.', confirmLabel: 'Отвязать', danger: true });
+    if (!ok) return;
     setBusy(true);
     setError('');
     try {
@@ -183,7 +196,8 @@ function SessionsCard() {
     load();
   };
   const endOthers = async () => {
-    if (!window.confirm('Завершить все сеансы, кроме этого?')) return;
+    const ok = await confirmDialog({ title: 'Завершить все остальные сеансы?', text: 'На других устройствах потребуется войти заново. Этот сеанс останется.', confirmLabel: 'Завершить', danger: true });
+    if (!ok) return;
     setBusy(true);
     setError('');
     await api<{ revoked: number }>('/sessions/revoke-others', 'POST')

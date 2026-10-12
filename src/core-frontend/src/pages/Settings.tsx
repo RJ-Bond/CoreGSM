@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, getToken, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { confirmDialog, promptDialog } from '../confirm';
 import { useAuth } from '../auth';
-import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
+import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -167,7 +168,7 @@ function BotCard() {
   };
 
   const removeToken = async () => {
-    if (!window.confirm('Удалить токен? Бот перестанет обновлять карточки.')) return;
+    if (!(await confirmDialog({ title: 'Удалить токен?', text: 'Бот перестанет обновлять карточки.', confirmLabel: 'Удалить', danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
     } catch (err) {
@@ -176,7 +177,7 @@ function BotCard() {
   };
 
   const removeSecret = async () => {
-    if (!window.confirm('Удалить Client Secret? Вход через Discord перестанет работать.')) return;
+    if (!(await confirmDialog({ title: 'Удалить Client Secret?', text: 'Вход через Discord перестанет работать.', confirmLabel: 'Удалить', danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
     } catch (err) {
@@ -328,9 +329,17 @@ function UpdateCard() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  // set when "Update" was pressed: remembers the previous job timestamp to recognise the new result
-  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null } | null>(null);
+  // set when "Update" or "Rollback" was pressed: remembers the previous job timestamp to recognise the new result
+  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null; kind: 'update' | 'rollback' } | null>(null);
   const [offline, setOffline] = useState(false);
+  const [log, setLog] = useState<Changelog | null>(null);
+  const [logError, setLogError] = useState('');
+
+  useEffect(() => {
+    api<Changelog>('/update/changelog')
+      .then((r) => { setLog(r); setLogError(r.error ?? ''); })
+      .catch((e: Error) => setLogError(e.message));
+  }, []);
 
   usePoll(() => {
     api<UpdateInfo>('/update/status')
@@ -366,13 +375,34 @@ function UpdateCard() {
   };
 
   const apply = async () => {
-    if (!window.confirm('Обновить панель? Она будет недоступна 1-3 минуты, данные и настройки сохранятся.')) return;
+    if (!(await confirmDialog({ title: 'Обновить панель?', text: 'Она будет недоступна 1-3 минуты, данные и настройки сохранятся.', confirmLabel: 'Обновить' }))) return;
     setBusy(true);
     setError('');
     try {
       const r = await api<UpdateInfo>('/update/apply', 'POST');
       setInfo(r);
-      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null });
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rollback = async () => {
+    const ok = await confirmDialog({
+      title: 'Откатить к предыдущей версии?',
+      text: 'Будут восстановлены предыдущая версия панели и копия базы данных, сделанная перед последним обновлением. Всё, что изменилось после обновления (новые серверы, новости, пользователи), будет потеряно. Панель будет недоступна 1-3 минуты.',
+      confirmLabel: 'Откатить',
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<UpdateInfo>('/update/rollback', 'POST');
+      setInfo(r);
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -381,50 +411,75 @@ function UpdateCard() {
   };
 
   const running = !!waiting || info?.job?.state === 'running';
+  const rollingBack = waiting?.kind === 'rollback';
   // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
   const [dismissed, setDismissed] = useState<number>(readDismissed);
   const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
   return (
-    <div className="panel space-y-3.5 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-black">Обновления</h2>
-        {running ? <span className="pill pill-warn">ОБНОВЛЕНИЕ</span>
-          : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
-          : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
-          : <span className="pill pill-mute">ПРОВЕРКА</span>}
-      </div>
-
-      <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
-        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
-        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
-      </dl>
-
-      {running && (
-        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
-          {offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : 'Запрос отправлен серверу…'}
-        </p>
-      )}
-      {stuck && (
-        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-          Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm update</span>.
-        </p>
-      )}
-      {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
-      {showOldFailure && info?.job && (
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-          <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
-          <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+    <div className="space-y-5">
+      <div className="panel space-y-3.5 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-black">Обновления</h2>
+          {running ? <span className="pill pill-warn">{rollingBack ? 'ОТКАТ' : 'ОБНОВЛЕНИЕ'}</span>
+            : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
+            : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
+            : <span className="pill pill-mute">ПРОВЕРКА</span>}
         </div>
-      )}
-      <ErrorLine text={error} />
 
-      <div className="flex flex-wrap gap-2">
-        <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
-        {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
+        <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
+          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
+          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
+        </dl>
+
+        {running && (
+          <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
+            {offline
+              ? (rollingBack ? 'Панель перезапускается после отката… страница обновится сама.' : 'Панель перезапускается… страница обновится сама.')
+              : info?.job?.state === 'running' ? info.job.message
+              : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…'}
+          </p>
+        )}
+        {stuck && (
+          <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+            Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или {rollingBack ? 'выполните откат вручную' : <>обновите командой <span className="font-mono">sudo coregsm update</span></>}.
+          </p>
+        )}
+        {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
+        {showOldFailure && info?.job && (
+          <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+            <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
+            <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+          </div>
+        )}
+        <ErrorLine text={error} />
+
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
+          {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
+          {info?.canRollback && <button className="btn btn-soft" onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей версии</button>}
+        </div>
+        {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
       </div>
-      {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
+
+      <div className="panel space-y-3 p-6">
+        <h2 className="text-lg font-black">Что нового</h2>
+        {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
+        {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
+        {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">Список изменений пуст.</p>}
+        {log && log.items.length > 0 && (
+          <ul className="divide-y divide-line">
+            {log.items.map((c) => (
+              <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
+                <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 break-words font-bold hover:text-link">{c.title}</a>
+                <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
+                <span className="text-sm font-semibold text-mute">{ago(Date.parse(c.date) || null)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -440,6 +495,8 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
     </label>
   );
 }
+
+const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
 export function UsersTab() {
   const { me, reload } = useAuth();
@@ -462,7 +519,7 @@ export function UsersTab() {
     load();
   };
   const reject = async (u: UserRow) => {
-    if (!window.confirm(`Отклонить заявку «${u.username}»?`)) return;
+    if (!(await confirmDialog({ title: `Отклонить заявку «${u.username}»?`, confirmLabel: 'Отклонить', danger: true }))) return;
     await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
     load();
   };
@@ -476,12 +533,18 @@ export function UsersTab() {
     load();
   };
   const resetPassword = async (u: UserRow) => {
-    const pw = window.prompt(`Новый пароль для «${u.username}» (от 8 символов):`);
+    const pw = await promptDialog({
+      title: `Новый пароль для «${u.username}»`,
+      label: 'Новый пароль (от 8 символов)',
+      password: true,
+      confirmLabel: 'Сменить пароль',
+      validate: (v) => (v.length < 8 ? 'Минимум 8 символов' : null),
+    });
     if (!pw) return;
     await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
   };
   const remove = async (u: UserRow) => {
-    if (!window.confirm(`Удалить пользователя «${u.username}»?`)) return;
+    if (!(await confirmDialog({ title: `Удалить пользователя «${u.username}»?`, confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
     load();
   };
@@ -505,7 +568,12 @@ export function UsersTab() {
             </div>
           </>
         )}
-        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы, писать новости и менять настройки могут администраторы.</p>
+        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы и менять настройки могут администраторы.</p>
+        <div className="rounded-2xl bg-soft px-4 py-3 text-sm font-semibold text-mute">
+          <p><b className="text-ink">Игрок</b>: смотрит серверы и новости, ведёт свой профиль.</p>
+          <p><b className="text-ink">Модератор</b>: пишет, публикует и удаляет новости, меняет канал новостей по умолчанию. Серверы, настройки, пользователи и система ему недоступны.</p>
+          <p><b className="text-ink">Администратор</b>: полный доступ ко всему.</p>
+        </div>
       </div>
 
       <div className="panel space-y-3 p-6">
@@ -544,8 +612,10 @@ export function UsersTab() {
                 {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
+              <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
               <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
                 <option value="player">Игрок</option>
+                <option value="moderator">Модератор</option>
                 <option value="admin">Администратор</option>
               </select>
               <button className="btn btn-soft btn-sm" onClick={() => void resetPassword(u)}>Пароль</button>

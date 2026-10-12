@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
+import { confirmDialog } from '../confirm';
 import { Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
@@ -17,12 +18,11 @@ export default function DiscordPage() {
   const [error, setError] = useState('');
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
-  const [tick, setTick] = useState(0);
   const [picked, setPicked] = useState<number[]>([]);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
-      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); setTick((t) => t + 1); })
+      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
@@ -31,13 +31,17 @@ export default function DiscordPage() {
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
 
   const remove = async (b: Binding) => {
-    if (!window.confirm('Удалить привязку? Сообщение в Discord останется, но обновляться перестанет.')) return;
+    const ok = await confirmDialog({ title: 'Удалить привязку?', text: 'Сообщение в Discord останется, но обновляться перестанет.', confirmLabel: 'Удалить', danger: true });
+    if (!ok) return;
     await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
     load();
   };
 
   const bulk = async (action: 'pause' | 'resume' | 'delete') => {
-    if (action === 'delete' && !window.confirm(`Удалить привязок: ${picked.length}? Сообщения в Discord останутся, но обновляться перестанут.`)) return;
+    if (action === 'delete') {
+      const ok = await confirmDialog({ title: `Удалить привязок: ${picked.length}?`, text: 'Сообщения в Discord останутся, но обновляться перестанут.', confirmLabel: 'Удалить', danger: true });
+      if (!ok) return;
+    }
     await api('/bindings/bulk', 'POST', { ids: picked, action })
       .then(() => toast(action === 'delete' ? 'Привязки удалены' : action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
       .catch((e: Error) => setError(e.message));
@@ -61,7 +65,7 @@ export default function DiscordPage() {
   return (
     <div className="space-y-6">
       <PageHead icon={<IconDiscord />} title="Discord" subtitle="Куда бот публикует состояние серверов">
-        <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
+        <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -113,11 +117,11 @@ export default function DiscordPage() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-2">
         {bindings.map((b) => {
           const s = server(b.serverId);
           return (
-            <div key={b.id} className={`panel space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
+            <div key={b.id} className={`panel min-w-0 space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   {bindings.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
@@ -135,7 +139,7 @@ export default function DiscordPage() {
               {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
               {b.style !== 'embed' && (
                 <img
-                  src={`/api/card/${b.serverId}.png?t=${tick}`}
+                  src={`/api/card/${b.serverId}.png?v=${s?.updatedAt ?? 0}`}
                   alt={`Карточка: ${s?.name ?? ''}`}
                   loading="lazy"
                   className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"

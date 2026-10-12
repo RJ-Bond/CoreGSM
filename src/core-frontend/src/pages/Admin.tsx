@@ -1,7 +1,9 @@
-import { useState, type ReactNode } from 'react';
-import { api, type Server, type ServerInput } from '../api';
+import { useEffect, useState, type ReactNode } from 'react';
+import { api, type CertInfo, type Server, type ServerInput } from '../api';
+import { useAuth } from '../auth';
+import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, toast, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import AlertsPage, { IconBell } from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
@@ -46,15 +48,19 @@ export const ADMIN_SECTIONS: Section[] = [
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+  const { isAdmin } = useAuth();
   const [section, ...rest] = sub.split('/');
-  const current = ADMIN_SECTIONS.some((s) => s.id === section) ? section : 'servers';
-  const tail = rest.join('/');
+  // a moderator sees only the news section; everything else is for administrators
+  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
+  const current = sections.some((s) => s.id === section) ? section : sections[0].id;
+  // the sub-path belongs to the section that was asked for, not to the fallback
+  const tail = current === section ? rest.join('/') : '';
 
   return (
     <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
       <nav className="flex gap-1 overflow-x-auto rounded-3xl border border-line bg-card p-1.5 shadow-soft md:sticky md:top-4 md:flex-col md:self-start md:overflow-visible md:p-2" aria-label="Разделы админки">
         <div className="hidden px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute md:block">Админка</div>
-        {ADMIN_SECTIONS.map((s) => (
+        {sections.map((s) => (
           <a
             key={s.id}
             href={`#/admin/${s.id}`}
@@ -67,7 +73,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </a>
         ))}
       </nav>
-      <div className="min-w-0">
+      <div className="min-w-0 space-y-5">
+        {isAdmin && <CertWarning />}
         {current === 'servers' && <ServersManage />}
         {current === 'discord' && <DiscordPage />}
         {current === 'news' && <NewsPage sub={tail} />}
@@ -78,6 +85,42 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'system' && <SystemPage />}
         {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
+    </div>
+  );
+}
+
+const CERT_DISMISSED = 'coregsm_cert_warning_dismissed';
+const certDismissed = () => {
+  try { return sessionStorage.getItem(CERT_DISMISSED) === '1'; } catch { return false; }
+};
+
+/** A slim banner for administrators when the HTTPS certificate is about to expire (or already has). */
+function CertWarning() {
+  const [cert, setCert] = useState<CertInfo | null>(null);
+  const [hidden, setHidden] = useState(certDismissed);
+
+  useEffect(() => {
+    if (hidden) return;
+    api<{ cert?: CertInfo }>('/system').then((r) => setCert(r.cert ?? null)).catch(() => undefined);
+  }, [hidden]);
+
+  if (hidden || !cert || cert.daysLeft == null || cert.daysLeft > 14) return null;
+  const d = cert.daysLeft;
+  const expired = d <= 0;
+  const text = expired
+    ? 'Сертификат HTTPS истёк.'
+    : `Сертификат HTTPS истекает через ${d} ${plural(d, ['день', 'дня', 'дней'])}.`;
+  return (
+    <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl px-4 py-2.5 text-sm font-bold ${expired ? 'bg-badbg text-bad' : 'bg-warnbg text-warn'}`} role={expired ? 'alert' : 'status'}>
+      <span className="min-w-0 flex-1">{text} <a href="#/admin/system" className="underline">Подробнее</a></span>
+      <button
+        type="button"
+        className="rounded-full px-2 py-0.5 font-extrabold hover:bg-black/5"
+        aria-label="Скрыть предупреждение до конца сессии"
+        onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
+      >
+        ✕
+      </button>
     </div>
   );
 }
@@ -98,7 +141,7 @@ function ServersManage() {
   usePoll(load, 15_000);
 
   const remove = async (s: Server) => {
-    if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
+    if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e: Error) => setError(e.message));
     void load();
   };

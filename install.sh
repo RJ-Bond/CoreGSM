@@ -17,7 +17,7 @@ export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
 
 APP_DIR="${APP_DIR:-/app}"
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b47cce227841"
+COREGSM_BUILD="6fe6f729b31b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -27,9 +27,16 @@ if [ -t 1 ]; then
 else
   RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; BOLD=''; DIM=''; NC=''
 fi
+# set by issue_certificate / launch
+CERT_MODE=""; CERT_CHANGED=0; CERT_ISSUED=0; PANEL_OK=0
 
 LOGFILE="${COREGSM_LOG:-/var/log/coregsm-install.log}"
 mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
+# the log may contain proxy addresses: readable by root only, credentials are masked (see redact_log)
+{ touch "$LOGFILE" && chmod 600 "$LOGFILE"; } 2>/dev/null || true
+redact_log() { sed -i -E 's#(://)[^/@[:space:]]+@#\1***@#g' "$LOGFILE" 2>/dev/null || true; }
+trap redact_log EXIT
+APT_OPTS=(-o DPkg::Lock::Timeout=300)
 IS_TTY=0; [ -t 1 ] && IS_TTY=1
 # started by "coregsm update": print only the steps and their results
 QUIET_OK="${COREGSM_FROM_MANAGER:-0}"
@@ -37,10 +44,10 @@ QUIET_OK="${COREGSM_FROM_MANAGER:-0}"
 VERBOSE="${COREGSM_VERBOSE:-0}"
 
 # everything that is shown also goes to the log, without colour codes
-logf() { printf '%s\n' "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOGFILE" 2>/dev/null || true; }
+logf() { printf '%s\n' "$*" | sed -E 's/\x1b\[[0-9;]*m//g; s#(://)[^/@[:space:]]+@#\1***@#g' >> "$LOGFILE" 2>/dev/null || true; }
 
 STEP=0
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 step()  { STEP=$((STEP + 1)); echo -e "\n${BLUE}[${STEP}/${TOTAL_STEPS}]${NC} ${BOLD}$*${NC}"; logf "[${STEP}/${TOTAL_STEPS}] $*"; }
 info()  { [ "$QUIET_OK" = 1 ] || echo -e "  ${CYAN}>${NC} $*"; logf "  > $*"; }
 ok()    { [ "$QUIET_OK" = 1 ] || echo -e "  ${GREEN}✔${NC} $*"; logf "  ok: $*"; }
@@ -56,7 +63,7 @@ _run() {
   local msg="$1"; shift
   local t0=$SECONDS rc=0 pid i=0
   local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-  printf '\n### %s: %s\n' "$msg" "$*" >> "$LOGFILE" 2>/dev/null || true
+  printf '\n### %s: %s\n' "$msg" "$*" | sed -E 's#(://)[^/@[:space:]]+@#\1***@#g' >> "$LOGFILE" 2>/dev/null || true
   if [ "$VERBOSE" = 1 ]; then
     echo -e "  ${CYAN}›${NC} $msg"
     set +e; "$@" 2>&1 | tee -a "$LOGFILE"; rc=${PIPESTATUS[0]}; set -e
@@ -73,6 +80,7 @@ _run() {
     echo "  … $msg"
     "$@" >> "$LOGFILE" 2>&1 || rc=$?
   fi
+  redact_log
   if [ "$rc" -eq 0 ]; then
     done_line "$msg ${DIM}($((SECONDS - t0)) с)${NC}"
     return 0
@@ -133,6 +141,29 @@ gen_secret() { # gen_secret LENGTH  -> alphanumeric
 env_get() { # env_get KEY  -> value from existing .env (empty if none)
   [ -f "$APP_DIR/.env" ] || return 0
   grep -E "^$1=" "$APP_DIR/.env" | tail -n1 | cut -d= -f2- || true
+}
+
+env_set() { # env_set KEY VALUE  -> replaces or appends the line in .env, keeping everything else (and the file mode)
+  local f="$APP_DIR/.env" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp)"
+  if grep -qE "^$1=" "$f"; then
+    K="$1" V="$2" awk 'BEGIN{k=ENVIRON["K"]; v=ENVIRON["V"]} index($0, k "=") == 1 {print k "=" v; next} {print}' "$f" > "$tmp"
+  else
+    { cat "$f"; printf '%s=%s\n' "$1" "$2"; } > "$tmp"
+  fi
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
+}
+
+# Is a CoreGSM stack running right now? (then an update must not stop it)
+stack_running() {
+  [ -f "$APP_DIR/docker-compose.yml" ] || return 1
+  (cd "$APP_DIR" && docker compose ps --status running -q 2>/dev/null | grep -q .)
+}
+service_running() { # service_running NAME
+  [ -f "$APP_DIR/docker-compose.yml" ] || return 1
+  (cd "$APP_DIR" && docker compose ps --status running --services 2>/dev/null | grep -qx "$1")
 }
 
 # ---------- 1. preflight ----------
@@ -210,8 +241,9 @@ setup_proxy() {
   export HTTP_PROXY="$tool_proxy" HTTPS_PROXY="$tool_proxy" ALL_PROXY="$tool_proxy"
   export no_proxy="localhost,127.0.0.1,::1" NO_PROXY="localhost,127.0.0.1,::1"
 
-  printf '%s\nAcquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$PROXY_MARK" "$tool_proxy" "$tool_proxy" \
-    > /etc/apt/apt.conf.d/99coregsm-proxy
+  ( umask 077; printf '%s\nAcquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$PROXY_MARK" "$tool_proxy" "$tool_proxy" \
+    > /etc/apt/apt.conf.d/99coregsm-proxy )
+  chmod 600 /etc/apt/apt.conf.d/99coregsm-proxy
 
   if curl -fsS --max-time 15 -o /dev/null https://download.docker.com/linux/debian/gpg; then
     ok "Прокси работает"
@@ -235,11 +267,12 @@ configure_docker_proxy() {
       "$PROXY_MARK" "$PROXY_URL" "$PROXY_URL" > "$tmp"
     mkdir -p "$dir"
     if ! cmp -s "$tmp" "$file"; then
-      install -m 0644 "$tmp" "$file"
+      install -m 0600 "$tmp" "$file"
       systemctl daemon-reload
       systemctl restart docker
       ok "Docker настроен на работу через прокси"
     fi
+    chmod 600 "$file" 2>/dev/null || true
   elif grep -qs "$PROXY_MARK" "$file"; then
     rm -f "$file"
     systemctl daemon-reload
@@ -253,19 +286,19 @@ configure_docker_proxy() {
 system_update() {
   step "Обновление системы"
   if [ "${SKIP_UPDATE:-}" = "1" ]; then
-    run "Обновление списка пакетов" apt-get update -y
+    run "Обновление списка пакетов" apt-get "${APT_OPTS[@]}" update -y
     ok "SKIP_UPDATE=1: полное обновление пропущено (список пакетов обновлён)"
     return 0
   fi
-  run "Обновление списка пакетов" apt-get update -y
-  run "Установка обновлений системы (несколько минут)" apt-get upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
+  run "Обновление списка пакетов" apt-get "${APT_OPTS[@]}" update -y
+  run "Установка обновлений системы (несколько минут)" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
   ok "Система обновлена"
 }
 
 # ---------- 3. packages ----------
 base_packages() {
   step "Установка curl, git, ufw и вспомогательных пакетов"
-  run "Установка curl, git, ufw" apt-get install -y --no-install-recommends curl git ufw ca-certificates gnupg openssl
+  run "Установка curl, git, ufw" apt-get "${APT_OPTS[@]}" install -y --no-install-recommends curl git ufw ca-certificates gnupg openssl
   ok "Базовые пакеты установлены"
 }
 
@@ -282,8 +315,8 @@ install_docker() {
   chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
-  run "Обновление списка пакетов Docker" apt-get update -y
-  run "Установка Docker Engine (1-2 минуты)" apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  run "Обновление списка пакетов Docker" apt-get "${APT_OPTS[@]}" update -y
+  run "Установка Docker Engine (1-2 минуты)" apt-get "${APT_OPTS[@]}" install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   systemctl enable --now docker
   docker compose version >/dev/null 2>&1 || die "Docker Compose не установился"
   ok "Установлено: $(docker --version)"
@@ -299,9 +332,13 @@ collect_input() {
   : "${DISCORD_TOKEN:=$(env_get DISCORD_TOKEN)}"
   : "${DOMAIN:=$(env_get DOMAIN)}"
   : "${LE_EMAIL:=$(env_get LE_EMAIL)}"
+  local prev_domain; prev_domain="$(env_get DOMAIN)"
 
   ask DOMAIN "Домен (gsm.my-domain.com) или IP сервера для локальной сети (192.168.88.152)"
   DOMAIN="$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')"
+  # the local mode chosen at the first install sticks to the same address: later updates must not
+  # try Let's Encrypt for a local name. A different address is decided afresh.
+  if [ -z "${LOCAL_MODE:-}" ] && [ "$DOMAIN" = "$prev_domain" ]; then LOCAL_MODE="$(env_get LOCAL_MODE)"; fi
 
   if [ "${LOCAL_MODE:-}" = "1" ] || is_local_host "$DOMAIN"; then
     # Local / development: Let's Encrypt cannot issue certificates for IPs and private names.
@@ -401,9 +438,12 @@ __COREGSM_EOF__
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.5.0",
     "express": "^4.21.1",
+    "fetch-socks": "^1.3.3",
     "gamedig": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "skia-canvas": "^1.0.2",
+    "tar": "^7.5.22",
+    "undici": "^6.29.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -634,6 +674,618 @@ export function registerAlerts(deps: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/backup.ts" << '__COREGSM_EOF__'
+/**
+ * Full backups of the panel: archive format, schedule, off-host copy, staged restore.
+ *
+ * Archive (.tar.gz) layout:
+ *   coregsm.db           consistent snapshot of the database (SQLite online backup)
+ *   news/<24hex>.<ext>   pictures uploaded in the news editor
+ *   brand-logo.<ext>     custom logo (if any)
+ *   manifest.json        { createdAt, version, files }
+ *
+ * Encrypted archive (.tar.gz.enc), written when the "backup_passphrase" setting is set:
+ *   offset 0   8 bytes   magic "CGSMENC1"
+ *   offset 8   16 bytes  scrypt salt
+ *   offset 24  12 bytes  AES-GCM IV (nonce)
+ *   offset 36  ...       ciphertext of the whole .tar.gz (AES-256-GCM, header bytes 0..35 are the AAD)
+ *   last 16    16 bytes  GCM authentication tag
+ * The 32-byte key is scrypt(passphrase, salt, N=32768, r=8, p=1).
+ *
+ * Restoring never touches the live database: the archive is unpacked and validated into
+ * <DATA_DIR>/restore-pending/ and the swap happens at the next start (see db.ts), after which the process exits
+ * and the container restarts.
+ */
+import type { Express, RequestHandler, Request, Response, NextFunction } from 'express';
+import Database from 'better-sqlite3';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { once } from 'node:events';
+import * as tar from 'tar';
+import { z } from 'zod';
+import { DATA_DIR, db, getSetting, setSetting } from './db.js';
+
+export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
+const MAX_UPLOAD = 300 * 1024 * 1024;
+const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
+const MAGIC = Buffer.from('CGSMENC1');
+const HEADER_LEN = 8 + 16 + 12;
+const NAME_RE = /^coregsm-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual)\.tar\.gz(\.enc)?$/;
+const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp))$/;
+
+/** user-facing error (message is shown in the panel) */
+export class BackupError extends Error {
+  constructor(message: string, public status = 400) {
+    super(message);
+  }
+}
+
+// ---------- settings ----------
+export type Schedule = 'off' | 'daily' | 'weekly';
+export const backupSettings = () => {
+  const sch = getSetting('backup_schedule');
+  const keep = Number(getSetting('backup_keep'));
+  return {
+    schedule: (sch === 'daily' || sch === 'weekly' ? sch : 'off') as Schedule,
+    keep: Number.isInteger(keep) && keep >= 1 && keep <= 30 ? keep : 7,
+    remoteUrl: getSetting('backup_remote_url') || null,
+    passphrase: getSetting('backup_passphrase') || null,
+  };
+};
+
+/** https://user:pass@host/path?token -> https://host/…  (nothing secret is returned to the panel) */
+export function maskUrl(u: string | null): string | null {
+  if (!u) return null;
+  try {
+    return `${new URL(u).origin}/…`;
+  } catch {
+    return '***';
+  }
+}
+
+// ---------- encryption ----------
+const scrypt = (pass: string, salt: Buffer): Promise<Buffer> =>
+  new Promise((resolve, reject) => crypto.scrypt(pass, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 }, (e, k) => (e ? reject(e) : resolve(k))));
+
+export async function encryptFile(src: string, dst: string, pass: string): Promise<void> {
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const header = Buffer.concat([MAGIC, salt, iv]);
+  const cipher = crypto.createCipheriv('aes-256-gcm', await scrypt(pass, salt), iv);
+  cipher.setAAD(header);
+  const out = fs.createWriteStream(dst, { mode: 0o600 });
+  const done = new Promise<void>((res, rej) => {
+    out.on('finish', res);
+    out.on('error', rej);
+  });
+  out.write(header);
+  for await (const chunk of fs.createReadStream(src)) {
+    const c = cipher.update(chunk as Buffer);
+    if (c.length && !out.write(c)) await once(out, 'drain');
+  }
+  out.write(cipher.final());
+  out.end(cipher.getAuthTag());
+  await done;
+}
+
+export async function decryptFile(src: string, dst: string, pass: string): Promise<void> {
+  const size = fs.statSync(src).size;
+  if (size < HEADER_LEN + 16) throw new BackupError('Файл повреждён');
+  const fd = fs.openSync(src, 'r');
+  const header = Buffer.alloc(HEADER_LEN);
+  const tag = Buffer.alloc(16);
+  try {
+    fs.readSync(fd, header, 0, HEADER_LEN, 0);
+    fs.readSync(fd, tag, 0, 16, size - 16);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (!header.subarray(0, 8).equals(MAGIC)) throw new BackupError('Это не зашифрованная копия CoreGSM');
+  const key = await scrypt(pass, header.subarray(8, 24));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, header.subarray(24, 36));
+  decipher.setAAD(header);
+  decipher.setAuthTag(tag);
+  const out = fs.createWriteStream(dst, { mode: 0o600 });
+  const done = new Promise<void>((res, rej) => {
+    out.on('finish', res);
+    out.on('error', rej);
+  });
+  try {
+    if (size - 16 > HEADER_LEN) {
+      for await (const chunk of fs.createReadStream(src, { start: HEADER_LEN, end: size - 17 })) {
+        const c = decipher.update(chunk as Buffer);
+        if (c.length && !out.write(c)) await once(out, 'drain');
+      }
+    }
+    out.end(decipher.final());
+  } catch {
+    out.destroy();
+    throw new BackupError('Неверный пароль шифрования или файл повреждён');
+  }
+  await done;
+}
+
+// ---------- names, listing ----------
+const two = (n: number) => String(n).padStart(2, '0');
+const stamp = (d: Date) => `${d.getUTCFullYear()}${two(d.getUTCMonth() + 1)}${two(d.getUTCDate())}-${two(d.getUTCHours())}${two(d.getUTCMinutes())}${two(d.getUTCSeconds())}`;
+
+export interface BackupItem {
+  name: string;
+  size: number;
+  createdAt: number;
+  kind: 'auto' | 'manual';
+}
+
+export function listBackups(): BackupItem[] {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  const out: BackupItem[] = [];
+  for (const name of fs.readdirSync(BACKUP_DIR)) {
+    const m = NAME_RE.exec(name);
+    if (!m) continue;
+    try {
+      out.push({ name, size: fs.statSync(path.join(BACKUP_DIR, name)).size, createdAt: Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]), kind: m[7] as 'auto' | 'manual' });
+    } catch {
+      /* removed meanwhile */
+    }
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt || (a.name < b.name ? 1 : -1));
+}
+
+export const isBackupName = (n: string) => NAME_RE.test(n);
+
+/** keeps the newest `keep` automatic and the newest `keep` manual archives */
+export function pruneBackups(keep: number): string[] {
+  const removed: string[] = [];
+  for (const kind of ['auto', 'manual'] as const) {
+    for (const it of listBackups().filter((i) => i.kind === kind).slice(keep)) {
+      fs.rmSync(path.join(BACKUP_DIR, it.name), { force: true });
+      removed.push(it.name);
+    }
+  }
+  return removed;
+}
+
+/** pure schedule rule: daily = 23 h since the last automatic archive, weekly = 6.9 days */
+export function backupDue(schedule: Schedule, lastAutoAt: number | null, now: number): boolean {
+  if (schedule === 'off') return false;
+  if (lastAutoAt == null) return true;
+  return now - lastAutoAt >= (schedule === 'daily' ? 23 * 3600_000 : 6.9 * 86400_000);
+}
+
+// ---------- creating an archive ----------
+const rmrf = (p: string) => fs.rmSync(p, { recursive: true, force: true });
+const newsDir = path.join(DATA_DIR, 'news');
+
+/** Builds a .tar.gz (encrypted when a passphrase is given) at `dest` (the caller picks the final name). */
+export async function buildArchive(dest: string, passphrase: string | null): Promise<void> {
+  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.backup-stage-'));
+  const plain = `${dest}.part`;
+  try {
+    await db.backup(path.join(stage, 'coregsm.db'));
+    const files = ['coregsm.db'];
+    const entries = ['coregsm.db', 'manifest.json'];
+    if (fs.existsSync(newsDir)) {
+      fs.mkdirSync(path.join(stage, 'news'));
+      for (const f of fs.readdirSync(newsDir)) {
+        if (!/^[a-f0-9]{24}\.(png|jpg|gif|webp)$/.test(f)) continue;
+        // news pictures never change after upload: a hard link costs nothing (copy when the volumes differ)
+        try {
+          fs.linkSync(path.join(newsDir, f), path.join(stage, 'news', f));
+        } catch {
+          fs.copyFileSync(path.join(newsDir, f), path.join(stage, 'news', f));
+        }
+        files.push(`news/${f}`);
+      }
+      entries.push('news');
+    }
+    for (const f of fs.readdirSync(DATA_DIR)) {
+      if (/^brand-logo\.(png|jpg|webp)$/.test(f)) {
+        fs.copyFileSync(path.join(DATA_DIR, f), path.join(stage, f));
+        files.push(f);
+        entries.push(f);
+      }
+    }
+    fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify({ createdAt: new Date().toISOString(), version: process.env.APP_VERSION || null, files }, null, 2));
+    await tar.c({ gzip: true, file: plain, cwd: stage, portable: true }, entries);
+    if (passphrase) {
+      await encryptFile(plain, dest, passphrase);
+      rmrf(plain);
+    } else {
+      fs.renameSync(plain, dest);
+    }
+    try {
+      fs.chmodSync(dest, 0o600);
+    } catch {
+      /* not supported on this file system */
+    }
+  } catch (e) {
+    rmrf(plain);
+    rmrf(dest);
+    throw e;
+  } finally {
+    rmrf(stage);
+  }
+}
+
+let busy = false;
+
+/** Creates a stored archive, prunes old ones and starts the off-host copy (not awaited: it can be slow). */
+export async function createStoredBackup(kind: 'auto' | 'manual'): Promise<BackupItem> {
+  if (busy) throw new BackupError('Резервная копия уже создаётся, подождите', 409);
+  busy = true;
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 });
+    const s = backupSettings();
+    let t = Date.now();
+    const nameFor = () => `coregsm-${stamp(new Date(t))}-${kind}.tar.gz${s.passphrase ? '.enc' : ''}`;
+    while (fs.existsSync(path.join(BACKUP_DIR, nameFor())) || fs.existsSync(path.join(BACKUP_DIR, nameFor().replace(/\.enc$/, '')))) t += 1000;
+    const name = nameFor();
+    const file = path.join(BACKUP_DIR, name);
+    await buildArchive(file, s.passphrase);
+    pruneBackups(s.keep);
+    if (s.remoteUrl) void uploadRemote(file, name, s.remoteUrl);
+    const item = listBackups().find((i) => i.name === name);
+    return item ?? { name, size: fs.statSync(file).size, createdAt: t, kind };
+  } finally {
+    busy = false;
+  }
+}
+
+// ---------- off-host copy ----------
+export interface RemoteResult {
+  at: number;
+  ok: boolean;
+  error: string | null;
+}
+export const lastRemote = (): RemoteResult | null => {
+  try {
+    const v = JSON.parse(getSetting('backup_last_remote') ?? 'null');
+    return v && typeof v.at === 'number' ? (v as RemoteResult) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** HTTP PUT of the archive. If the URL ends with "/" the file name is appended. Never throws. */
+export async function uploadRemote(file: string, name: string, url: string): Promise<RemoteResult> {
+  let result: RemoteResult;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') throw new Error('адрес должен начинаться с https://');
+    const headers: Record<string, string> = { 'content-type': 'application/octet-stream', 'content-length': String(fs.statSync(file).size), 'user-agent': 'CoreGSM' };
+    if (u.username || u.password) {
+      headers.authorization = `Basic ${Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')}`;
+      u.username = '';
+      u.password = '';
+    }
+    if (u.pathname.endsWith('/')) u.pathname += name;
+    const r = await fetch(u, {
+      method: 'PUT',
+      headers,
+      body: Readable.toWeb(fs.createReadStream(file)) as unknown as BodyInit,
+      // streaming request bodies need this flag in Node's fetch
+      ...({ duplex: 'half' } as object),
+      signal: AbortSignal.timeout(15 * 60_000),
+    });
+    if (!r.ok) throw new Error(`сервер ответил HTTP ${r.status}`);
+    result = { at: Date.now(), ok: true, error: null };
+  } catch (e) {
+    const err = e as Error & { cause?: { message?: string } };
+    result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
+    console.error('backup upload failed:', result.error);
+  }
+  try {
+    setSetting('backup_last_remote', JSON.stringify(result));
+  } catch {
+    /* ignore */
+  }
+  return result;
+}
+
+// ---------- scheduler ----------
+export async function runScheduledIfDue(now = Date.now()): Promise<BackupItem | null> {
+  const s = backupSettings();
+  const lastAuto = listBackups().find((i) => i.kind === 'auto')?.createdAt ?? null;
+  if (!backupDue(s.schedule, lastAuto, now)) return null;
+  try {
+    const it = await createStoredBackup('auto');
+    console.log(`scheduled backup created: ${it.name}`);
+    return it;
+  } catch (e) {
+    console.error('scheduled backup failed:', (e as Error).message);
+    return null;
+  }
+}
+
+export function startBackupTimer(): void {
+  setTimeout(() => void runScheduledIfDue(), 60_000).unref();
+  setInterval(() => void runScheduledIfDue(), 3600_000).unref();
+}
+
+// ---------- restoring ----------
+const readHead = (file: string, n: number): Buffer => {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const b = Buffer.alloc(n);
+    const got = fs.readSync(fd, b, 0, n, 0);
+    return b.subarray(0, got);
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+
+/** null = fine, otherwise a message for the panel */
+function validateDb(file: string): string | null {
+  let t: InstanceType<typeof Database> | null = null;
+  try {
+    t = new Database(file, { readonly: true, fileMustExist: true });
+    const tables = (t.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((x) => x.name);
+    if (!['users', 'servers', 'settings'].every((n) => tables.includes(n)) || t.pragma('quick_check', { simple: true }) !== 'ok') {
+      return 'Файл повреждён или это копия не от CoreGSM';
+    }
+    const cols = (t.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
+    // very old databases had no role/status columns: every account was an active administrator
+    const where = [cols.includes('role') ? "role = 'admin'" : '1=1', cols.includes('status') ? "status = 'active'" : '1=1'].join(' AND ');
+    if (!t.prepare(`SELECT 1 FROM users WHERE ${where} LIMIT 1`).get()) {
+      return 'В копии нет ни одного активного администратора: восстановление отменено, чтобы вы не потеряли доступ к панели';
+    }
+    return null;
+  } catch {
+    return 'Файл повреждён или это копия не от CoreGSM';
+  } finally {
+    try {
+      t?.close();
+    } catch {
+      /* ignore */
+    }
+    for (const ext of ['-wal', '-shm']) rmrf(`${file}${ext}`);
+  }
+}
+
+async function unpack(file: string, stage: string): Promise<void> {
+  let total = 0;
+  let bad: string | null = null;
+  await tar.x({
+    file,
+    cwd: stage,
+    preserveOwner: false,
+    noChmod: true,
+    filter: (p, entry) => {
+      const e = entry as { type?: string; size?: number };
+      const name = p.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+      const okType = e.type === 'File' || e.type === 'Directory';
+      if (!okType || !ALLOWED_ENTRY.test(name) || (name === 'news' && e.type !== 'Directory') || (name !== 'news' && e.type === 'Directory')) {
+        bad ??= name || p;
+        return false;
+      }
+      total += e.size ?? 0;
+      if (total > MAX_UNPACKED) bad ??= 'слишком большой архив';
+      return !bad;
+    },
+  });
+  if (bad) throw new BackupError(`В архиве есть недопустимый файл («${String(bad).slice(0, 60)}»). Восстановление отменено.`);
+}
+
+/**
+ * Validates an uploaded/stored backup (tar.gz, encrypted tar.gz or a legacy raw SQLite file) and stages it for the
+ * swap at the next start. Throws BackupError with a Russian message when the file is not acceptable.
+ */
+export async function stageRestore(file: string, passphrase: string | null): Promise<void> {
+  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.restore-stage-'));
+  const tmp: string[] = [];
+  try {
+    let src = file;
+    let head = readHead(src, 15);
+    if (head.length >= 8 && head.subarray(0, 8).equals(MAGIC)) {
+      if (!passphrase) throw new BackupError('Архив зашифрован: укажите пароль шифрования (тот, что был задан при создании копии)');
+      const dec = path.join(DATA_DIR, `.restore-dec-${crypto.randomBytes(6).toString('hex')}`);
+      tmp.push(dec);
+      await decryptFile(src, dec, passphrase);
+      src = dec;
+      head = readHead(src, 15);
+    }
+    if (head[0] === 0x1f && head[1] === 0x8b) {
+      try {
+        await unpack(src, stage);
+      } catch (e) {
+        if (e instanceof BackupError) throw e;
+        throw new BackupError('Архив повреждён или имеет неверную структуру');
+      }
+      if (!fs.existsSync(path.join(stage, 'coregsm.db'))) throw new BackupError('В архиве нет базы данных (coregsm.db)');
+    } else if (head.toString('latin1') === 'SQLite format 3') {
+      fs.copyFileSync(src, path.join(stage, 'coregsm.db'));
+    } else {
+      throw new BackupError('Это не файл резервной копии CoreGSM (нужен .tar.gz или .db)');
+    }
+    const bad = validateDb(path.join(stage, 'coregsm.db'));
+    if (bad) throw new BackupError(bad);
+    rmrf(PENDING_DIR);
+    fs.renameSync(stage, PENDING_DIR);
+  } catch (e) {
+    rmrf(stage);
+    throw e;
+  } finally {
+    for (const t of tmp) rmrf(t);
+  }
+}
+
+/** writes the request body to a file, refusing more than `max` bytes */
+async function spool(req: Request, dest: string, max: number): Promise<void> {
+  let n = 0;
+  const cap = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      n += chunk.length;
+      if (n > max) cb(new BackupError('Файл больше 300 МБ', 413));
+      else cb(null, chunk);
+    },
+  });
+  await pipeline(req, cap, fs.createWriteStream(dest, { mode: 0o600 }));
+}
+
+const passFromHeader = (req: Request): string | null => {
+  const raw = req.headers['x-backup-passphrase'];
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (!v) return null;
+  if (String(req.headers['x-backup-passphrase-encoding'] ?? '').toLowerCase() === 'uri') {
+    try {
+      return decodeURIComponent(v);
+    } catch {
+      return null;
+    }
+  }
+  return v;
+};
+
+// ---------- routes ----------
+export function registerBackups({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const fail = (res: Response, e: unknown) => {
+    if (e instanceof BackupError) return void res.status(e.status).json({ error: e.message });
+    console.error('backup error', e);
+    res.status(500).json({ error: `Не удалось выполнить операцию: ${(e as Error).message}` });
+  };
+  const guard =
+    (fn: (req: Request, res: Response) => Promise<unknown> | unknown) =>
+    (req: Request, res: Response, _next: NextFunction) => {
+      Promise.resolve()
+        .then(() => fn(req, res))
+        .catch((e) => fail(res, e));
+    };
+
+  const payload = () => {
+    const s = backupSettings();
+    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote() };
+  };
+
+  // one-off archive for downloading (not stored)
+  app.get(
+    '/api/backup',
+    admin,
+    guard(async (_req, res) => {
+      const s = backupSettings();
+      const tmp = path.join(os.tmpdir(), `coregsm-dl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
+      const name = `coregsm-${stamp(new Date())}-manual.tar.gz${s.passphrase ? '.enc' : ''}`;
+      await buildArchive(tmp, s.passphrase);
+      res.download(tmp, name, () => rmrf(tmp));
+    }),
+  );
+
+  app.post(
+    '/api/backup/restore',
+    admin,
+    guard(async (req, res) => {
+      const upload = path.join(DATA_DIR, `.restore-upload-${crypto.randomBytes(6).toString('hex')}`);
+      try {
+        const declared = Number(req.headers['content-length']);
+        if (declared > MAX_UPLOAD) throw new BackupError('Файл больше 300 МБ', 413);
+        try {
+          await spool(req, upload, MAX_UPLOAD);
+        } catch (e) {
+          if (e instanceof BackupError) throw e;
+          throw new BackupError('Загрузка прервана');
+        }
+        if (fs.statSync(upload).size < 100) throw new BackupError('Это не файл резервной копии CoreGSM');
+        await stageRestore(upload, passFromHeader(req));
+      } finally {
+        rmrf(upload);
+      }
+      // the swap happens at start-up (see db.ts); the container restarts by itself
+      res.json({ ok: true, restarting: true });
+      setTimeout(() => process.exit(0), 800);
+    }),
+  );
+
+  app.get('/api/backups', admin, guard((_req, res) => res.json(payload())));
+
+  app.put(
+    '/api/backups/settings',
+    admin,
+    guard((req, res) => {
+      const b = z
+        .object({
+          schedule: z.enum(['off', 'daily', 'weekly']).optional(),
+          keep: z.number().int().min(1).max(30).optional(),
+          remoteUrl: z.string().trim().max(500).optional(),
+          passphrase: z.string().max(200).optional(),
+        })
+        .safeParse(req.body);
+      if (!b.success) return res.status(400).json({ error: 'Проверьте поля: расписание off/daily/weekly, хранить от 1 до 30 копий' });
+      if (b.data.remoteUrl) {
+        let ok = false;
+        try {
+          ok = new URL(b.data.remoteUrl).protocol === 'https:';
+        } catch {
+          /* not a URL */
+        }
+        if (!ok) return res.status(400).json({ error: 'Адрес для копии должен начинаться с https://' });
+      }
+      if (b.data.passphrase && b.data.passphrase.length < 8) return res.status(400).json({ error: 'Пароль шифрования: не короче 8 символов' });
+      if (b.data.schedule !== undefined) setSetting('backup_schedule', b.data.schedule);
+      if (b.data.keep !== undefined) setSetting('backup_keep', String(b.data.keep));
+      if (b.data.remoteUrl !== undefined) setSetting('backup_remote_url', b.data.remoteUrl);
+      if (b.data.passphrase !== undefined) setSetting('backup_passphrase', b.data.passphrase);
+      res.json(payload());
+    }),
+  );
+
+  app.post(
+    '/api/backups/run',
+    admin,
+    guard(async (_req, res) => {
+      res.status(201).json(await createStoredBackup('manual'));
+    }),
+  );
+
+  const storedFile = (req: Request, res: Response): { name: string; file: string } | null => {
+    const name = String(req.params.name ?? '');
+    const file = path.join(BACKUP_DIR, name);
+    if (!isBackupName(name) || !fs.existsSync(file)) {
+      res.status(404).json({ error: 'Копия не найдена' });
+      return null;
+    }
+    return { name, file };
+  };
+
+  app.get(
+    '/api/backups/:name',
+    admin,
+    guard((req, res) => {
+      const f = storedFile(req, res);
+      if (f) res.download(f.file, f.name);
+    }),
+  );
+
+  app.delete(
+    '/api/backups/:name',
+    admin,
+    guard((req, res) => {
+      const f = storedFile(req, res);
+      if (!f) return;
+      fs.rmSync(f.file, { force: true });
+      res.json({ ok: true });
+    }),
+  );
+
+  app.post(
+    '/api/backups/:name/restore',
+    admin,
+    guard(async (req, res) => {
+      const f = storedFile(req, res);
+      if (!f) return;
+      const given = z.object({ passphrase: z.string().max(200).optional() }).safeParse(req.body ?? {});
+      const pass = (given.success && given.data.passphrase) || backupSettings().passphrase;
+      await stageRestore(f.file, pass || null);
+      res.json({ ok: true, restarting: true });
+      setTimeout(() => process.exit(0), 800);
+    }),
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/card.ts" << '__COREGSM_EOF__'
 import skia from 'skia-canvas';
 import { db, type ServerRow, type StatusRow } from './db.js';
@@ -695,7 +1347,21 @@ function fit(ctx: any, text: string, maxWidth: number): string {
 
 const cache = new Map<number, { at: number; buf: Buffer }>();
 
-export async function renderCard(serverId: number): Promise<Buffer | null> {
+const inflight = new Map<number, Promise<Buffer | null>>();
+
+/** Concurrent requests for the same server share one render. */
+export function renderCard(serverId: number): Promise<Buffer | null> {
+  const running = inflight.get(serverId);
+  if (running) return running;
+  const p = renderCardNow(serverId).finally(() => inflight.delete(serverId));
+  inflight.set(serverId, p);
+  return p;
+}
+
+/** true for games with their own colour/pictogram; everything else gets the generic icon */
+export const isKnownGame = (game: string): boolean => game in GAME_COLORS;
+
+async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const hit = cache.get(serverId);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
 
@@ -931,9 +1597,10 @@ export async function renderGameIcon(game: string): Promise<Buffer> {
     ctx.font = `700 96px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(GAME_COLORS[game]?.[0] ?? game.slice(0, 2).toUpperCase(), 128, 134);
+    ctx.fillText(GAME_COLORS[game]?.[0] ?? (game.slice(0, 2).toUpperCase() || '?'), 128, 134);
   }
   const buf = await canvas.toBuffer('png');
+  if (iconCache.size >= 100) iconCache.delete(iconCache.keys().next().value as string);
   iconCache.set(game, buf);
   return buf;
 }
@@ -945,22 +1612,41 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+export const DATA_DIR = path.dirname(dbPath);
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// a backup uploaded from the panel is put in place here, before the database is opened
-const pending = path.join(path.dirname(dbPath), 'restore-pending.db');
-if (fs.existsSync(pending)) {
+// A backup restored from the panel is staged in <DATA_DIR>/restore-pending/ (coregsm.db, news/*, brand-logo.*,
+// manifest.json) and put in place here, before the database is opened.
+const pendingDir = path.join(DATA_DIR, 'restore-pending');
+let restoredNow = false;
+if (fs.existsSync(pendingDir)) {
   try {
+    const pendingDb = path.join(pendingDir, 'coregsm.db');
+    if (!fs.existsSync(pendingDb)) throw new Error('в подготовленной копии нет базы данных');
     if (fs.existsSync(dbPath)) fs.copyFileSync(dbPath, `${dbPath}.before-restore`);
     for (const ext of ['-wal', '-shm']) {
       fs.rmSync(`${dbPath}${ext}`, { force: true });
-      fs.rmSync(`${pending}${ext}`, { force: true });
+      fs.rmSync(`${pendingDb}${ext}`, { force: true });
     }
-    fs.renameSync(pending, dbPath);
+    fs.copyFileSync(pendingDb, dbPath);
+    // files of a full archive: news pictures are added, the logo is replaced by the one in the archive (if any)
+    const full = fs.existsSync(path.join(pendingDir, 'manifest.json'));
+    const newsSrc = path.join(pendingDir, 'news');
+    if (fs.existsSync(newsSrc)) {
+      fs.mkdirSync(path.join(DATA_DIR, 'news'), { recursive: true });
+      for (const f of fs.readdirSync(newsSrc)) fs.copyFileSync(path.join(newsSrc, f), path.join(DATA_DIR, 'news', f));
+    }
+    if (full) {
+      for (const f of fs.readdirSync(DATA_DIR)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.rmSync(path.join(DATA_DIR, f), { force: true });
+      for (const f of fs.readdirSync(pendingDir)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.copyFileSync(path.join(pendingDir, f), path.join(DATA_DIR, f));
+    }
+    restoredNow = true;
     console.log('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
   } catch (e) {
     console.error('Restore failed:', (e as Error).message);
   }
+  // never retry a half-done restore on every start
+  fs.rmSync(pendingDir, { recursive: true, force: true });
 }
 
 export const db = new Database(dbPath);
@@ -1070,7 +1756,35 @@ CREATE TABLE IF NOT EXISTS sessions (
   ua TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_history_ts ON history(ts);
+-- who is online right now and since when (updated on every successful poll)
+CREATE TABLE IF NOT EXISTS player_now (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  since INTEGER NOT NULL,
+  PRIMARY KEY (server_id, name)
+);
+-- per UTC day: polls, polls that found the server up, peak players (status page)
+CREATE TABLE IF NOT EXISTS uptime_daily (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  up INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  peak INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (server_id, day)
+);
 `);
+try {
+  db.exec('ALTER TABLE history ADD COLUMN ping INTEGER');
+} catch {
+  /* column already exists */
+}
+// a restored database starts with nobody signed in
+if (restoredNow) {
+  db.prepare('DELETE FROM sessions').run();
+  // the restored database has no record of the restore itself
+  db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(Date.now(), 'система', 'Панель восстановлена из резервной копии', '');
+}
 
 // older databases: new columns are added once
 try {
@@ -1527,7 +2241,7 @@ export async function queryServer(s: ServerRow): Promise<QueryResult> {
       map: clean(r.map),
       version: clean(typeof rawVersion === 'string' ? rawVersion : null),
       ping: typeof r.ping === 'number' ? Math.round(r.ping) : null,
-      playerNames: names.slice(0, 50),
+      playerNames: names.slice(0, 200),
       error: null,
     };
   } catch (e) {
@@ -1553,7 +2267,35 @@ ON CONFLICT(server_id) DO UPDATE SET
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
   error=excluded.error, updated_at=excluded.updated_at
 `);
-const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players) VALUES (?, ?, ?, ?)');
+const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping) VALUES (?, ?, ?, ?, ?)');
+
+/**
+ * Keeps player_now in step with the latest poll: names that left are removed, new ones get since = now.
+ * A failed/offline poll clears the server's rows. Names are capped at 200.
+ */
+export function syncPlayersNow(serverId: number, names: string[], online: boolean, now: number): void {
+  db.transaction(() => {
+    if (!online) {
+      db.prepare('DELETE FROM player_now WHERE server_id = ?').run(serverId);
+      return;
+    }
+    const current = new Set(names.slice(0, 200));
+    const have = db.prepare('SELECT name FROM player_now WHERE server_id = ?').all(serverId) as { name: string }[];
+    const del = db.prepare('DELETE FROM player_now WHERE server_id = ? AND name = ?');
+    for (const h of have) if (!current.has(h.name)) del.run(serverId, h.name);
+    const ins = db.prepare('INSERT OR IGNORE INTO player_now (server_id, name, since) VALUES (?, ?, ?)');
+    for (const n of current) ins.run(serverId, n, now);
+  })();
+}
+
+/** Daily counters for the status page (UTC day). */
+export function recordUptime(serverId: number, online: boolean, players: number, ts: number): void {
+  const day = new Date(ts).toISOString().slice(0, 10);
+  db.prepare(
+    `INSERT INTO uptime_daily (server_id, day, up, total, peak) VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(server_id, day) DO UPDATE SET up = up + excluded.up, total = total + 1, peak = MAX(peak, excluded.peak)`,
+  ).run(serverId, day, online ? 1 : 0, online ? Math.max(0, players) : 0);
+}
 
 export async function refreshServer(s: ServerRow): Promise<void> {
   const r = await queryServer(s);
@@ -1570,11 +2312,17 @@ export async function refreshServer(s: ServerRow): Promise<void> {
     map: r.map,
     version: r.version,
     ping: r.ping,
-    names: JSON.stringify(r.playerNames),
+    names: JSON.stringify(r.playerNames.slice(0, 50)),
     error: r.error,
     ts,
   });
-  addHistory.run(s.id, ts, r.online ? 1 : 0, r.players);
+  addHistory.run(s.id, ts, r.online ? 1 : 0, r.players, r.ping);
+  try {
+    syncPlayersNow(s.id, r.playerNames, r.online, ts);
+    recordUptime(s.id, r.online, r.players, ts);
+  } catch (e) {
+    console.error('player/uptime bookkeeping failed', (e as Error).message);
+  }
   try {
     trackAlerts(s.id, r.online, r.error);
   } catch (e) {
@@ -1591,6 +2339,7 @@ export async function pollAll(): Promise<void> {
     const servers = db.prepare('SELECT * FROM servers').all() as ServerRow[];
     await Promise.allSettled(servers.map(refreshServer));
     db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 7 * 24 * 3600 * 1000);
+    db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
   } finally {
     running = false;
   }
@@ -1612,11 +2361,14 @@ import path from 'node:path';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
 import { queryServer, refreshServer, startPoller } from './gsm.js';
-import { renderCard, renderGameIcon } from './card.js';
+import { isKnownGame, renderCard, renderGameIcon } from './card.js';
+import { registerBackups, startBackupTimer } from './backup.js';
+import { gameLabel } from './games.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
+import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -1626,10 +2378,16 @@ const POLL_MS = Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000;
 // one-time code that protects the first-run setup wizard from strangers who find the panel first
 const SETUP_TOKEN = process.env.SETUP_TOKEN || crypto.randomBytes(8).toString('hex');
 
-if (JWT_SECRET.length < 16 || INTERNAL_TOKEN.length < 16) {
-  console.error('JWT_SECRET and INTERNAL_TOKEN must be set (min 16 chars)');
+if (JWT_SECRET.length < 32) {
+  console.error('JWT_SECRET must be set and at least 32 characters long (generate one with: openssl rand -hex 32)');
   process.exit(1);
 }
+if (INTERNAL_TOKEN.length < 16) {
+  console.error('INTERNAL_TOKEN must be set (min 16 chars)');
+  process.exit(1);
+}
+// a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(8).toString('hex'), 12);
 
 const needsSetup = () => !db.prepare('SELECT 1 FROM users LIMIT 1').get();
 
@@ -1701,7 +2459,7 @@ const wrap =
   };
 
 // ---------- auth ----------
-type Role = 'admin' | 'player';
+type Role = 'admin' | 'moderator' | 'player';
 interface AuthedRequest extends Request {
   user?: { id: number; username: string; role: Role; sid?: string };
 }
@@ -1710,7 +2468,7 @@ interface AuthedRequest extends Request {
 function userFromToken(token: string): { id: number; username: string; role: Role; sid: string } | null {
   if (!token) return null;
   try {
-    const p = jwt.verify(token, JWT_SECRET) as { sub: string; sid?: string };
+    const p = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub: string; sid?: string };
     // a token without a session id predates sessions: sign in again
     if (!p.sid) return null;
     const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
@@ -1747,11 +2505,15 @@ function issueToken(u: { id: number; username: string }, req: Request): string {
   const sid = crypto.randomBytes(12).toString('hex');
   const now = Date.now();
   db.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, ip, ua) VALUES (?, ?, ?, ?, ?, ?)').run(sid, u.id, now, now, (req.ip ?? '').slice(0, 64), uaLabel(req.headers['user-agent']));
-  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d' });
+  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d', algorithm: 'HS256' });
 }
 setInterval(() => db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - 8 * 24 * 3600 * 1000), 3600_000).unref();
 
 const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
+const isStaff = (req: Request) => {
+  const r = (req as AuthedRequest).user?.role;
+  return r === 'admin' || r === 'moderator';
+};
 const flag = (key: string, fallback: boolean) => {
   const v = getSetting(key);
   return v === null ? fallback : v === '1';
@@ -1774,6 +2536,14 @@ function admin(req: AuthedRequest, res: Response, next: NextFunction) {
   req.user = u;
   next();
 }
+/** administrators and moderators (news and the Discord channel list) */
+function staff(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  if (u.role !== 'admin' && u.role !== 'moderator') return void res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
+  req.user = u;
+  next();
+}
 /** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
 function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   const u = loadUser(req);
@@ -1785,6 +2555,20 @@ function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
 const LOCK_AFTER = 5;
 const fails = new Map<string, { n: number; until: number }>();
 setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
+
+/** a lighter per-address limit for public lookups: `max` requests per minute */
+function rateLimit(max: number) {
+  const hits = new Map<string, { n: number; reset: number }>();
+  setInterval(() => { for (const [k, v] of hits) if (v.reset < Date.now()) hits.delete(k); }, 60_000).unref();
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = req.ip ?? 'x';
+    const now = Date.now();
+    const h = hits.get(key);
+    if (!h || h.reset <= now) hits.set(key, { n: 1, reset: now + 60_000 });
+    else if (++h.n > max) return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.' });
+    next();
+  };
+}
 
 const attempts = new Map<string, { n: number; reset: number }>();
 function loginLimiter(req: Request, res: Response, next: NextFunction) {
@@ -1820,7 +2604,7 @@ app.post(
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
       | { id: number; username: string; password_hash: string; role: Role; status: string }
       | undefined;
-    const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? '$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi');
+    const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
       const f = fails.get(key) ?? { n: 0, until: 0 };
       f.n++;
@@ -1897,7 +2681,7 @@ function settingsPayload(req?: Request) {
     proxyUrl: proxy ? maskProxy(proxy) : null,
     discordSecretSet: !!getSetting('discord_client_secret'),
     discordClientId: botStatus.clientId ?? clientIdFromToken(tok),
-    discordRedirect: req ? `${req.protocol}://${req.get('host')}/api/auth/discord/callback` : '',
+    discordRedirect: req ? `${publicBase() ?? baseOf(req)}/api/auth/discord/callback` : '',
   };
 }
 
@@ -2013,7 +2797,7 @@ function updateFile(name: string): string {
 }
 
 function updatePayload() {
-  let job: { state: string; message: string; time: number } | null = null;
+  let job: { state: string; message: string; time: number; rollback_available?: boolean } | null = null;
   try {
     job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
   } catch {
@@ -2028,9 +2812,61 @@ function updatePayload() {
     error: remote.error,
     canApply: dirOk,
     pending: dirOk && fs.existsSync(updateFile('request')),
+    // the host manager keeps the previous version and says so in status.json
+    canRollback: dirOk && job?.rollback_available === true,
     job,
   };
 }
+
+// ---- changelog: the last commits of the repository the panel updates from
+const GITHUB_API = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '');
+interface ChangelogItem { sha: string; title: string; date: number | null; url: string }
+let changelog: { at: number; items: ChangelogItem[]; error: string | null } | null = null;
+
+function commitsUrl(): string | null {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
+  return m ? `${GITHUB_API}/repos/${m[1]}/${m[2]}/commits?per_page=15&sha=${encodeURIComponent(m[3])}` : null;
+}
+
+/** first line of the message without "Co-Authored-By" trailers */
+const commitTitle = (msg: string): string =>
+  msg
+    .split(/\r?\n/)
+    .filter((l) => !/^co-authored-by:/i.test(l.trim()))[0]
+    ?.trim()
+    .slice(0, 200) ?? '';
+
+async function loadChangelog(): Promise<{ items: ChangelogItem[]; error?: string }> {
+  if (changelog && Date.now() - changelog.at < (changelog.error ? 60_000 : 10 * 60_000)) {
+    return changelog.error ? { items: changelog.items, error: changelog.error } : { items: changelog.items };
+  }
+  const url = commitsUrl();
+  try {
+    if (!url) throw new Error('адрес репозитория обновлений не распознан');
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'CoreGSM' } });
+    if (!r.ok) throw new Error(`GitHub ответил HTTP ${r.status}`);
+    const list = (await r.json()) as { sha?: string; html_url?: string; commit?: { message?: string; committer?: { date?: string }; author?: { date?: string } } }[];
+    if (!Array.isArray(list)) throw new Error('неожиданный ответ GitHub');
+    const items = list.slice(0, 15).map((c) => {
+      const d = Date.parse(c.commit?.committer?.date ?? c.commit?.author?.date ?? '');
+      return { sha: String(c.sha ?? ''), title: commitTitle(String(c.commit?.message ?? '')), date: Number.isNaN(d) ? null : d, url: String(c.html_url ?? '') };
+    });
+    changelog = { at: Date.now(), items, error: null };
+    return { items };
+  } catch (e) {
+    const error = `Не удалось получить список изменений: ${(e as Error).message}`;
+    changelog = { at: Date.now(), items: changelog?.items ?? [], error };
+    return { items: changelog.items, error };
+  }
+}
+
+app.get(
+  '/api/update/changelog',
+  admin,
+  wrap(async (_req, res) => {
+    res.json(await loadChangelog());
+  }),
+);
 
 app.get(
   '/api/update/status',
@@ -2063,11 +2899,38 @@ app.post('/api/update/apply', admin, (_req, res) => {
   res.status(202).json(updatePayload());
 });
 
+// same request file, different word: the host manager reads it and restores the previous version
+app.post('/api/update/rollback', admin, (_req, res) => {
+  const state = updatePayload();
+  if (!state.canApply) return res.status(503).json({ error: 'Откат из панели не настроен на сервере. Выполните: sudo coregsm rollback' });
+  if (state.job?.state === 'running') return res.status(409).json({ error: 'Сейчас выполняется обновление или откат' });
+  if (!state.canRollback) return res.status(409).json({ error: 'Откат недоступен: предыдущая версия не сохранена' });
+  if (state.pending) return res.status(409).json({ error: 'Запрос уже ожидает выполнения' });
+  try {
+    fs.writeFileSync(updateFile('request'), 'rollback');
+  } catch {
+    return res.status(500).json({ error: 'Не удалось создать запрос на откат (нет прав на папку /app/update)' });
+  }
+  console.log('rollback requested from the panel');
+  res.status(202).json(updatePayload());
+});
+
 // ---------- access: who may look at the panel, who may register ----------
-// remember the public https address the panel is opened at: Discord needs it to load the embed thumbnail
-function rememberPublicBase(req: Request) {
-  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(':')[0];
-  if (!host || host === 'localhost' || /^[\d.]+$/.test(host) || !host.includes('.')) return;
+// The public https address of the panel (Discord needs it to load embed images). Trusted sources only, in this order:
+// PUBLIC_URL, https://DOMAIN, and the address an administrator opened the panel at (saved from an authenticated request).
+// A guest's Host header is never stored: it would let anyone point the embeds at their own server.
+const isRealDomain = (d: string) => /^[a-z0-9.-]+$/i.test(d) && d.includes('.') && !/^[\d.]+$/.test(d) && d.toLowerCase() !== 'localhost';
+function publicBase(): string | null {
+  const env = (process.env.PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\/[^\s/]+$/i.test(env)) return env;
+  const d = (process.env.DOMAIN ?? '').trim();
+  if (isRealDomain(d)) return `https://${d}`;
+  return getSetting('public_base') || null;
+}
+/** called only for requests that carry a valid administrator token */
+function rememberAdminBase(req: Request) {
+  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim().split(':')[0];
+  if (!isRealDomain(host)) return;
   const base = `https://${host}`;
   if (getSetting('public_base') !== base) setSetting('public_base', base);
 }
@@ -2084,8 +2947,7 @@ const accessPayload = () => ({
   brand: brand(),
 });
 
-app.get('/api/access', (req, res) => {
-  rememberPublicBase(req);
+app.get('/api/access', (_req, res) => {
   res.json(accessPayload());
 });
 app.put('/api/access', admin, (req, res) => {
@@ -2170,7 +3032,7 @@ app.get('/api/manifest.json', (_req, res) => {
 // ---------- registration of players ----------
 const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
 
-app.get('/api/auth/check', (req, res) => {
+app.get('/api/auth/check', rateLimit(30), (req, res) => {
   const name = String(req.query.username ?? '').trim();
   const valid = USERNAME_RE.test(name);
   const available = valid && !db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase());
@@ -2231,7 +3093,7 @@ app.post('/api/users/:id/approve', admin, (req, res) => {
 });
 
 app.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
-  const b = z.object({ role: z.enum(['admin', 'player']) }).safeParse(req.body);
+  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']) }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
   const id = Number(req.params.id);
   const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
@@ -2286,6 +3148,7 @@ interface UserFull { id: number; username: string; role: Role; password_hash: st
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
+  if (req.user!.role === 'admin') rememberAdminBase(req);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
   res.json({ username: u.username, role: u.role, avatarUrl: avatarUrl(u), discordName: u.discord_name, hasPassword: !u.no_password });
 });
@@ -2323,6 +3186,11 @@ app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
   const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
   res.json({ ok: true, revoked: r.changes });
 });
+// logout: ends the session this very token belongs to
+app.delete('/api/sessions/current', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(req.user!.sid ?? '', req.user!.id);
+  res.json({ ok: true });
+});
 app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
   const r = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user!.id);
   if (!r.changes) return res.status(404).json({ error: 'Сеанс не найден' });
@@ -2339,11 +3207,11 @@ app.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
 // ---------- sign in with Discord (OAuth2, identify scope) ----------
 const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
 const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
-const redirectUri = (req: Request) => `${baseOf(req)}/api/auth/discord/callback`;
+const redirectUri = (req: Request) => `${publicBase() ?? baseOf(req)}/api/auth/discord/callback`;
 const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
 const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
 
-app.get('/api/auth/discord/start', (req, res) => {
+app.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
   const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
   if (!clientId || !getSetting('discord_client_secret')) return failTo(res, 'Вход через Discord не настроен администратором');
   const mode = req.query.mode === 'link' ? 'link' : 'login';
@@ -2354,6 +3222,8 @@ app.get('/api/auth/discord/start', (req, res) => {
     userId = u.id;
   }
   for (const [k, v] of oauthStates) if (v.exp < Date.now()) oauthStates.delete(k);
+  // bounded memory: the oldest pending sign-ins are dropped first
+  while (oauthStates.size >= 1000) oauthStates.delete(oauthStates.keys().next().value as string);
   const state = crypto.randomBytes(16).toString('hex');
   oauthStates.set(state, { mode, userId, exp: Date.now() + 10 * 60_000 });
   const q = new URLSearchParams({ client_id: clientId, response_type: 'code', scope: 'identify', redirect_uri: redirectUri(req), state, prompt: 'none' });
@@ -2373,19 +3243,19 @@ app.get(
 
     let me: { id: string; username: string; global_name?: string | null; avatar?: string | null };
     try {
-      const tr = await fetch('https://discord.com/api/v10/oauth2/token', {
+      const tr = await discordFetch('https://discord.com/api/v10/oauth2/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ client_id: clientId, client_secret: secret, grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri(req) }),
-        signal: AbortSignal.timeout(10_000),
       });
       if (!tr.ok) return failTo(res, 'Discord отклонил вход. Проверьте Client Secret и Redirect URI в настройках');
       const tok = (await tr.json()) as { access_token: string };
-      const mr = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` }, signal: AbortSignal.timeout(10_000) });
+      const mr = await discordFetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` } });
       if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
       me = (await mr.json()) as typeof me;
-    } catch {
-      return failTo(res, 'Не удалось связаться с Discord');
+    } catch (e) {
+      console.error('discord oauth request failed:', (e as Error).message);
+      return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
     }
     const dname = me.global_name || me.username;
     const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
@@ -2584,9 +3454,12 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
       .all(id, since) as { ts: number; online: number }[]
   ).map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down' }));
 
+  const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
+
   res.json({
     server: isAdmin(req) ? server : publicServer(server),
     hours,
+    playersNow,
     points,
     stats: {
       samples: agg.samples,
@@ -2618,24 +3491,138 @@ app.get('/api/servers/:id/history', viewer, (req, res) => {
   res.json(rows);
 });
 
-// public PNG card (used by Discord bot and for sharing)
+// public PNG card (shared links, link previews). A private panel hides it unless the request carries a session token (?t=).
 app.get(
   '/api/card/:id(\\d+).png',
   wrap(async (req, res) => {
+    if (!publicPanel() && !userFromToken(String(req.query.t ?? ''))) return res.status(404).json({ error: 'Сервер не найден' });
     const buf = await renderCard(Number(req.params.id));
     if (!buf) return res.status(404).json({ error: 'Сервер не найден' });
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
   }),
 );
 
-// game pictogram for embeds (public: Discord fetches it)
+// game pictogram for embeds (public: Discord fetches it); unknown ids get the generic icon
 app.get(
   '/api/game-icon/:game.png',
   wrap(async (req, res) => {
     const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(game));
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(isKnownGame(game) ? game : ''));
   }),
 );
+
+// ---------- public server page: a link that looks good when pasted into Discord/Telegram ----------
+const esc = (v: unknown) =>
+  String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+app.get('/s/:id(\\d+)', (req, res) => {
+  res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
+  const gone = () =>
+    void res
+      .status(404)
+      .type('html')
+      .send('<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Не найдено</title></head><body style="font-family:sans-serif;padding:2rem"><h1>Страница недоступна</h1><p><a href="/">На главную</a></p></body></html>');
+  if (!publicPanel()) return gone();
+  const id = Number(req.params.id);
+  const sv = getServer(id);
+  if (!sv) return gone();
+  const base = publicBase() ?? baseOf(req);
+  const b = brand();
+  // never the internal host:port; when the server has no title the game name stands in
+  const title = sv.name === `${sv.host}:${sv.port}` ? gameLabel(sv.game) : sv.name;
+  const parts: string[] = [];
+  if (!sv.hasStatus) parts.push('Состояние неизвестно');
+  else if (!sv.online) parts.push('Сервер недоступен');
+  else {
+    parts.push(`Онлайн: ${sv.players}${sv.maxPlayers ? `/${sv.maxPlayers}` : ''}`);
+    if (sv.map) parts.push(`Карта: ${sv.map}`);
+  }
+  parts.push(`Игра: ${gameLabel(sv.game)}`);
+  const desc = parts.join(' · ');
+  const target = `/#/servers/${id}`;
+  const url = `${base}/s/${id}`;
+  const image = `${base}/api/card/${id}.png`;
+  res.type('html').send(`<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · ${esc(b.name)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta name="theme-color" content="${esc(b.color)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${esc(b.name)}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="480">
+<meta property="og:url" content="${esc(url)}">
+<meta property="og:locale" content="ru_RU">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(desc)}">
+<meta name="twitter:image" content="${esc(image)}">
+<meta http-equiv="refresh" content="0;url=${esc(target)}">
+<script>location.replace(${JSON.stringify(target).replace(/</g, '\\u003c')});</script>
+</head>
+<body>
+<p><a href="${esc(target)}">${esc(title)}</a></p>
+</body>
+</html>`);
+});
+
+// ---------- status page data ----------
+app.get('/api/status', viewer, (req, res) => {
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const list = rows.map(serialize);
+  const servers = isAdmin(req) ? list : list.map(publicServer);
+  const now = Date.now();
+  const days: string[] = [];
+  for (let i = 29; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
+  const daily = new Map<string, { up: number; total: number }>();
+  for (const r of db.prepare('SELECT server_id, day, up, total FROM uptime_daily WHERE day >= ?').all(days[0]) as { server_id: number; day: string; up: number; total: number }[]) {
+    daily.set(`${r.server_id}|${r.day}`, r);
+  }
+  const pings = new Map<number, number>();
+  for (const r of db.prepare('SELECT server_id, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY server_id').all(now - 24 * 3600_000) as { server_id: number; a: number }[]) {
+    pings.set(r.server_id, Math.round(r.a));
+  }
+  const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
+  const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+  res.json({
+    updatedAt: last ?? now,
+    servers: servers.map((sv) => {
+      let up = 0;
+      let total = 0;
+      const dd = days.map((day) => {
+        const r = daily.get(`${sv.id}|${day}`);
+        if (r) {
+          up += r.up;
+          total += r.total;
+        }
+        return { day, pct: r ? pct(r.up, r.total) : null };
+      });
+      return {
+        id: sv.id,
+        name: sv.name,
+        game: sv.game,
+        address: sv.address,
+        online: sv.online,
+        players: sv.players,
+        maxPlayers: sv.maxPlayers,
+        uptime30: pct(up, total),
+        days: dd,
+        avgPing: pings.get(sv.id) ?? null,
+      };
+    }),
+  });
+});
 
 // ---------- discord bindings ----------
 const bindingSchema = z.object({
@@ -2674,7 +3661,7 @@ function channelInfo(channelId: string): { channelName: string | null; guildName
   return { channelName: null, guildName: null, guildId: null };
 }
 
-app.get('/api/discord/channels', admin, (_req, res) => {
+app.get('/api/discord/channels', staff, (_req, res) => {
   res.json(botGuilds);
 });
 
@@ -2700,7 +3687,7 @@ function embedFor(serverId: number, intervalSec: number) {
     .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ?')
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
-  const base = getSetting('public_base');
+  const base = publicBase();
   return buildEmbed(server, up.u, intervalSec, { lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
@@ -2760,6 +3747,29 @@ app.get('/internal/servers/:id/embed', internal, (req, res) => {
   res.json(e);
 });
 
+// the same PNG card, for the bot (works while the panel is private)
+app.get(
+  '/internal/card/:id(\\d+).png',
+  internal,
+  wrap(async (req, res) => {
+    const buf = await renderCard(Number(req.params.id));
+    if (!buf) return res.status(404).json({ error: 'not found' });
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
+  }),
+);
+
+// "Refresh" button on the Discord message: query the game server right now
+app.post(
+  '/internal/servers/:id/refresh',
+  internal,
+  wrap(async (req, res) => {
+    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
+    if (!row) return res.status(404).json({ error: 'not found' });
+    await refreshServer(row);
+    res.json({ ok: true });
+  }),
+);
+
 app.get('/internal/config', internal, (_req, res) => {
   res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
 });
@@ -2805,6 +3815,28 @@ app.get('/internal/bindings', internal, (_req, res) => {
   res.json(rows.map((r) => ({ ...serializeBinding(r), serverName: r.server_name })));
 });
 
+const bindingForBot = (id: number) => {
+  const r = db
+    .prepare(`SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.id = ?`)
+    .get(id) as (BindingRow & { server_name: string }) | undefined;
+  return r ? { ...serializeBinding(r), serverName: r.server_name } : null;
+};
+
+// one binding, enabled or not (the buttons on the Discord message work for paused ones too)
+app.get('/internal/bindings/:id', internal, (req, res) => {
+  const b = bindingForBot(Number(req.params.id));
+  if (!b) return res.status(404).json({ error: 'not found' });
+  res.json(b);
+});
+for (const [action, enabled] of [['pause', 0], ['resume', 1]] as const) {
+  app.post(`/internal/bindings/:id/${action}`, internal, (req, res) => {
+    const id = Number(req.params.id);
+    const r = db.prepare('UPDATE bindings SET enabled = ? WHERE id = ?').run(enabled, id);
+    if (!r.changes) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true, binding: bindingForBot(id) });
+  });
+}
+
 app.patch('/internal/bindings/:id', internal, (req, res) => {
   const b = z
     .object({ messageId: z.string().nullable().optional(), error: z.string().max(300).nullable().optional() })
@@ -2816,12 +3848,17 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
   res.json({ ok: true });
 });
 
-registerNews({ app, admin, viewer, internal, channelInfo, isAdmin });
+registerNews({ app, staff, viewer, internal, channelInfo, isStaff });
 registerAlerts({ app, admin, internal, channelInfo });
-registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS });
+registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
+registerBackups({ app, admin });
 
 // ---------- errors ----------
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+  // body-parser: broken JSON / too large body are the client's mistake, not a server error
+  if (err.type === 'entity.parse.failed') return void res.status(400).json({ error: 'Некорректный JSON в запросе' });
+  if (err.type === 'entity.too.large') return void res.status(413).json({ error: 'Слишком большой запрос' });
+  if (err.type === 'request.aborted' || err.type === 'encoding.unsupported' || err.type === 'charset.unsupported') return void res.status(400).json({ error: 'Некорректный запрос' });
   console.error(err);
   res.status(500).json({ error: 'Внутренняя ошибка сервера' });
 });
@@ -2833,6 +3870,7 @@ app.listen(PORT, () => {
     if (!process.env.SETUP_TOKEN) console.log(`Setup code: ${SETUP_TOKEN}`);
   }
   startPoller(POLL_MS);
+  startBackupTimer();
 });
 
 __COREGSM_EOF__
@@ -2987,13 +4025,15 @@ type ChannelInfo = (id: string) => { channelName: string | null; guildName: stri
 
 export function registerNews(deps: {
   app: express.Express;
-  admin: RequestHandler;
+  /** administrators and moderators: everything that writes news */
+  staff: RequestHandler;
   viewer: RequestHandler;
   internal: RequestHandler;
   channelInfo: ChannelInfo;
-  isAdmin: (req: Request) => boolean;
+  /** the signed-in user is an administrator or a moderator */
+  isStaff: (req: Request) => boolean;
 }) {
-  const { app, admin, viewer, internal, channelInfo, isAdmin } = deps;
+  const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin } = deps;
   const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res)).catch(next);
   };
@@ -3021,11 +4061,11 @@ export function registerNews(deps: {
   };
 
   // ---------- default news channel ----------
-  app.get('/api/news/settings', admin, (_req, res) => {
+  app.get('/api/news/settings', staff, (_req, res) => {
     const channelId = getSetting('news_channel_id');
     res.json({ channelId, ...(channelId ? channelInfo(channelId) : { channelName: null, guildName: null }) });
   });
-  app.put('/api/news/settings', admin, (req, res) => {
+  app.put('/api/news/settings', staff, (req, res) => {
     const b = z.object({ channelId: z.string().regex(/^\d{15,25}$/).nullable() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
     setSetting('news_channel_id', b.data.channelId);
@@ -3036,7 +4076,7 @@ export function registerNews(deps: {
   const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
   app.post(
     '/api/news/images',
-    admin,
+    staff,
     express.raw({ type: Object.keys(EXT), limit: '8mb' }),
     (req, res) => {
       const ext = EXT[String(req.headers['content-type'] ?? '').split(';')[0]];
@@ -3085,7 +4125,7 @@ export function registerNews(deps: {
 
   app.post(
     '/api/news',
-    admin,
+    staff,
     wrap(async (req, res) => {
       const b = bodySchema.safeParse(req.body);
       if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
@@ -3102,7 +4142,7 @@ export function registerNews(deps: {
     }),
   );
 
-  app.put('/api/news/:id', admin, (req, res) => {
+  app.put('/api/news/:id', staff, (req, res) => {
     const id = Number(req.params.id);
     const old = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!old) return res.status(404).json({ error: 'Новость не найдена' });
@@ -3136,7 +4176,7 @@ export function registerNews(deps: {
   });
 
   // publish a draft / scheduled / failed item right now
-  app.post('/api/news/:id/publish', admin, (req, res) => {
+  app.post('/api/news/:id/publish', staff, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });
@@ -3147,7 +4187,7 @@ export function registerNews(deps: {
     res.json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow));
   });
 
-  app.delete('/api/news/:id', admin, (req, res) => {
+  app.delete('/api/news/:id', staff, (req, res) => {
     const id = Number(req.params.id);
     const r = db.prepare('SELECT * FROM news WHERE id = ?').get(id) as NewsRow | undefined;
     if (!r) return res.status(404).json({ error: 'Новость не найдена' });
@@ -3222,16 +4262,13 @@ __COREGSM_EOF__
  * Operations for administrators: action log, bulk actions on Discord bindings,
  * system health and diagnostics, database backup and restore.
  */
-import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import Database from 'better-sqlite3';
+import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import tls from 'node:tls';
 import { z } from 'zod';
-import { db, getSetting } from './db.js';
+import { DATA_DIR, db, getSetting } from './db.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
-const DATA_DIR = path.dirname(DB_PATH);
 const startedAt = Date.now();
 
 // ---------- action log ----------
@@ -3273,7 +4310,12 @@ const RULES: Rule[] = [
   { m: 'PUT', re: /^\/api\/branding\/logo$/, label: 'Загружен логотип' },
   { m: 'DELETE', re: /^\/api\/branding\/logo$/, label: 'Сброшен логотип' },
   { m: 'POST', re: /^\/api\/update\/apply$/, label: 'Запущено обновление панели' },
+  { m: 'POST', re: /^\/api\/update\/rollback$/, label: 'Запущен откат панели' },
   { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
+  { m: 'PUT', re: /^\/api\/backups\/settings$/, label: 'Изменены настройки резервного копирования', detail: (r) => ['schedule', 'keep', 'remoteUrl', 'passphrase'].filter((k) => r.body?.[k] !== undefined).map((k) => (k === 'schedule' ? `расписание: ${s(r.body?.schedule, 10)}` : k === 'keep' ? `хранить: ${Number(r.body?.keep) || ''}` : k === 'remoteUrl' ? 'внешняя копия' : 'шифрование')).join(', ') },
+  { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
+  { m: 'DELETE', re: /^\/api\/backups\/([^/]+)$/, label: 'Удалена резервная копия', pre: (id) => s(id, 80) },
+  { m: 'POST', re: /^\/api\/backups\/([^/]+)\/restore$/, label: 'Восстановлена копия из архива', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
   { m: 'POST', re: /^\/api\/auth\/register$/, label: 'Регистрация', anon: true },
   { m: 'POST', re: /^\/api\/auth\/password$/, label: 'Смена пароля' },
@@ -3287,8 +4329,24 @@ const RULES: Rule[] = [
 export function installAudit(app: Express): void {
   const insert = db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)');
   app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
-    const url = req.originalUrl.split('?')[0];
+    // paths are matched case-insensitively and without a trailing slash (Express routes the same way)
+    const url = req.originalUrl.split('?')[0].toLowerCase().replace(/\/+$/, '');
+    if (req.method === 'GET') {
+      // downloads of backups are reads, but worth a log line
+      if (/^\/api\/backup$/.test(url) || /^\/api\/backups\/coregsm-[\w.-]+$/.test(url)) {
+        res.on('finish', () => {
+          if (res.statusCode >= 400) return;
+          try {
+            const user = (req as Request & { user?: { username: string } }).user;
+            insert.run(Date.now(), user?.username ?? '—', 'Скачана резервная копия', url === '/api/backup' ? '' : url.slice('/api/backups/'.length));
+          } catch (e) {
+            console.error('audit failed', (e as Error).message);
+          }
+        });
+      }
+      return next();
+    }
+    if (req.method === 'HEAD' || req.method === 'OPTIONS') return next();
     let match: RegExpExecArray | null = null;
     const rule = RULES.find((r) => r.m === req.method && (match = r.re.exec(url)) !== null);
     if (!rule || !match) return next();
@@ -3317,9 +4375,67 @@ interface Ctx {
   guildCount: () => number;
   version: string;
   pollMs: number;
+  /** trusted public base URL (https://domain) or null */
+  publicBase: () => string | null;
 }
 
-export function registerOps({ app, admin, getBot, guildCount, version, pollMs }: Ctx): void {
+interface CertInfo {
+  daysLeft: number | null;
+  notAfter: number | null;
+  issuer: string | null;
+  selfSigned: boolean;
+}
+const NO_CERT: CertInfo = { daysLeft: null, notAfter: null, issuer: null, selfSigned: false };
+let certCache: { at: number; info: CertInfo } | null = null;
+
+const dnString = (n: unknown): string => {
+  if (!n || typeof n !== 'object') return '';
+  const o = n as Record<string, string | string[]>;
+  return ['CN', 'O', 'OU', 'C'].map((k) => (o[k] ? `${k}=${Array.isArray(o[k]) ? o[k].join('+') : o[k]}` : '')).filter(Boolean).join(', ');
+};
+
+/** What the reverse proxy serves on :443 (cached for an hour). Nulls when DOMAIN is unset or the proxy does not answer. */
+export function checkCert(force = false): Promise<CertInfo> {
+  const domain = process.env.DOMAIN;
+  if (!domain) return Promise.resolve(NO_CERT);
+  if (!force && certCache && Date.now() - certCache.at < 3600_000) return Promise.resolve(certCache.info);
+  return new Promise<CertInfo>((resolve) => {
+    let done = false;
+    const finish = (info: CertInfo) => {
+      if (done) return;
+      done = true;
+      // a failed check is retried after 2 minutes, a successful one after an hour
+      certCache = { at: info.daysLeft == null ? Date.now() - 3600_000 + 120_000 : Date.now(), info };
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
+      resolve(info);
+    };
+    const sock = tls.connect({ host: process.env.CERT_CHECK_HOST || 'nginx-proxy', port: Number(process.env.CERT_CHECK_PORT) || 443, servername: domain, rejectUnauthorized: false, timeout: 4000 }, () => {
+      try {
+        const c = sock.getPeerCertificate();
+        if (!c || !c.valid_to) return finish(NO_CERT);
+        const notAfter = Date.parse(c.valid_to);
+        const issuer = dnString(c.issuer);
+        finish({
+          daysLeft: Number.isNaN(notAfter) ? null : Math.floor((notAfter - Date.now()) / 86400_000),
+          notAfter: Number.isNaN(notAfter) ? null : notAfter,
+          issuer: issuer || null,
+          selfSigned: !!issuer && issuer === dnString(c.subject),
+        });
+      } catch {
+        finish(NO_CERT);
+      }
+    });
+    sock.on('error', () => finish(NO_CERT));
+    sock.on('timeout', () => finish(NO_CERT));
+    setTimeout(() => finish(NO_CERT), 5000).unref();
+  });
+}
+
+export function registerOps({ app, admin, getBot, guildCount, version, pollMs, publicBase }: Ctx): void {
   // ----- log -----
   app.get('/api/audit', admin, (req, res) => {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
@@ -3351,7 +4467,8 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
   };
   const count = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
 
-  app.get('/api/system', admin, (_req, res) => {
+  app.get('/api/system', admin, async (_req, res) => {
+    const cert = await checkCert().catch(() => NO_CERT);
     const space = freeSpace();
     const dbBytes = (() => {
       try {
@@ -3377,7 +4494,8 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
       },
       bot: getBot(),
       guilds: guildCount(),
-      publicBase: getSetting('public_base') || null,
+      publicBase: publicBase(),
+      cert,
     });
   });
 
@@ -3391,7 +4509,15 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
     }
   };
 
-  app.post('/api/system/run', admin, async (_req, res) => {
+  app.post('/api/system/run', admin, async (_req, res, next) => {
+    try {
+      await runChecks(res);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  async function runChecks(res: Response): Promise<void> {
     const checks: Check[] = [];
     const add = (id: string, label: string, status: Check['status'], detail: string) => checks.push({ id, label, status, detail });
 
@@ -3428,50 +4554,66 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs }:
     else if (!last || Date.now() - last > Math.max(pollMs * 5, 120_000)) add('poll', 'Опрос игровых серверов', 'fail', 'Давно не было ответов: проверьте журнал backend');
     else add('poll', 'Опрос игровых серверов', 'ok', `Последний опрос ${Math.round((Date.now() - last) / 1000)} с назад`);
 
-    const base = getSetting('public_base');
+    const base = publicBase();
     add('public', 'Публичный адрес (значки в Discord)', base ? 'ok' : 'warn', base ? base : 'Откройте панель по домену с https, и значки игр появятся в сообщениях');
 
     const [gh, ds] = await Promise.all([probe('https://api.github.com'), getSetting('proxy_url') ? Promise.resolve(true) : probe('https://discord.com/api/v10/gateway')]);
+    const cert = await checkCert().catch(() => NO_CERT);
+    if (cert.daysLeft == null) add('cert', 'Сертификат HTTPS', 'warn', 'не удалось проверить');
+    else if (cert.daysLeft < 0) add('cert', 'Сертификат HTTPS', 'fail', 'Срок действия сертификата истёк');
+    else if (cert.daysLeft <= 14) add('cert', 'Сертификат HTTPS', 'warn', `Истекает через ${cert.daysLeft} дн.${cert.selfSigned ? ' (самоподписанный)' : ''}`);
+    else add('cert', 'Сертификат HTTPS', 'ok', `Действует ещё ${cert.daysLeft} дн.${cert.selfSigned ? ' (самоподписанный)' : ''}`);
+
     add('github', 'Доступ к GitHub (обновления)', gh ? 'ok' : 'warn', gh ? 'Доступен' : 'Нет ответа: проверка обновлений не сработает');
     add('discord-net', 'Доступ к Discord', ds ? 'ok' : 'fail', getSetting('proxy_url') ? 'Работа идёт через прокси' : ds ? 'Доступен напрямую' : 'Нет ответа. Включите прокси в настройках бота');
     res.json({ at: Date.now(), checks });
-  });
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/proxyFetch.ts" << '__COREGSM_EOF__'
+/**
+ * fetch() for Discord requests made by the backend (OAuth sign-in): goes through the same proxy as the bot
+ * (setting `proxy_url`: socks5://, socks5h://, http:// or https://), because Discord is often blocked directly.
+ */
+import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { socksDispatcher } from 'fetch-socks';
+import { getSetting } from './db.js';
 
-  // ----- backup -----
-  app.get('/api/backup', admin, async (_req, res) => {
-    const tmp = path.join(os.tmpdir(), `coregsm-backup-${Date.now()}.db`);
-    try {
-      await db.backup(tmp);
-    } catch (e) {
-      return res.status(500).json({ error: `Не удалось создать копию: ${(e as Error).message}` });
-    }
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, '0');
-    const name = `coregsm-backup-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.db`;
-    res.download(tmp, name, () => fs.rmSync(tmp, { force: true }));
-  });
+let cache: { url: string; dispatcher: Dispatcher } | null = null;
 
-  app.post('/api/backup/restore', admin, express.raw({ type: 'application/octet-stream', limit: '300mb' }), (req, res) => {
-    const body = req.body as Buffer;
-    if (!Buffer.isBuffer(body) || body.length < 4096 || body.subarray(0, 15).toString('latin1') !== 'SQLite format 3') {
-      return res.status(400).json({ error: 'Это не файл резервной копии CoreGSM (.db)' });
-    }
-    const pending = path.join(DATA_DIR, 'restore-pending.db');
-    try {
-      fs.writeFileSync(pending, body);
-      const t = new Database(pending, { readonly: true });
-      const tables = (t.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((x) => x.name);
-      const ok = ['users', 'servers', 'settings'].every((n) => tables.includes(n)) && t.pragma('quick_check', { simple: true }) === 'ok';
-      t.close();
-      for (const ext of ['-wal', '-shm']) fs.rmSync(`${pending}${ext}`, { force: true });
-      if (!ok) throw new Error('bad');
-    } catch {
-      fs.rmSync(pending, { force: true });
-      return res.status(400).json({ error: 'Файл повреждён или это копия не от CoreGSM' });
-    }
-    // the swap happens at start-up (see db.ts); the container restarts by itself
-    res.json({ ok: true, restarting: true });
-    setTimeout(() => process.exit(0), 800);
+function dispatcherFor(raw: string): Dispatcher | null {
+  if (cache && cache.url === raw) return cache.dispatcher;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  let d: Dispatcher | null = null;
+  if (u.protocol === 'socks5:' || u.protocol === 'socks5h:' || u.protocol === 'socks:') {
+    const user = decodeURIComponent(u.username);
+    d = socksDispatcher({
+      type: 5,
+      host: u.hostname,
+      port: Number(u.port) || 1080,
+      ...(user ? { userId: user, password: decodeURIComponent(u.password) } : {}),
+    }) as unknown as Dispatcher;
+  } else if (u.protocol === 'http:' || u.protocol === 'https:') {
+    d = new ProxyAgent(u.toString());
+  }
+  if (d) cache = { url: raw, dispatcher: d };
+  return d;
+}
+
+export async function discordFetch(url: string, init: { method?: string; headers?: Record<string, string>; body?: string | URLSearchParams; timeoutMs?: number } = {}) {
+  const proxy = getSetting('proxy_url');
+  const dispatcher = proxy ? dispatcherFor(proxy) : null;
+  const { timeoutMs = 12_000, ...rest } = init;
+  return undiciFetch(url, {
+    ...rest,
+    signal: AbortSignal.timeout(timeoutMs),
+    ...(dispatcher ? { dispatcher } : {}),
   });
 }
 __COREGSM_EOF__
@@ -3549,7 +4691,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
 patchGatewayAgent(() => gatewayAgent);
-const { AttachmentBuilder, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
+const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, MessageFlags, PermissionFlagsBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
 
 interface Binding {
@@ -3562,6 +4704,9 @@ interface Binding {
   /** embed (default), card (PNG) or both */
   style?: 'embed' | 'card' | 'both';
 }
+
+/** Binding as the buttons need it: also available while paused. */
+type FullBinding = Binding & { enabled: boolean };
 
 interface BotConfig {
   discordToken: string;
@@ -3596,7 +4741,7 @@ async function backend(path: string, init: RequestInit = {}): Promise<Response> 
   return fetch(BACKEND + path, {
     ...init,
     headers: { 'x-internal-token': INTERNAL_TOKEN, 'content-type': 'application/json', ...(init.headers ?? {}) },
-    signal: AbortSignal.timeout(20_000),
+    signal: init.signal ?? AbortSignal.timeout(20_000),
   });
 }
 
@@ -3746,6 +4891,9 @@ async function applyConfig(): Promise<void> {
     ...(proxy ? { rest: { agent: proxy.rest } } : {}),
   });
   c.on('error', (e) => log('client error', e));
+  c.on('interactionCreate', (i) => {
+    if (i.isButton() && i.customId.startsWith('gsm:')) onButton(i).catch((e) => log('button failed:', (e as Error).message));
+  });
   client = c;
   setState('connecting');
   try {
@@ -3763,7 +4911,24 @@ async function applyConfig(): Promise<void> {
   }
 }
 
-async function update(c: DiscordClient, b: Binding): Promise<void> {
+type MessageButtons = InstanceType<typeof ActionRowBuilder<InstanceType<typeof ButtonBuilder>>>;
+
+/** the action row under the server message */
+function controls(bindingId: number, paused: boolean): MessageButtons {
+  const row = new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>();
+  if (paused) {
+    row.addComponents(new ButtonBuilder().setCustomId(`gsm:resume:${bindingId}`).setLabel('Возобновить').setEmoji('▶️').setStyle(ButtonStyle.Success));
+  } else {
+    row.addComponents(
+      new ButtonBuilder().setCustomId(`gsm:refresh:${bindingId}`).setLabel('Обновить').setEmoji('🔄').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`gsm:pause:${bindingId}`).setLabel('Пауза').setEmoji('⏸️').setStyle(ButtonStyle.Secondary),
+    );
+  }
+  return row;
+}
+
+/** Builds what a binding's message looks like (embed, card attachment, buttons). Shared by the periodic update and the buttons. */
+async function buildPayload(b: Binding) {
   const style = b.style ?? 'embed';
 
   // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
@@ -3778,16 +4943,21 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
 
   const files: InstanceType<typeof AttachmentBuilder>[] = [];
   if (style !== 'embed') {
-    const img = await backend(`/api/card/${b.serverId}.png`, { headers: { 'content-type': 'image/png' } });
+    const img = await backend(`/internal/card/${b.serverId}.png`);
     if (!img.ok) throw new Error(`card HTTP ${img.status}`);
     files.push(new AttachmentBuilder(Buffer.from(await img.arrayBuffer()), { name: 'card.png' }));
     embed.setImage('attachment://card.png');
   }
+  return { embeds: [embed], files, components: [controls(b.id, false)] };
+}
+
+async function update(c: DiscordClient, b: Binding): Promise<void> {
+  const built = await buildPayload(b);
 
   const channel = await c.channels.fetch(b.channelId);
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
-  const payload = () => ({ embeds: [embed], files });
+  const payload = () => built;
 
   if (b.messageId) {
     try {
@@ -3801,6 +4971,75 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
   }
   const sent = await channel.send(payload());
   await report(b.id, { messageId: sent.id, error: null });
+}
+
+// ---------- buttons on the server message ----------
+const lastRefresh = new Map<number, number>();
+const REFRESH_COOLDOWN_MS = 10_000;
+
+async function onButton(i: import('discord.js').ButtonInteraction): Promise<void> {
+  const m = /^gsm:(refresh|pause|resume):(\d+)$/.exec(i.customId);
+  if (!m) return;
+  const action = m[1] as 'refresh' | 'pause' | 'resume';
+  const id = Number(m[2]);
+  const deny = (content: string) => i.reply({ content, flags: MessageFlags.Ephemeral });
+
+  // only people who manage the Discord server may press them
+  const perms = i.memberPermissions;
+  if (!perms || !(perms.has(PermissionFlagsBits.ManageGuild) || perms.has(PermissionFlagsBits.Administrator))) {
+    await deny('Недостаточно прав');
+    return;
+  }
+  if (action === 'refresh') {
+    const last = lastRefresh.get(id) ?? 0;
+    if (Date.now() - last < REFRESH_COOLDOWN_MS) {
+      await deny('Подождите несколько секунд');
+      return;
+    }
+    lastRefresh.set(id, Date.now());
+  }
+
+  const get = await backend(`/internal/bindings/${id}`);
+  if (!get.ok) {
+    await deny('Привязка не найдена: возможно, она удалена в панели');
+    return;
+  }
+  const b = (await get.json()) as FullBinding;
+  if (b.messageId && b.messageId !== i.message.id) {
+    await deny('Эта кнопка устарела: сообщение заменено новым');
+    return;
+  }
+
+  // the backend work may take longer than the 3 s Discord allows for an answer
+  await i.deferUpdate();
+  try {
+    if (action === 'pause') {
+      const r = await backend(`/internal/bindings/${id}/pause`, { method: 'POST' });
+      if (!r.ok) throw new Error(`pause HTTP ${r.status}`);
+      // keep the message as it is and mark it as paused
+      const prev = i.message.embeds[0];
+      const embed = prev ? EmbedBuilder.from(prev) : new EmbedBuilder().setColor(0x5a4bd1);
+      embed.setDescription(['⏸️ Обновление приостановлено', prev?.description].filter(Boolean).join('\n'));
+      await i.editReply({ embeds: [embed], components: [controls(id, true)] });
+      log(`binding ${id}: paused from Discord by ${i.user.tag}`);
+      return;
+    }
+    if (action === 'resume') {
+      const r = await backend(`/internal/bindings/${id}/resume`, { method: 'POST' });
+      if (!r.ok) throw new Error(`resume HTTP ${r.status}`);
+      lastRun.delete(id);
+    } else {
+      const r = await backend(`/internal/servers/${b.serverId}/refresh`, { method: 'POST', signal: AbortSignal.timeout(45_000) });
+      if (!r.ok) throw new Error(`refresh HTTP ${r.status}`);
+    }
+    const built = await buildPayload(b);
+    await i.editReply({ ...built, attachments: [] });
+    lastRun.set(id, Date.now());
+    log(`binding ${id}: ${action} from Discord by ${i.user.tag}`);
+  } catch (e) {
+    log(`binding ${id}: button ${action} failed:`, (e as Error).message);
+    await i.followUp({ content: `Не удалось выполнить: ${humanDiscordError(e)}`, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+  }
 }
 
 // ---------- news: messages written in the panel ----------
@@ -4153,8 +5392,7 @@ __COREGSM_EOF__
     "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
-    "@fontsource/nunito": "^5.1.0",
-    "@fontsource/plus-jakarta-sans": "^5.3.0",
+    "@fontsource-variable/manrope": "^5.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -4789,16 +6027,18 @@ lpZdO+rqtpoW7v8BFI4qdDVfylwAAAAASUVORK5CYII=
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
   cat > "$APP_DIR/core-frontend/public/sw.js" << '__COREGSM_EOF__'
-// Minimal service worker: lets the browser offer "install app". Nothing is cached, the panel is always live.
+// Minimal service worker: lets the browser offer "install app". Nothing is cached and requests are not intercepted: the panel is always live.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
-self.addEventListener('fetch', () => {});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
+import { BLACK, WHITE, contrast, ensureContrast, mix, parseHex, parseTriplet, triplet, type RGB } from './colors';
+import Tour from './components/Tour';
+import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Setup from './pages/Setup';
@@ -4806,7 +6046,14 @@ import ServersPage from './pages/Servers';
 import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, useHash } from './ui';
+import StatusPage from './pages/Status';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, parseHash, toast, useHash } from './ui';
+
+const IconStatus = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </svg>
+);
 
 interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
 
@@ -4814,41 +6061,85 @@ interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: bo
 const PAGES: PageDef[] = [
   { id: 'servers', label: 'Серверы', icon: IconServers },
   { id: 'news', label: 'Новости', icon: IconNews },
+  { id: 'status', label: 'Статус', icon: IconStatus },
   { id: 'admin', label: 'Админка', icon: IconSettings, admin: true },
 ];
 
-const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+const ADMIN_TITLES: Record<string, string> = {
+  servers: 'Серверы',
+  discord: 'Discord',
+  news: 'Новости',
+  alerts: 'Оповещения',
+  cards: 'Карточки',
+  users: 'Пользователи',
+  journal: 'Журнал',
+  system: 'Система',
+  settings: 'Настройки',
+};
 
-/** brand colour, name and tab colour; recomputed when the theme flips */
+const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
+const DEFAULT_BRAND: RGB = [79, 70, 229];
+
+const isDarkNow = (root: HTMLElement) =>
+  root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+/**
+ * Brand colour, name and tab colour; recomputed when the theme flips.
+ * Safeguards: white text on filled buttons keeps >= 4.5:1 (the fill is darkened, hue kept); brand-coloured text (--link)
+ * keeps >= 4.5:1 on the card and soft surfaces of the current theme (darkened in light, lightened in dark).
+ */
 function useBrand(b: Access['brand']) {
   useEffect(() => {
     const root = document.documentElement;
     const apply = () => {
-      const hex = b.color.replace('#', '');
-      const [r, g, bl] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
-      const dark = root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      const mix = (c: number, t: number, k: number) => Math.round(c + (t - c) * k);
-      const hover = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.2) : mix(c, 0, 0.15))).join(' ');
-      const link = [r, g, bl].map((c) => (dark ? mix(c, 255, 0.45) : c)).join(' ');
-      root.style.setProperty('--brand', `${r} ${g} ${bl}`);
-      root.style.setProperty('--brand-hover', hover);
-      root.style.setProperty('--link', link);
+      const base = parseHex(b.color) ?? DEFAULT_BRAND;
+      const dark = isDarkNow(root);
+      const style = getComputedStyle(root);
+      const surface = (name: string, fallback: RGB) => parseTriplet(style.getPropertyValue(`--${name}`)) ?? fallback;
+      const card = surface('card', dark ? [23, 24, 29] : WHITE);
+      const soft = surface('soft', dark ? [33, 34, 41] : [238, 240, 244]);
+
+      // filled buttons: white text must stay readable
+      const fill = contrast(base, WHITE) >= 4.5 ? base : ensureContrast(base, [WHITE], 4.5, 'darken');
+      // hover is always a bit darker, so white text keeps its contrast
+      const hover = mix(fill, BLACK, 0.14);
+      // brand-coloured text and focus rings
+      const link = dark
+        ? ensureContrast(mix(base, WHITE, 0.45), [card, soft], 4.5, 'lighten')
+        : ensureContrast(base, [card, soft], 4.5, 'darken');
+
+      root.style.setProperty('--brand', triplet(fill));
+      root.style.setProperty('--brand-hover', triplet(hover));
+      root.style.setProperty('--link', triplet(link));
     };
     apply();
     const mo = new MutationObserver(apply);
     mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
-    document.title = b.name;
+    // "as in the system" theme: follow the OS switching while the page is open
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener?.('change', apply);
     document.querySelector('meta[name=theme-color]')?.setAttribute('content', b.color);
-    return () => mo.disconnect();
-  }, [b.color, b.name]);
+    return () => {
+      mo.disconnect();
+      mq.removeEventListener?.('change', apply);
+    };
+  }, [b.color]);
 }
 
-interface Boot { ready: boolean; needsSetup: boolean; me: Me | null; access: Access }
+interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
+
+const IconLogout = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+  </svg>
+);
 
 export default function App() {
   const { page: rawPage, sub } = useHash();
-  const [boot, setBoot] = useState<Boot>({ ready: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
+  const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [authing, setAuthing] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
 
   // who is signed in, what is open to guests, and whether the first-run wizard is still pending
   const load = useCallback(async () => {
@@ -4857,26 +6148,93 @@ export default function App() {
       api<{ needed: boolean }>('/setup/status').catch(() => ({ needed: false })),
     ]);
     let me: Me | null = null;
+    let offline = false;
     if (getToken()) {
-      me = await api<Me>('/me').catch(() => null);
-      if (!me) setToken('');
+      try {
+        me = await api<Me>('/me');
+      } catch (e) {
+        // only a rejected token ends the session; a network error or a 5xx must not log anyone out
+        if (e instanceof ApiError && e.status === 401) setToken('');
+        else offline = true;
+      }
     }
-    setBoot({ ready: true, needsSetup: setup.needed, me, access });
+    setBoot((prev) => {
+      if (offline) return prev.ready && prev.me ? prev : { ...prev, ready: true, offline: true };
+      return { ready: true, offline: false, needsSetup: setup.needed, me, access };
+    });
   }, []);
 
-  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>)
+  const meRef = useRef<Me | null>(null);
+  const accessRef = useRef<Access>(DEFAULT_ACCESS);
+  meRef.current = boot.me;
+  accessRef.current = boot.access;
+  const loggingOut = useRef(false);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // while the server is unreachable at start, try again by itself
+  useEffect(() => {
+    if (!boot.offline) return;
+    const t = setInterval(() => void load(), 10_000);
+    return () => clearInterval(t);
+  }, [boot.offline, load]);
+
+  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>).
+  // The token leaves the address bar at once (no history entry), is checked with /me and only then kept.
+  const pendingJwt = useRef('');
   useEffect(() => {
     if (rawPage !== 'auth' || !sub) return;
-    setToken(sub);
-    window.location.hash = '#/servers';
-    void load();
-  }, [rawPage, sub, load]);
-  useEffect(() => { void load(); }, [load]);
+    pendingJwt.current = sub;
+    setAuthing(true);
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/servers`);
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  }, [rawPage, sub]);
   useEffect(() => {
-    // a rejected token (expired, account removed) comes back as this event
-    const out = () => void load();
+    if (!boot.ready || !authing) return;
+    const jwt = pendingJwt.current;
+    pendingJwt.current = '';
+    if (!jwt) { setAuthing(false); return; }
+    // already signed in: the link is ignored
+    if (boot.me) { setAuthing(false); return; }
+    void (async () => {
+      let ok = false;
+      try {
+        ok = (await fetch('/api/me', { headers: { Authorization: `Bearer ${jwt}` } })).ok;
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        setToken(jwt);
+        await load();
+      } else {
+        toast('Не удалось войти через Discord. Попробуйте ещё раз', 'err');
+        window.location.hash = '#/login';
+      }
+      setAuthing(false);
+    })();
+  }, [boot.ready, boot.me, authing, load]);
+
+  useEffect(() => {
+    // a rejected token (expired, account removed) comes back as this event; several requests may report it at once
+    let timer = 0;
+    const out = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        // nobody was signed in, we signed out ourselves, or a new sign-in has already happened: nothing to do
+        if (!meRef.current || loggingOut.current || getToken()) return;
+        toast('Сеанс завершён, войдите снова', 'info');
+        setBoot((p) => ({ ...p, me: null }));
+        const { page } = parseHash();
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status');
+        if (!publicRoute) window.location.hash = '#/login';
+        void load();
+      }, 300);
+    };
     window.addEventListener('coregsm:logout', out);
-    return () => window.removeEventListener('coregsm:logout', out);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('coregsm:logout', out);
+    };
   }, [load]);
 
   const { me, access } = boot;
@@ -4884,38 +6242,100 @@ export default function App() {
 
   useEffect(() => {
     if (!isAdmin) return;
-    const check = () => api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
-    void check();
+    const check = () => {
+      if (document.hidden) return;
+      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
+    };
+    check();
     const t = setInterval(check, 30 * 60_000);
     return () => clearInterval(t);
   }, [isAdmin]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    if (loggingOut.current) return;
+    loggingOut.current = true;
+    try {
+      // ends the session on the server too; a failure (404, no connection) must not keep the user signed in
+      await api('/sessions/current', 'DELETE');
+    } catch {
+      /* ignore */
+    }
     setToken('');
     window.location.hash = '#/servers';
-    void load();
+    await load();
+    loggingOut.current = false;
   }, [load]);
 
   useBrand(access.brand);
 
-  const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, access, reload: load, logout }), [me, isAdmin, access, load, logout]);
+  const isStaff = isAdmin || me?.role === 'moderator';
+  const ctx = useMemo(() => ({ me, isAdmin: !!isAdmin, isStaff, access, reload: load, logout }), [me, isAdmin, isStaff, access, load, logout]);
 
-  if (!boot.ready) return <div className="grid min-h-full place-items-center text-2xl"><Wordmark /></div>;
+  // ---- document title and focus follow the route ----
+  const visible = PAGES.filter((p) => !p.admin || isStaff);
+  const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
+  const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const adminSection = sub.split('/')[0];
+  const sectionTitle = boot.needsSetup
+    ? 'Первый запуск'
+    : showAuth
+      ? rawPage === 'register' && access.registration ? 'Регистрация' : 'Вход'
+      : page === 'profile'
+        ? 'Профиль'
+        : page === 'admin'
+          ? `Админка · ${ADMIN_TITLES[adminSection] ?? ADMIN_TITLES.servers}`
+          : PAGES.find((p) => p.id === page)?.label ?? '';
+  useEffect(() => {
+    document.title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
+  }, [boot.ready, sectionTitle, access.brand.name]);
+
+  const routeKey = `${page}/${page === 'servers' || page === 'admin' ? adminSection : ''}`;
+  const firstRoute = useRef(true);
+  useEffect(() => {
+    if (!boot.ready) return;
+    if (firstRoute.current) { firstRoute.current = false; return; }
+    window.scrollTo(0, 0);
+    // a dialog (the tour, a confirmation) keeps the focus it has
+    if (document.querySelector('[aria-modal="true"]')) return;
+    mainRef.current?.focus({ preventScroll: true });
+  }, [routeKey, boot.ready]);
+
+  if (!boot.ready || authing) {
+    return (
+      <div className="grid min-h-[100dvh] place-items-center text-2xl" role="status" aria-label="Загрузка">
+        <Wordmark />
+      </div>
+    );
+  }
+
+  if (boot.offline) {
+    return (
+      <div className="grid min-h-[100dvh] place-items-center p-6">
+        <div className="panel w-full max-w-sm space-y-4 p-6 text-center">
+          <Wordmark className="text-2xl" />
+          <p className="text-lg font-black" role="alert">Нет связи с сервером</p>
+          <p className="font-semibold text-mute">Вы остаётесь в аккаунте. Проверьте подключение: мы попробуем ещё раз автоматически.</p>
+          <button className="btn w-full" onClick={() => void load()}>Повторить</button>
+        </div>
+        <Toaster />
+      </div>
+    );
+  }
 
   if (boot.needsSetup) {
     return (
       <AuthContext.Provider value={ctx}>
         <Setup onDone={() => void load()} />
         <Toaster />
+        <ConfirmHost />
       </AuthContext.Provider>
     );
   }
 
   // sign-in / registration screens: for a closed panel they are the only thing a guest sees
-  const wantsRegister = rawPage === 'register';
-  if (!me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || wantsRegister)) {
+  if (showAuth) {
     const done = () => { window.location.hash = '#/servers'; void load(); };
-    const mode = wantsRegister && access.registration ? 'register' : 'login';
+    const mode = rawPage === 'register' && access.registration ? 'register' : 'login';
     // after a failed Discord sign-in the backend sends #/login/<message>
     let notice = '';
     if (rawPage === 'login' && sub) {
@@ -4929,21 +6349,31 @@ export default function App() {
           </AuthCard>
         </AuthShell>
         <Toaster />
+        <ConfirmHost />
       </AuthContext.Provider>
     );
   }
 
-  const visible = PAGES.filter((p) => !p.admin || isAdmin);
-  const page = rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
-  const dot = <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление" />;
+  const dot = (
+    <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-warn align-middle" title="Доступно обновление">
+      <span className="sr-only">(доступно обновление)</span>
+    </span>
+  );
 
   return (
     <AuthContext.Provider value={ctx}>
-      <div className="mx-auto min-h-full max-w-6xl px-4 pb-28 pt-5 sm:px-6 md:pb-16">
-        <header className="mb-6 flex items-center gap-x-4 md:mb-8">
-          <a href="#/servers" className="flex items-center gap-2.5 text-2xl font-black tracking-tight">
-            <Logo size={34} />
-            <Wordmark />
+      <a
+        href="#/servers"
+        className="skip-link"
+        onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}
+      >
+        Перейти к содержимому
+      </a>
+      <div className="mx-auto min-h-full max-w-6xl px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-5 sm:px-6 md:pb-16">
+        <header className="mb-6 flex items-center gap-x-3 md:mb-8 md:gap-x-4">
+          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-2xl font-black tracking-tight max-md:flex-1">
+            <Logo size={34} alt="" />
+            <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="hidden gap-1.5 md:flex" aria-label="Разделы">
@@ -4961,38 +6391,50 @@ export default function App() {
               </a>
             ))}
           </nav>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 md:ml-auto">
             <ThemeToggle />
             {me ? (
               <>
                 <a
                   href="#/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex max-w-[11rem] items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3.5 font-extrabold shadow-pop transition ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
-                  title="Профиль"
+                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold shadow-pop transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1.5 sm:pl-1.5 sm:pr-3.5 ${page === 'profile' ? 'bg-brand text-white' : 'bg-card text-ink hover:text-link'}`}
+                  title={`Профиль: ${me.username}`}
+                  aria-label={`Профиль: ${me.username}`}
                 >
                   <UserAvatar name={me.username} url={me.avatarUrl} size={28} className="!rounded-full" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
-                <button onClick={logout} className="rounded-full bg-card px-4 py-2 font-extrabold text-mute shadow-pop hover:text-bad">Выйти</button>
+                <button
+                  onClick={() => void logout()}
+                  className="grid place-items-center rounded-full bg-card font-extrabold text-mute shadow-pop transition hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-4 sm:py-2"
+                  aria-label="Выйти"
+                  title="Выйти"
+                >
+                  <span className="sm:hidden"><IconLogout /></span>
+                  <span className="hidden sm:inline">Выйти</span>
+                </button>
               </>
             ) : (
               <>
-                <a href="#/login" className="rounded-full bg-card px-4 py-2 font-extrabold text-ink shadow-pop hover:text-link">Войти</a>
+                <a href="#/login" className="inline-flex items-center rounded-full bg-card px-4 py-2 font-extrabold text-ink shadow-pop hover:text-link max-sm:min-h-[44px]">Войти</a>
                 {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">Регистрация</a>}
               </>
             )}
           </div>
         </header>
 
-        <main key={page} className="pop min-w-0">
+        <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
           {page === 'servers' && <ServersPage sub={sub} />}
           {page === 'news' && <NewsFeed />}
+          {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
         </main>
 
         <Toaster />
+        <ConfirmHost />
+        {isAdmin && <Tour />}
 
         <nav
           className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card/95 backdrop-blur md:hidden"
@@ -5007,19 +6449,21 @@ export default function App() {
                   <a
                     href={`#/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`relative flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`grid h-8 w-14 place-items-center rounded-full transition ${active ? 'bg-soft' : ''}`}>{p.icon()}</span>
                     {p.label}
-                    {p.id === 'admin' && updateAvailable && <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn" />}
+                    {p.id === 'admin' && updateAvailable && (
+                      <span className="absolute right-[26%] top-2 h-2.5 w-2.5 rounded-full bg-warn"><span className="sr-only">Доступно обновление</span></span>
+                    )}
                   </a>
                 </li>
               );
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '#/register' : '#/login'} className="flex flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold text-link">
-                  <span className="grid h-8 w-14 place-items-center rounded-full bg-soft text-lg">→</span>
+                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[56px] flex-col items-center gap-0.5 px-1 pb-2 pt-2.5 text-xs font-extrabold text-link">
+                  <span className="grid h-8 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   Войти
                 </a>
               </li>
@@ -5157,8 +6601,76 @@ export interface UpdateInfo {
   checkedAt: number | null;
   error: string | null;
   canApply: boolean;
+  /** a previous version and a database copy exist, so the update can be undone */
+  canRollback: boolean;
   pending: boolean;
   job: { state: 'running' | 'done' | 'error'; message: string; time: number } | null;
+}
+
+export interface ChangelogItem {
+  sha: string;
+  title: string;
+  /** ISO date */
+  date: string;
+  url: string;
+}
+
+export interface Changelog {
+  items: ChangelogItem[];
+  error?: string;
+}
+
+// ---------- public status page ----------
+export interface StatusDay {
+  /** YYYY-MM-DD */
+  day: string;
+  /** null = no data */
+  pct: number | null;
+}
+
+export interface StatusServer {
+  id: number;
+  name: string;
+  game: string;
+  address: string;
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+  uptime30: number | null;
+  /** 30 entries, oldest first */
+  days: StatusDay[];
+  avgPing: number | null;
+}
+
+export interface StatusInfo {
+  updatedAt: number;
+  servers: StatusServer[];
+}
+
+// ---------- backups ----------
+export interface BackupItem {
+  name: string;
+  size: number;
+  createdAt: number;
+  kind: 'auto' | 'manual';
+}
+
+export interface BackupInfo {
+  schedule: 'off' | 'daily' | 'weekly';
+  keep: number;
+  /** masked */
+  remoteUrl: string | null;
+  encrypted: boolean;
+  items: BackupItem[];
+  lastRemote: { at: number; ok: boolean; error: string | null } | null;
+}
+
+export interface CertInfo {
+  daysLeft: number | null;
+  /** ms */
+  notAfter: number | null;
+  issuer: string | null;
+  selfSigned: boolean;
 }
 
 export interface TestResult {
@@ -5179,6 +6691,14 @@ export interface ServerDetails {
   points: { ts: number; players: number; online: number }[];
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   events: { ts: number; type: 'up' | 'down' }[];
+  /** players with the time they joined (empty when the game gives no names) */
+  playersNow: PlayerNow[];
+}
+
+export interface PlayerNow {
+  name: string;
+  /** ms: when the player joined */
+  since: number;
 }
 
 export interface DiscordGuild {
@@ -5239,7 +6759,7 @@ export interface NewsSettings {
 // ---------- accounts and access ----------
 export interface Me {
   username: string;
-  role: 'admin' | 'player';
+  role: 'admin' | 'moderator' | 'player';
   /** Discord CDN url */
   avatarUrl: string | null;
   discordName: string | null;
@@ -5279,7 +6799,7 @@ export interface Access {
 export interface UserRow {
   id: number;
   username: string;
-  role: 'admin' | 'player';
+  role: 'admin' | 'moderator' | 'player';
   createdAt: number | null;
   status: 'active' | 'pending';
   discordName: string | null;
@@ -5303,6 +6823,8 @@ export interface AuthState {
   /** null = a guest */
   me: Me | null;
   isAdmin: boolean;
+  /** administrator or moderator: may open the admin area (moderators only its news section) */
+  isStaff: boolean;
   access: Access;
   /** re-read who is signed in and the access settings */
   reload: () => Promise<void>;
@@ -5312,12 +6834,89 @@ export interface AuthState {
 export const AuthContext = createContext<AuthState>({
   me: null,
   isAdmin: false,
+  isStaff: false,
   access: { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } },
   reload: async () => undefined,
   logout: () => undefined,
 });
 
 export const useAuth = () => useContext(AuthContext);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/colors.ts" << '__COREGSM_EOF__'
+// Colour helpers for the brand-colour safeguard (WCAG 2.1 contrast).
+export type RGB = [number, number, number];
+
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+/** "#4f46e5" / "#4af" -> [79, 70, 229]; null when it is not a hex colour */
+export function parseHex(hex: string): RGB | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)) as RGB;
+}
+
+/** "23 24 29" (a CSS variable value) -> [23, 24, 29] */
+export function parseTriplet(v: string): RGB | null {
+  const p = v.trim().split(/\s+/).map(Number);
+  return p.length === 3 && p.every((n) => Number.isFinite(n)) ? (p as RGB) : null;
+}
+
+const lin = (v: number) => {
+  const s = v / 255;
+  return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+};
+export const luminance = (c: RGB) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+
+export function contrast(a: RGB, b: RGB): number {
+  const x = luminance(a);
+  const y = luminance(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+export function toHsl([r, g, b]: RGB): [number, number, number] {
+  const R = r / 255, G = g / 255, B = b / 255;
+  const max = Math.max(R, G, B), min = Math.min(R, G, B);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h = max === R ? ((G - B) / d) % 6 : max === G ? (B - R) / d + 2 : (R - G) / d + 4;
+  h = (h * 60 + 360) % 360;
+  return [h, s, l];
+}
+
+export function fromHsl([h, s, l]: [number, number, number]): RGB {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return [r, g, b].map((v) => Math.round((v + m) * 255)) as RGB;
+}
+
+/**
+ * Moves the lightness of `c` (hue and saturation kept) in the given direction until it has `min` contrast
+ * with every colour in `against`. Returns the original colour when it already passes.
+ */
+export function ensureContrast(c: RGB, against: RGB[], min: number, direction: 'darken' | 'lighten'): RGB {
+  const ok = (x: RGB) => against.every((bg) => contrast(x, bg) >= min);
+  if (ok(c)) return c;
+  const [h, s, l] = toHsl(c);
+  const step = direction === 'darken' ? -0.01 : 0.01;
+  let cur = c;
+  for (let L = l + step; L >= 0 && L <= 1; L += step) {
+    cur = fromHsl([h, s, clamp(L, 0, 1)]);
+    if (ok(cur)) return cur;
+  }
+  return cur;
+}
+
+export const mix = (a: RGB, b: RGB, k: number): RGB => a.map((v, i) => Math.round(v + (b[i] - v) * k)) as RGB;
+export const triplet = (c: RGB) => c.join(' ');
+export const WHITE: RGB = [255, 255, 255];
+export const BLACK: RGB = [0, 0, 0];
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
@@ -5502,27 +7101,6 @@ export function CardsArt() {
     </Frame>
   );
 }
-
-/** The big composition on the sign-in panel: servers sending a signal. */
-export function AuthArt() {
-  return (
-    <svg viewBox="0 0 320 220" width="320" height="220" role="img" aria-label="" className="max-w-full">
-      <circle cx="160" cy="112" r="96" fill="#fff" opacity="0.07" />
-      <circle cx="160" cy="112" r="64" fill="#fff" opacity="0.08" />
-      {[44, 84, 124].map((y, i) => (
-        <g key={y} transform={`translate(${i === 1 ? 14 : 0} 0)`}>
-          <rect x="74" y={y} width="150" height="32" rx="12" fill="#fff" opacity={i === 0 ? 1 : i === 1 ? 0.88 : 0.74} />
-          <rect x="88" y={y + 13} width="62" height="6" rx="3" fill="#5a4bd1" opacity="0.35" />
-          <circle cx="198" cy={y + 16} r="5" fill={[OK, WARN, BAD][i]} />
-        </g>
-      ))}
-      <path d="M250 70q16 14 0 34M260 60q26 24 0 54" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
-      <circle cx="248" cy="87" r="5" fill="#fff" />
-      <path d="M62 52l3 7 7 3-7 3-3 7-3-7-7-3 7-3z" fill="#fff" opacity="0.6" />
-      <path d="M268 156l2.4 5.6 5.6 2.4-5.6 2.4-2.4 5.6-2.4-5.6-5.6-2.4 5.6-2.4z" fill="#fff" opacity="0.5" />
-    </svg>
-  );
-}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/Markdown.tsx" << '__COREGSM_EOF__'
@@ -5610,6 +7188,488 @@ export function Markdown({ text }: { text: string }) {
     out.push(line.trim() === '' ? <div key={i} className="h-2" /> : <div key={i}>{inlineMd(line)}</div>);
   }
   return <div className="break-words leading-snug">{out}</div>;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/Tour.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useAuth } from '../auth';
+import { useDialogFocus } from '../confirm';
+
+/**
+ * First-run guided tour for administrators: a short list of coach-marks that walks through the admin area.
+ * Shown once per user name (remembered in localStorage); "Показать подсказки заново" in the profile calls restartTour().
+ *
+ * Each step may point at an element. The selectors are tried in order, so a page can mark its own anchor with
+ * data-tour="<name>" and the tour falls back to the section navigation. A missing anchor just centres the card.
+ */
+
+interface Step {
+  title: string;
+  text: string;
+  /** hash route opened for this step */
+  route: string;
+  /** CSS selectors tried in order */
+  anchors: string[];
+}
+
+const ADMIN_NAV = 'nav[aria-label="Разделы админки"]';
+const SETTINGS_NAV = 'nav[aria-label="Разделы настроек"]';
+
+const STEPS: Step[] = [
+  {
+    title: 'Добавьте игровой сервер',
+    text: 'Добро пожаловать! Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
+    route: '#/admin/servers',
+    anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="#/admin/servers"]`],
+  },
+  {
+    title: 'Подключите Discord-бота',
+    text: 'В «Настройки → Discord-бот» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
+    route: '#/admin/settings/bot',
+    anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="#/admin/settings/bot"]`],
+  },
+  {
+    title: 'Привяжите канал',
+    text: 'В разделе «Discord» выберите канал, куда бот будет публиковать карточку сервера. Сообщение обновляется по таймеру само.',
+    route: '#/admin/discord',
+    anchors: ['[data-tour="bind-channel"]', `${ADMIN_NAV} a[href="#/admin/discord"]`],
+  },
+  {
+    title: 'Пишите новости',
+    text: 'В «Новости» можно подготовить запись с картинкой, отправить её в Discord сразу или по расписанию и повторять по расписанию.',
+    route: '#/admin/news',
+    anchors: ['[data-tour="news-new"]', `${ADMIN_NAV} a[href="#/admin/news"]`],
+  },
+  {
+    title: 'Настройте оформление',
+    text: 'В «Настройки → Оформление» задайте название сообщества, логотип и фирменный цвет. На этом всё: подсказки можно показать снова в профиле.',
+    route: '#/admin/settings/brand',
+    anchors: ['[data-tour="brand"]', `${SETTINGS_NAV} a[href="#/admin/settings/brand"]`],
+  },
+];
+
+const key = (username: string) => `coregsm_tour_${username}`;
+const RESTART = 'coregsm:tour-restart';
+
+const seen = (username: string) => {
+  try { return localStorage.getItem(key(username)) === '1'; } catch { return true; }
+};
+const markSeen = (username: string) => {
+  try { localStorage.setItem(key(username), '1'); } catch { /* private mode: it may show again next time */ }
+};
+
+/** forget that the tour was shown and start it now */
+export function restartTour(username: string) {
+  try { localStorage.removeItem(key(username)); } catch { /* ignore */ }
+  window.dispatchEvent(new Event(RESTART));
+}
+
+/** mounted once for a signed-in layout */
+export default function Tour() {
+  const { me, isAdmin } = useAuth();
+  const username = me?.username ?? '';
+  const [open, setOpen] = useState(false);
+
+  // first sign-in: wait a moment so the page settles
+  useEffect(() => {
+    if (!isAdmin || !username || seen(username)) { setOpen(false); return; }
+    const t = window.setTimeout(() => setOpen(true), 1200);
+    return () => window.clearTimeout(t);
+  }, [isAdmin, username]);
+
+  useEffect(() => {
+    const again = () => { if (isAdmin && username) setOpen(true); };
+    window.addEventListener(RESTART, again);
+    return () => window.removeEventListener(RESTART, again);
+  }, [isAdmin, username]);
+
+  const close = useCallback(() => {
+    if (username) markSeen(username);
+    setOpen(false);
+  }, [username]);
+
+  if (!open || !isAdmin) return null;
+  return <TourOverlay onClose={close} />;
+}
+
+const findAnchor = (step: Step): HTMLElement | null => {
+  for (const sel of step.anchors) {
+    const el = document.querySelector<HTMLElement>(sel);
+    if (el && el.getClientRects().length > 0) return el;
+  }
+  return null;
+};
+
+const POP_W = 360;
+
+function TourOverlay({ onClose }: { onClose: () => void }) {
+  const [i, setI] = useState(0);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const [vw, setVw] = useState(window.innerWidth);
+  const box = useRef<HTMLDivElement>(null);
+  const step = STEPS[i];
+  const last = i === STEPS.length - 1;
+
+  useDialogFocus(box, onClose, () => box.current?.querySelector<HTMLElement>('[data-next]'));
+
+  // open the step's page, then wait for the anchor to appear (pages load their data first)
+  useEffect(() => {
+    if (window.location.hash !== step.route) {
+      // replace, not push: the back button should not walk through the tour
+      window.location.replace(`${window.location.pathname}${window.location.search}${step.route}`);
+    }
+    setRect(null);
+    let tries = 0;
+    let alive = true;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const look = () => {
+      if (!alive) return;
+      const el = findAnchor(step);
+      if (el) {
+        el.scrollIntoView({ block: 'center', inline: 'center', behavior: reduce ? 'auto' : 'smooth' });
+        setRect(el.getBoundingClientRect());
+      } else if (++tries < 25) {
+        timer = window.setTimeout(look, 120);
+      }
+    };
+    let timer = window.setTimeout(look, 150);
+    return () => { alive = false; window.clearTimeout(timer); };
+  }, [step]);
+
+  // keep the spotlight on the anchor while scrolling / resizing
+  useLayoutEffect(() => {
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        setVw(window.innerWidth);
+        const el = findAnchor(step);
+        if (el) setRect(el.getBoundingClientRect());
+      });
+    };
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [step]);
+
+  const mobile = vw < 640;
+  const pad = 6;
+  let popStyle: CSSProperties = {};
+  if (!mobile) {
+    if (rect) {
+      const below = rect.bottom + pad + 14;
+      const fitsBelow = below + 230 < window.innerHeight;
+      const left = Math.min(Math.max(12, rect.left), Math.max(12, vw - POP_W - 12));
+      popStyle = fitsBelow
+        ? { left, top: below }
+        : { left, bottom: Math.max(12, window.innerHeight - rect.top + pad + 14) };
+    } else {
+      popStyle = { left: '50%', top: '50%', transform: 'translate(-50%, -50%)' };
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[85]">
+      {/* swallows clicks: the tour moves between pages itself */}
+      <div className="absolute inset-0" />
+      {rect ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute rounded-2xl transition-all duration-300"
+          style={{
+            top: rect.top - pad,
+            left: rect.left - pad,
+            width: rect.width + pad * 2,
+            height: rect.height + pad * 2,
+            boxShadow: '0 0 0 9999px rgb(0 0 0 / 0.58)',
+            outline: '2px solid rgb(var(--link))',
+          }}
+        />
+      ) : (
+        <div aria-hidden className="absolute inset-0 bg-black/55" />
+      )}
+
+      <div
+        ref={box}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tour-title"
+        aria-describedby="tour-text"
+        tabIndex={-1}
+        style={mobile ? undefined : { ...popStyle, width: POP_W }}
+        className={`panel absolute space-y-3 p-5 shadow-pop outline-none max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-b-none max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] ${mobile ? '' : 'max-w-[calc(100vw-1.5rem)]'}`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-extrabold text-mute" aria-live="polite">Шаг {i + 1} из {STEPS.length}</p>
+          <div className="flex gap-1.5" aria-hidden>
+            {STEPS.map((_, n) => (
+              <span key={n} className={`h-1.5 rounded-full transition-all ${n === i ? 'w-5 bg-brand' : n < i ? 'w-1.5 bg-brand/50' : 'w-1.5 bg-field/60'}`} />
+            ))}
+          </div>
+        </div>
+        <h2 id="tour-title" className="text-lg font-black leading-snug">{step.title}</h2>
+        <p id="tour-text" className="font-semibold leading-relaxed text-mute">{step.text}</p>
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+          <button type="button" className="rounded-full px-3 py-2 font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px]" onClick={onClose}>
+            Пропустить
+          </button>
+          <div className="flex gap-2">
+            {i > 0 && (
+              <button type="button" className="btn btn-soft" onClick={() => setI(i - 1)}>Назад</button>
+            )}
+            <button type="button" data-next className="btn" onClick={() => (last ? onClose() : setI(i + 1))}>
+              {last ? 'Готово' : 'Далее'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/confirm.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
+
+/**
+ * Styled replacements for window.confirm / window.prompt.
+ *   if (!(await confirmDialog({ title: 'Удалить сервер?', text: '…', confirmLabel: 'Удалить', danger: true }))) return;
+ *   const pw = await promptDialog({ title: 'Новый пароль', label: 'Пароль', password: true });   // null = cancelled
+ * <ConfirmHost /> must be mounted once (App.tsx does it). Several calls at once are queued and shown one after another.
+ * Without a mounted host the browser's own dialogs are used, so a call never hangs.
+ */
+
+export interface ConfirmOptions {
+  title: string;
+  text?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** red confirm button, focus starts on "Отмена" */
+  danger?: boolean;
+}
+export interface PromptOptions extends ConfirmOptions {
+  label: string;
+  value?: string;
+  placeholder?: string;
+  password?: boolean;
+  /** show the value only to copy it: the text is selected, there is no cancel button */
+  readOnly?: boolean;
+  /** returns an error text to keep the dialog open */
+  validate?: (v: string) => string | null;
+}
+
+type Req =
+  | { id: number; kind: 'confirm'; opts: ConfirmOptions; resolve: (v: boolean) => void }
+  | { id: number; kind: 'prompt'; opts: PromptOptions; resolve: (v: string | null) => void };
+
+let push: ((r: Req) => void) | null = null;
+let seq = 0;
+
+export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (!push) return resolve(window.confirm(`${opts.title}${opts.text ? `\n\n${opts.text}` : ''}`));
+    push({ id: ++seq, kind: 'confirm', opts, resolve });
+  });
+}
+
+export function promptDialog(opts: PromptOptions): Promise<string | null> {
+  return new Promise((resolve) => {
+    if (!push) return resolve(window.prompt(opts.label, opts.value ?? ''));
+    push({ id: ++seq, kind: 'prompt', opts, resolve });
+  });
+}
+
+// ---------- shared dialog behaviour (also used by Modal in ui.tsx) ----------
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const stack: HTMLElement[] = [];
+let scrollLocks = 0;
+
+/**
+ * Focus management for a modal dialog: moves focus inside, keeps Tab in the dialog, closes on Escape (only the topmost dialog),
+ * locks page scroll and gives focus back to the element that opened the dialog.
+ */
+export function useDialogFocus(box: RefObject<HTMLElement>, onEscape: () => void, initialFocus?: () => HTMLElement | null | undefined) {
+  const esc = useRef(onEscape);
+  esc.current = onEscape;
+  const init = useRef(initialFocus);
+  init.current = initialFocus;
+
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const opener = document.activeElement as HTMLElement | null;
+    stack.push(el);
+    if (++scrollLocks === 1) document.body.style.overflow = 'hidden';
+
+    if (!el.contains(document.activeElement)) {
+      const first = init.current?.() ?? el.querySelector<HTMLElement>('[data-autofocus]') ?? el.querySelector<HTMLElement>(FOCUSABLE) ?? el;
+      first.focus();
+    }
+
+    const onKey = (e: KeyboardEvent) => {
+      if (stack[stack.length - 1] !== el) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        esc.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((x) => x.offsetParent !== null || x === document.activeElement);
+      if (!items.length) { e.preventDefault(); el.focus(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !el.contains(active))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (active === last || !el.contains(active))) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      const i = stack.indexOf(el);
+      if (i >= 0) stack.splice(i, 1);
+      if (--scrollLocks <= 0) { scrollLocks = 0; document.body.style.overflow = ''; }
+      // the opener may be gone (e.g. the row was deleted): then focus simply stays where the browser puts it
+      if (opener && document.contains(opener)) opener.focus?.();
+    };
+  }, [box]);
+}
+
+/** a click that starts AND ends on the backdrop itself closes the dialog; a text selection dragged out of it does not */
+export function useBackdropClose(close: () => void) {
+  const down = useRef(false);
+  const fn = useRef(close);
+  fn.current = close;
+  return {
+    onMouseDown: (e: MouseEvent<HTMLElement>) => { down.current = e.target === e.currentTarget; },
+    onMouseUp: (e: MouseEvent<HTMLElement>) => {
+      if (down.current && e.target === e.currentTarget) fn.current();
+      down.current = false;
+    },
+  };
+}
+
+export function ConfirmHost() {
+  const [req, setReq] = useState<Req | null>(null);
+  const current = useRef<Req | null>(null);
+  const queue = useRef<Req[]>([]);
+
+  useEffect(() => {
+    push = (r) => {
+      if (current.current) queue.current.push(r);
+      else { current.current = r; setReq(r); }
+    };
+    return () => {
+      push = null;
+      // unmounting with dialogs open: answer "no" so no caller waits forever
+      const pending = [current.current, ...queue.current].filter((x): x is Req => !!x);
+      current.current = null;
+      queue.current = [];
+      pending.forEach((r) => (r.kind === 'confirm' ? r.resolve(false) : r.resolve(null)));
+    };
+  }, []);
+
+  const done = () => {
+    current.current = queue.current.shift() ?? null;
+    setReq(current.current);
+  };
+
+  if (!req) return null;
+  return <Dialog key={req.id} req={req} onDone={done} />;
+}
+
+function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
+  const box = useRef<HTMLFormElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState(req.kind === 'prompt' ? (req.opts.value ?? '') : '');
+  const [error, setError] = useState('');
+  const closed = useRef(false);
+  const o = req.opts;
+  const readOnly = req.kind === 'prompt' && !!req.opts.readOnly;
+
+  const finish = (ok: boolean) => {
+    if (closed.current) return;
+    closed.current = true;
+    if (req.kind === 'confirm') req.resolve(ok);
+    else req.resolve(ok ? value : null);
+    onDone();
+  };
+
+  // prompt: the field; destructive confirm: the safe button (cancel); otherwise the OK button
+  useDialogFocus(box, () => finish(false), () => {
+    const el = box.current;
+    if (!el) return null;
+    if (input.current) {
+      if (readOnly) input.current.select();
+      return input.current;
+    }
+    return el.querySelector<HTMLElement>(o.danger ? '[data-cancel]' : '[data-ok]');
+  });
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (req.kind === 'prompt' && req.opts.validate) {
+      const msg = req.opts.validate(value);
+      if (msg) { setError(msg); input.current?.focus(); return; }
+    }
+    finish(true);
+  };
+
+  const bd = useBackdropClose(() => finish(false));
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      {...bd}
+    >
+      <form
+        ref={box}
+        tabIndex={-1}
+        role={req.kind === 'confirm' && o.danger ? 'alertdialog' : 'dialog'}
+        aria-modal="true"
+        aria-labelledby="cd-title"
+        aria-describedby={o.text ? 'cd-text' : undefined}
+        onSubmit={submit}
+        className="pop panel max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-3xl sm:pb-6"
+      >
+        <h2 id="cd-title" className="text-xl font-black">{o.title}</h2>
+        {o.text && <p id="cd-text" className="whitespace-pre-line font-semibold text-mute">{o.text}</p>}
+        {req.kind === 'prompt' && (
+          <div>
+            <label htmlFor="cd-input" className="label">{req.opts.label}</label>
+            <input
+              id="cd-input"
+              ref={input}
+              className={`input ${readOnly ? 'font-mono' : ''}`}
+              type={req.opts.password ? 'password' : 'text'}
+              value={value}
+              readOnly={readOnly}
+              placeholder={req.opts.placeholder}
+              autoComplete={req.opts.password ? 'new-password' : 'off'}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? 'cd-err' : undefined}
+              onFocus={readOnly ? (e) => e.currentTarget.select() : undefined}
+              onChange={(e) => { setValue(e.target.value); setError(''); }}
+            />
+            {error && <p id="cd-err" className="mt-1.5 text-sm font-bold text-bad" role="alert">{error}</p>}
+          </div>
+        )}
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {!readOnly && (
+            <button type="button" data-cancel className="btn btn-soft min-h-[44px]" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
+          )}
+          <button data-ok className={`btn min-h-[44px] ${o.danger ? '!bg-badsolid hover:!brightness-110' : ''}`}>
+            {o.confirmLabel ?? (readOnly ? 'Готово' : o.danger ? 'Удалить' : 'Подтвердить')}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -5718,37 +7778,44 @@ __COREGSM_EOF__
 @tailwind utilities;
 
 /* Palette as space-separated RGB so Tailwind can apply opacity (bg-brand/20).
-   Light is the default; dark applies with the system setting unless a theme is chosen explicitly. */
+   Light is the default; dark applies with the system setting unless a theme is chosen explicitly.
+   Contrast (WCAG 2.1, checked for both themes): text tokens (mute, link, ok, warn, bad on page/card/soft and on their pill
+   backgrounds) >= 4.5:1; white on brand / badsolid >= 4.5:1; --field (input borders) >= 3:1 on card, soft and page.
+   --line is decorative only (panel borders, dividers). */
 :root {
   --page: 244 245 247;
   --card: 255 255 255;
   --ink: 20 22 26;
-  --mute: 107 114 128;
+  --mute: 92 99 114;
   --line: 232 234 238;
+  --field: 130 137 150;
   --soft: 238 240 244;
   --brand: 79 70 229;
   --brand-hover: 67 56 202;
   --link: 79 70 229;
-  --ok: 22 128 74;
+  --ok: 18 120 66;
   --okbg: 220 247 232;
   --warn: 146 94 0;
   --warnbg: 255 241 205;
-  --bad: 197 48 48;
+  --bad: 185 40 40;
   --badbg: 254 226 226;
+  --badsolid: 185 40 40;
   --shadow-soft: 0 1px 2px rgba(16, 24, 40, 0.05);
   --shadow-pop: 0 1px 2px rgba(16, 24, 40, 0.08);
+  --page-glow: 0.04;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --page: 15 16 18;
-    --card: 22 23 26;
+    --page: 13 14 17;
+    --card: 23 24 29;
     --ink: 236 236 239;
-    --mute: 145 150 160;
-    --line: 38 39 43;
-    --soft: 29 30 34;
-    --brand: 99 102 241;
-    --brand-hover: 129 140 248;
+    --mute: 150 155 166;
+    --line: 46 48 56;
+    --field: 108 114 128;
+    --soft: 33 34 41;
+    --brand: 88 91 235;
+    --brand-hover: 76 79 214;
     --link: 165 170 255;
     --ok: 74 222 128;
     --okbg: 20 56 38;
@@ -5756,20 +7823,23 @@ __COREGSM_EOF__
     --warnbg: 58 46 16;
     --bad: 248 113 113;
     --badbg: 62 26 31;
-    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --badsolid: 214 48 48;
+    --shadow-soft: 0 0 0 1px rgb(255 255 255 / 0.025) inset, 0 12px 28px -18px rgba(0, 0, 0, 0.85);
+    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.55);
+    --page-glow: 0.13;
     color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
-  --page: 15 16 18;
-  --card: 22 23 26;
+  --page: 13 14 17;
+  --card: 23 24 29;
   --ink: 236 236 239;
-  --mute: 145 150 160;
-  --line: 38 39 43;
-  --soft: 29 30 34;
-  --brand: 99 102 241;
-  --brand-hover: 129 140 248;
+  --mute: 150 155 166;
+  --line: 46 48 56;
+  --field: 108 114 128;
+  --soft: 33 34 41;
+  --brand: 88 91 235;
+  --brand-hover: 76 79 214;
   --link: 165 170 255;
   --ok: 74 222 128;
   --okbg: 20 56 38;
@@ -5777,24 +7847,35 @@ __COREGSM_EOF__
   --warnbg: 58 46 16;
   --bad: 248 113 113;
   --badbg: 62 26 31;
-  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --badsolid: 214 48 48;
+  --shadow-soft: 0 0 0 1px rgb(255 255 255 / 0.025) inset, 0 12px 28px -18px rgba(0, 0, 0, 0.85);
+  --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.55);
+  --page-glow: 0.13;
   color-scheme: dark;
 }
 
 @layer base {
   html, body, #root { min-height: 100%; }
-  body { @apply bg-page text-ink font-sans text-[15px] antialiased; }
+  body {
+    @apply bg-page text-ink font-sans text-[15px] antialiased;
+    background-image: radial-gradient(64rem 26rem at 50% -8rem, rgb(var(--brand) / var(--page-glow)), transparent 70%);
+    background-repeat: no-repeat;
+    -webkit-text-size-adjust: 100%;
+  }
   ::selection { @apply bg-brand/30; }
-  :focus-visible { @apply outline-none ring-2 ring-brand/70; }
+  :focus-visible { @apply outline-none ring-2 ring-link; }
+  /* long words (usernames, addresses) must not stretch the layout */
+  h1, h2, h3 { overflow-wrap: anywhere; }
 }
 
 @layer components {
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full bg-brand px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-brand-hover active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full bg-brand px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-brand-hover active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none max-sm:min-h-[44px]; }
   .btn-soft { @apply bg-soft text-link shadow-none hover:bg-line; }
   .btn-danger { @apply bg-badbg text-bad shadow-none hover:bg-bad/20; }
-  .btn-sm { @apply px-3 py-1 text-sm; }
-  .input { @apply w-full rounded-2xl border-2 border-line bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:border-brand focus:outline-none disabled:opacity-60; }
+  .btn-sm { @apply px-3 py-1 text-sm max-sm:min-h-[44px] max-sm:px-4; }
+  /* square icon button; 44px on phones */
+  .btn-icon { @apply inline-grid h-10 w-10 place-items-center rounded-full bg-card text-mute shadow-pop transition hover:text-link max-sm:h-11 max-sm:w-11; }
+  .input { @apply w-full rounded-2xl border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-none disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px]; }
   .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
   .panel { @apply rounded-3xl border border-line bg-card shadow-soft; }
   .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
@@ -5871,19 +7952,60 @@ __COREGSM_EOF__
   40%, 60% { transform: translateX(6px); }
 }
 
+/* ---------- shared helpers ---------- */
+/* "skip to content" link: visible only while focused */
+.skip-link {
+  position: fixed; left: 1rem; top: 0.75rem; z-index: 100;
+  transform: translateY(-200%);
+  border-radius: 9999px; padding: 0.6rem 1.1rem; font-weight: 800;
+  background: rgb(var(--brand)); color: #fff; box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
+}
+.skip-link:focus { transform: none; }
+main:focus { outline: none; }
+
+/* a value that just changed: short glow */
+@keyframes num-bump {
+  0% { text-shadow: 0 0 0 rgb(var(--ok) / 0); }
+  30% { text-shadow: 0 0 16px rgb(var(--ok) / 0.55); color: rgb(var(--ok)); }
+  100% { text-shadow: 0 0 0 rgb(var(--ok) / 0); }
+}
+.num-bump { animation: num-bump .9s ease-out; }
+
+/* touch devices: bigger hit areas for small controls without changing the desktop look */
+@media (max-width: 639px) {
+  input[type='checkbox'], input[type='radio'] { width: 1.25rem !important; height: 1.25rem !important; }
+  label:has(> input[type='checkbox']), label:has(> input[type='radio']) { min-height: 44px; }
+  /* text-style buttons ("Обновить список", "Показать правила") */
+  button.text-link { min-height: 44px; display: inline-flex; align-items: center; }
+  /* section navigation of the admin area and of the settings (their pages are not ours: target them by label) */
+  nav[aria-label='Разделы админки'] a, nav[aria-label='Разделы настроек'] a { min-height: 44px; display: flex; align-items: center; justify-content: center; }
+  nav[aria-label='Разделы админки'] { scroll-snap-type: x proximity; }
+  nav[aria-label='Разделы админки'] a { scroll-snap-align: center; justify-content: flex-start; }
+  select, textarea, input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='color']) { font-size: 16px; }
+}
+
+/* ---------- reduced motion: no animations, no transitions ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .auth-glow, .auth-float, .auth-card, .auth-swap, .shake { animation: none; }
-  .animate-spin { animation-duration: 2s; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  .auth-glow, .auth-float, .skeleton, .pill.live::before { animation: none !important; }
+  /* a spinner must still say "busy": keep a slow rotation */
+  .animate-spin { animation: spin 2s linear infinite !important; }
+  .active\:scale-\[\.98\]:active, .hover\:-translate-y-0\.5:hover, .hover\:scale-110:hover { transform: none !important; }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import '@fontsource/plus-jakarta-sans/500.css';
-import '@fontsource/plus-jakarta-sans/600.css';
-import '@fontsource/plus-jakarta-sans/700.css';
-import '@fontsource/plus-jakarta-sans/800.css';
+// variable Manrope: has Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800)
+import '@fontsource-variable/manrope/wght.css';
 import './index.css';
 import App from './App';
 
@@ -5900,10 +8022,12 @@ if ('serviceWorker' in navigator) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
-import { useState, type ReactNode } from 'react';
-import { api, type Server, type ServerInput } from '../api';
+import { useEffect, useState, type ReactNode } from 'react';
+import { api, type CertInfo, type Server, type ServerInput } from '../api';
+import { useAuth } from '../auth';
+import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, toast, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, IconCards, IconDiscord, IconNews, IconServers, IconSettings, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import AlertsPage, { IconBell } from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
@@ -5948,15 +8072,19 @@ export const ADMIN_SECTIONS: Section[] = [
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+  const { isAdmin } = useAuth();
   const [section, ...rest] = sub.split('/');
-  const current = ADMIN_SECTIONS.some((s) => s.id === section) ? section : 'servers';
-  const tail = rest.join('/');
+  // a moderator sees only the news section; everything else is for administrators
+  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
+  const current = sections.some((s) => s.id === section) ? section : sections[0].id;
+  // the sub-path belongs to the section that was asked for, not to the fallback
+  const tail = current === section ? rest.join('/') : '';
 
   return (
     <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
       <nav className="flex gap-1 overflow-x-auto rounded-3xl border border-line bg-card p-1.5 shadow-soft md:sticky md:top-4 md:flex-col md:self-start md:overflow-visible md:p-2" aria-label="Разделы админки">
         <div className="hidden px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute md:block">Админка</div>
-        {ADMIN_SECTIONS.map((s) => (
+        {sections.map((s) => (
           <a
             key={s.id}
             href={`#/admin/${s.id}`}
@@ -5969,7 +8097,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </a>
         ))}
       </nav>
-      <div className="min-w-0">
+      <div className="min-w-0 space-y-5">
+        {isAdmin && <CertWarning />}
         {current === 'servers' && <ServersManage />}
         {current === 'discord' && <DiscordPage />}
         {current === 'news' && <NewsPage sub={tail} />}
@@ -5980,6 +8109,42 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {current === 'system' && <SystemPage />}
         {current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
+    </div>
+  );
+}
+
+const CERT_DISMISSED = 'coregsm_cert_warning_dismissed';
+const certDismissed = () => {
+  try { return sessionStorage.getItem(CERT_DISMISSED) === '1'; } catch { return false; }
+};
+
+/** A slim banner for administrators when the HTTPS certificate is about to expire (or already has). */
+function CertWarning() {
+  const [cert, setCert] = useState<CertInfo | null>(null);
+  const [hidden, setHidden] = useState(certDismissed);
+
+  useEffect(() => {
+    if (hidden) return;
+    api<{ cert?: CertInfo }>('/system').then((r) => setCert(r.cert ?? null)).catch(() => undefined);
+  }, [hidden]);
+
+  if (hidden || !cert || cert.daysLeft == null || cert.daysLeft > 14) return null;
+  const d = cert.daysLeft;
+  const expired = d <= 0;
+  const text = expired
+    ? 'Сертификат HTTPS истёк.'
+    : `Сертификат HTTPS истекает через ${d} ${plural(d, ['день', 'дня', 'дней'])}.`;
+  return (
+    <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl px-4 py-2.5 text-sm font-bold ${expired ? 'bg-badbg text-bad' : 'bg-warnbg text-warn'}`} role={expired ? 'alert' : 'status'}>
+      <span className="min-w-0 flex-1">{text} <a href="#/admin/system" className="underline">Подробнее</a></span>
+      <button
+        type="button"
+        className="rounded-full px-2 py-0.5 font-extrabold hover:bg-black/5"
+        aria-label="Скрыть предупреждение до конца сессии"
+        onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
+      >
+        ✕
+      </button>
     </div>
   );
 }
@@ -6000,7 +8165,7 @@ function ServersManage() {
   usePoll(load, 15_000);
 
   const remove = async (s: Server) => {
-    if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
+    if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e: Error) => setError(e.message));
     void load();
   };
@@ -6180,23 +8345,325 @@ export default function AlertsPage() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Backups.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, getToken, type BackupInfo, type BackupItem } from '../api';
+import { confirmDialog, promptDialog } from '../confirm';
+import { ErrorLine, Field, fmtDateTime, toast } from '../ui';
+
+export const fmtSize = (n: number) =>
+  n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
+
+const isEncrypted = (name: string) => name.endsWith('.enc');
+
+/** save an authenticated GET as a file */
+async function downloadFile(path: string, fallbackName: string) {
+  const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
+  if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось получить копию');
+  const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** the panel restarts after a restore: wait until it is back, then reload (the old session may no longer be valid) */
+async function waitAndReload() {
+  for (let i = 0; i < 40; i++) {
+    await new Promise((res) => setTimeout(res, 1500));
+    const ok = await fetch('/api/access').then((x) => x.ok).catch(() => false);
+    if (ok && i > 1) break;
+  }
+  window.location.reload();
+}
+
+const askPassphrase = (what: string) =>
+  promptDialog({
+    title: 'Архив зашифрован',
+    label: 'Парольная фраза',
+    text: `Введите парольную фразу, с которой был создан архив «${what}».`,
+    password: true,
+    confirmLabel: 'Продолжить',
+    validate: (v) => (v ? null : 'Введите парольную фразу'),
+  });
+
+/** Stored archives, schedule, off-site upload and restore. */
+export default function BackupsCard() {
+  const [info, setInfo] = useState<BackupInfo | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+
+  const [schedule, setSchedule] = useState<BackupInfo['schedule']>('off');
+  const [keep, setKeep] = useState(7);
+  const [remoteUrl, setRemoteUrl] = useState('');
+  const [clearRemote, setClearRemote] = useState(false);
+  const [passphrase, setPassphrase] = useState('');
+  const [clearPass, setClearPass] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const load = () =>
+    api<BackupInfo>('/backups')
+      .then((r) => { setInfo(r); setSchedule(r.schedule); setKeep(r.keep); setError(''); })
+      .catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+
+  const guard = async (key: string, fn: () => Promise<void>) => {
+    setBusy(key);
+    setError('');
+    try { await fn(); } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
+  };
+
+  const downloadFull = () => guard('full', async () => {
+    await downloadFile('/backup', 'coregsm-backup.tar.gz');
+    toast('Копия скачана');
+  });
+  const createCopy = () => guard('run', async () => {
+    await api<BackupItem>('/backups/run', 'POST');
+    toast('Копия создана');
+    await load();
+  });
+  const download = (b: BackupItem) => guard(`dl:${b.name}`, async () => {
+    await downloadFile(`/backups/${encodeURIComponent(b.name)}`, b.name);
+  });
+  const remove = async (b: BackupItem) => {
+    if (!(await confirmDialog({ title: 'Удалить копию?', text: `Файл «${b.name}» будет удалён с сервера без возможности восстановления.`, confirmLabel: 'Удалить', danger: true }))) return;
+    await guard(`rm:${b.name}`, async () => {
+      await api(`/backups/${encodeURIComponent(b.name)}`, 'DELETE');
+      toast('Копия удалена');
+      await load();
+    });
+  };
+  const restoreStored = async (b: BackupItem) => {
+    if (!(await confirmDialog({
+      title: 'Восстановить из этой копии?',
+      text: `Все текущие данные панели будут заменены копией «${b.name}» от ${fmtDateTime(b.createdAt)}. Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`,
+      confirmLabel: 'Восстановить',
+      danger: true,
+    }))) return;
+    let pass: string | undefined;
+    if (isEncrypted(b.name)) {
+      const p = await askPassphrase(b.name);
+      if (p == null) return;
+      pass = p;
+    }
+    setRestoring(true);
+    setError('');
+    try {
+      await api('/backups/' + encodeURIComponent(b.name) + '/restore', 'POST', pass ? { passphrase: pass } : {});
+      toast('Копия принята, панель перезапускается…');
+      await waitAndReload();
+    } catch (e) {
+      setError((e as Error).message);
+      setRestoring(false);
+    }
+  };
+  const restoreFile = async (file: File) => {
+    if (!(await confirmDialog({
+      title: 'Восстановить из файла?',
+      text: `Все данные панели будут заменены копией «${file.name}». Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`,
+      confirmLabel: 'Восстановить',
+      danger: true,
+    }))) return;
+    const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() ?? ''}` };
+    if (file.name.endsWith('.enc')) {
+      const p = await askPassphrase(file.name);
+      if (p == null) return;
+      headers['x-backup-passphrase'] = p;
+    }
+    setRestoring(true);
+    setError('');
+    try {
+      const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
+      const j = (await r.json().catch(() => null)) as { error?: string } | null;
+      if (!r.ok) throw new Error(j?.error ?? 'Не удалось восстановить копию');
+      toast('Копия принята, панель перезапускается…');
+      await waitAndReload();
+    } catch (e) {
+      setError((e as Error).message);
+      setRestoring(false);
+    }
+  };
+
+  const saveSettings = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    const url = remoteUrl.trim();
+    if (url && !/^https:\/\//i.test(url)) { setError('Адрес для отправки должен начинаться с https://'); return; }
+    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError('Хранить можно от 1 до 30 копий'); return; }
+    const body: { schedule: string; keep: number; remoteUrl?: string; passphrase?: string } = { schedule, keep };
+    if (clearRemote) body.remoteUrl = '';
+    else if (url) body.remoteUrl = url;
+    if (clearPass) body.passphrase = '';
+    else if (passphrase) body.passphrase = passphrase;
+    setSaving(true);
+    try {
+      await api('/backups/settings', 'PUT', body);
+      setRemoteUrl('');
+      setClearRemote(false);
+      setPassphrase('');
+      setClearPass(false);
+      toast('Настройки копий сохранены');
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const disabled = restoring || busy != null;
+
+  return (
+    <div className="panel space-y-5 p-6">
+      <div>
+        <h2 className="text-lg font-black">Резервные копии</h2>
+        <p className="font-semibold text-mute">
+          В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип.
+          Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными.
+        </p>
+      </div>
+      <ErrorLine text={error} />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? 'Готовлю…' : 'Скачать полную копию'}</button>
+        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? 'Создаю…' : 'Создать копию на сервере'}</button>
+        <label className={`btn btn-soft cursor-pointer ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
+          {restoring ? 'Восстанавливаю…' : 'Восстановить из файла'}
+          <input
+            type="file"
+            accept=".db,.gz,.enc,.tar.gz,application/octet-stream"
+            className="hidden"
+            disabled={disabled}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void restoreFile(f); }}
+          />
+        </label>
+      </div>
+
+      <form onSubmit={saveSettings} className="space-y-4 rounded-2xl bg-soft p-4">
+        <h3 className="font-black">Расписание и хранение</h3>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Автоматические копии">
+            <select id="bk-schedule" className="input" value={schedule} onChange={(e) => setSchedule(e.target.value as BackupInfo['schedule'])}>
+              <option value="off">Выключено</option>
+              <option value="daily">Каждый день</option>
+              <option value="weekly">Каждую неделю</option>
+            </select>
+          </Field>
+          <Field label="Сколько копий хранить (1-30)">
+            <input id="bk-keep" className="input" type="number" min={1} max={30} value={keep} onChange={(e) => setKeep(Number(e.target.value))} />
+          </Field>
+        </div>
+
+        <div>
+          <label htmlFor="bk-remote" className="label">Отправлять копию по адресу (необязательно)</label>
+          <input
+            id="bk-remote"
+            className="input font-mono"
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            value={clearRemote ? '' : remoteUrl}
+            disabled={clearRemote}
+            onChange={(e) => setRemoteUrl(e.target.value)}
+            placeholder={info?.remoteUrl ? `сейчас: ${info.remoteUrl}` : 'https://…'}
+            aria-describedby="bk-remote-hint"
+          />
+          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.</p>
+          {info?.remoteUrl && (
+            <label className="mt-2 flex items-center gap-2 text-sm font-bold text-mute">
+              <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearRemote} onChange={(e) => setClearRemote(e.target.checked)} />
+              Отключить отправку
+            </label>
+          )}
+          {info?.lastRemote && (
+            <p className={`mt-2 rounded-2xl px-4 py-2 text-sm font-bold ${info.lastRemote.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
+              Последняя отправка: {fmtDateTime(info.lastRemote.at)}, {info.lastRemote.ok ? 'успешно' : `ошибка${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label htmlFor="bk-pass" className="label">Парольная фраза для шифрования (необязательно)</label>
+          <input
+            id="bk-pass"
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            value={clearPass ? '' : passphrase}
+            disabled={clearPass}
+            onChange={(e) => setPassphrase(e.target.value)}
+            placeholder={info?.encrypted ? 'шифрование включено, введите новую фразу для замены' : 'не задана: копии не шифруются'}
+            aria-describedby="bk-pass-hint"
+          />
+          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.</p>
+          {info?.encrypted && (
+            <label className="mt-2 flex items-center gap-2 text-sm font-bold text-mute">
+              <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearPass} onChange={(e) => setClearPass(e.target.checked)} />
+              Отключить шифрование новых копий
+            </label>
+          )}
+        </div>
+
+        <button className="btn" disabled={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</button>
+      </form>
+
+      <div>
+        <h3 className="mb-2 font-black">Копии на сервере</h3>
+        {!info ? (
+          <div className="skeleton h-20 rounded-2xl" />
+        ) : info.items.length === 0 ? (
+          <p className="font-semibold text-mute">Пока нет сохранённых копий. Нажмите «Создать копию на сервере» или включите расписание.</p>
+        ) : (
+          <ul className="divide-y divide-line rounded-2xl border border-line">
+            {info.items.map((b) => (
+              <li key={b.name} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+                <div className="min-w-0 flex-1 basis-56">
+                  <div className="break-all font-mono text-sm font-bold">{b.name}</div>
+                  <div className="text-sm font-semibold text-mute">{fmtDateTime(b.createdAt)} · {fmtSize(b.size)}</div>
+                </div>
+                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? 'АВТО' : 'ВРУЧНУЮ'}</span>
+                {isEncrypted(b.name) && <span className="pill pill-warn">ЗАШИФРОВАНА</span>}
+                <div className="flex gap-2">
+                  <button className="btn btn-soft btn-sm" onClick={() => void download(b)} disabled={disabled}>Скачать</button>
+                  <button className="btn btn-soft btn-sm" onClick={() => void restoreStored(b)} disabled={disabled}>Восстановить</button>
+                  <button className="btn btn-danger btn-sm" onClick={() => void remove(b)} disabled={disabled}>Удалить</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Cards.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { api, type Server } from '../api';
 import { CardsArt } from '../components/Illustrations';
+import { promptDialog } from '../confirm';
 import { Empty, ErrorLine, IconCards, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [tick, setTick] = useState(0);
+  // bumped by the "Обновить" button only; otherwise a picture is reloaded when the server's own data changed (updatedAt)
+  const [forced, setForced] = useState(0);
   const [copied, setCopied] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const copyTimer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
-  usePoll(() => {
-    api<Server[]>('/servers').then(setServers).catch((e) => setError(e.message)).finally(() => setLoaded(true));
-    setTick((t) => t + 1);
-  }, 15_000);
+  const load = () =>
+    api<Server[]>('/servers')
+      .then((s) => { setServers(s); setError(''); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoaded(true));
+  usePoll(load, 15_000);
 
   const copy = async (s: Server) => {
     const url = `${window.location.origin}/api/card/${s.id}.png`;
@@ -6204,25 +8671,33 @@ export default function CardsPage() {
       await navigator.clipboard.writeText(url);
       setCopied(s.id);
       toast('Ссылка скопирована');
-      setTimeout(() => setCopied(null), 1800);
+      window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(null), 1800);
     } catch {
-      window.prompt('Ссылка на картинку', url);
+      await promptDialog({ title: 'Ссылка на картинку', label: 'Скопируйте ссылку', value: url, readOnly: true });
     }
+  };
+
+  const refresh = () => {
+    setForced((n) => n + 1);
+    void load();
   };
 
   return (
     <div className="space-y-6">
-      <PageHead icon={<IconCards />} title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно." />
+      <PageHead icon={<IconCards />} title="Карточки" subtitle="Картинки, которые бот публикует в Discord. Ссылка открыта, её можно вставить куда угодно.">
+        <button className="btn btn-soft" onClick={refresh}>Обновить</button>
+      </PageHead>
       <ErrorLine text={error} />
       {loaded && servers.length === 0 && <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»." />}
       <div className="grid gap-5 xl:grid-cols-2">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-4">
-            <img src={`/api/card/${s.id}.png?t=${tick}`} alt={`Карточка ${s.name}`} className="w-full rounded-2xl bg-soft" />
+            <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-2xl bg-soft" />
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-black">{s.name}</span>
-              <div className="flex gap-2">
-                <button className="btn btn-soft btn-sm" onClick={() => copy(s)}>{copied === s.id ? 'Скопировано' : 'Копировать ссылку'}</button>
+              <span className="min-w-0 break-words font-black">{s.name}</span>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn btn-soft btn-sm" onClick={() => void copy(s)}>{copied === s.id ? 'Скопировано' : 'Копировать ссылку'}</button>
                 <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png`} target="_blank" rel="noreferrer">Открыть</a>
               </div>
             </div>
@@ -6238,6 +8713,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
+import { confirmDialog } from '../confirm';
 import { Empty, ErrorLine, Field, GameAvatar, IconDiscord, InviteButton, Modal, PageHead, ago, toast, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
@@ -6254,12 +8730,11 @@ export default function DiscordPage() {
   const [error, setError] = useState('');
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
-  const [tick, setTick] = useState(0);
   const [picked, setPicked] = useState<number[]>([]);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
-      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); setTick((t) => t + 1); })
+      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
@@ -6268,13 +8743,17 @@ export default function DiscordPage() {
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
 
   const remove = async (b: Binding) => {
-    if (!window.confirm('Удалить привязку? Сообщение в Discord останется, но обновляться перестанет.')) return;
+    const ok = await confirmDialog({ title: 'Удалить привязку?', text: 'Сообщение в Discord останется, но обновляться перестанет.', confirmLabel: 'Удалить', danger: true });
+    if (!ok) return;
     await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
     load();
   };
 
   const bulk = async (action: 'pause' | 'resume' | 'delete') => {
-    if (action === 'delete' && !window.confirm(`Удалить привязок: ${picked.length}? Сообщения в Discord останутся, но обновляться перестанут.`)) return;
+    if (action === 'delete') {
+      const ok = await confirmDialog({ title: `Удалить привязок: ${picked.length}?`, text: 'Сообщения в Discord останутся, но обновляться перестанут.', confirmLabel: 'Удалить', danger: true });
+      if (!ok) return;
+    }
     await api('/bindings/bulk', 'POST', { ids: picked, action })
       .then(() => toast(action === 'delete' ? 'Привязки удалены' : action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
       .catch((e: Error) => setError(e.message));
@@ -6298,7 +8777,7 @@ export default function DiscordPage() {
   return (
     <div className="space-y-6">
       <PageHead icon={<IconDiscord />} title="Discord" subtitle="Куда бот публикует состояние серверов">
-        <button className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
+        <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
       </PageHead>
       <ErrorLine text={error} />
 
@@ -6350,11 +8829,11 @@ export default function DiscordPage() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-2">
         {bindings.map((b) => {
           const s = server(b.serverId);
           return (
-            <div key={b.id} className={`panel space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
+            <div key={b.id} className={`panel min-w-0 space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   {bindings.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
@@ -6372,7 +8851,7 @@ export default function DiscordPage() {
               {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
               {b.style !== 'embed' && (
                 <img
-                  src={`/api/card/${b.serverId}.png?t=${tick}`}
+                  src={`/api/card/${b.serverId}.png?v=${s?.updatedAt ?? 0}`}
                   alt={`Карточка: ${s?.name ?? ''}`}
                   loading="lazy"
                   className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
@@ -6542,7 +9021,15 @@ export interface DiscordEmbed {
 const D = { bg: '#2b2d31', outer: '#313338', text: '#dbdee1', title: '#ffffff', muted: '#949ba4' };
 
 /** A Discord message as the bot would post it: optional text above and an embed below. */
+/** only http(s) links and images are rendered: `javascript:` and `data:` urls are dropped */
+const safeUrl = (u?: string | null): string | undefined => (u && /^https?:\/\//i.test(u.trim()) ? u.trim() : undefined);
+
 export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; content?: string }) {
+  const authorIcon = safeUrl(embed?.author?.icon_url);
+  const embedUrl = safeUrl(embed?.url);
+  const thumb = safeUrl(embed?.thumbnail?.url);
+  const image = safeUrl(embed?.image?.url);
+  const footerIcon = safeUrl(embed?.footer?.icon_url);
   const color = `#${(embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
   const inlineFields = embed?.fields?.filter((f) => f.inline) ?? [];
   const wideFields = embed?.fields?.filter((f) => !f.inline) ?? [];
@@ -6560,18 +9047,18 @@ export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; con
             <div className="min-w-0 flex-1">
               {embed.author && (
                 <div className="mb-1 flex items-center gap-2 text-[13px] font-bold" style={{ color: D.title }}>
-                  {embed.author.icon_url && <img src={embed.author.icon_url} alt="" className="h-6 w-6 rounded-full object-cover" />}
+                  {authorIcon && <img src={authorIcon} alt="" className="h-6 w-6 rounded-full object-cover" />}
                   {embed.author.name}
                 </div>
               )}
               {embed.title && (
-                <div className="mb-1 break-words text-base font-bold" style={{ color: embed.url ? '#00a8fc' : D.title }}>
-                  {embed.url ? <a href={embed.url} target="_blank" rel="noreferrer" className="hover:underline">{embed.title}</a> : embed.title}
+                <div className="mb-1 break-words text-base font-bold" style={{ color: embedUrl ? '#00a8fc' : D.title }}>
+                  {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{embed.title}</a> : embed.title}
                 </div>
               )}
               {embed.description && <div className="mb-2 text-sm"><Markdown text={embed.description} /></div>}
             </div>
-            {embed.thumbnail && <img src={embed.thumbnail.url} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />}
+            {thumb && <img src={thumb} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />}
           </div>
           {inlineFields.length > 0 && (
             <div className="mb-2 grid grid-cols-3 gap-x-3 gap-y-2">
@@ -6589,10 +9076,10 @@ export function EmbedView({ embed, content }: { embed?: DiscordEmbed | null; con
               <Markdown text={f.value} />
             </div>
           ))}
-          {embed.image && <img src={embed.image.url} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
+          {image && <img src={image} alt="" className="mt-1 max-h-72 w-full rounded-md object-cover" />}
           {(embed.footer || embed.timestamp) && (
             <div className="mt-2 flex items-center gap-1.5 text-xs" style={{ color: D.muted }}>
-              {embed.footer?.icon_url && <img src={embed.footer.icon_url} alt="" className="h-5 w-5 rounded-full" />}
+              {footerIcon && <img src={footerIcon} alt="" className="h-5 w-5 rounded-full" />}
               <span>{embed.footer?.text}
               {embed.footer && embed.timestamp ? ' • ' : ''}
               {embed.timestamp ? ago(new Date(embed.timestamp).getTime()) : ''}</span>
@@ -6818,6 +9305,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/News.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
+import { confirmDialog } from '../confirm';
 import { api, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
@@ -6851,7 +9339,7 @@ function StatusPill({ n }: { n: NewsItem }) {
 /** a short plain-text teaser: markdown marks removed */
 const excerpt = (n: NewsItem) => {
   const raw = n.payload.embed?.description || n.payload.content || '';
-  return raw.replace(/^s*[-*•]s+/gm, '• ').replace(/[*_~`|>#]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 170);
+  return raw.replace(/^\s*[-*•]\s+/gm, '• ').replace(/[*_~`|>#]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 170);
 };
 
 function NewsList() {
@@ -6886,7 +9374,7 @@ function NewsList() {
   };
   const remove = async (n: NewsItem) => {
     const sent = n.status === 'sent';
-    if (!window.confirm(sent ? 'Удалить новость? Сообщение также будет удалено из Discord.' : 'Удалить новость?')) return;
+    if (!(await confirmDialog({ title: 'Удалить новость?', text: sent ? 'Сообщение также будет удалено из Discord.' : undefined, confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
     void load();
   };
@@ -6989,6 +9477,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/NewsEditor.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, type NewsItem, type NewsPayload, type NewsSettings } from '../api';
+import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { ErrorLine, Field, toast } from '../ui';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
@@ -7308,9 +9797,9 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const total = embedLength(d);
   const preview = previewOf(d);
 
-  const applyTemplate = (t: (typeof TEMPLATES)[number]) => {
+  const applyTemplate = async (t: (typeof TEMPLATES)[number]) => {
     const dirty = d.title || d.description || d.content || d.fields.length;
-    if (dirty && !window.confirm('Заменить текущий текст шаблоном?')) return;
+    if (dirty && !(await confirmDialog({ title: 'Заменить текущий текст шаблоном?', text: 'Введённый текст будет потерян.', confirmLabel: 'Заменить' }))) return;
     set({ ...blank(d.channelId), ...t.apply, channelId: d.channelId });
   };
 
@@ -7370,7 +9859,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           {!id && (
             <Section title="Шаблон" hint="Готовая заготовка, которую можно изменить. Слова ДАТА, ВРЕМЯ и т. п. замените на свои.">
               <div className="flex flex-wrap gap-2">
-                {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => applyTemplate(t)}>{t.label}</button>)}
+                {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(t)}>{t.label}</button>)}
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => set({ ...blank(d.channelId) })}>Очистить</button>
               </div>
             </Section>
@@ -7482,7 +9971,9 @@ __COREGSM_EOF__
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
 import { useAuth } from '../auth';
-import { ago, ErrorLine, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast } from '../ui';
+import { restartTour } from '../components/Tour';
+import { confirmDialog } from '../confirm';
+import { ago, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast } from '../ui';
 
 /** "Chrome · Windows" from a User-Agent string */
 function deviceName(ua: string): string {
@@ -7524,7 +10015,7 @@ export default function ProfilePage() {
         <div className="panel flex flex-wrap items-center gap-4 p-5 md:col-span-2">
           <UserAvatar name={me.username} url={me.avatarUrl} size={64} tone="brand" className="!rounded-3xl" />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-2xl font-black">{me.username}</div>
+            <div className="line-clamp-2 break-words text-2xl font-black leading-tight">{me.username}</div>
             <div className="flex flex-wrap items-center gap-2">
               <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{isAdmin ? 'АДМИНИСТРАТОР' : 'ИГРОК'}</span>
               {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}
@@ -7537,6 +10028,16 @@ export default function ProfilePage() {
         <DiscordCard onChanged={reload} />
         <SessionsCard />
 
+        {isAdmin && (
+          <div className="panel flex flex-wrap items-center justify-between gap-3 p-6 md:col-span-2">
+            <div className="min-w-0">
+              <h2 className="text-lg font-black">Подсказки для администратора</h2>
+              <p className="font-semibold text-mute">Короткий тур по первым шагам: сервер, Discord-бот, канал, новости и оформление.</p>
+            </div>
+            <button className="btn btn-soft" onClick={() => restartTour(me.username)}>Показать подсказки заново</button>
+          </div>
+        )}
+
         <div className="panel space-y-3 p-6">
           <h2 className="text-lg font-black">Избранные серверы</h2>
           {favs === null && <div className="skeleton h-20 rounded-2xl bg-soft" />}
@@ -7545,7 +10046,7 @@ export default function ProfilePage() {
             <a key={s.id} href={`#/servers/${s.id}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5 transition hover:ring-2 hover:ring-brand/30">
               <GameAvatar game={s.game} size={36} />
               <span className="min-w-0 flex-1 truncate font-bold">{s.name}</span>
-              <StatusPill online={s.online} known={s.hasStatus} />
+              <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} />
             </a>
           ))}
         </div>
@@ -7606,7 +10107,8 @@ function DiscordCard({ onChanged }: { onChanged: () => Promise<void> }) {
   if (!me) return null;
 
   const unlink = async () => {
-    if (!window.confirm('Отвязать Discord от аккаунта?')) return;
+    const ok = await confirmDialog({ title: 'Отвязать Discord?', text: 'Вход через Discord для этого аккаунта перестанет работать, пока вы не привяжете его снова.', confirmLabel: 'Отвязать', danger: true });
+    if (!ok) return;
     setBusy(true);
     setError('');
     try {
@@ -7664,7 +10166,8 @@ function SessionsCard() {
     load();
   };
   const endOthers = async () => {
-    if (!window.confirm('Завершить все сеансы, кроме этого?')) return;
+    const ok = await confirmDialog({ title: 'Завершить все остальные сеансы?', text: 'На других устройствах потребуется войти заново. Этот сеанс останется.', confirmLabel: 'Завершить', danger: true });
+    if (!ok) return;
     setBusy(true);
     setError('');
     await api<{ revoked: number }>('/sessions/revoke-others', 'POST')
@@ -7928,10 +10431,11 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
-import { api, type ServerDetails } from '../api';
+import { api, ApiError, type PlayerNow, type ServerDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
-import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, usePoll } from '../ui';
+import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, toast, usePoll } from '../ui';
+import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 
 type Point = ServerDetails['points'][number];
@@ -8054,7 +10558,64 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
   );
 }
 
+/** "1 ч 12 мин" */
+function playedFor(since: number, now: number): string {
+  const m = Math.max(0, Math.floor((now - since) / 60_000));
+  if (m < 1) return 'меньше минуты';
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ч ${m % 60} мин`;
+  return `${Math.floor(h / 24)} д ${h % 24} ч`;
+}
+
+function PlayersNow({ online, players, names, list }: { online: boolean; players: number; names: string[]; list: PlayerNow[] }) {
+  // the "in game for" labels advance while the page stays open
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const sorted = [...list].sort((a, b) => a.since - b.since);
+  const hiddenCount = Math.max(0, players - (sorted.length || names.length));
+
+  return (
+    <div className="panel p-5">
+      <h2 className="mb-3 text-lg font-black">Сейчас в игре{online ? `: ${players}` : ''}</h2>
+      {!online ? (
+        <p className="font-semibold text-mute">Сервер недоступен.</p>
+      ) : sorted.length > 0 ? (
+        <>
+          <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+            {sorted.map((p, i) => (
+              <li key={`${p.name}-${p.since}-${i}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-card text-sm font-black text-link" aria-hidden>
+                  {(Array.from(p.name.trim())[0] ?? '?').toUpperCase()}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-bold">{p.name || 'Без имени'}</span>
+                <span className="shrink-0 text-sm font-semibold text-mute">в игре {playedFor(p.since, now)}</span>
+              </li>
+            ))}
+          </ul>
+          {hiddenCount > 0 && <p className="mt-2 text-sm font-bold text-mute">и ещё {hiddenCount}</p>}
+        </>
+      ) : names.length > 0 ? (
+        <div className="flex max-h-72 flex-wrap gap-2 overflow-y-auto">
+          {names.map((n, i) => <span key={`${n}-${i}`} className="rounded-full bg-soft px-3 py-1 text-sm font-bold">{n}</span>)}
+          {hiddenCount > 0 && <span className="px-1 py-1 text-sm font-bold text-mute">и ещё {hiddenCount}</span>}
+        </div>
+      ) : (
+        <p className="font-semibold text-mute">{players > 0 ? 'Игра не передаёт имена игроков.' : 'Пока никого нет.'}</p>
+      )}
+    </div>
+  );
+}
+
+/** key={id}: switching between servers starts from a clean state */
 export default function ServerDetail({ id }: { id: number }) {
+  return <ServerDetailView key={id} id={id} />;
+}
+
+function ServerDetailView({ id }: { id: number }) {
   const { isAdmin } = useAuth();
   const [hours, setHours] = useState(24);
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -8062,13 +10623,26 @@ export default function ServerDetail({ id }: { id: number }) {
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const seq = useRef(0);
+  const firstHours = useRef(true);
 
-  const load = () =>
-    api<ServerDetails>(`/servers/${id}/details?hours=${hours}`)
-      .then((d) => { setData(d); setError(''); setMissing(false); })
-      .catch((e: Error) => (e.message.includes('не найден') ? setMissing(true) : setError(e.message)));
-  usePoll(load, 15_000);
-  useEffect(() => { void load(); }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
+  // only the newest request may update the page
+  const load = (h = hours) => {
+    const n = ++seq.current;
+    return api<ServerDetails>(`/servers/${id}/details?hours=${h}`)
+      .then((d) => { if (n !== seq.current) return; setData(d); setError(''); setMissing(false); })
+      .catch((e: Error) => {
+        if (n !== seq.current) return;
+        if (e instanceof ApiError && e.status === 404) setMissing(true);
+        else setError(e.message);
+      });
+  };
+  usePoll(() => { void load(); }, 15_000);
+  useEffect(() => {
+    // the first load is done by usePoll
+    if (firstHours.current) { firstHours.current = false; return; }
+    void load(hours);
+  }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (missing) {
     return (
@@ -8096,10 +10670,25 @@ export default function ServerDetail({ id }: { id: number }) {
     await load();
     setBusy(false);
   };
+  const share = async () => {
+    const url = `${window.location.origin}/s/${id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Ссылка скопирована');
+    } catch {
+      toast(`Не удалось скопировать. Ссылка: ${url}`, 'err', 8000);
+    }
+  };
   const remove = async () => {
-    if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
-    await api(`/servers/${id}`, 'DELETE').catch((e: Error) => setError(e.message));
-    window.location.hash = '#/servers';
+    const ok = await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true });
+    if (!ok) return;
+    try {
+      await api(`/servers/${id}`, 'DELETE');
+      toast('Сервер удалён');
+      window.location.hash = '#/servers';
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   return (
@@ -8120,6 +10709,7 @@ export default function ServerDetail({ id }: { id: number }) {
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
           <CopyButton text={s.address} label="Адрес" />
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void share()}>Поделиться</button>
           {link && <a className="btn btn-soft btn-sm" href={link}>Подключиться</a>}
         </div>
         {!s.online && s.error && (
@@ -8170,19 +10760,7 @@ export default function ServerDetail({ id }: { id: number }) {
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <div className="panel p-5">
-          <h2 className="mb-3 text-lg font-black">Сейчас в игре{s.online ? `: ${s.players}` : ''}</h2>
-          {!s.online ? (
-            <p className="font-semibold text-mute">Сервер недоступен.</p>
-          ) : s.playerNames.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {s.playerNames.map((n, i) => <span key={`${n}-${i}`} className="rounded-full bg-soft px-3 py-1 text-sm font-bold">{n}</span>)}
-              {s.players > s.playerNames.length && <span className="px-1 py-1 text-sm font-bold text-mute">и ещё {s.players - s.playerNames.length}</span>}
-            </div>
-          ) : (
-            <p className="font-semibold text-mute">{s.players > 0 ? 'Сервер не сообщает список игроков.' : 'Сейчас на сервере никого нет.'}</p>
-          )}
-        </div>
+        <PlayersNow online={s.online} players={s.players} names={s.playerNames} list={data.playersNow ?? []} />
 
         <div className="panel p-5">
           <h2 className="mb-3 text-lg font-black">Журнал событий</h2>
@@ -8360,12 +10938,12 @@ export default function ServerForm({ initial, id, onClose, onSaved }: { initial:
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
 import { ServersArt } from '../components/Illustrations';
-import { Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, plural, usePoll } from '../ui';
+import { AnimatedNumber, Empty, ErrorLine, FillBar, FleetBar, GameAvatar, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, usePoll } from '../ui';
 import ServerDetail from './ServerDetail';
 
 export default function ServersPage({ sub }: { sub: string }) {
@@ -8414,15 +10992,15 @@ function ServerList() {
 
       {servers.length > 0 && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            [plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), servers.length],
-            ['Онлайн', `${online.length} из ${servers.length}`],
-            [plural(players, ['Игрок', 'Игрока', 'Игроков']), players],
-            ['Средний пинг', avg == null ? '–' : `${avg} мс`],
-          ].map(([k, v]) => (
+          {([
+            [plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), <AnimatedNumber value={servers.length} />],
+            ['Онлайн', <><AnimatedNumber value={online.length} /> из {servers.length}</>],
+            [plural(players, ['Игрок', 'Игрока', 'Игроков']), <AnimatedNumber value={players} pulse />],
+            ['Средний пинг', avg == null ? '–' : <><AnimatedNumber value={avg} /> мс</>],
+          ] as [string, ReactNode][]).map(([k, v]) => (
             <div key={k} className="panel px-5 py-4">
               <div className="text-sm font-extrabold text-mute">{k}</div>
-              <div className="text-3xl font-black tabular-nums text-link">{v}</div>
+              <div className="text-2xl font-black tabular-nums text-link sm:text-3xl">{v}</div>
             </div>
           ))}
         </div>
@@ -8430,8 +11008,8 @@ function ServerList() {
 
       {servers.length > 0 && (
         <FleetBar
-          online={servers.filter((x) => x.online && !(x.ping != null && x.ping > 100)).length}
-          lag={servers.filter((x) => x.online && x.ping != null && x.ping > 100).length}
+          online={servers.filter((x) => x.online && !isLag(x)).length}
+          lag={servers.filter(isLag).length}
           offline={servers.filter((x) => x.hasStatus && !x.online).length}
         />
       )}
@@ -8451,7 +11029,7 @@ function ServerList() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {sorted.map((s, i) => {
           const color = gameColor(s.game);
-          const lag = s.ping != null && s.ping > 100;
+          const lag = isLag(s);
           return (
             <article
               key={s.id}
@@ -8473,8 +11051,9 @@ function ServerList() {
                   {me && (
                     <button
                       onClick={(e) => { e.stopPropagation(); void toggleFav(s.id); }}
-                      className={`text-xl leading-none transition hover:scale-110 ${favs.includes(s.id) ? 'text-warn' : 'text-mute'}`}
+                      className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${favs.includes(s.id) ? 'text-warn' : 'text-mute'}`}
                       title={favs.includes(s.id) ? 'Убрать из избранного' : 'В избранное'}
+                      aria-label={`В избранное: ${s.name}`}
                       aria-pressed={favs.includes(s.id)}
                     >{favs.includes(s.id) ? '★' : '☆'}</button>
                   )}
@@ -8484,7 +11063,7 @@ function ServerList() {
               {s.online ? (
                 <>
                   <div className="flex items-baseline gap-1.5">
-                    <span className="text-4xl font-black tabular-nums">{s.players}</span>
+                    <AnimatedNumber value={s.players} pulse className="text-4xl font-black" />
                     <span className="font-extrabold text-mute">/ {s.maxPlayers}</span>
                     <span className="ml-auto text-sm font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
                   </div>
@@ -8519,9 +11098,10 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, getToken, type Access, type BotStatus, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
+import { confirmDialog, promptDialog } from '../confirm';
 import { useAuth } from '../auth';
-import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, toast, usePoll, type ProxyType } from '../ui';
+import { CopyButton, ErrorLine, Field, IconSettings, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -8687,7 +11267,7 @@ function BotCard() {
   };
 
   const removeToken = async () => {
-    if (!window.confirm('Удалить токен? Бот перестанет обновлять карточки.')) return;
+    if (!(await confirmDialog({ title: 'Удалить токен?', text: 'Бот перестанет обновлять карточки.', confirmLabel: 'Удалить', danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
     } catch (err) {
@@ -8696,7 +11276,7 @@ function BotCard() {
   };
 
   const removeSecret = async () => {
-    if (!window.confirm('Удалить Client Secret? Вход через Discord перестанет работать.')) return;
+    if (!(await confirmDialog({ title: 'Удалить Client Secret?', text: 'Вход через Discord перестанет работать.', confirmLabel: 'Удалить', danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
     } catch (err) {
@@ -8848,9 +11428,17 @@ function UpdateCard() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  // set when "Update" was pressed: remembers the previous job timestamp to recognise the new result
-  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null } | null>(null);
+  // set when "Update" or "Rollback" was pressed: remembers the previous job timestamp to recognise the new result
+  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null; kind: 'update' | 'rollback' } | null>(null);
   const [offline, setOffline] = useState(false);
+  const [log, setLog] = useState<Changelog | null>(null);
+  const [logError, setLogError] = useState('');
+
+  useEffect(() => {
+    api<Changelog>('/update/changelog')
+      .then((r) => { setLog(r); setLogError(r.error ?? ''); })
+      .catch((e: Error) => setLogError(e.message));
+  }, []);
 
   usePoll(() => {
     api<UpdateInfo>('/update/status')
@@ -8886,13 +11474,34 @@ function UpdateCard() {
   };
 
   const apply = async () => {
-    if (!window.confirm('Обновить панель? Она будет недоступна 1-3 минуты, данные и настройки сохранятся.')) return;
+    if (!(await confirmDialog({ title: 'Обновить панель?', text: 'Она будет недоступна 1-3 минуты, данные и настройки сохранятся.', confirmLabel: 'Обновить' }))) return;
     setBusy(true);
     setError('');
     try {
       const r = await api<UpdateInfo>('/update/apply', 'POST');
       setInfo(r);
-      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null });
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rollback = async () => {
+    const ok = await confirmDialog({
+      title: 'Откатить к предыдущей версии?',
+      text: 'Будут восстановлены предыдущая версия панели и копия базы данных, сделанная перед последним обновлением. Всё, что изменилось после обновления (новые серверы, новости, пользователи), будет потеряно. Панель будет недоступна 1-3 минуты.',
+      confirmLabel: 'Откатить',
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<UpdateInfo>('/update/rollback', 'POST');
+      setInfo(r);
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -8901,50 +11510,75 @@ function UpdateCard() {
   };
 
   const running = !!waiting || info?.job?.state === 'running';
+  const rollingBack = waiting?.kind === 'rollback';
   // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
   const [dismissed, setDismissed] = useState<number>(readDismissed);
   const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
   return (
-    <div className="panel space-y-3.5 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-black">Обновления</h2>
-        {running ? <span className="pill pill-warn">ОБНОВЛЕНИЕ</span>
-          : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
-          : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
-          : <span className="pill pill-mute">ПРОВЕРКА</span>}
-      </div>
-
-      <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
-        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
-        <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
-      </dl>
-
-      {running && (
-        <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
-          {offline ? 'Панель перезапускается… страница обновится сама.' : info?.job?.state === 'running' ? info.job.message : 'Запрос отправлен серверу…'}
-        </p>
-      )}
-      {stuck && (
-        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-          Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или обновите командой <span className="font-mono">sudo coregsm update</span>.
-        </p>
-      )}
-      {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
-      {showOldFailure && info?.job && (
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-          <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
-          <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+    <div className="space-y-5">
+      <div className="panel space-y-3.5 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-black">Обновления</h2>
+          {running ? <span className="pill pill-warn">{rollingBack ? 'ОТКАТ' : 'ОБНОВЛЕНИЕ'}</span>
+            : info?.available ? <span className="pill pill-warn">ДОСТУПНО ОБНОВЛЕНИЕ</span>
+            : info?.latest ? <span className="pill pill-ok">ПОСЛЕДНЯЯ ВЕРСИЯ</span>
+            : <span className="pill pill-mute">ПРОВЕРКА</span>}
         </div>
-      )}
-      <ErrorLine text={error} />
 
-      <div className="flex flex-wrap gap-2">
-        <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
-        {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
+        <dl className="grid grid-cols-2 gap-3 text-sm font-bold sm:max-w-sm">
+          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">Установлена</dt><dd className="font-mono text-[15px]">{short(info?.current ?? null)}</dd></div>
+          <div className="rounded-2xl bg-soft px-4 py-2.5"><dt className="text-mute">В репозитории</dt><dd className="font-mono text-[15px]">{short(info?.latest ?? null)}</dd></div>
+        </dl>
+
+        {running && (
+          <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
+            {offline
+              ? (rollingBack ? 'Панель перезапускается после отката… страница обновится сама.' : 'Панель перезапускается… страница обновится сама.')
+              : info?.job?.state === 'running' ? info.job.message
+              : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…'}
+          </p>
+        )}
+        {stuck && (
+          <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+            Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или {rollingBack ? 'выполните откат вручную' : <>обновите командой <span className="font-mono">sudo coregsm update</span></>}.
+          </p>
+        )}
+        {info?.error && !running && <p className="text-sm font-semibold text-mute">{info.error}</p>}
+        {showOldFailure && info?.job && (
+          <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+            <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
+            <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+          </div>
+        )}
+        <ErrorLine text={error} />
+
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-soft" onClick={check} disabled={busy || running}>Проверить обновления</button>
+          {info?.available && <button className="btn" onClick={apply} disabled={busy || running || !info.canApply}>Обновить сейчас</button>}
+          {info?.canRollback && <button className="btn btn-soft" onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей версии</button>}
+        </div>
+        {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
       </div>
-      {info && !info.canApply && <p className="text-sm font-semibold text-mute">Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>}
+
+      <div className="panel space-y-3 p-6">
+        <h2 className="text-lg font-black">Что нового</h2>
+        {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
+        {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
+        {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">Список изменений пуст.</p>}
+        {log && log.items.length > 0 && (
+          <ul className="divide-y divide-line">
+            {log.items.map((c) => (
+              <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
+                <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 break-words font-bold hover:text-link">{c.title}</a>
+                <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
+                <span className="text-sm font-semibold text-mute">{ago(Date.parse(c.date) || null)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -8960,6 +11594,8 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
     </label>
   );
 }
+
+const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
 export function UsersTab() {
   const { me, reload } = useAuth();
@@ -8982,7 +11618,7 @@ export function UsersTab() {
     load();
   };
   const reject = async (u: UserRow) => {
-    if (!window.confirm(`Отклонить заявку «${u.username}»?`)) return;
+    if (!(await confirmDialog({ title: `Отклонить заявку «${u.username}»?`, confirmLabel: 'Отклонить', danger: true }))) return;
     await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
     load();
   };
@@ -8996,12 +11632,18 @@ export function UsersTab() {
     load();
   };
   const resetPassword = async (u: UserRow) => {
-    const pw = window.prompt(`Новый пароль для «${u.username}» (от 8 символов):`);
+    const pw = await promptDialog({
+      title: `Новый пароль для «${u.username}»`,
+      label: 'Новый пароль (от 8 символов)',
+      password: true,
+      confirmLabel: 'Сменить пароль',
+      validate: (v) => (v.length < 8 ? 'Минимум 8 символов' : null),
+    });
     if (!pw) return;
     await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
   };
   const remove = async (u: UserRow) => {
-    if (!window.confirm(`Удалить пользователя «${u.username}»?`)) return;
+    if (!(await confirmDialog({ title: `Удалить пользователя «${u.username}»?`, confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
     load();
   };
@@ -9025,7 +11667,12 @@ export function UsersTab() {
             </div>
           </>
         )}
-        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы, писать новости и менять настройки могут администраторы.</p>
+        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы и менять настройки могут администраторы.</p>
+        <div className="rounded-2xl bg-soft px-4 py-3 text-sm font-semibold text-mute">
+          <p><b className="text-ink">Игрок</b>: смотрит серверы и новости, ведёт свой профиль.</p>
+          <p><b className="text-ink">Модератор</b>: пишет, публикует и удаляет новости, меняет канал новостей по умолчанию. Серверы, настройки, пользователи и система ему недоступны.</p>
+          <p><b className="text-ink">Администратор</b>: полный доступ ко всему.</p>
+        </div>
       </div>
 
       <div className="panel space-y-3 p-6">
@@ -9064,8 +11711,10 @@ export function UsersTab() {
                 {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
+              <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
               <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
                 <option value="player">Игрок</option>
+                <option value="moderator">Модератор</option>
                 <option value="admin">Администратор</option>
               </select>
               <button className="btn btn-soft btn-sm" onClick={() => void resetPassword(u)}>Пароль</button>
@@ -9203,10 +11852,137 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Status.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api, type StatusDay, type StatusInfo, type StatusServer } from '../api';
+import { Empty, ErrorLine, GameAvatar, IconServers, PageHead, StatusPill, ago, usePoll } from '../ui';
+
+const dayColor = (pct: number | null) =>
+  pct == null ? 'bg-line' : pct >= 99.9 ? 'bg-ok' : pct >= 95 ? 'bg-ok/60' : pct >= 80 ? 'bg-warn' : 'bg-bad';
+
+const fmtDay = (day: string) => {
+  const d = new Date(`${day}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+};
+const fmtPct = (p: number) => `${(Math.round(p * 10) / 10).toLocaleString('ru-RU')}%`;
+const dayTitle = (d: StatusDay) => (d.pct == null ? `${fmtDay(d.day)}: нет данных` : `${fmtDay(d.day)}: ${fmtPct(d.pct)}`);
+
+function UptimeBar({ s }: { s: StatusServer }) {
+  const withData = s.days.filter((d) => d.pct != null);
+  const summary = s.uptime30 == null
+    ? 'Нет данных об аптайме за 30 дней'
+    : `Аптайм за 30 дней: ${fmtPct(s.uptime30)}; дней без данных: ${s.days.length - withData.length}`;
+  return (
+    <div className="flex h-8 w-full min-w-0 gap-[2px] sm:gap-[3px]" role="img" aria-label={summary}>
+      {s.days.map((d) => (
+        <span key={d.day} title={dayTitle(d)} className={`h-full min-w-0 flex-1 rounded-[3px] ${dayColor(d.pct)}`} />
+      ))}
+    </div>
+  );
+}
+
+function ServerRow({ s }: { s: StatusServer }) {
+  return (
+    <li className="panel space-y-3 p-4 sm:p-5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <GameAvatar game={s.game} size={40} />
+        <div className="min-w-0 flex-1 basis-40">
+          <a href={`#/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
+          <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
+        </div>
+        {s.online && <span className="text-sm font-bold tabular-nums text-mute">{s.players}/{s.maxPlayers}{s.avgPing != null ? ` · ${s.avgPing} мс` : ''}</span>}
+        <StatusPill online={s.online} known lag={s.online && s.avgPing != null && s.avgPing > 100} />
+      </div>
+      <div className="flex items-center gap-3">
+        <UptimeBar s={s} />
+        <div className="w-16 shrink-0 text-right text-sm font-black tabular-nums sm:w-20 sm:text-base">
+          {s.uptime30 == null ? <span className="text-mute">–</span> : fmtPct(s.uptime30)}
+        </div>
+      </div>
+      <div className="flex justify-between text-xs font-semibold text-mute">
+        <span>30 дней назад</span>
+        <span>сегодня</span>
+      </div>
+    </li>
+  );
+}
+
+function Banner({ servers }: { servers: StatusServer[] }) {
+  const total = servers.length;
+  const up = servers.filter((s) => s.online).length;
+  const [cls, title] = up === total
+    ? ['bg-okbg text-ok', 'Все серверы работают']
+    : up === 0
+      ? ['bg-badbg text-bad', 'Все серверы недоступны']
+      : ['bg-warnbg text-warn', 'Часть серверов недоступна'];
+  return (
+    <div className={`flex flex-wrap items-center justify-between gap-2 rounded-3xl px-5 py-4 ${cls}`} role="status">
+      <span className="text-xl font-black">{title}</span>
+      <span className="font-bold">онлайн: {up} из {total}</span>
+    </div>
+  );
+}
+
+const LEGEND: [string, string][] = [
+  ['bg-ok', '99,9% и выше'],
+  ['bg-ok/60', 'от 95%'],
+  ['bg-warn', 'от 80%'],
+  ['bg-bad', 'ниже 80%'],
+  ['bg-line', 'нет данных'],
+];
+
+/** Public status page: every server with its 30-day availability. */
+export default function StatusPage() {
+  const [data, setData] = useState<StatusInfo | null>(null);
+  const [error, setError] = useState('');
+
+  usePoll(() => {
+    api<StatusInfo>('/status')
+      .then((r) => { setData(r); setError(''); })
+      .catch((e: Error) => setError(e.message));
+  }, 60_000);
+
+  return (
+    <div className="space-y-5">
+      <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов за последние 30 дней" />
+      <ErrorLine text={error} />
+
+      {!data && !error && (
+        <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
+          <div className="skeleton panel h-16" />
+          <div className="skeleton panel h-32" />
+          <div className="skeleton panel h-32" />
+        </div>
+      )}
+
+      {data && data.servers.length === 0 && (
+        <Empty title="Серверов пока нет" text="Когда серверы будут добавлены, здесь появится их доступность." />
+      )}
+
+      {data && data.servers.length > 0 && (
+        <>
+          <Banner servers={data.servers} />
+          <ul className="space-y-3">
+            {data.servers.map((s) => <ServerRow key={s.id} s={s} />)}
+          </ul>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-mute">
+            {LEGEND.map(([c, t]) => (
+              <span key={t} className="inline-flex items-center gap-1.5"><span className={`inline-block h-3 w-3 rounded-[3px] ${c}`} aria-hidden />{t}</span>
+            ))}
+            <span className="ml-auto">обновлено {ago(data.updatedAt)}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/System.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
-import { api, getToken } from '../api';
-import { ErrorLine, IconSettings, PageHead, ago, fmtDateTime, plural, toast, usePoll } from '../ui';
+import { api, type CertInfo } from '../api';
+import { ErrorLine, IconSettings, PageHead, ago, fmtDateTime, plural, usePoll } from '../ui';
+import BackupsCard from './Backups';
 
 interface Health {
   version: string | null;
@@ -9220,11 +11996,21 @@ interface Health {
   bot: { state: string; tag: string | null; error: string | null; updatedAt: number };
   guilds: number;
   publicBase: string | null;
+  cert?: CertInfo;
 }
 interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }
 
 const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : `${(n / 1048576).toFixed(1)} МБ`);
 const dur = (s: number) => (s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч ${Math.floor((s % 3600) / 60)} мин` : `${Math.floor(s / 86400)} д ${Math.floor((s % 86400) / 3600)} ч`);
+
+const certTile = (c: CertInfo): [string, string, string | undefined, string | undefined] => {
+  const note = [c.issuer, c.selfSigned ? 'самоподписанный' : null].filter(Boolean).join(' · ') || undefined;
+  if (c.daysLeft == null) return ['Сертификат HTTPS', 'нет', note ?? 'панель работает по HTTP', undefined];
+  const d = c.daysLeft;
+  const value = d <= 0 ? 'истёк' : `${d} ${plural(d, ['день', 'дня', 'дней'])}`;
+  const tone = d <= 0 ? 'text-bad' : d <= 14 ? 'text-warn' : undefined;
+  return ['Сертификат HTTPS', value, note, tone];
+};
 
 /** Health, diagnostics and backups. */
 export default function SystemPage() {
@@ -9232,7 +12018,6 @@ export default function SystemPage() {
   const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
-  const [restoring, setRestoring] = useState(false);
 
   usePoll(() => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message)), 15_000);
 
@@ -9242,46 +12027,7 @@ export default function SystemPage() {
     setRunning(false);
   };
 
-  const download = async () => {
-    try {
-      const r = await fetch('/api/backup', { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
-      if (!r.ok) throw new Error('Не удалось создать копию');
-      const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? 'coregsm-backup.db';
-      const url = URL.createObjectURL(await r.blob());
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = name;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast('Копия скачана');
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  const restore = async (file: File) => {
-    if (!window.confirm(`Заменить все данные панели копией «${file.name}»? Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`)) return;
-    setRestoring(true);
-    setError('');
-    try {
-      const r = await fetch('/api/backup/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
-      const j = (await r.json().catch(() => null)) as { error?: string } | null;
-      if (!r.ok) throw new Error(j?.error ?? 'Не удалось восстановить копию');
-      toast('Копия принята, панель перезапускается…');
-      // wait until the backend is back, then reload (the old session may no longer be valid)
-      for (let i = 0; i < 40; i++) {
-        await new Promise((res) => setTimeout(res, 1500));
-        const ok = await fetch('/api/access').then((x) => x.ok).catch(() => false);
-        if (ok && i > 1) break;
-      }
-      window.location.reload();
-    } catch (e) {
-      setError((e as Error).message);
-      setRestoring(false);
-    }
-  };
-
-  const tiles: [string, string, string?][] = h
+  const tiles: [string, string, string?, string?][] = h
     ? [
         ['Версия', h.version ? h.version.slice(0, 7) : 'не задана', `Node ${h.node}`],
         ['Работает', dur(h.uptimeSec), `память ${h.memoryMb} МБ`],
@@ -9290,6 +12036,7 @@ export default function SystemPage() {
         ['Серверы', `${h.counts.online} из ${h.counts.servers}`, 'онлайн'],
         ['Привязки Discord', String(h.counts.bindings), `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`],
         ['Пользователи', String(h.counts.users)],
+        ...(h.cert ? [certTile(h.cert)] : []),
         ['Бот', h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined)],
       ]
     : [];
@@ -9302,10 +12049,10 @@ export default function SystemPage() {
 
       {h ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {tiles.map(([k, v, hint]) => (
+          {tiles.map(([k, v, hint, tone]) => (
             <div key={k} className="panel px-5 py-4">
               <div className="text-sm font-extrabold text-mute">{k}</div>
-              <div className="truncate text-2xl font-black tabular-nums text-link">{v}</div>
+              <div className={`truncate text-2xl font-black tabular-nums ${tone ?? 'text-link'}`}>{v}</div>
               {hint && <div className="truncate text-sm font-semibold text-mute">{hint}</div>}
             </div>
           ))}
@@ -9340,42 +12087,97 @@ export default function SystemPage() {
         )}
       </div>
 
-      <div className="panel space-y-4 p-6">
-        <div>
-          <h2 className="text-lg font-black">Резервные копии</h2>
-          <p className="font-semibold text-mute">
-            В копию входят серверы, привязки, пользователи, новости и настройки, в том числе токен бота и хэши паролей. Храните файл так же бережно, как пароль.
-            Картинки новостей и логотип в копию не входят.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button className="btn" onClick={() => void download()}>Скачать копию</button>
-          <label className={`btn btn-soft cursor-pointer ${restoring ? 'pointer-events-none opacity-50' : ''}`}>
-            {restoring ? 'Восстанавливаю…' : 'Восстановить из файла'}
-            <input type="file" accept=".db,application/octet-stream" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void restore(f); e.target.value = ''; }} />
-          </label>
-        </div>
-      </div>
+      <BackupsCard />
     </div>
   );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
-import { forwardRef, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useAuth } from './auth';
-import { api } from './api';
+import { getToken, type Server } from './api';
+import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
 import { GAME_IMAGE, gameAbbr, gameColor } from './games';
 import { gameIconPath, ICON_PATHS } from './gameIcons';
 
-export function usePoll(fn: () => void, ms: number) {
+/**
+ * Calls `fn` now and then every `ms` milliseconds.
+ * - nothing runs while the tab is hidden; coming back to the tab refreshes at once
+ * - a tick is skipped while the previous call (if it returns a promise) is still pending
+ * - nothing is scheduled after unmount
+ */
+export function usePoll(fn: () => unknown, ms: number) {
   const ref = useRef(fn);
   ref.current = fn;
   useEffect(() => {
-    ref.current();
-    const t = setInterval(() => ref.current(), ms);
-    return () => clearInterval(t);
+    let alive = true;
+    let pending = false;
+    const run = async () => {
+      if (!alive || pending || document.hidden) return;
+      pending = true;
+      try {
+        await ref.current();
+      } catch {
+        /* the caller shows its own errors */
+      } finally {
+        pending = false;
+      }
+    };
+    void run();
+    const t = setInterval(() => void run(), ms);
+    const onVisible = () => { if (!document.hidden) void run(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [ms]);
+}
+
+/** a server answers, but slowly (ping over 100 ms) */
+export const LAG_PING = 100;
+export const isLag = (s: Pick<Server, 'online' | 'ping'>) => s.online && s.ping != null && s.ping > LAG_PING;
+
+const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
+export function useTween(value: number, ms = 600): number {
+  const [shown, setShown] = useState(value);
+  const cur = useRef(value);
+  useEffect(() => {
+    if (cur.current === value) return;
+    if (reducedMotion()) { cur.current = value; setShown(value); return; }
+    const from = cur.current;
+    const start = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const k = Math.min(1, (now - start) / ms);
+      const eased = 1 - Math.pow(1 - k, 3);
+      cur.current = k >= 1 ? value : Math.round(from + (value - from) * eased);
+      setShown(cur.current);
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value, ms]);
+  return shown;
+}
+
+/** tabular number that tweens to new values and (optionally) flashes briefly when the value changes */
+export function AnimatedNumber({ value, className = '', pulse = false }: { value: number; className?: string; pulse?: boolean }) {
+  const shown = useTween(value);
+  const [bump, setBump] = useState(false);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    if (!pulse) return;
+    setBump(true);
+    const t = setTimeout(() => setBump(false), 950);
+    return () => clearTimeout(t);
+  }, [value, pulse]);
+  return <span aria-live="off" className={`tabular-nums ${bump ? 'num-bump' : ''} ${className}`}>{shown}</span>;
 }
 
 /** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
@@ -9482,7 +12284,7 @@ export function ThemeToggle() {
   return (
     <button
       type="button"
-      className="grid h-10 w-10 place-items-center rounded-full bg-card text-mute shadow-pop transition hover:text-link"
+      className="btn-icon"
       title={`Тема: ${label[theme]}. Нажмите, чтобы переключить`}
       aria-label={`Тема: ${label[theme]}. Переключить`}
       onClick={() => {
@@ -9497,23 +12299,34 @@ export function ThemeToggle() {
 }
 
 // ---------- building blocks ----------
+/**
+ * Dialog: a bottom sheet on phones, a centred card on larger screens.
+ * Focus moves inside and is trapped, Escape closes, focus returns to the opener, only a real click on the backdrop closes it.
+ */
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  const box = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  // keyboards: first field; touch screens: the dialog itself (no on-screen keyboard popping up)
+  useDialogFocus(box, onClose, () =>
+    window.matchMedia?.('(pointer: coarse)').matches
+      ? box.current
+      : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
+  const bd = useBackdropClose(onClose);
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" {...bd}>
       <div
+        ref={box}
         role="dialog"
-        aria-label={title}
-        className="pop panel max-h-[92vh] w-full max-w-lg overflow-auto rounded-b-none p-6 sm:rounded-b-3xl"
-        onMouseDown={(e) => e.stopPropagation()}
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="pop panel max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-3xl sm:p-6"
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-black">{title}</h2>
-          <button className="grid h-8 w-8 place-items-center rounded-full bg-soft text-mute hover:text-ink" onClick={onClose} aria-label="Закрыть">✕</button>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
+          <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label="Закрыть">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
         </div>
         {children}
       </div>
@@ -9532,8 +12345,8 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 export function StatusPill({ online, known, lag }: { online: boolean; known: boolean; lag?: boolean }) {
   if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
-  if (!online) return <span className="pill pill-bad">OFFLINE</span>;
-  return lag ? <span className="pill pill-warn">LAG</span> : <span className="pill pill-ok live">ONLINE</span>;
+  if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
+  return lag ? <span className="pill pill-warn">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
 }
 
 export function GameAvatar({ game, size = 44 }: { game: string; size?: number }) {
@@ -9567,18 +12380,69 @@ export function FillBar({ value, max, color }: { value: number; max: number; col
   );
 }
 
-/** 24h player-count sparkline. Loads its own history; shows a quiet placeholder until there are two points. */
+// history of a server is shared between remounts (list <-> details) for a couple of minutes
+const sparkCache = new Map<number, { at: number; pts: number[] }>();
+const SPARK_EVERY = 3 * 60_000;
+
+/**
+ * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
+ * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
+ */
 export function Spark({ serverId, color }: { serverId: number; color: string }) {
-  const [pts, setPts] = useState<number[]>([]);
-  usePoll(() => {
-    api<{ players: number }[]>(`/servers/${serverId}/history?hours=24`)
-      .then((rows) => {
+  const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
+
+  useEffect(() => {
+    let timer = 0;
+    let ctl: AbortController | null = null;
+    let alive = true;
+
+    const load = async () => {
+      if (!alive || document.hidden) return;
+      ctl?.abort();
+      ctl = new AbortController();
+      try {
+        const token = getToken();
+        const res = await fetch(`/api/servers/${serverId}/history?hours=24`, {
+          signal: ctl.signal,
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) return;
+        const rows = (await res.json()) as { players: number }[];
         // downsample to at most 48 points
         const step = Math.max(1, Math.ceil(rows.length / 48));
-        setPts(rows.filter((_, i) => i % step === 0).map((r) => r.players));
-      })
-      .catch(() => undefined);
-  }, 60_000);
+        const next = rows.filter((_, i) => i % step === 0).map((r) => r.players);
+        sparkCache.set(serverId, { at: Date.now(), pts: next });
+        if (alive) setPts(next);
+      } catch {
+        /* aborted or offline: keep what we have */
+      }
+    };
+    const schedule = (delay: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        await load();
+        if (alive) schedule(SPARK_EVERY);
+      }, delay);
+    };
+
+    const cached = sparkCache.get(serverId);
+    const age = cached ? Date.now() - cached.at : Infinity;
+    // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
+    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : 150 + Math.random() * 2500);
+
+    const onVisible = () => {
+      if (document.hidden) return;
+      const c = sparkCache.get(serverId);
+      if (!c || Date.now() - c.at >= SPARK_EVERY) schedule(100 + Math.random() * 1000);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      ctl?.abort();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [serverId]);
 
   if (pts.length < 2) return <div className="h-9 rounded-xl bg-soft/60" aria-hidden />;
   const w = 240, h = 36;
@@ -9587,7 +12451,7 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
   const d = 'M' + xy.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L');
   const last = xy[xy.length - 1];
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-9 w-full" preserveAspectRatio="none" role="img" aria-label="Игроки за 24 часа">
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-9 w-full" preserveAspectRatio="none" role="img" aria-label={`Игроков за 24 часа: от ${Math.min(...pts)} до ${max}`}>
       <path d={`${d} L${w} ${h} L0 ${h}Z`} fill={color} opacity="0.14" />
       <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       <circle cx={last[0]} cy={last[1]} r="3.5" fill={color} />
@@ -9598,10 +12462,10 @@ export function Spark({ serverId, color }: { serverId: number; color: string }) 
 export function PageHead({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon?: ReactNode; children?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
-      <div className="flex items-center gap-3.5">
+      <div className="flex min-w-0 items-center gap-3.5">
         {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-soft text-link">{icon}</span>}
-        <div>
-          <h1 className="text-3xl font-black tracking-tight">{title}</h1>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-black tracking-tight sm:text-3xl">{title}</h1>
           {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
         </div>
       </div>
@@ -9625,16 +12489,19 @@ export function Empty({ title, text, art, children }: { title: string; text: str
   );
 }
 
-/** Copies text to the clipboard; falls back to a prompt where the Clipboard API is blocked. */
+/** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
 export function CopyButton({ text, label = 'Копировать', className = '' }: { text: string; label?: string; className?: string }) {
   const [done, setDone] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
       setDone(true);
-      setTimeout(() => setDone(false), 1500);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setDone(false), 1500);
     } catch {
-      window.prompt('Скопируйте:', text);
+      await promptDialog({ title: 'Скопируйте вручную', label: 'Текст', value: text, readOnly: true });
     }
   };
   return (
@@ -9646,14 +12513,15 @@ export function CopyButton({ text, label = 'Копировать', className = '
 }
 
 /** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
-export function Logo({ size = 32 }: { size?: number }) {
+export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
   const { brand } = useAuth().access;
   return (
     <img
       src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
       width={size}
       height={size}
-      alt={brand.name}
+      // pass alt="" when the name is written next to the logo; alone it is described by the community name
+      alt={alt ?? brand.name}
       className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
       draggable={false}
     />
@@ -9740,31 +12608,49 @@ let toastSeq = 0;
 const toastListeners = new Set<(t: ToastItem[]) => void>();
 const emitToasts = () => toastListeners.forEach((l) => l(toasts));
 
-export function toast(text: string, kind: ToastKind = 'ok', ms = 3500) {
+/** `ms`: how long it stays; errors stay longer (8 s) by default. Every toast can also be dismissed by hand. */
+export function toast(text: string, kind: ToastKind = 'ok', ms?: number) {
   const t = { id: ++toastSeq, text, kind };
   toasts = [...toasts, t].slice(-4);
   emitToasts();
-  setTimeout(() => {
-    toasts = toasts.filter((x) => x.id !== t.id);
-    emitToasts();
-  }, ms);
+  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : 3500));
 }
 
+export function dismissToast(id: number) {
+  if (!toasts.some((x) => x.id === id)) return;
+  toasts = toasts.filter((x) => x.id !== id);
+  emitToasts();
+}
+
+/**
+ * Two sibling live regions (never nested): errors are announced assertively (role=alert), the rest politely.
+ * They sit above the phone navigation bar and the home-indicator safe area.
+ */
 export function Toaster() {
   const [list, setList] = useState<ToastItem[]>(toasts);
   useEffect(() => {
     toastListeners.add(setList);
     return () => { toastListeners.delete(setList); };
   }, []);
-  const tone = { ok: 'bg-okbg text-ok', err: 'bg-badbg text-bad', info: 'bg-soft text-ink' } as const;
+  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-card text-ink ring-line' } as const;
+  const item = (t: ToastItem) => (
+    <div key={t.id} className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
+      <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
+      <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
+      <button
+        type="button"
+        onClick={() => dismissToast(t.id)}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full opacity-80 hover:opacity-100 max-sm:h-11 max-sm:w-11"
+        aria-label="Закрыть уведомление"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+    </div>
+  );
   return (
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-4 bottom-24 z-[70] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
-      {list.map((t) => (
-        <div key={t.id} role="status" className={`pop pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl px-4 py-3 text-sm font-bold shadow-soft ring-1 ring-black/5 ${tone[t.kind]}`}>
-          <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
-          {t.text}
-        </div>
-      ))}
+    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-[90] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+      <div aria-live="polite" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind !== 'err').map(item)}</div>
+      <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
     </div>
   );
 }
@@ -9808,7 +12694,7 @@ function AuthDecor() {
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden p-4 sm:p-8">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden p-4 pt-20 sm:p-8">
       <AuthDecor />
       <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
       <div className="relative z-[1] flex w-full justify-center">{children}</div>
@@ -9820,8 +12706,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
 export function AuthBrand({ subtitle }: { subtitle?: string }) {
   return (
     <div className="mb-5 flex flex-col items-center text-center">
-      <Logo size={64} />
-      <Wordmark className="mt-2 text-3xl" />
+      <Logo size={64} alt="" />
+      <Wordmark className="mt-2 max-w-full break-words text-3xl" />
       {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
     </div>
   );
@@ -9844,7 +12730,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
               key={t.id}
               href={`#/${t.id}`}
               aria-current={mode === t.id ? 'page' : undefined}
-              className={`flex-1 rounded-full px-3 py-1.5 text-center font-extrabold transition ${mode === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+              className={`flex flex-1 items-center justify-center rounded-full px-3 py-1.5 text-center font-extrabold transition max-sm:min-h-[44px] ${mode === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
             >
               {t.label}
             </a>
@@ -9853,7 +12739,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
       )}
       <div key={mode} className="auth-swap">{children}</div>
       {access.publicPanel && (
-        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="text-link hover:underline">Продолжить без входа</a></p>
+        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">Продолжить без входа</a></p>
       )}
     </div>
   );
@@ -9928,7 +12814,7 @@ export const PasswordField = forwardRef<
         <input
           id={id}
           ref={ref}
-          className="input !pr-11"
+          className="input !pr-12 max-sm:!pr-14"
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -9946,7 +12832,7 @@ export const PasswordField = forwardRef<
         />
         <button
           type="button"
-          className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink"
+          className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11"
           onClick={() => setShown((v) => !v)}
           aria-label={shown ? 'Скрыть пароль' : 'Показать пароль'}
           aria-pressed={shown}
@@ -10028,7 +12914,7 @@ export function DiscordButton({ label, href, className = '' }: { label: string; 
   return (
     <a
       href={href}
-      className={`inline-flex w-full items-center justify-center gap-2.5 rounded-full bg-[#5865f2] px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-[#4752c4] active:scale-[.98] ${className}`}
+      className={`inline-flex w-full items-center justify-center gap-2.5 rounded-full bg-[#5865f2] px-4 py-2 font-extrabold text-white shadow-pop transition hover:bg-[#4752c4] active:scale-[.98] max-sm:min-h-[44px] ${className}`}
     >
       <IconDiscordLogo />
       {label}
@@ -10085,6 +12971,8 @@ export default {
         ink: c('ink'),
         mute: c('mute'),
         line: c('line'),
+        // input borders: >= 3:1 against the card (line is decorative only)
+        field: c('field'),
         soft: c('soft'),
         // brand: fills and buttons; link: brand-coloured text (lighter in the dark theme for contrast)
         brand: { DEFAULT: c('brand'), hover: c('brand-hover') },
@@ -10094,10 +12982,12 @@ export default {
         warn: c('warn'),
         warnbg: c('warnbg'),
         bad: c('bad'),
+        // filled red buttons: white text >= 4.5:1 in both themes
+        badsolid: c('badsolid'),
         badbg: c('badbg'),
       },
       fontFamily: {
-        sans: ['Plus Jakarta Sans', 'Nunito', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: ['"Manrope Variable"', 'Manrope', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
       borderRadius: { '4xl': '2rem' },
@@ -10156,6 +13046,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    init: true
     restart: unless-stopped
     logging: *logging
     env_file: .env
@@ -10163,6 +13054,11 @@ services:
       PORT: "3000"
       DB_PATH: /data/coregsm.db
       UPDATE_DIR: /update
+      # public address of the panel: the trusted URL and the certificate check
+      DOMAIN: ${DOMAIN}
+      # the installer passes the new build id here while it starts the containers; .env gets it only
+      # after the health check, so a failed update never looks like a finished one
+      APP_VERSION: ${APP_VERSION:-}
     volumes:
       - coregsm-data:/data
       # update requests/status exchanged with the host updater (no Docker socket is exposed)
@@ -10182,6 +13078,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    init: true
     restart: unless-stopped
     logging: *logging
     environment:
@@ -10200,12 +13097,14 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    init: true
     restart: unless-stopped
     logging: *logging
     networks: [internal]
 
   nginx-proxy:
     build: ./nginx
+    init: true
     restart: unless-stopped
     logging: *logging
     environment:
@@ -10220,9 +13119,17 @@ services:
       - backend
       - frontend
     networks: [internal]
+    # port 80 answers as soon as nginx runs (no dependency on the backend)
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/80' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   certbot:
     image: certbot/certbot
+    init: true
     restart: unless-stopped
     logging: *logging
     environment:
@@ -10328,6 +13235,29 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # creating and downloading a backup archive can take a while
+    location ~ ^/api/backups?(/|$) {
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # shareable server page with link-preview meta tags (redirects to the SPA)
+    location ~ ^/s/\d+$ {
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
     location /api/ {
         set $backend http://backend:3000;
         proxy_pass $backend;
@@ -10354,6 +13284,16 @@ write_env() {
   SETUP_TOKEN="$(env_get SETUP_TOKEN)"; [ -n "$SETUP_TOKEN" ] || SETUP_TOKEN="$(gen_secret 16)"
   jwt="$(env_get JWT_SECRET)";          [ -n "$jwt" ]      || jwt="$(gen_secret 64)"
   internal="$(env_get INTERNAL_TOKEN)"; [ -n "$internal" ] || internal="$(gen_secret 48)"
+  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
+  # the .env is truncated by the redirection below, so everything is read from it first
+  local appver; appver="$(env_get APP_VERSION)"
+  poll="$(env_get POLL_INTERVAL_SEC)"; [ -n "$poll" ] || poll=30
+  lm=0; [ "${LOCAL_MODE:-}" = "1" ] && lm=1
+  cert_mode="$(env_get CERT_MODE)"; [ "$lm" = 1 ] && [ -z "$cert_mode" ] && cert_mode=local
+  # settings added by hand (custom variables) survive a re-run
+  if [ -f "$APP_DIR/.env" ]; then
+    extra="$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$APP_DIR/.env" | grep -Ev "^($known)=" || true)"
+  fi
   umask 077
   cat > "$APP_DIR/.env" << ENVFILE
 # Generated by CoreGSM installer. Keep this file private (chmod 600).
@@ -10365,14 +13305,19 @@ DISCORD_TOKEN=${DISCORD_TOKEN:-}
 PROXY_URL=${PROXY_URL:-}
 # http(s) proxy for Docker image builds and certbot renewal (SOCKS is not supported there)
 BUILD_PROXY=${BUILD_PROXY:-}
-# installed build, compared with version.txt in the repository
-APP_VERSION=${COREGSM_BUILD}
+# installed build, compared with version.txt in the repository. The new value is written only after
+# the panel has answered (see promote_version), so a failed update does not look like a finished one.
+APP_VERSION=${appver}
+# local mode (self-signed certificate, no Let's Encrypt) and the kind of the current certificate
+LOCAL_MODE=${lm}
+CERT_MODE=${cert_mode}
 # one-time code for the first-run setup wizard in the browser
 SETUP_TOKEN=${SETUP_TOKEN}
 JWT_SECRET=${jwt}
 INTERNAL_TOKEN=${internal}
-POLL_INTERVAL_SEC=30
+POLL_INTERVAL_SEC=${poll}
 ENVFILE
+  if [ -n "$extra" ]; then printf '# custom settings (kept on re-install)\n%s\n' "$extra" >> "$APP_DIR/.env"; fi
   chmod 600 "$APP_DIR/.env"
   umask 022
   ok "Секреты записаны в $APP_DIR/.env (права 600)"
@@ -10385,11 +13330,17 @@ issue_certificate() {
 
   if [ "${LOCAL_MODE:-}" = "1" ]; then
     step "SSL-сертификат для локального режима (самоподписанный)"
-    if [ -f "$APP_DIR/docker-compose.yml" ]; then
-      (cd "$APP_DIR" && docker compose down >/dev/null 2>&1) || true
+    # an existing self-signed certificate that is valid for more than 30 days is kept: browsers that
+    # already trusted it keep working, and nothing has to be restarted
+    if [ -f "$live/.selfsigned" ] && [ -f "$live/fullchain.pem" ] && [ -f "$live/privkey.pem" ] \
+       && openssl x509 -checkend $((30 * 86400)) -noout -in "$live/fullchain.pem" >/dev/null 2>&1; then
+      CERT_MODE="local"
+      ok "Самоподписанный сертификат ещё действует более 30 дней, оставляю прежний"
+      return 0
     fi
     rm -rf "$live"
     mkdir -p "$live"
+    CERT_CHANGED=1
     local san="DNS:${DOMAIN}"
     [[ "$DOMAIN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && san="IP:${DOMAIN}"
     openssl req -x509 -nodes -newkey rsa:2048 -days 825 -subj "/CN=${DOMAIN}" -addext "subjectAltName=${san}" \
@@ -10402,28 +13353,50 @@ issue_certificate() {
 
   step "Выпуск SSL-сертификата Let's Encrypt (Certbot в Docker)"
 
-  # Stop a previous stack so port 80 is free for the standalone challenge.
-  if [ -f "$APP_DIR/docker-compose.yml" ]; then
-    (cd "$APP_DIR" && docker compose down >/dev/null 2>&1) || true
-  fi
-
-  if [ -f "$live/.selfsigned" ]; then rm -rf "$live" "$conf/archive/$DOMAIN" "$conf/renewal/$DOMAIN.conf"; fi
-
-  if [ -f "$live/fullchain.pem" ]; then
+  if [ ! -f "$live/.selfsigned" ] && [ -f "$live/fullchain.pem" ]; then
     ok "Действующий сертификат для $DOMAIN уже есть, выпуск пропущен"
     CERT_MODE="letsencrypt"
     return 0
   fi
 
-  if run_soft "Выпуск сертификата Let's Encrypt" docker run --rm -p 80:80 ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
+  # A temporary self-signed certificate is replaced: it is moved aside first (nginx keeps serving it from
+  # memory) and put back if the issuance fails.
+  local aside="$conf/live/$DOMAIN.selfsigned-bak" acme=(--standalone)
+  if [ -f "$live/.selfsigned" ]; then
+    rm -rf "$aside"; mv "$live" "$aside"
+    rm -rf "$conf/archive/$DOMAIN" "$conf/renewal/$DOMAIN.conf"
+  fi
+
+  if service_running nginx-proxy; then
+    # a running panel already answers on port 80: prove the domain through its webroot, no downtime
+    acme=(--webroot -w /var/www/certbot)
+    info "Панель работает: подтверждаю домен через неё, остановка не нужна"
+  else
+    # nothing serves port 80 (fresh install or stopped stack); a crash-looping nginx must not hold it
+    if [ -f "$APP_DIR/docker-compose.yml" ]; then
+      (cd "$APP_DIR" && docker compose stop nginx-proxy >/dev/null 2>&1) || true
+    fi
+  fi
+  local pflag=()
+  if [ "${acme[0]}" = "--standalone" ]; then pflag=(-p 80:80); fi
+
+  if run_soft "Выпуск сертификата Let's Encrypt" docker run --rm ${pflag[@]+"${pflag[@]}"} ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
       -v "$conf:/etc/letsencrypt" -v "$APP_DIR/certbot/www:/var/www/certbot" \
-      certbot/certbot certonly --standalone --non-interactive --agree-tos --no-eff-email \
+      certbot/certbot certonly "${acme[@]}" --non-interactive --agree-tos --no-eff-email \
       -m "$LE_EMAIL" -d "$DOMAIN"; then
-    CERT_MODE="letsencrypt"
+    CERT_MODE="letsencrypt"; CERT_CHANGED=1; CERT_ISSUED=1
+    rm -rf "$aside"
     ok "Сертификат Let's Encrypt выпущен. Автопродление: контейнер certbot."
   else
     warn "Не удалось получить сертификат (проверьте A-запись домена и доступность порта 80)."
+    if [ -d "$aside" ]; then
+      rm -rf "$live"; mv "$aside" "$live"
+      warn "Оставляю прежний самоподписанный сертификат."
+      CERT_MODE="selfsigned"
+      return 0
+    fi
     warn "Создаю временный самоподписанный сертификат, чтобы панель всё равно запустилась."
+    CERT_CHANGED=1
     mkdir -p "$live"
     openssl req -x509 -nodes -newkey rsa:2048 -days 30 -subj "/CN=${DOMAIN}" \
       -keyout "$live/privkey.pem" -out "$live/fullchain.pem" >/dev/null 2>&1
@@ -10433,20 +13406,53 @@ issue_certificate() {
 }
 
 # ---------- 9. launch ----------
-launch() {
-  step "Сборка и запуск контейнеров"
+# Images are built first, while the old containers keep serving. A failed build stops the installer here
+# (die) and leaves the running version untouched.
+build_images() {
+  step "Сборка образов"
   cd "$APP_DIR"
-  run "Сборка образов и запуск контейнеров (3-8 минут)" docker compose up --build -d
+  if stack_running; then info "Панель продолжает работать на прежней версии, пока идёт сборка."; fi
+  run "Сборка образов (3-8 минут)" docker compose build
+  ok "Образы собраны"
+}
+
+# only now the containers are replaced: "up -d" recreates just the services whose image or settings changed
+# (nginx keeps running when it did not change). The build id is passed to the backend explicitly because it
+# is written to .env only after the health check.
+launch() {
+  step "Запуск контейнеров"
+  cd "$APP_DIR"
+  run "Запуск контейнеров" env APP_VERSION="$COREGSM_BUILD" docker compose up -d --remove-orphans
+  if [ "$CERT_CHANGED" = 1 ] && service_running nginx-proxy; then
+    docker compose exec -T nginx-proxy nginx -s reload >/dev/null 2>&1 || true
+  fi
   info "Жду готовности панели…"
   local i
   for i in $(seq 1 60); do
     if curl -fsk --noproxy "*" --max-time 3 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
       ok "Панель отвечает"
+      PANEL_OK=1
+      # the previous images are now untagged (the :prev copies for rollback stay): free the disk
+      docker image prune -f >/dev/null 2>&1 || true
       return 0
     fi
     sleep 3
   done
   warn "Панель не ответила за 3 минуты. Логи: cd $APP_DIR && docker compose logs --tail=100"
+}
+
+# Let's Encrypt: once after issuing, check that renewal works through the running panel (webroot, as the
+# certbot container does). A failure is only reported.
+verify_renewal() {
+  [ "$CERT_ISSUED" = 1 ] && [ "$PANEL_OK" = 1 ] || return 0
+  if run_soft "Проверка автопродления сертификата (certbot renew --dry-run)" \
+      docker run --rm ${BUILD_PROXY:+-e HTTPS_PROXY=$BUILD_PROXY} \
+      -v "$APP_DIR/certbot/conf:/etc/letsencrypt" -v "$APP_DIR/certbot/www:/var/www/certbot" \
+      certbot/certbot renew --dry-run --authenticator webroot --webroot-path /var/www/certbot; then
+    ok "Автопродление работает"
+  else
+    warn "Проверка автопродления не прошла: сертификат выпущен, но продлить его автоматически может не получиться. Подробности: $LOGFILE"
+  fi
 }
 
 report() {
@@ -10486,7 +13492,8 @@ install_manager() {
 # coregsm: CoreGSM manager (menu + commands). Installed to /usr/local/bin/coregsm by install.sh.
 #
 #   coregsm                 interactive menu
-#   coregsm update [--check|--force|--yes|--auto]
+#   coregsm update [--check|--force|--yes|--auto]   (--from-panel: reads the request file; "rollback" = roll back)
+#   coregsm rollback [--yes]                         previous version + database from the pre-update backup
 #   coregsm status | doctor | logs [service] | start | stop | restart
 #   coregsm backup | restore [file] | domain | reset-password | uninstall
 set -uo pipefail
@@ -10543,6 +13550,38 @@ need_installed() { installed || { bad "CoreGSM не установлен. Зап
 
 envget() { grep -E "^$1=" "$APP_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true; }
 dc() { (cd "$APP_DIR" && docker compose "$@"); }
+
+env_set() { # env_set KEY VALUE  -> replaces or appends the line in .env, keeping everything else (and the file mode)
+  local f="$APP_DIR/.env" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp)"
+  if grep -qE "^$1=" "$f"; then
+    K="$1" V="$2" awk 'BEGIN{k=ENVIRON["K"]; v=ENVIRON["V"]} index($0, k "=") == 1 {print k "=" v; next} {print}' "$f" > "$tmp"
+  else
+    { cat "$f"; printf '%s=%s\n' "$1" "$2"; } > "$tmp"
+  fi
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
+}
+
+is_local_name() { # IPv4, localhost or a private suffix: Let's Encrypt is impossible for these
+  [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && return 0
+  [[ "$1" =~ (^localhost$|\.(local|lan|home|internal|test|localdomain)$|\.home\.arpa$) ]] && return 0
+  return 1
+}
+
+# days until the panel certificate expires (fails when there is no certificate)
+cert_days() {
+  local d crt end ts
+  d="$(envget DOMAIN)"; crt="$APP_DIR/certbot/conf/live/$d/fullchain.pem"
+  [ -f "$crt" ] || return 1
+  end="$(openssl x509 -enddate -noout -in "$crt" 2>/dev/null | cut -d= -f2)"; [ -n "$end" ] || return 1
+  ts="$(date -d "$end" +%s 2>/dev/null)" || return 1
+  echo $(( (ts - $(date +%s)) / 86400 ))
+}
+cert_kind() { # letsencrypt | selfsigned
+  [ -f "$APP_DIR/certbot/conf/live/$(envget DOMAIN)/.selfsigned" ] && echo selfsigned || echo letsencrypt
+}
 
 PROXY_ARGS=()
 _p="$(envget PROXY_URL)"; [ -n "$_p" ] && PROXY_ARGS=(--proxy "${_p/#socks5:/socks5h:}")
@@ -10631,14 +13670,13 @@ cmd_status() {
   done < <(dc ps -a --format '{{.Service}}\t{{.State}}' 2>/dev/null | sort)
   hr
   if healthy 3; then kv "Панель" "${OKC}отвечает${NC}"; else kv "Панель" "${BAD}не отвечает${NC}"; fi
-  local d crt end days
-  d="$(envget DOMAIN)"; crt="$APP_DIR/certbot/conf/live/$d/fullchain.pem"
-  if [ -f "$crt" ]; then
-    end="$(openssl x509 -enddate -noout -in "$crt" 2>/dev/null | cut -d= -f2)"
-    days=$(( ( $(date -d "$end" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
-    if [ -f "$(dirname "$crt")/.selfsigned" ]; then kv "Сертификат" "самоподписанный"; else kv "Сертификат" "Let's Encrypt, ещё ${days} дн."; fi
+  local days kind lbl
+  if days="$(cert_days)"; then
+    kind="$(cert_kind)"; lbl="Let's Encrypt"; [ "$kind" = selfsigned ] && lbl="самоподписанный"
+    if [ "$days" -lt 14 ]; then kv "Сертификат" "${WRN}${lbl}, осталось ${days} дн. — скоро истечёт${NC}"; else kv "Сертификат" "${lbl}, ещё ${days} дн."; fi
   fi
   kv "Версия" "$(cur_build | cut -c1-7)"
+  if rollback_available; then kv "Откат" "возможен (coregsm rollback)"; fi
   local latest; latest="$(remote_build)"
   if [ -n "$latest" ] && [ "$latest" != "$(cur_build)" ]; then kv "Обновление" "${WRN}⬆ ${latest:0:7}${NC}  (coregsm update)"; fi
   local last; last="$(ls -1t "$BACKUPS" 2>/dev/null | head -n1)"
@@ -10662,7 +13700,7 @@ cmd_doctor() {
     curl -sk --noproxy "*" --max-time 5 --resolve "${d}:443:127.0.0.1" "https://${d}/api/health" || echo "no answer"
     echo; echo "== dns ($d)"; getent ahostsv4 "$d" 2>&1 | head -n 2
     local crt="$APP_DIR/certbot/conf/live/$d/fullchain.pem"
-    if [ -f "$crt" ]; then echo; echo "== certificate"; openssl x509 -noout -subject -enddate -in "$crt" 2>&1; [ -f "$(dirname "$crt")/.selfsigned" ] && echo "self-signed"; fi
+    if [ -f "$crt" ]; then echo; echo "== certificate"; openssl x509 -noout -subject -enddate -in "$crt" 2>&1; [ -f "$(dirname "$crt")/.selfsigned" ] && echo "self-signed"; echo "days left: $(cert_days)   local_mode: $(envget LOCAL_MODE)   cert_mode: $(envget CERT_MODE)"; fi
     echo; echo "== updater"; systemctl is-active coregsm-update.path 2>&1; ls -la "$UPD" 2>&1 | head -n 8
     local s; for s in backend bot nginx-proxy; do echo; echo "== log: $s (last 25)"; dc logs --no-color --tail=25 "$s" 2>&1; done
   } > "$out" 2>&1
@@ -10674,11 +13712,41 @@ cmd_doctor() {
   healthy 3 && ok "Панель отвечает на запросы" || { bad "Панель не отвечает"; problems=$((problems + 1)); }
   ss -ltn 2>/dev/null | grep -qE ':443\b' && ok "Порт 443 слушается" || { bad "Порт 443 не слушается"; problems=$((problems + 1)); }
   ufw status 2>/dev/null | grep -q "443" && ok "Файрвол пропускает 80 и 443" || warn "В UFW не видно правил для 443"
+  local cdays
+  if cdays="$(cert_days)"; then
+    if [ "$cdays" -lt 14 ]; then warn "Сертификат истекает через ${cdays} дн."; problems=$((problems + 1)); else ok "Сертификат действует ещё ${cdays} дн."; fi
+  fi
   local free; free="$(df -P "$APP_DIR" | awk 'NR==2{print int($4/1024)}')"
   [ "$free" -gt 1024 ] && ok "Свободно места: ${free} МБ" || { warn "Мало места на диске: ${free} МБ"; problems=$((problems + 1)); }
   hr
   if [ "$problems" -eq 0 ]; then ok "Проблем не найдено"; else warn "Найдено проблем: $problems"; fi
   dim "Полный отчёт для поддержки: $out"
+}
+
+# Daily check (coregsm-health.timer): a warning in the journal and in /var/log/coregsm-health.log when the
+# certificate expires in less than 14 days (renewal does not work) or the panel does not answer.
+cmd_health() {
+  installed || return 0
+  local days msg f=/var/log/coregsm-health.log
+  if days="$(cert_days)"; then
+    if [ "$days" -lt 14 ]; then
+      msg="Сертификат $(envget DOMAIN) истекает через ${days} дн. Проверьте: docker compose logs certbot (cd $APP_DIR)"
+      [ "$(cert_kind)" = selfsigned ] && msg="$msg; для самоподписанного: sudo bash install.sh --install"
+      printf '%s WARN %s\n' "$(date '+%F %T')" "$msg" >> "$f"
+      warn "$msg"
+      command -v logger >/dev/null 2>&1 && logger -t coregsm -p daemon.warning "$msg"
+    else
+      dim "Сертификат действует ещё ${days} дн."
+    fi
+  fi
+  if ! healthy 6; then
+    msg="Панель не отвечает на https://$(envget DOMAIN)/api/health"
+    printf '%s WARN %s\n' "$(date '+%F %T')" "$msg" >> "$f"
+    warn "$msg"
+    command -v logger >/dev/null 2>&1 && logger -t coregsm -p daemon.warning "$msg"
+  fi
+  [ -f "$f" ] && chmod 600 "$f"
+  return 0
 }
 
 # ---------- logs / start / stop ----------
@@ -10745,8 +13813,18 @@ remote_meta() { # sets R_BUILD R_SHA
 # ---------- backups ----------
 data_volume() { docker volume ls -q 2>/dev/null | grep -E 'coregsm-data$' | head -n1; }
 
+# Image for one-off commands on the data volume: busybox, or (offline) the backend image itself.
+helper_image() {
+  if docker image inspect busybox >/dev/null 2>&1; then echo busybox; return; fi
+  if docker pull -q busybox >/dev/null 2>&1; then echo busybox; return; fi
+  echo coregsm-backend
+}
+
+# An archive "coregsm-[TAG-]DATE.tgz" holds: coregsm.db (consistent copy), env, certs.tgz, and (new)
+# files.tgz + files.list with the news pictures and the brand logo from the data volume. The panel's own
+# scheduled backups (/data/backups) and *.db-wal/-shm files are not part of it.
 backup_create() { # backup_create [tag]  -> prints the archive path
-  local tag="${1:-}" tmp name vol
+  local tag="${1:-}" tmp name vol pat
   mkdir -p "$BACKUPS"; chmod 700 "$BACKUPS"
   tmp="$(mktemp -d)"; vol="$(data_volume)"
   name="coregsm-${tag:+$tag-}$(date +%Y%m%d-%H%M%S).tgz"
@@ -10757,18 +13835,46 @@ backup_create() { # backup_create [tag]  -> prints the archive path
       && docker cp "$(dc ps -q backend):/data/.backup.db" "$tmp/coregsm.db" >/dev/null 2>&1
     dc exec -T backend rm -f /data/.backup.db >/dev/null 2>&1
   fi
+  if [ ! -f "$tmp/coregsm.db" ] && [ -n "$vol" ] && docker image inspect coregsm-backend >/dev/null 2>&1; then
+    # backend stopped: let SQLite merge the write-ahead log into the copy (the backend image has the driver)
+    docker run --rm -u 0 --entrypoint node -v "$vol:/data:ro" -v "$tmp:/out" coregsm-backend \
+      -e "const D=require('better-sqlite3');const s=new D('/data/coregsm.db',{readonly:true});s.backup('/out/coregsm.db').then(()=>process.exit(0),e=>{console.error(e);process.exit(1)})" >/dev/null 2>&1 \
+      || rm -f "$tmp/coregsm.db"
+  fi
   if [ ! -f "$tmp/coregsm.db" ] && [ -n "$vol" ]; then
-    docker run --rm -v "$vol:/data:ro" -v "$tmp:/out" busybox sh -c 'cp /data/coregsm.db /out/coregsm.db' >/dev/null 2>&1
+    docker run --rm -u 0 --entrypoint sh -v "$vol:/data:ro" -v "$tmp:/out" "$(helper_image)" -c 'cp /data/coregsm.db /out/coregsm.db' >/dev/null 2>&1
   fi
   [ -f "$tmp/coregsm.db" ] || { rm -rf "$tmp"; return 1; }
+
+  if [ -n "$vol" ]; then
+    # news pictures and brand logo; files.list is kept only when the archive really holds them
+    docker run --rm -u 0 --entrypoint sh -v "$vol:/data:ro" -v "$tmp:/out" "$(helper_image)" -c \
+      'cd /data && ls -d news brand-logo.* 2>/dev/null > /out/files.list; if [ -s /out/files.list ]; then tar czf /out/files.tgz -T /out/files.list || rm -f /out/files.list /out/files.tgz; fi; exit 0' >/dev/null 2>&1 || true
+  fi
 
   cp "$APP_DIR/.env" "$tmp/env"
   [ -d "$APP_DIR/certbot/conf" ] && tar czf "$tmp/certs.tgz" -C "$APP_DIR" certbot/conf 2>/dev/null
   tar czf "$BACKUPS/$name" -C "$tmp" . && chmod 600 "$BACKUPS/$name"
   rm -rf "$tmp"
-  # keep the newest $KEEP_BACKUPS archives
-  ls -1t "$BACKUPS"/coregsm-*.tgz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -f
+  # keep the newest $KEEP_BACKUPS archives of each kind (auto, pre-update, before-restore, manual, ...)
+  if [ -n "$tag" ]; then pat="coregsm-$tag-[0-9]*.tgz"; else pat="coregsm-[0-9]*.tgz"; fi
+  ls -1t "$BACKUPS"/$pat 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -f
   printf '%s' "$BACKUPS/$name"
+}
+
+# Writes data from an extracted archive (DIR) into the data volume.
+#   MODE db   : only coregsm.db (rollback)
+#   MODE full : the database, news/ and brand-logo.* (restore); an old archive without files.list leaves
+#               the current pictures alone
+# The caller stops backend and bot first.
+restore_volume() { # restore_volume DIR db|full
+  local vol script
+  vol="$(data_volume)"; [ -n "$vol" ] || return 1
+  script='cp /in/coregsm.db /data/coregsm.db && rm -f /data/coregsm.db-wal /data/coregsm.db-shm && chown 1000:1000 /data/coregsm.db || exit 1'
+  if [ "$2" = full ]; then
+    script="$script"'; if [ -f /in/files.list ]; then rm -rf /data/news; rm -f /data/brand-logo.*; if [ -f /in/files.tgz ]; then tar xzf /in/files.tgz -C /data || exit 1; fi; fi; chown -R 1000:1000 /data/news /data/brand-logo.* 2>/dev/null; exit 0'
+  fi
+  docker run --rm -u 0 --entrypoint sh -v "$vol:/data" -v "$1:/in:ro" "$(helper_image)" -c "$script" >/dev/null 2>&1
 }
 
 cmd_backup() {
@@ -10796,19 +13902,40 @@ cmd_restore() {
   local file="${1:-}" tmp vol
   if [ -z "$file" ]; then title "Восстановление"; file="$(pick_backup)" || return 0; fi
   [ -f "$file" ] || { bad "Файл не найден: $file"; return 1; }
-  say "Будут заменены база данных и .env из копии."
-  ask_yn "Восстановить из $(basename "$file")?" || { dim "Отменено"; return 0; }
-  spin "Страховочная копия текущего состояния" backup_create before-restore || warn "Страховочная копия не создана"
-
-  tmp="$(mktemp -d)"; vol="$(data_volume)"
+  tmp="$(mktemp -d)"
   tar xzf "$file" -C "$tmp" || { bad "Архив повреждён"; rm -rf "$tmp"; return 1; }
   [ -f "$tmp/coregsm.db" ] || { bad "В архиве нет базы данных"; rm -rf "$tmp"; return 1; }
+  say "Будут заменены: база данных, картинки новостей и логотип (если они есть в копии),"
+  say "а также секреты JWT_SECRET и INTERNAL_TOKEN (они должны совпадать с базой)."
+  say "Домен, версия и сертификаты этого сервера не меняются."
+  ask_yn "Восстановить из $(basename "$file")?" || { dim "Отменено"; rm -rf "$tmp"; return 0; }
+  local with_certs=0
+  if [ -f "$tmp/certs.tgz" ]; then
+    echo; say "В копии есть сертификаты и адрес (домен) прежнего сервера."
+    dim "Нужны только при возврате на тот же адрес. При переносе на другой сервер ответьте «нет»."
+    ask_yn "Восстановить также сертификаты и домен из копии?" && with_certs=1
+  fi
+  spin "Страховочная копия текущего состояния" backup_create before-restore || warn "Страховочная копия не создана"
+
   spin "Останавливаю сервисы" dc stop backend bot
-  docker run --rm -v "$vol:/data" -v "$tmp:/in:ro" busybox sh -c \
-    'cp /in/coregsm.db /data/coregsm.db && rm -f /data/coregsm.db-wal /data/coregsm.db-shm && chown 1000:1000 /data/coregsm.db' \
-    && ok "База данных восстановлена" || { bad "Не удалось записать базу"; rm -rf "$tmp"; return 1; }
-  [ -f "$tmp/env" ] && cp "$tmp/env" "$APP_DIR/.env" && chmod 600 "$APP_DIR/.env" && ok "Файл .env восстановлен"
-  [ -f "$tmp/certs.tgz" ] && tar xzf "$tmp/certs.tgz" -C "$APP_DIR" && ok "Сертификаты восстановлены"
+  restore_volume "$tmp" full && ok "База данных и файлы восстановлены" || { bad "Не удалось записать данные"; rm -rf "$tmp"; return 1; }
+  if [ -f "$tmp/env" ]; then
+    local k v
+    for k in JWT_SECRET INTERNAL_TOKEN; do
+      v="$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"
+      [ -n "$v" ] && env_set "$k" "$v"
+    done
+    ok "Секреты JWT_SECRET и INTERNAL_TOKEN восстановлены"
+    if [ "$with_certs" = 1 ]; then
+      for k in DOMAIN LE_EMAIL LOCAL_MODE CERT_MODE; do
+        grep -qE "^$k=" "$tmp/env" && env_set "$k" "$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"
+      done
+      if ! grep -qE '^LOCAL_MODE=' "$tmp/env"; then
+        if is_local_name "$(envget DOMAIN)"; then env_set LOCAL_MODE 1; else env_set LOCAL_MODE 0; fi
+      fi
+    fi
+  fi
+  if [ "$with_certs" = 1 ] && [ -f "$tmp/certs.tgz" ]; then tar xzf "$tmp/certs.tgz" -C "$APP_DIR" && ok "Сертификаты и домен восстановлены"; fi
   rm -rf "$tmp"
   spin "Запускаю сервисы" dc up -d
 }
@@ -10838,7 +13965,7 @@ screen_backups() {
     kv "Хранится" "$(ls -1 "$BACKUPS"/coregsm-*.tgz 2>/dev/null | wc -l) шт. из $KEEP_BACKUPS"
     kv "Последняя" "$(ls -1t "$BACKUPS" 2>/dev/null | head -n1 | sed 's/^coregsm-//; s/\.tgz$//')"
     echo
-    item 1 "Создать копию" "база, .env, сертификаты"
+    item 1 "Создать копию" "база, картинки, .env, сертификаты"
     item 2 "Восстановить" "из выбранной копии"
     item 3 "Копия каждую ночь" "$(flag backup)"
     printf '\n  %sВыбор:%s ' "$DIM" "$NC"; local k; tty_read -n1 k; echo
@@ -10852,34 +13979,126 @@ screen_backups() {
 }
 
 # ---------- update (with rollback) ----------
+# Rollback is possible while the previous images (:prev tags), the source snapshot and the pre-update backup
+# exist. They are taken by snapshot_create before an update and consumed by a successful rollback.
+rollback_available() {
+  [ -f "$PREV/src.tgz" ] || return 1
+  local b; b="$(cat "$PREV/pre_backup" 2>/dev/null)"
+  [ -n "$b" ] && [ -f "$b" ] || return 1
+  docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE '^coregsm-.*:prev$'
+}
+
+# status.json: {"state":"running|done|error","message":"...","time":<ms>,"rollback_available":true|false}
 status_file() { # status_file STATE MESSAGE  (the panel shows this)
-  local msg; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+  local msg rb=false; msg="$(printf '%s' "$2" | tr -d '\n\r' | sed 's/["\\]/ /g')"
+  rollback_available && rb=true
   mkdir -p "$UPD"
-  printf '{"state":"%s","message":"%s","time":%s000}\n' "$1" "$msg" "$(date +%s)" > "$UPD/status.json.tmp"
+  printf '{"state":"%s","message":"%s","time":%s000,"rollback_available":%s}\n' "$1" "$msg" "$(date +%s)" "$rb" > "$UPD/status.json.tmp"
   mv -f "$UPD/status.json.tmp" "$UPD/status.json"; chmod 644 "$UPD/status.json"
 }
 
+prev_images() { docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^coregsm-.*:prev$'; }
+
 snapshot_create() {
   mkdir -p "$PREV"
+  rm -f "$PREV/pre_backup"
+  # drop the :prev tags of an older snapshot, so old and new images never mix
+  prev_images | xargs -r docker rmi >/dev/null 2>&1
   cur_build > "$PREV/version"
   cp -f "$APP_DIR/.env" "$PREV/env"
   tar czf "$PREV/src.tgz" -C "$APP_DIR" docker-compose.yml core-backend core-frontend core-bot nginx 2>/dev/null
-  local img
+  local img f
   for img in $(dc config --images 2>/dev/null | grep '^coregsm-'); do
     docker image inspect "$img" >/dev/null 2>&1 && docker tag "$img" "${img%%:*}:prev"
   done
-  backup_create pre-update >/dev/null 2>&1 || true
+  f="$(backup_create pre-update 2>/dev/null)" && [ -f "$f" ] && printf '%s' "$f" > "$PREV/pre_backup"
+  return 0
 }
 
+# the sources of the version that is still running (after a failed build the new ones are on disk already)
+restore_sources() { [ -f "$PREV/src.tgz" ] && tar xzf "$PREV/src.tgz" -C "$APP_DIR" 2>/dev/null; return 0; }
+
+RB_ERR=""; RB_DB=0
+# Back to the previous version: sources and APP_VERSION, :prev images, the database from the pre-update backup
+# (only coregsm.db: .env, certificates, news pictures and the logo stay as they are), then start.
 rollback_apply() {
-  [ -f "$PREV/src.tgz" ] || return 1
-  tar xzf "$PREV/src.tgz" -C "$APP_DIR" && cp -f "$PREV/env" "$APP_DIR/.env" && chmod 600 "$APP_DIR/.env" || return 1
+  RB_ERR=""; RB_DB=0
+  [ -f "$PREV/src.tgz" ] || { RB_ERR="нет снимка предыдущей версии"; return 1; }
+  tar xzf "$PREV/src.tgz" -C "$APP_DIR" || { RB_ERR="не удалось распаковать снимок файлов"; return 1; }
+  env_set APP_VERSION "$(cat "$PREV/version" 2>/dev/null)"
   local img
-  for img in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^coregsm-.*:prev$'); do
+  for img in $(prev_images); do
     docker tag "$img" "${img%:prev}:latest"
   done
+  local pre; pre="$(cat "$PREV/pre_backup" 2>/dev/null)"
+  if [ -n "$pre" ] && [ -f "$pre" ]; then
+    status_file running "Откат к предыдущей версии: восстанавливаю базу данных…"
+    local tmp; tmp="$(mktemp -d)"
+    tar xzf "$pre" -C "$tmp" ./coregsm.db 2>/dev/null || tar xzf "$pre" -C "$tmp" 2>/dev/null
+    if [ ! -f "$tmp/coregsm.db" ]; then
+      rm -rf "$tmp"; RB_ERR="копия базы перед обновлением повреждена"; return 1
+    fi
+    dc stop backend bot >/dev/null 2>&1
+    if restore_volume "$tmp" db; then RB_DB=1; say "База данных восстановлена из $(basename "$pre")"
+    else rm -rf "$tmp"; RB_ERR="не удалось записать базу данных"; return 1; fi
+    rm -rf "$tmp"
+  else
+    warn "Копия базы перед обновлением не найдена: база не изменена"
+  fi
+  status_file running "Откат к предыдущей версии: запускаю прежние контейнеры…"
   dc up -d --no-build >/dev/null 2>&1
-  healthy 90
+  if ! healthy 90; then RB_ERR="прежняя версия не отвечает после запуска"; return 1; fi
+  # the snapshot is used up: rolling back twice would only bring the old database back again
+  rm -f "$PREV/src.tgz" "$PREV/pre_backup"
+  prev_images | xargs -r docker rmi >/dev/null 2>&1
+  return 0
+}
+
+acquire_lock() {
+  mkdir -p "$UPD"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9> "$UPD/.lock"; flock -n 9 || { say "Обновление уже выполняется"; return 1; }
+  fi
+  return 0
+}
+
+# Rollback to the previous version (panel button: request file "rollback"; or "coregsm rollback").
+# rollback_flow ASK: ASK=1 asks for a confirmation first (terminal)
+rollback_flow() {
+  local ask="${1:-0}" prev
+  if ! rollback_available; then
+    bad "Откат невозможен: нет снимка предыдущей версии или копии базы (создаются при обновлении)"
+    status_file error "Откат не удался: нет сохранённого снимка предыдущей версии или копии базы. Откат доступен только после обновления"
+    return 1
+  fi
+  prev="$(cat "$PREV/version" 2>/dev/null)"
+  if [ "$ask" = 1 ]; then
+    title "Откат"
+    kv "Установлено" "$(cur_build | cut -c1-7)"; kv "Вернуть" "${prev:0:7}"
+    warn "База данных вернётся к состоянию перед обновлением: изменения после него будут потеряны."
+    ask_yn "Откатить?" || { dim "Отменено"; return 0; }
+  fi
+  status_file running "Откат к предыдущей версии…"
+  : > "$LOG"
+  rollback_apply >> "$LOG" 2>&1; local rc=$?
+  [ "$ask" = 1 ] && sed 's/\x1b\[[0-9;]*m//g' "$LOG"
+  if [ "$rc" -eq 0 ]; then
+    status_file done "Откат выполнен: работает версия ${prev:0:7}"
+    ok "Откат выполнен: работает версия ${prev:0:7}"; return 0
+  fi
+  status_file error "Откат не удался: ${RB_ERR:-причина в журнале}. Запустите: coregsm doctor"
+  bad "Откат не удался: ${RB_ERR:-причина в журнале}. Запустите: coregsm doctor"
+  return 1
+}
+
+cmd_rollback() {
+  local a ask=1
+  for a in "$@"; do
+    case "$a" in --yes|-y) ask=0 ;; *) bad "Неизвестный параметр: $a"; return 2 ;; esac
+  done
+  need_root; need_installed
+  acquire_lock || return 0
+  rollback_flow "$ask"
 }
 
 cmd_update() {
@@ -10892,11 +14111,16 @@ cmd_update() {
   done
   need_root; need_installed
   mkdir -p "$UPD"
-  # the request flag must go first, otherwise the systemd path unit would fire again
-  [ "$panel" = 1 ] && rm -f "$UPD/request"
-  if command -v flock >/dev/null 2>&1; then
-    exec 9> "$UPD/.lock"; flock -n 9 || { say "Обновление уже выполняется"; return 0; }
+  # The request file tells what the panel wants: the word "rollback" = roll back to the previous version,
+  # anything else (a timestamp, empty) = update. It is consumed first, otherwise the systemd path unit
+  # would fire again.
+  local req=""
+  if [ "$panel" = 1 ]; then
+    req="$(head -c 256 "$UPD/request" 2>/dev/null | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    rm -f "$UPD/request"
   fi
+  acquire_lock || return 0
+  if [ "$panel" = 1 ] && [ "$req" = rollback ]; then rollback_flow 0; return $?; fi
   local quiet=0; { [ "$panel" = 1 ] || [ "$auto" = 1 ]; } && quiet=1
   fail() { bad "$1"; [ "$check" = 1 ] || status_file error "$1"; return 1; }
 
@@ -10937,26 +14161,34 @@ cmd_update() {
   rm -f "$tmp"
 
   if [ "$rc" -eq 0 ] && healthy 120; then
+    # the new build id is stamped only now, after the health check
+    env_set APP_VERSION "$latest"
+    docker image prune -f >/dev/null 2>&1
     status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
     # pull the actual cause out of the installer output so it is visible in the panel and on screen
     local reason
-    reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
-    status_file error "Установка не удалась (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
-    bad "Установка не удалась (код $rc), прежняя версия работает."
+    reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | sed 's/\. Полный журнал:.*//' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
+    # still the old version: it keeps its build id, and if the build failed the new sources go back as well
+    [ -n "$current" ] && env_set APP_VERSION "$current"
+    grep -q 'Запуск контейнеров' "$LOG" 2>/dev/null || restore_sources
+    status_file error "Обновление не удалось (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
+    bad "Обновление не удалось (код $rc), прежняя версия работает."
     [ -n "$reason" ] && say "Причина: $reason"
     dim "Последние строки журнала:"; tail -n 12 "$LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g; s/^/    /'
     dim "Полный журнал: /var/log/coregsm-install.log"
     return "$rc"
   fi
   warn "Новая версия не запустилась. Возвращаю предыдущую…"
+  status_file running "Новая версия не запустилась. Откат к предыдущей версии…"
   if rollback_apply; then
-    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}. Журнал: /var/log/coregsm-install.log"
+    local dbnote=""; [ "$RB_DB" = 1 ] && dbnote=" (база данных восстановлена из копии перед обновлением)"
+    status_file error "Обновление не удалось, выполнен откат на ${current:0:7}${dbnote}. Журнал: /var/log/coregsm-install.log"
     ok "Откат выполнен: работает версия ${current:0:7}"
   else
-    status_file error "Обновление не удалось и откат не помог. Запустите: coregsm doctor"
-    bad "Откат не удался. Запустите: coregsm doctor"
+    status_file error "Обновление не удалось и откат не помог: ${RB_ERR:-причина неизвестна}. Запустите: coregsm doctor"
+    bad "Откат не удался: ${RB_ERR:-причина неизвестна}. Запустите: coregsm doctor"
   fi
   return 1
 }
@@ -10970,9 +14202,11 @@ screen_update() {
     ok "У вас последняя версия"
     echo; item 1 "Переустановить файлы" "вернёт изменённые вручную"
     item 2 "Автообновление по ночам" "$(flag autoupdate)"
+    rollback_available && item 3 "Откатить обновление" "версия $(cat "$PREV/version" 2>/dev/null | cut -c1-7), вместе с базой"
     printf '\n  %sВыбор:%s ' "$DIM" "$NC"; local k; tty_read -n1 k; echo
     case "$k" in
       1) cmd_update --force --yes ;;
+      3) cmd_rollback ;;
       2) if timer_on autoupdate; then timer_set autoupdate off; ok "Автообновление выключено"; else timer_set autoupdate on; ok "Проверка и обновление каждую ночь в 04:30"; fi ;;
       *) return 0 ;;
     esac
@@ -11033,11 +14267,20 @@ cmd_reset_password() {
   [ "${#p1}" -ge 10 ] || { bad "Пароль слишком короткий"; return 1; }
   printf '  Повторите пароль: '; tty_read -s p2; echo
   [ "$p1" = "$p2" ] || { bad "Пароли не совпадают"; return 1; }
-  if dc exec -T -e NEWPW="$p1" backend node -e "
-    const db=require('better-sqlite3')('/data/coregsm.db'); const b=require('bcryptjs');
-    const r=db.prepare('UPDATE users SET password_hash=? WHERE id=(SELECT MIN(id) FROM users)').run(b.hashSync(process.env.NEWPW,12));
-    if(!r.changes){console.error('no user');process.exit(1)}" >/dev/null 2>&1; then
-    ok "Пароль изменён"
+  # the first administrator (lowest id with role admin); all of their sessions are closed, nothing else is touched
+  local js
+  js="$(cat << 'JS'
+const db = require('better-sqlite3')('/data/coregsm.db');
+const b = require('bcryptjs');
+const row = db.prepare("SELECT MIN(id) AS id FROM users WHERE role='admin'").get();
+if (!row || !row.id) { console.error('no admin'); process.exit(1); }
+const r = db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(b.hashSync(process.env.NEWPW, 12), row.id);
+if (!r.changes) { console.error('no user'); process.exit(1); }
+db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.id);
+JS
+)"
+  if dc exec -T -e NEWPW="$p1" backend node -e "$js" >/dev/null 2>&1; then
+    ok "Пароль изменён, все сеансы администратора закрыты"
   else
     bad "Не удалось изменить пароль (панель ещё не настроена или backend остановлен)"; return 1
   fi
@@ -11062,7 +14305,14 @@ cmd_uninstall() {
   [ "$w" = "УДАЛИТЬ" ] || { dim "Отменено"; return 0; }
 
   if [ "$k" -ge 2 ] && installed; then
-    local f; f="$(backup_create final 2>/dev/null)" && { mv "$f" "/root/$(basename "$f")"; ok "Последняя копия: /root/$(basename "$f")"; } || warn "Копию создать не удалось"
+    local f; f="$(backup_create final 2>/dev/null)"
+    if [ -n "$f" ] && [ -f "$f" ] && mv "$f" "/root/$(basename "$f")"; then
+      ok "Последняя копия: /root/$(basename "$f")"
+    else
+      warn "Последнюю копию создать не удалось: данные будут удалены безвозвратно."
+      say "Чтобы всё равно удалить без копии, введите ${BLD}БЕЗ КОПИИ${NC}:"; printf '  > '; local w2; tty_read w2
+      [ "$w2" = "БЕЗ КОПИИ" ] || { dim "Отменено, ничего не удалено"; return 0; }
+    fi
   fi
 
   if installed; then
@@ -11073,8 +14323,12 @@ cmd_uninstall() {
 
   if [ "$k" -ge 2 ]; then
     local t
-    for t in coregsm-update.path coregsm-backup.timer coregsm-autoupdate.timer; do systemctl disable --now "$t" >/dev/null 2>&1; done
-    rm -f /etc/systemd/system/coregsm-* /etc/bash_completion.d/coregsm /usr/local/bin/coregsm-update
+    for t in coregsm-update.path coregsm-backup.timer coregsm-autoupdate.timer coregsm-health.timer; do systemctl disable --now "$t" >/dev/null 2>&1; done
+    rm -f /etc/systemd/system/coregsm-* /etc/bash_completion.d/coregsm /usr/local/bin/coregsm-update /var/log/coregsm-health.log
+    # proxy settings the installer wrote (Docker picks the drop-in removal up at its next restart)
+    grep -qs "managed by CoreGSM installer" /etc/apt/apt.conf.d/99coregsm-proxy && rm -f /etc/apt/apt.conf.d/99coregsm-proxy
+    grep -qs "managed by CoreGSM installer" /etc/systemd/system/docker.service.d/coregsm-proxy.conf && rm -f /etc/systemd/system/docker.service.d/coregsm-proxy.conf
+    rmdir /etc/systemd/system/docker.service.d 2>/dev/null
     systemctl daemon-reload
     rm -rf "$APP_DIR"
     ok "Файлы приложения удалены"
@@ -11130,6 +14384,7 @@ usage() {
   cat << 'HELP'
   coregsm                     меню управления
   coregsm update              обновить (--check, --force, --yes)
+  coregsm rollback            откатить последнее обновление вместе с базой (--yes)
   coregsm status              состояние сервисов
   coregsm doctor              диагностика и отчёт для поддержки
   coregsm logs [сервис]       журналы (backend, bot, nginx-proxy)
@@ -11147,6 +14402,8 @@ main() {
   case "$cmd" in
     menu) menu ;;
     update) cmd_update "$@" ;;
+    rollback) cmd_rollback "$@" ;;
+    health) cmd_health ;;
     status) cmd_status ;;
     doctor) cmd_doctor ;;
     logs) cmd_logs "$@" ;;
@@ -11176,7 +14433,7 @@ MANAGER
 _coregsm() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "update status doctor logs start stop restart backup restore domain reset-password uninstall help" -- "$cur"))
+    COMPREPLY=($(compgen -W "update rollback status doctor logs start stop restart backup restore domain reset-password uninstall help" -- "$cur"))
   fi
 }
 complete -F _coregsm coregsm
@@ -11209,7 +14466,30 @@ Unit=coregsm-update.service
 [Install]
 WantedBy=multi-user.target
 UNIT
+    # daily check of the certificate expiry (warns in the log and in the journal when < 14 days are left)
+    cat > /etc/systemd/system/coregsm-health.service << UNIT
+[Unit]
+Description=CoreGSM daily health check (certificate expiry)
+
+[Service]
+Type=oneshot
+Environment=APP_DIR=${APP_DIR}
+ExecStart=/usr/local/bin/coregsm health
+UNIT
+    cat > /etc/systemd/system/coregsm-health.timer << UNIT
+[Unit]
+Description=CoreGSM daily health check
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
     systemctl daemon-reload
+    systemctl enable --now coregsm-health.timer >/dev/null 2>&1 || warn "Не удалось включить ежедневную проверку сертификата (coregsm-health.timer)"
     systemctl enable --now coregsm-update.path >/dev/null 2>&1 \
       && ok "Команда coregsm и кнопка «Обновить» в панели включены" \
       || warn "Не удалось включить systemd-юнит coregsm-update.path: кнопка в панели работать не будет, обновляйте командой sudo coregsm update"
@@ -11221,11 +14501,31 @@ UNIT
 
 installed_already() { [ -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/docker-compose.yml" ] && [ -x /usr/local/bin/coregsm ]; }
 
+# Rollback is possible when the previous images and the pre-update backup (taken by "coregsm update") exist.
+rollback_available() {
+  [ -f "$APP_DIR/.prev/src.tgz" ] || return 1
+  [ -f "$APP_DIR/.prev/pre_backup" ] && [ -f "$(cat "$APP_DIR/.prev/pre_backup" 2>/dev/null)" ] || return 1
+  docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE '^coregsm-.*:prev$'
+}
+
+# The new build id is stamped into .env only after the panel has answered: a failed update must not look
+# like a finished one (the next "coregsm update" would claim "up to date").
+promote_version() {
+  [ "$PANEL_OK" = 1 ] || return 0
+  env_set APP_VERSION "$COREGSM_BUILD"
+}
+
 # A finished install is a successful update: tell the panel, so an old failure is not shown any more.
+# Started by "coregsm update" the manager writes the status itself, after its own health check.
 mark_update_done() {
+  promote_version
+  [ "$PANEL_OK" = 1 ] || return 0
+  [ "${COREGSM_FROM_MANAGER:-0}" = 1 ] && return 0
   [ -d "$APP_DIR/update" ] || return 0
-  printf '{"state":"done","message":"Установлена версия %s","time":%s000}
-' "${COREGSM_BUILD:0:7}" "$(date +%s)" > "$APP_DIR/update/status.json" 2>/dev/null || true
+  local rb=false; rollback_available && rb=true
+  printf '{"state":"done","message":"Установлена версия %s","time":%s000,"rollback_available":%s}\n' \
+    "${COREGSM_BUILD:0:7}" "$(date +%s)" "$rb" > "$APP_DIR/update/status.json.tmp" 2>/dev/null \
+    && mv -f "$APP_DIR/update/status.json.tmp" "$APP_DIR/update/status.json" 2>/dev/null || true
   chmod 644 "$APP_DIR/update/status.json" 2>/dev/null || true
 }
 
@@ -11270,8 +14570,12 @@ HELP
   ok "Файлы проекта созданы"
   write_env
   install_manager
+  # images first (the old version keeps serving), then the certificate, then the containers are replaced
+  build_images
   issue_certificate
+  env_set CERT_MODE "$CERT_MODE"
   launch
+  verify_renewal
   mark_update_done
   report
 }

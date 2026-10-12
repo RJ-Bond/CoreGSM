@@ -58,7 +58,21 @@ function fit(ctx: any, text: string, maxWidth: number): string {
 
 const cache = new Map<number, { at: number; buf: Buffer }>();
 
-export async function renderCard(serverId: number): Promise<Buffer | null> {
+const inflight = new Map<number, Promise<Buffer | null>>();
+
+/** Concurrent requests for the same server share one render. */
+export function renderCard(serverId: number): Promise<Buffer | null> {
+  const running = inflight.get(serverId);
+  if (running) return running;
+  const p = renderCardNow(serverId).finally(() => inflight.delete(serverId));
+  inflight.set(serverId, p);
+  return p;
+}
+
+/** true for games with their own colour/pictogram; everything else gets the generic icon */
+export const isKnownGame = (game: string): boolean => game in GAME_COLORS;
+
+async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const hit = cache.get(serverId);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
 
@@ -294,9 +308,10 @@ export async function renderGameIcon(game: string): Promise<Buffer> {
     ctx.font = `700 96px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(GAME_COLORS[game]?.[0] ?? game.slice(0, 2).toUpperCase(), 128, 134);
+    ctx.fillText(GAME_COLORS[game]?.[0] ?? (game.slice(0, 2).toUpperCase() || '?'), 128, 134);
   }
   const buf = await canvas.toBuffer('png');
+  if (iconCache.size >= 100) iconCache.delete(iconCache.keys().next().value as string);
   iconCache.set(game, buf);
   return buf;
 }

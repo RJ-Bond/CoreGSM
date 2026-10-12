@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type ServerDetails } from '../api';
+import { api, ApiError, type PlayerNow, type ServerDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameLabel } from '../games';
-import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, usePoll } from '../ui';
+import { CopyButton, Empty, ErrorLine, GameAvatar, StatusPill, ago, fmtDateTime, plural, toast, usePoll } from '../ui';
+import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 
 type Point = ServerDetails['points'][number];
@@ -125,7 +126,64 @@ function PlayersChart({ points, hours, max, color }: { points: Point[]; hours: n
   );
 }
 
+/** "1 ч 12 мин" */
+function playedFor(since: number, now: number): string {
+  const m = Math.max(0, Math.floor((now - since) / 60_000));
+  if (m < 1) return 'меньше минуты';
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ч ${m % 60} мин`;
+  return `${Math.floor(h / 24)} д ${h % 24} ч`;
+}
+
+function PlayersNow({ online, players, names, list }: { online: boolean; players: number; names: string[]; list: PlayerNow[] }) {
+  // the "in game for" labels advance while the page stays open
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const sorted = [...list].sort((a, b) => a.since - b.since);
+  const hiddenCount = Math.max(0, players - (sorted.length || names.length));
+
+  return (
+    <div className="panel p-5">
+      <h2 className="mb-3 text-lg font-black">Сейчас в игре{online ? `: ${players}` : ''}</h2>
+      {!online ? (
+        <p className="font-semibold text-mute">Сервер недоступен.</p>
+      ) : sorted.length > 0 ? (
+        <>
+          <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+            {sorted.map((p, i) => (
+              <li key={`${p.name}-${p.since}-${i}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-card text-sm font-black text-link" aria-hidden>
+                  {(Array.from(p.name.trim())[0] ?? '?').toUpperCase()}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-bold">{p.name || 'Без имени'}</span>
+                <span className="shrink-0 text-sm font-semibold text-mute">в игре {playedFor(p.since, now)}</span>
+              </li>
+            ))}
+          </ul>
+          {hiddenCount > 0 && <p className="mt-2 text-sm font-bold text-mute">и ещё {hiddenCount}</p>}
+        </>
+      ) : names.length > 0 ? (
+        <div className="flex max-h-72 flex-wrap gap-2 overflow-y-auto">
+          {names.map((n, i) => <span key={`${n}-${i}`} className="rounded-full bg-soft px-3 py-1 text-sm font-bold">{n}</span>)}
+          {hiddenCount > 0 && <span className="px-1 py-1 text-sm font-bold text-mute">и ещё {hiddenCount}</span>}
+        </div>
+      ) : (
+        <p className="font-semibold text-mute">{players > 0 ? 'Игра не передаёт имена игроков.' : 'Пока никого нет.'}</p>
+      )}
+    </div>
+  );
+}
+
+/** key={id}: switching between servers starts from a clean state */
 export default function ServerDetail({ id }: { id: number }) {
+  return <ServerDetailView key={id} id={id} />;
+}
+
+function ServerDetailView({ id }: { id: number }) {
   const { isAdmin } = useAuth();
   const [hours, setHours] = useState(24);
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -133,13 +191,26 @@ export default function ServerDetail({ id }: { id: number }) {
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const seq = useRef(0);
+  const firstHours = useRef(true);
 
-  const load = () =>
-    api<ServerDetails>(`/servers/${id}/details?hours=${hours}`)
-      .then((d) => { setData(d); setError(''); setMissing(false); })
-      .catch((e: Error) => (e.message.includes('не найден') ? setMissing(true) : setError(e.message)));
-  usePoll(load, 15_000);
-  useEffect(() => { void load(); }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
+  // only the newest request may update the page
+  const load = (h = hours) => {
+    const n = ++seq.current;
+    return api<ServerDetails>(`/servers/${id}/details?hours=${h}`)
+      .then((d) => { if (n !== seq.current) return; setData(d); setError(''); setMissing(false); })
+      .catch((e: Error) => {
+        if (n !== seq.current) return;
+        if (e instanceof ApiError && e.status === 404) setMissing(true);
+        else setError(e.message);
+      });
+  };
+  usePoll(() => { void load(); }, 15_000);
+  useEffect(() => {
+    // the first load is done by usePoll
+    if (firstHours.current) { firstHours.current = false; return; }
+    void load(hours);
+  }, [hours]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (missing) {
     return (
@@ -167,10 +238,25 @@ export default function ServerDetail({ id }: { id: number }) {
     await load();
     setBusy(false);
   };
+  const share = async () => {
+    const url = `${window.location.origin}/s/${id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Ссылка скопирована');
+    } catch {
+      toast(`Не удалось скопировать. Ссылка: ${url}`, 'err', 8000);
+    }
+  };
   const remove = async () => {
-    if (!window.confirm(`Удалить сервер «${s.name}» вместе с привязками к Discord?`)) return;
-    await api(`/servers/${id}`, 'DELETE').catch((e: Error) => setError(e.message));
-    window.location.hash = '#/servers';
+    const ok = await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true });
+    if (!ok) return;
+    try {
+      await api(`/servers/${id}`, 'DELETE');
+      toast('Сервер удалён');
+      window.location.hash = '#/servers';
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   return (
@@ -191,6 +277,7 @@ export default function ServerDetail({ id }: { id: number }) {
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill online={s.online} known={s.hasStatus} lag={lag} />
           <CopyButton text={s.address} label="Адрес" />
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void share()}>Поделиться</button>
           {link && <a className="btn btn-soft btn-sm" href={link}>Подключиться</a>}
         </div>
         {!s.online && s.error && (
@@ -241,19 +328,7 @@ export default function ServerDetail({ id }: { id: number }) {
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <div className="panel p-5">
-          <h2 className="mb-3 text-lg font-black">Сейчас в игре{s.online ? `: ${s.players}` : ''}</h2>
-          {!s.online ? (
-            <p className="font-semibold text-mute">Сервер недоступен.</p>
-          ) : s.playerNames.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {s.playerNames.map((n, i) => <span key={`${n}-${i}`} className="rounded-full bg-soft px-3 py-1 text-sm font-bold">{n}</span>)}
-              {s.players > s.playerNames.length && <span className="px-1 py-1 text-sm font-bold text-mute">и ещё {s.players - s.playerNames.length}</span>}
-            </div>
-          ) : (
-            <p className="font-semibold text-mute">{s.players > 0 ? 'Сервер не сообщает список игроков.' : 'Сейчас на сервере никого нет.'}</p>
-          )}
-        </div>
+        <PlayersNow online={s.online} players={s.players} names={s.playerNames} list={data.playersNow ?? []} />
 
         <div className="panel p-5">
           <h2 className="mb-3 text-lg font-black">Журнал событий</h2>
