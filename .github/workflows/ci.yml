@@ -1,0 +1,84 @@
+name: ci
+
+# Typecheck everything, run the API tests against a real backend on a throwaway database,
+# and the frontend unit tests. The generated installer is checked by check-installer.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/core-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/core-backend/package.json
+      # package-lock.json is not committed, so a plain install
+      - run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: API and embed tests
+        run: npm test
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/core-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/core-frontend/package.json
+      - run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npx vite build
+
+  bot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/core-bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/core-bot/package.json
+      - run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No secrets or local databases committed
+        run: |
+          set -e
+          if git ls-files | grep -E '(^|/)(\.env|.*\.db|.*\.sqlite)$'; then echo 'forbidden file committed'; exit 1; fi
+          if git grep -nE '(discord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]{20,}|[MN][A-Za-z0-9]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,})' -- . ':!tests' ':!docs'; then echo 'looks like a Discord token or webhook'; exit 1; fi
+      - name: UI rules that prevent the Chrome black-square flash
+        run: |
+          set -e
+          # no fixed full-screen wash layer and no outline restyling on :focus
+          if grep -n "body::before" src/core-frontend/src/index.css | grep -v '^\s*/\*'; then echo 'body::before wash layer is back'; exit 1; fi
+          grep -q ':focus, :focus-visible { outline: 0 !important; }' src/core-frontend/src/index.css
