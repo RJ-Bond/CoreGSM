@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="471eef813fb5"
+COREGSM_BUILD="cd2482462a53"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18542,7 +18542,7 @@ export default function App() {
       api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
     };
     check();
-    const t = setInterval(check, 30 * 60_000);
+    const t = setInterval(check, 60_000);
     return () => clearInterval(t);
   }, [isAdmin]);
 
@@ -27892,7 +27892,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
-import { api, type CertInfo, type Server, type ServerInput } from '../api';
+import { api, type CertInfo, type Server, type ServerInput, type UpdateInfo } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
@@ -27978,23 +27978,59 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   );
 }
 
-/** A banner at the top of the admin area while a new version is waiting. */
+/** A banner at the top of the admin area while a new version is waiting; it follows the running update. */
 function UpdateBanner() {
-  const [latest, setLatest] = useState<string | null>(null);
-  useEffect(() => {
-    api<{ latest: string | null }>('/update/status').then((r) => setLatest(r.latest)).catch(() => undefined);
-  }, []);
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [offline, setOffline] = useState(false);
+  const wasRunning = useRef(false);
+  usePoll(
+    () =>
+      api<UpdateInfo>("/update/status")
+        .then((r) => {
+          setOffline(false);
+          setInfo(r);
+          if (r.job?.state === "running") wasRunning.current = true;
+          // the update finished while this banner was on screen: the new frontend is served now
+          if (wasRunning.current && r.job?.state === "done") {
+            wasRunning.current = false;
+            setTimeout(() => window.location.reload(), 1500);
+          }
+        })
+        .catch(() => { if (wasRunning.current) setOffline(true); }),
+    info?.job?.state === "running" || offline ? 2_000 : 20_000,
+  );
+  const running = info?.job?.state === "running" || offline;
+  const failed = info?.job?.state === "error" && info.available;
+  // nothing to install any more (or the status is not known yet): no banner
+  if (!running && info && !info.available) return null;
+  const pct = typeof info?.job?.progress === "number" ? Math.max(0, Math.min(100, Math.round(info.job.progress))) : null;
+  const latest = info?.latest ?? null;
   return (
     <div className="update-hero relative flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden rounded-[22px] px-5 py-3.5 text-white" role="status">
       <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/15" />
       <span aria-hidden className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20">
-        <IconArrowUp className="update-bob" />
+        {running ? <IconRefresh spinning /> : <IconArrowUp className="update-bob" />}
       </span>
       <div className="relative min-w-0 flex-1">
-        <div className="font-extrabold leading-tight">Доступно обновление панели</div>
-        <div className="text-sm font-semibold text-white/90">Новая сборка {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ''} готова к установке.</div>
+        {running ? (
+          <>
+            <div className="font-extrabold leading-tight">{offline ? "Панель перезапускается…" : "Идёт обновление панели"}{pct != null && !offline ? ` · ${pct}%` : ""}</div>
+            <div className="text-sm font-semibold text-white/90">{offline ? "Это занимает 1-3 минуты, страница обновится сама." : info?.job?.message || "Устанавливаю новую сборку…"}</div>
+            {pct != null && !offline && <div className="update-progress det mt-1.5" style={{ ["--p" as string]: `${pct}%` }}><i /></div>}
+          </>
+        ) : failed ? (
+          <>
+            <div className="font-extrabold leading-tight">Обновление не удалось</div>
+            <div className="text-sm font-semibold text-white/90">{info?.job?.message || "Подробности на странице обновлений."}</div>
+          </>
+        ) : (
+          <>
+            <div className="font-extrabold leading-tight">Доступно обновление панели</div>
+            <div className="text-sm font-semibold text-white/90">Новая сборка {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ""} готова к установке.</div>
+          </>
+        )}
       </div>
-      <a href="#/admin/settings/updates" className="btn-on-grad relative">Обновить</a>
+      <a href="#/admin/settings/updates" className="btn-on-grad relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
     </div>
   );
 }

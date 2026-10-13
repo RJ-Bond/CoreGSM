@@ -211,7 +211,7 @@ export default function App() {
       api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
     };
     check();
-    const t = setInterval(check, 30 * 60_000);
+    const t = setInterval(check, 60_000);
     return () => clearInterval(t);
   }, [isAdmin]);
 
