@@ -353,6 +353,94 @@ export interface Me {
   discordName: string | null;
   hasPassword: boolean;
   email?: string | null;
+  /** language and regional settings (absent on older servers) */
+  prefs?: Prefs;
+  /** "/api/..." url of the uploaded banner, null when there is none */
+  bannerUrl?: string | null;
+  /** gradient preset id ('' = none) */
+  bannerPreset?: string;
+}
+
+// ---------- profile: preferences, player card, statistics, achievements ----------
+export interface Prefs {
+  lang: 'ru' | 'en';
+  /** IANA name, '' = as in the system */
+  timezone: string;
+  timeFormat: '24' | '12';
+  dateFormat: 'dmy' | 'mdy' | 'iso';
+}
+
+/** GET/PUT /me/player */
+export interface PlayerProfile {
+  gameNick: string;
+  bio: string;
+  publicProfile: boolean;
+}
+
+/** GET /me/stats?days= */
+export interface MyStats {
+  days: number;
+  nick: string;
+  totalSeconds: number;
+  sessions: number;
+  longestSessionSec: number;
+  streakDays: number;
+  lastSeenAt: number | null;
+  favouriteServerId: number | null;
+  byServer: { serverId: number; name: string; game: string; seconds: number; sessions: number }[];
+  /** date: YYYY-MM-DD, oldest first */
+  byDay: { date: string; seconds: number }[];
+  /** 24 numbers: seconds (or any unit) played in each hour of the day */
+  hourly: number[];
+}
+
+/** GET /me/achievements */
+export interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  /** clock flame moon sun star server shield calendar crown heart */
+  icon: string;
+  earned: boolean;
+  progress: number;
+  target: number;
+  earnedAt: number | null;
+}
+
+/** GET /me/activity */
+export interface ActivityItem {
+  ts: number;
+  kind: 'session' | 'account';
+  text: string;
+}
+
+export type JournalKind =
+  | 'login' | 'login_failed' | 'password_changed' | 'email_changed' | 'discord_linked' | 'discord_unlinked'
+  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed';
+
+/** GET /me/journal */
+export interface JournalItem {
+  id: number | string;
+  ts: number;
+  kind: JournalKind | string;
+  ip: string;
+  ua: string;
+  detail: string;
+}
+
+/** GET /u/:username (no sign-in; 404 when the profile is private) */
+export interface PublicProfile {
+  username: string;
+  role: 'admin' | 'moderator' | 'player';
+  avatarUrl: string | null;
+  bannerUrl: string | null;
+  bannerPreset: string;
+  gameNick: string;
+  bio: string;
+  /** ms (or an ISO string) */
+  memberSince: number | string | null;
+  stats: { totalSeconds: number; sessions: number; streakDays: number; favouriteServerName: string | null };
+  achievements: { id: string; title: string; icon: string }[];
 }
 
 export interface Session {

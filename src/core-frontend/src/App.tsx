@@ -13,6 +13,8 @@ import ServersPage from './pages/Servers';
 import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
+import PublicProfilePage from './pages/PublicProfile';
+import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import StatusPage from './pages/Status';
 import UiKitPage from './pages/UiKit';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, parseHash, toast, useHash } from './ui';
@@ -23,14 +25,14 @@ const IconStatus = () => (
   </svg>
 );
 
-interface PageDef { id: string; label: string; icon: () => ReactNode; admin?: boolean }
+interface PageDef { id: string; label: TKey; icon: () => ReactNode; admin?: boolean }
 
 // everybody can open the server list and the news; everything that changes the panel is in "Админка"
 const PAGES: PageDef[] = [
-  { id: 'servers', label: 'Серверы', icon: IconServers },
-  { id: 'news', label: 'Новости', icon: IconNews },
-  { id: 'status', label: 'Статус', icon: IconStatus },
-  { id: 'admin', label: 'Админка', icon: IconSettings, admin: true },
+  { id: 'servers', label: 'nav.servers', icon: IconServers },
+  { id: 'news', label: 'nav.news', icon: IconNews },
+  { id: 'status', label: 'nav.status', icon: IconStatus },
+  { id: 'admin', label: 'nav.admin', icon: IconSettings, admin: true },
 ];
 
 const ADMIN_TITLES: Record<string, string> = {
@@ -90,6 +92,8 @@ const IconLogout = () => (
 
 export default function App() {
   const { page: rawPage, sub } = useHash();
+  // re-renders the whole shell when the language or a regional setting changes
+  useI18n();
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [authing, setAuthing] = useState(false);
@@ -116,6 +120,8 @@ export default function App() {
         else offline = true;
       }
     }
+    // language and regional settings of the account apply as soon as we know who is signed in
+    if (me?.prefs) applyServerPrefs(me.prefs);
     setBoot((prev) => {
       if (offline) return prev.ready && prev.me ? prev : { ...prev, ready: true, offline: true };
       return { ready: true, offline: false, needsSetup: setup.needed, me, access };
@@ -165,7 +171,7 @@ export default function App() {
         setToken(jwt);
         await load();
       } else {
-        toast('Не удалось войти через Discord. Попробуйте ещё раз', 'err');
+        toast(t('app.discordFail'), 'err');
         window.location.hash = '#/login';
       }
       setAuthing(false);
@@ -180,10 +186,10 @@ export default function App() {
       timer = window.setTimeout(() => {
         // nobody was signed in, we signed out ourselves, or a new sign-in has already happened: nothing to do
         if (!meRef.current || loggingOut.current || getToken()) return;
-        toast('Сеанс завершён, войдите снова', 'info');
+        toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseHash();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'u');
         if (!publicRoute) window.location.hash = '#/login';
         void load();
       }, 300);
@@ -245,25 +251,32 @@ export default function App() {
 
   // ---- document title and focus follow the route ----
   const visible = PAGES.filter((p) => !p.admin || isStaff);
-  const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
+  // a public player page (#/u/<name>) is open to guests even when the rest of the panel is closed
+  const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', '_ui'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
+  let publicName = '';
+  if (page === 'u') {
+    try { publicName = decodeURIComponent(sub.split('/')[0]); } catch { publicName = sub.split('/')[0]; }
+  }
   const sectionTitle = boot.needsSetup
-    ? 'Первый запуск'
+    ? t('title.setup')
     : showAuth
-      ? rawPage === 'register' && access.registration ? 'Регистрация' : 'Вход'
+      ? rawPage === 'register' && access.registration ? t('auth.register') : t('auth.signIn')
       : page === '_ui'
         ? 'UI-кит'
         : page === '404'
-        ? 'Не найдено'
+        ? t('title.notfound')
+        : page === 'u'
+        ? publicName
         : page === 'profile'
-        ? 'Профиль'
+        ? t('hdr.profile')
         : page === 'admin'
-          ? (ADMIN_TITLES[adminSection] ? `Админка · ${ADMIN_TITLES[adminSection]}` : 'Админка')
-          : PAGES.find((p) => p.id === page)?.label ?? '';
+          ? (ADMIN_TITLES[adminSection] ? `${t('nav.admin')} · ${ADMIN_TITLES[adminSection]}` : t('nav.admin'))
+          : (() => { const d = PAGES.find((p) => p.id === page); return d ? t(d.label) : ''; })();
   useEffect(() => {
     document.title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
   }, [boot.ready, sectionTitle, access.brand.name]);
@@ -281,7 +294,7 @@ export default function App() {
 
   if (!boot.ready || authing) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center text-2xl" role="status" aria-label="Загрузка">
+      <div className="grid min-h-[100dvh] place-items-center text-2xl" role="status" aria-label={t('hdr.loading')}>
         <Wordmark />
       </div>
     );
@@ -292,9 +305,9 @@ export default function App() {
       <div className="grid min-h-[100dvh] place-items-center p-6">
         <div className="panel w-full max-w-sm space-y-4 p-6 text-center">
           <Wordmark className="text-2xl" />
-          <p className="text-lg font-black" role="alert">Нет связи с сервером</p>
-          <p className="font-semibold text-mute">Вы остаётесь в аккаунте. Проверьте подключение: мы попробуем ещё раз автоматически.</p>
-          <button className="btn w-full" onClick={() => void load()}>Повторить</button>
+          <p className="text-lg font-black" role="alert">{t('hdr.offlineTitle')}</p>
+          <p className="font-semibold text-mute">{t('hdr.offlineText')}</p>
+          <button className="btn w-full" onClick={() => void load()}>{t('common.retry')}</button>
         </div>
         <Toaster />
       </div>
@@ -334,8 +347,8 @@ export default function App() {
   }
 
   const dot = (
-    <span className="update-dot ml-1.5 align-middle" title="Доступно обновление">
-      <span className="sr-only">(доступно обновление)</span>
+    <span className="update-dot ml-1.5 align-middle" title={t('hdr.update')}>
+      <span className="sr-only">({t('hdr.update')})</span>
     </span>
   );
 
@@ -346,7 +359,7 @@ export default function App() {
         className="skip-link"
         onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}
       >
-        Перейти к содержимому
+        {t('nav.skip')}
       </a>
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
@@ -355,10 +368,10 @@ export default function App() {
             <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
-          <nav className="seg ml-2 hidden md:inline-flex" aria-label="Разделы">
+          <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
               <a key={p.id} href={`#/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
-                {p.label}
+                {t(p.label)}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
@@ -368,12 +381,12 @@ export default function App() {
               type="button"
               onClick={() => setPaletteOpen(true)}
               className="grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10 md:inline-flex md:w-auto md:items-center md:gap-2.5 md:pl-3.5 md:pr-2"
-              aria-label="Поиск по панели (Ctrl K)"
+              aria-label={t('hdr.searchAria')}
               aria-haspopup="dialog"
-              title="Поиск (Ctrl K)"
+              title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hidden md:inline">Поиск</span>
+              <span className="hidden md:inline">{t('hdr.search')}</span>
               <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute md:inline">Ctrl K</kbd>
             </button>
             <ThemeToggle />
@@ -383,8 +396,8 @@ export default function App() {
                   href="#/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
                   className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
-                  title={`Профиль: ${me.username}`}
-                  aria-label={`Профиль: ${me.username}`}
+                  title={t('hdr.profileOf', { name: me.username })}
+                  aria-label={t('hdr.profileOf', { name: me.username })}
                 >
                   <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="!rounded-full" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
@@ -392,17 +405,17 @@ export default function App() {
                 <button
                   onClick={() => void logout()}
                   className="grid place-items-center rounded-full font-extrabold text-mute transition hover:bg-soft hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-3.5 sm:py-2"
-                  aria-label="Выйти"
-                  title="Выйти"
+                  aria-label={t('hdr.logout')}
+                  title={t('hdr.logout')}
                 >
                   <span className="sm:hidden"><IconLogout /></span>
-                  <span className="hidden sm:inline">Выйти</span>
+                  <span className="hidden sm:inline">{t('hdr.logout')}</span>
                 </button>
               </>
             ) : (
               <>
-                <a href="#/login" className="inline-flex items-center rounded-full bg-soft px-4 py-2 font-extrabold text-ink hover:text-link max-sm:min-h-[44px]">Войти</a>
-                {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">Регистрация</a>}
+                <a href="#/login" className="inline-flex items-center rounded-full bg-soft px-4 py-2 font-extrabold text-ink hover:text-link max-sm:min-h-[44px]">{t('hdr.login')}</a>
+                {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">{t('hdr.register')}</a>}
               </>
             )}
           </div>
@@ -414,6 +427,7 @@ export default function App() {
           {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
+          {page === 'u' && <PublicProfilePage username={publicName} />}
           {page === '_ui' && <UiKitPage />}
           {page === '404' && <NotFound />}
         </main>
@@ -426,7 +440,7 @@ export default function App() {
         <nav
           className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"
           style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
-          aria-label="Разделы"
+          aria-label={t('nav.sections')}
         >
           <ul className="flex px-1.5">
             {visible.map((p) => {
@@ -439,9 +453,9 @@ export default function App() {
                     className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
-                    {p.label}
+                    {t(p.label)}
                     {p.id === 'admin' && updateAvailable && (
-                      <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">Доступно обновление</span></span>
+                      <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">{t('hdr.update')}</span></span>
                     )}
                   </a>
                 </li>
@@ -451,7 +465,7 @@ export default function App() {
               <li className="flex-1">
                 <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
                   <span className="grid h-7 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
-                  Войти
+                  {t('hdr.login')}
                 </a>
               </li>
             )}

@@ -6,6 +6,7 @@ import { getToken, type Server } from './api';
 import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
 import { GAME_IMAGE, gameAbbr, gameGradient } from './games';
 import { gameIconPath, ICON_PATHS } from './gameIcons';
+import { getPrefs, t, t as tr } from './i18n';
 import { IconAuto, IconCheck, IconClose, IconCopy, IconError, IconEye, IconEyeOff, IconInfo, IconMoon, IconOk, IconSun } from './icons';
 
 // one icon set (24 px grid, 2 px stroke, currentColor): see icons.tsx; every icon is re-exported from here
@@ -200,17 +201,71 @@ export function useHash() {
 }
 
 // ---------- formatting ----------
+// Dates and times honour the user's regional settings (time zone, 12/24 h, date order): see «Оформление и регион».
 export const ago = (ts: number | null) => {
   if (!ts) return '–';
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return `${s} с назад`;
-  if (s < 3600) return `${Math.floor(s / 60)} мин назад`;
-  if (s < 86400) return `${Math.floor(s / 3600)} ч назад`;
-  return `${Math.floor(s / 86400)} дн назад`;
+  if (s < 60) return t('ago.s', { n: s });
+  if (s < 3600) return t('ago.m', { n: Math.floor(s / 60) });
+  if (s < 86400) return t('ago.h', { n: Math.floor(s / 3600) });
+  return t('ago.d', { n: Math.floor(s / 86400) });
 };
 
-export const fmtDateTime = (ts: number) =>
-  new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+const zonedFormatter = (tz: string): Intl.DateTimeFormat => {
+  let f = dtfCache.get(tz);
+  if (!f) {
+    const base: Intl.DateTimeFormatOptions = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' };
+    try {
+      f = new Intl.DateTimeFormat('en-US', { ...base, timeZone: tz || undefined });
+    } catch {
+      f = new Intl.DateTimeFormat('en-US', base);
+    }
+    dtfCache.set(tz, f);
+  }
+  return f;
+};
+
+/** calendar fields of a moment in the chosen time zone */
+function zoned(ts: number) {
+  const o: Record<string, string> = {};
+  for (const p of zonedFormatter(getPrefs().timezone).formatToParts(ts)) o[p.type] = p.value;
+  return { y: o.year, m: o.month, d: o.day, h: Number(o.hour) % 24, mi: o.minute, s: o.second };
+}
+
+const fmtYmd = (y: string, m: string, d: string) => {
+  const f = getPrefs().dateFormat;
+  return f === 'iso' ? `${y}-${m}-${d}` : f === 'mdy' ? `${m}/${d}/${y}` : `${d}.${m}.${y}`;
+};
+
+const validTs = (ts: number | null | undefined): ts is number => typeof ts === 'number' && Number.isFinite(ts);
+
+/** «13.10.2026» / «10/13/2026» / «2026-10-13» */
+export const fmtDate = (ts: number) => {
+  if (!validTs(ts)) return '–';
+  const z = zoned(ts);
+  return fmtYmd(z.y, z.m, z.d);
+};
+
+/** «14:05» or «2:05 PM» */
+export const fmtTime = (ts: number, seconds = false) => {
+  if (!validTs(ts)) return '–';
+  const z = zoned(ts);
+  const sec = seconds ? `:${z.s}` : '';
+  if (getPrefs().timeFormat === '12') {
+    const h12 = z.h % 12 === 0 ? 12 : z.h % 12;
+    return `${h12}:${z.mi}${sec} ${z.h < 12 ? 'AM' : 'PM'}`;
+  }
+  return `${String(z.h).padStart(2, '0')}:${z.mi}${sec}`;
+};
+
+export const fmtDateTime = (ts: number) => (validTs(ts) ? `${fmtDate(ts)}, ${fmtTime(ts)}` : '–');
+
+/** a plain calendar day "YYYY-MM-DD" (no time zone conversion) in the chosen date format */
+export const fmtDay = (day: string) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(day);
+  return m ? fmtYmd(m[1], m[2], m[3]) : day;
+};
 
 /** plural(5, ['сервер', 'сервера', 'серверов']) -> "серверов" */
 export function plural(n: number, forms: [string, string, string]): string {
@@ -256,13 +311,13 @@ function applyTheme(t: Theme) {
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
-  const label: Record<Theme, string> = { auto: 'как в системе', light: 'светлая', dark: 'тёмная' };
+  const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') };
   return (
     <button
       type="button"
       className="btn-icon"
-      title={`Тема: ${label[theme]}. Нажмите, чтобы переключить`}
-      aria-label={`Тема: ${label[theme]}. Переключить`}
+      title={t('theme.title', { name: label[theme] })}
+      aria-label={t('theme.aria', { name: label[theme] })}
       onClick={(e) => {
         const t = next[theme];
         // the new theme grows as a circle out of the button (View Transitions); elsewhere it just switches
@@ -304,7 +359,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
-          <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label="Закрыть">
+          <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label={t('common.close')}>
             <IconClose />
           </button>
         </div>
@@ -821,7 +876,7 @@ export function Toaster() {
         type="button"
         onClick={() => dismissToast(t.id, 'dismiss')}
         className="grid h-9 w-9 shrink-0 place-items-center rounded-full opacity-80 hover:opacity-100 max-sm:h-11 max-sm:w-11"
-        aria-label="Закрыть уведомление"
+        aria-label={tr('toast.close')}
       >
         <IconClose size={14} />
       </button>
@@ -901,14 +956,14 @@ export function AuthBrand({ subtitle }: { subtitle?: string }) {
 export function AuthCard({ mode, children }: { mode: 'login' | 'register'; children: ReactNode }) {
   const { access } = useAuth();
   const tabs = [
-    { id: 'login', label: 'Вход' },
-    { id: 'register', label: 'Регистрация' },
+    { id: 'login', label: t('auth.signIn') },
+    { id: 'register', label: t('auth.register') },
   ] as const;
   return (
     <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur sm:p-7">
-      <AuthBrand subtitle={mode === 'login' ? 'Войдите в свой аккаунт' : 'Создайте аккаунт игрока'} />
+      <AuthBrand subtitle={mode === 'login' ? t('auth.subLogin') : t('auth.subRegister')} />
       {access.registration && (
-        <nav className="seg mb-5 flex w-full" aria-label="Вход или регистрация">
+        <nav className="seg mb-5 flex w-full" aria-label={t('auth.switchAria')}>
           {tabs.map((t) => (
             <a
               key={t.id}
@@ -923,7 +978,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
       )}
       <div key={mode} className="auth-swap">{children}</div>
       {access.publicPanel && (
-        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">Продолжить без входа</a></p>
+        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('auth.guest')}</a></p>
       )}
     </div>
   );
@@ -1011,14 +1066,14 @@ export const PasswordField = forwardRef<
           type="button"
           className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11"
           onClick={() => setShown((v) => !v)}
-          aria-label={shown ? 'Скрыть пароль' : 'Показать пароль'}
+          aria-label={shown ? t('pw.hide') : t('pw.show')}
           aria-pressed={shown}
-          title={shown ? 'Скрыть пароль' : 'Показать пароль'}
+          title={shown ? t('pw.hide') : t('pw.show')}
         >
           {shown ? <IconEyeOff /> : <IconEye />}
         </button>
       </div>
-      {caps && <p id={`${id}-caps`} className="mt-1.5 text-sm font-bold text-warn">Включён Caps Lock</p>}
+      {caps && <p id={`${id}-caps`} className="mt-1.5 text-sm font-bold text-warn">{t('pw.caps')}</p>}
       <FieldError id={`${id}-err`} text={error} />
       {hint && !error && <p id={`${id}-hint`} className="mt-1.5 text-sm font-semibold text-mute">{hint}</p>}
       {children}
@@ -1038,12 +1093,12 @@ export function passwordScore(p: string): number {
   return Math.min(4, s);
 }
 
-const STRENGTH = [
-  { label: '', cls: 'bg-soft' },
-  { label: 'Слабый', cls: 'bg-bad' },
-  { label: 'Средний', cls: 'bg-warn' },
-  { label: 'Хороший', cls: 'bg-ok' },
-  { label: 'Отличный', cls: 'bg-ok' },
+const STRENGTH: { label: () => string; cls: string }[] = [
+  { label: () => '', cls: 'bg-soft' },
+  { label: () => t('pw.weak'), cls: 'bg-bad' },
+  { label: () => t('pw.mid'), cls: 'bg-warn' },
+  { label: () => t('pw.good'), cls: 'bg-ok' },
+  { label: () => t('pw.great'), cls: 'bg-ok' },
 ];
 
 export function PasswordStrength({ password }: { password: string }) {
@@ -1057,7 +1112,7 @@ export function PasswordStrength({ password }: { password: string }) {
           <span key={i} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= score ? st.cls : 'bg-soft'}`} />
         ))}
       </div>
-      <span className="w-20 text-right text-sm font-extrabold text-mute">{st.label}</span>
+      <span className="w-20 text-right text-sm font-extrabold text-mute">{st.label()}</span>
     </div>
   );
 }
@@ -1103,7 +1158,7 @@ export function OrDivider() {
   return (
     <div className="my-4 flex items-center gap-3 text-sm font-bold text-mute" aria-hidden>
       <span className="h-px flex-1 bg-line" />
-      или
+      {t('auth.or')}
       <span className="h-px flex-1 bg-line" />
     </div>
   );

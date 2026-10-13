@@ -32,6 +32,7 @@ if (fs.existsSync(pendingDir)) {
       for (const [dir, re] of [
         ['covers', /^\d{1,9}(@s)?\.jpg$/],
         ['avatars', /^\d{1,9}\.png$/],
+        ['banners', /^\d{1,9}\.jpg$/],
       ] as const) {
         const src = path.join(pendingDir, dir);
         if (!fs.existsSync(src)) continue;
@@ -182,6 +183,47 @@ try {
 } catch {
   /* column already exists */
 }
+// profile: preferences, player profile, game sessions, account journal
+db.exec(`
+CREATE TABLE IF NOT EXISTS user_prefs (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL DEFAULT 'ru',
+  timezone TEXT NOT NULL DEFAULT '',
+  time_format TEXT NOT NULL DEFAULT '24',
+  date_format TEXT NOT NULL DEFAULT 'dmy',
+  banner_preset TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS user_player (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  game_nick TEXT NOT NULL DEFAULT '',
+  bio TEXT NOT NULL DEFAULT '',
+  public_profile INTEGER NOT NULL DEFAULT 0
+);
+-- one row per visit of a player (name as the game server reports it); left_at NULL while still online
+CREATE TABLE IF NOT EXISTS player_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  joined_at INTEGER NOT NULL,
+  left_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_psess_server_open ON player_sessions(server_id, left_at);
+CREATE INDEX IF NOT EXISTS idx_psess_joined ON player_sessions(joined_at);
+CREATE TABLE IF NOT EXISTS account_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  ip TEXT NOT NULL DEFAULT '',
+  ua TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_account_events_user ON account_events(user_id, ts);
+`);
+// the panel was down: sessions left open by the previous run end when the server was last polled
+db.exec(`UPDATE player_sessions SET left_at = MAX(joined_at, COALESCE((SELECT updated_at FROM status WHERE status.server_id = player_sessions.server_id), joined_at)) WHERE left_at IS NULL`);
+
 // a restored database starts with nobody signed in
 if (restoredNow) {
   db.prepare('DELETE FROM sessions').run();

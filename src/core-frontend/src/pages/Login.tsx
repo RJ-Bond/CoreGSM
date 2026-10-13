@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
+import { t } from '../i18n';
 import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake } from '../ui';
 
 const NAME_KEY = 'coregsm_login_name';
@@ -57,8 +58,8 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
     setUserErr(''); setPassErr(''); setError(''); setPending(false);
     const name = username.trim();
     if (!name || !password) {
-      if (!name) setUserErr('Введите логин');
-      if (!password) setPassErr('Введите пароль');
+      if (!name) setUserErr(t('login.enterUser'));
+      if (!password) setPassErr(t('login.enterPass'));
       (name ? passRef : userRef).current?.focus();
       shake();
       return;
@@ -80,7 +81,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         setPending(true);
       } else if (status === 401) {
         const n = typeof data.attemptsLeft === 'number' ? data.attemptsLeft : null;
-        setPassErr(`${(err as Error).message}${n !== null ? `. Осталось попыток: ${n}` : ''}`);
+        setPassErr(`${(err as Error).message}${n !== null ? t('login.attempts', { n }) : ''}`);
         passRef.current?.focus();
         passRef.current?.select();
       } else {
@@ -97,17 +98,17 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
       {notice && <ErrorLine text={notice} />}
       {pending && (
         <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status">
-          Ваша заявка ещё не одобрена. Дождитесь решения администратора, затем войдите снова.
+          {t('login.pending')}
         </p>
       )}
       {locked && (
         <p className="rounded-2xl bg-warnbg px-4 py-2.5 font-bold text-warn" role="status" aria-live="off">
-          Слишком много попыток. Повторите через {clock(left)}
+          {t('login.locked', { time: clock(left) })}
         </p>
       )}
 
       <div>
-        <label htmlFor="login-user" className="label">Логин</label>
+        <label htmlFor="login-user" className="label">{t('login.user')}</label>
         <input
           id="login-user"
           ref={userRef}
@@ -128,7 +129,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
       <PasswordField
         id="login-pass"
         ref={passRef}
-        label="Пароль"
+        label={t('login.pass')}
         value={password}
         onChange={setPassword}
         autoComplete="current-password"
@@ -138,18 +139,18 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
 
       <label className="flex cursor-pointer items-center gap-2.5 text-sm font-bold text-mute">
         <input type="checkbox" className="h-4 w-4 accent-brand" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-        Запомнить меня (только логин)
+        {t('login.remember')}
       </label>
 
       <ErrorLine text={error} />
       <Button className="w-full" magnetic loading={busy} disabled={locked}>
-        {busy ? 'Проверяю…' : 'Войти'}
+        {busy ? t('login.checking') : t('login.submit')}
       </Button>
 
       {access.discordLogin && (
         <>
           <OrDivider />
-          <DiscordButton label="Войти через Discord" href="/api/auth/discord/start?mode=login" />
+          <DiscordButton label={t('auth.discordLogin')} href="/api/auth/discord/start?mode=login" />
         </>
       )}
     </form>

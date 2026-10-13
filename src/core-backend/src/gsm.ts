@@ -105,6 +105,35 @@ export function syncPlayersNow(serverId: number, names: string[], online: boolea
   })();
 }
 
+/**
+ * Player visit log: a session opens when a name appears in the poll and closes when it disappears
+ * (or when the server goes offline). Names are compared case-insensitively; empty and duplicate names are ignored.
+ */
+export function syncPlayerSessions(serverId: number, names: string[], online: boolean, now: number): void {
+  db.transaction(() => {
+    const open = db.prepare('SELECT id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL').all(serverId) as { id: number; name: string }[];
+    const close = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
+    if (!online) {
+      for (const o of open) close.run(now, o.id);
+      return;
+    }
+    const current = new Map<string, string>();
+    for (const raw of names.slice(0, 200)) {
+      const n = String(raw ?? '').trim().slice(0, 64);
+      if (n && !current.has(n.toLowerCase())) current.set(n.toLowerCase(), n);
+    }
+    const stillOpen = new Set<string>();
+    for (const o of open) {
+      const k = o.name.toLowerCase();
+      // gone from the list, or a duplicate row left over from an earlier run
+      if (!current.has(k) || stillOpen.has(k)) close.run(now, o.id);
+      else stillOpen.add(k);
+    }
+    const ins = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at) VALUES (?, ?, ?)');
+    for (const [k, n] of current) if (!stillOpen.has(k)) ins.run(serverId, n, now);
+  })();
+}
+
 /** Daily counters for the status page (UTC day). */
 export function recordUptime(serverId: number, online: boolean, players: number, ts: number): void {
   const day = new Date(ts).toISOString().slice(0, 10);
@@ -136,6 +165,7 @@ export async function refreshServer(s: ServerRow): Promise<void> {
   addHistory.run(s.id, ts, r.online ? 1 : 0, r.players, r.ping);
   try {
     syncPlayersNow(s.id, r.playerNames, r.online, ts);
+    syncPlayerSessions(s.id, r.playerNames, r.online, ts);
     recordUptime(s.id, r.online, r.players, ts);
   } catch (e) {
     console.error('player/uptime bookkeeping failed', (e as Error).message);
@@ -156,6 +186,8 @@ export async function pollAll(): Promise<void> {
     const servers = db.prepare('SELECT * FROM servers').all() as ServerRow[];
     await Promise.allSettled(servers.map(refreshServer));
     db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 30 * 24 * 3600 * 1000);
+    db.prepare('DELETE FROM player_sessions WHERE left_at IS NOT NULL AND left_at < ?').run(Date.now() - 90 * 24 * 3600 * 1000);
+    db.prepare('DELETE FROM account_events WHERE ts < ?').run(Date.now() - 180 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
   } finally {
     running = false;
