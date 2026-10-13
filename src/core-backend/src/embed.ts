@@ -37,6 +37,8 @@ export interface DiscordEmbed {
 }
 
 export interface EmbedExtra {
+  /** how many player names the message lists (0 = only the counter); default 5 */
+  playersShown?: number | null;
   /** panel server id: the title and the "all players" link point to its page */
   serverId?: number | null;
   /** last time the server answered (for the offline note) */
@@ -161,11 +163,13 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   if (s.online) {
     if (s.playerNames.length > 0) {
-      const shown = s.playerNames.slice(0, 18);
+      const limit = Math.min(20, Math.max(0, Math.round(extra.playersShown ?? 5)));
+      const shown = s.playerNames.slice(0, limit);
       const rest = s.players - shown.length;
       let list = nameRows(shown);
-      if (rest > 0) list += extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
-      fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list, 1000) });
+      if (limit === 0) list = '';
+      if (rest > 0) list += (list ? '\n' : '') + extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
+      fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list || '\u200b', 1000) });
     } else if (s.players === 0) {
       fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
     }

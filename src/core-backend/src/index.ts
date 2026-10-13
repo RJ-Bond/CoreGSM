@@ -1502,18 +1502,42 @@ const serializeBinding = (b: BindingRow) => ({
 });
 
 // The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
+const playersShown = () => {
+  const n = Number(getSetting('embed_players_shown'));
+  return Number.isFinite(n) && getSetting('embed_players_shown') !== '' ? Math.min(20, Math.max(0, Math.round(n))) : 5;
+};
+
 function embedFor(serverId: number, intervalSec: number) {
   const server = getServer(serverId);
   if (!server) return null;
+  // longest in the game first: the list shows who has been there the longest
+  try {
+    const since = new Map((db.prepare('SELECT name, since FROM player_now WHERE server_id = ?').all(serverId) as { name: string; since: number }[]).map((p) => [p.name.toLowerCase(), p.since]));
+    if (since.size > 0 && Array.isArray(server.playerNames)) {
+      server.playerNames = [...server.playerNames].sort((a, b) => (since.get(a.toLowerCase()) ?? Infinity) - (since.get(b.toLowerCase()) ?? Infinity));
+    }
+  } catch {
+    /* the order is a nicety */
+  }
   const up = db
     .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ? AND unconfirmed = 0 AND maint = 0')
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
+
+app.get('/api/settings/embed', admin, (_req, res) => {
+  res.json({ playersShown: playersShown() });
+});
+app.put('/api/settings/embed', admin, (req, res) => {
+  const b = z.object({ playersShown: z.number().int().min(0).max(20) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Число ников: от 0 до 20' });
+  setSetting('embed_players_shown', String(b.data.playersShown));
+  res.json({ playersShown: b.data.playersShown });
+});
 
 app.get('/api/servers/:id/embed', admin, (req, res) => {
   const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));

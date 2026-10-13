@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fdbabf9e9bae"
+COREGSM_BUILD="9a74ebeb9f07"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2670,6 +2670,8 @@ export interface DiscordEmbed {
 }
 
 export interface EmbedExtra {
+  /** how many player names the message lists (0 = only the counter); default 5 */
+  playersShown?: number | null;
   /** panel server id: the title and the "all players" link point to its page */
   serverId?: number | null;
   /** last time the server answered (for the offline note) */
@@ -2794,11 +2796,13 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   if (s.online) {
     if (s.playerNames.length > 0) {
-      const shown = s.playerNames.slice(0, 18);
+      const limit = Math.min(20, Math.max(0, Math.round(extra.playersShown ?? 5)));
+      const shown = s.playerNames.slice(0, limit);
       const rest = s.players - shown.length;
       let list = nameRows(shown);
-      if (rest > 0) list += extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
-      fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list, 1000) });
+      if (limit === 0) list = '';
+      if (rest > 0) list += (list ? '\n' : '') + extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
+      fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list || '\u200b', 1000) });
     } else if (s.players === 0) {
       fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
     }
@@ -5168,18 +5172,42 @@ const serializeBinding = (b: BindingRow) => ({
 });
 
 // The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
+const playersShown = () => {
+  const n = Number(getSetting('embed_players_shown'));
+  return Number.isFinite(n) && getSetting('embed_players_shown') !== '' ? Math.min(20, Math.max(0, Math.round(n))) : 5;
+};
+
 function embedFor(serverId: number, intervalSec: number) {
   const server = getServer(serverId);
   if (!server) return null;
+  // longest in the game first: the list shows who has been there the longest
+  try {
+    const since = new Map((db.prepare('SELECT name, since FROM player_now WHERE server_id = ?').all(serverId) as { name: string; since: number }[]).map((p) => [p.name.toLowerCase(), p.since]));
+    if (since.size > 0 && Array.isArray(server.playerNames)) {
+      server.playerNames = [...server.playerNames].sort((a, b) => (since.get(a.toLowerCase()) ?? Infinity) - (since.get(b.toLowerCase()) ?? Infinity));
+    }
+  } catch {
+    /* the order is a nicety */
+  }
   const up = db
     .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ? AND unconfirmed = 0 AND maint = 0')
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
+
+app.get('/api/settings/embed', admin, (_req, res) => {
+  res.json({ playersShown: playersShown() });
+});
+app.put('/api/settings/embed', admin, (req, res) => {
+  const b = z.object({ playersShown: z.number().int().min(0).max(20) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Число ников: от 0 до 20' });
+  setSetting('embed_players_shown', String(b.data.playersShown));
+  res.json({ playersShown: b.data.playersShown });
+});
 
 app.get('/api/servers/:id/embed', admin, (req, res) => {
   const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
@@ -8660,7 +8688,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
 patchGatewayAgent(() => gatewayAgent);
-const { AttachmentBuilder, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
+const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
 
 interface Binding {
@@ -8963,7 +8991,17 @@ async function buildPayload(b: Binding) {
       if (f && f.length > 6) raws[i].fields = f.slice(0, 6);
     }
   }
-  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components: [] };
+  // link buttons (no interactions to handle): «Все игроки» opens the players tab of the server in the panel;
+  // one button per server for up to 5 servers, the label is the server name when there are several
+  const buttons: InstanceType<typeof ButtonBuilder>[] = [];
+  for (const r of raws.slice(0, 5)) {
+    const url = (r as { url?: string }).url;
+    if (!url || !/^https?:\/\//.test(url)) continue;
+    const label = multi ? `👥 ${String(r.title ?? 'Сервер').slice(0, 70)}` : '👥 Все игроки на сайте';
+    buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(label).setURL(`${url.replace(/\/$/, '')}/players`));
+  }
+  const components = buttons.length ? [new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(buttons)] : [];
+  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components };
 }
 
 async function update(c: DiscordClient, b: Binding): Promise<void> {
@@ -24018,6 +24056,57 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/PlayersShownCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { Section, toast } from '../ui';
+
+const OPTIONS = [0, 3, 5, 8, 10, 15, 20];
+
+/** «Ники в сообщении»: how many player names the Discord message lists; the rest is a link to the site. */
+export default function PlayersShownCard() {
+  const [value, setValue] = useState<number | null>(null);
+  const [gone, setGone] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api<{ playersShown: number }>('/settings/embed')
+      .then((r) => { if (alive) setValue(r.playersShown); })
+      .catch(() => { if (alive) setGone(true); });
+    return () => { alive = false; };
+  }, []);
+
+  if (gone || value === null) return null;
+
+  const change = async (n: number) => {
+    const prev = value;
+    setValue(n);
+    setBusy(true);
+    try {
+      await api('/settings/embed', 'PUT', { playersShown: n });
+      toast('Сохранено. Сообщения обновятся при следующем опросе');
+    } catch (e) {
+      setValue(prev);
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const options = OPTIONS.includes(value) ? OPTIONS : [...OPTIONS, value].sort((a, b) => a - b);
+
+  return (
+    <Section title="Ники в сообщении" description="Сколько игроков перечислять в сообщении Discord. Остальные доступны по кнопке «Все игроки на сайте» и ссылке под списком. Первыми идут те, кто в игре дольше всех.">
+      <label htmlFor="players-shown" className="label">Показывать ников</label>
+      <select id="players-shown" className="input max-w-[16rem]" value={value} disabled={busy} onChange={(e) => void change(Number(e.target.value))}>
+        {options.map((n) => <option key={n} value={n}>{n === 0 ? '0: только счётчик' : String(n)}</option>)}
+      </select>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/PollSettingsCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
@@ -34596,6 +34685,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
+import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
@@ -34849,6 +34939,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         })}
       </div>
 
+      <PlayersShownCard />
       <DeliveryList />
 
       {draft && (
