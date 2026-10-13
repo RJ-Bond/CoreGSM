@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
-import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
+import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
+import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -16,6 +17,7 @@ interface Health {
   guilds: number;
   publicBase: string | null;
   cert?: CertInfo;
+  flags?: HealthFlag[];
 }
 interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }
 
@@ -39,6 +41,7 @@ export default function SystemPage() {
   const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const [histFlags, setHistFlags] = useState<HealthFlag[]>([]);
 
   const load = () => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message));
   usePoll(load, 15_000);
@@ -48,6 +51,16 @@ export default function SystemPage() {
     await api<{ at: number; checks: Check[] }>('/system/run', 'POST').then((r) => setChecks({ at: r.at, list: r.checks })).catch((e: Error) => setError(e.message));
     setRunning(false);
   };
+
+  // warnings from /system and from the history, one per kind (the earliest «с» wins)
+  const flags = useMemo(() => {
+    const m = new Map<string, HealthFlag>();
+    for (const f of [...(h?.flags ?? []), ...histFlags]) {
+      const old = m.get(f.kind);
+      if (!old || f.since < old.since) m.set(f.kind, f);
+    }
+    return [...m.values()].sort((a, b) => a.since - b.since);
+  }, [h, histFlags]);
 
   const diskUsed = h && h.diskTotal && h.diskFree != null ? 1 - h.diskFree / h.diskTotal : null;
   const memFrac = h ? h.memoryMb / MEM_REF_MB : null;
@@ -82,6 +95,16 @@ export default function SystemPage() {
       )}
     >
       {error && !h ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+
+      {flags.length > 0 && (
+        <div className="space-y-2" role="group" aria-label="Предупреждения">
+          {flags.map((f) => (
+            <Notice key={f.kind} tone="warn">
+              {f.text}<span className="font-semibold opacity-80"> · с {new Date(f.since).toDateString() === new Date().toDateString() ? fmtTime(f.since) : fmtDateTime(f.since)}</span>
+            </Notice>
+          ))}
+        </div>
+      )}
 
       {h ? (
         <>
@@ -125,6 +148,8 @@ export default function SystemPage() {
       ) : (
         <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />
       )}
+
+      <HealthHistoryCard onFlags={setHistFlags} />
 
       <Section title="Диагностика" description="Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.">
         {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}

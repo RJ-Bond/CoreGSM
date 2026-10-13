@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { ago, fmtDateTime, toast } from '../../ui';
+import MaintenanceChip from '../MaintenanceChip';
 import { pingTone } from './helpers';
 
 export interface PassportData {
@@ -17,6 +18,8 @@ export interface PassportData {
   lastSeen: number | null;
   mode: string | null;
   discord: { text: string; href: string | null }[];
+  /** an active maintenance window (the page passes `server.maintenance`) */
+  maintenance?: { name: string; until: number | null } | null;
 }
 
 const PP_TONE = { ok: 'pp-tone-ok', warn: 'pp-tone-warn', bad: 'pp-tone-bad' } as const;
@@ -43,6 +46,7 @@ export default function Passport({ d }: { d: PassportData }) {
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
+      {d.maintenance && <MaintenanceChip m={d.maintenance} glass className="mb-2" />}
       <dl className="pp">
         <Item k="Игра"><span>{d.game}{d.mode ? ` · ${d.mode}` : ''}</span></Item>
         <Item k="Версия"><span>{d.version ? `v${d.version.replace(/^v/i, '')}` : '–'}</span></Item>

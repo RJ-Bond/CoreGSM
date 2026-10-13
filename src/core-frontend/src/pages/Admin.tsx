@@ -13,6 +13,7 @@ import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import JournalPage from './Journal';
+import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
 
 export { ADMIN_SECTIONS };
@@ -135,6 +136,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
         {!home && current === 'news' && <NewsPage sub={tail} />}
         {!home && current === 'alerts' && <AlertsPage />}
+        {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}
         {!home && current === 'users' && <UsersTab />}
         {!home && current === 'journal' && <JournalPage />}
@@ -319,7 +321,7 @@ function ServersManage({ sub }: { sub: string }) {
               </div>
             </div>
             <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
-            <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
+            <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} maintenance={!!s.maintenance} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
               <a className="btn btn-soft btn-sm" href={`#/admin/discord/new/${s.id}`}>Привязать к Discord</a>

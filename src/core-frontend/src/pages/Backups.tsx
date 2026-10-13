@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
+import { t } from '../i18n';
+import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
@@ -47,6 +49,8 @@ export default function BackupsCard() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  // secrets that the restored copy could not decrypt: the warning stays until it is dismissed (and across the reload)
+  const [unreadable, setUnreadable] = useState<string[]>(() => loadUnreadableSecrets());
 
   const [schedule, setSchedule] = useState<BackupInfo['schedule']>('off');
   const [keep, setKeep] = useState(7);
@@ -88,6 +92,18 @@ export default function BackupsCard() {
       await load();
     });
   };
+  /** after a restore: with unreadable secrets the page stays (and warns), otherwise it waits for the restart and reloads */
+  const afterRestore = async (raw: unknown) => {
+    const un = unreadableSecrets(raw).map((x) => x.id);
+    toast('Копия принята, панель перезапускается…');
+    if (un.length) {
+      saveUnreadableSecrets(un);
+      setUnreadable(un);
+      setRestoring(false);
+      return;
+    }
+    await waitAndReload();
+  };
   const restoreStored = async (b: BackupItem) => {
     if (!(await confirmDialog({
       title: 'Восстановить из этой копии?',
@@ -104,9 +120,8 @@ export default function BackupsCard() {
     setRestoring(true);
     setError('');
     try {
-      await api('/backups/' + encodeURIComponent(b.name) + '/restore', 'POST', pass ? { passphrase: pass } : {});
-      toast('Копия принята, панель перезапускается…');
-      await waitAndReload();
+      const r = await api<{ unreadableSecrets?: string[] }>('/backups/' + encodeURIComponent(b.name) + '/restore', 'POST', pass ? { passphrase: pass } : {});
+      await afterRestore(r?.unreadableSecrets);
     } catch (e) {
       setError((e as Error).message);
       setRestoring(false);
@@ -131,10 +146,9 @@ export default function BackupsCard() {
     setError('');
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
-      const j = (await r.json().catch(() => null)) as { error?: string } | null;
+      const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
       if (!r.ok) throw new Error(j?.error ?? 'Не удалось восстановить копию');
-      toast('Копия принята, панель перезапускается…');
-      await waitAndReload();
+      await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError((e as Error).message);
       setRestoring(false);
@@ -176,6 +190,21 @@ export default function BackupsCard() {
       description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
+
+      {unreadable.length > 0 && (
+        <div className="space-y-3 rounded-ui-lg bg-warnbg p-4 text-warn" role="alert">
+          <h3 className="font-black">{t('bk.unreadTitle')}</h3>
+          <p className="font-semibold">{t('bk.unreadText')}</p>
+          <ul className="list-disc space-y-0.5 pl-5 font-bold">
+            {unreadableSecrets(unreadable).map((x) => <li key={x.id}>{x.label}</li>)}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <a className="btn btn-sm" href="#/admin/settings">{t('bk.unreadSettings')}</a>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => void waitAndReload()}>{t('bk.unreadReload')}</button>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => { saveUnreadableSecrets([]); setUnreadable([]); }}>{t('bk.unreadDismiss')}</button>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? 'Готовлю…' : 'Скачать полную копию'}</button>

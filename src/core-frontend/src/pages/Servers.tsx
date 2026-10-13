@@ -3,6 +3,7 @@ import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
+import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
@@ -304,9 +305,10 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s
             <span aria-hidden>·</span>
             <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
           </div>
+          {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
         </div>
       </div>
@@ -350,7 +352,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Serve
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
-          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
         </div>
       </div>
@@ -360,6 +362,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Serve
           <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
+        {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
       {s.online ? (

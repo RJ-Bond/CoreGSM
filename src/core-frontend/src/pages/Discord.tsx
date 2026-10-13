@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
+import DeliveryList from '../components/DeliveryList';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
@@ -253,6 +254,8 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           );
         })}
       </div>
+
+      <DeliveryList />
 
       {draft && (
         <BindingForm

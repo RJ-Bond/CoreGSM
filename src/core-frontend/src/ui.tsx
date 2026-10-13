@@ -382,7 +382,9 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 }
 
 /** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
-export function StatusPill({ online, known, lag, glass = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean }) {
+export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
+  if (maintenance) return glass ? <span className="pill-glass pill-glass-maint">Обслуживание</span> : <span className="pill pill-maint">ОБСЛУЖИВАНИЕ</span>;
   if (glass) {
     const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
     const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';

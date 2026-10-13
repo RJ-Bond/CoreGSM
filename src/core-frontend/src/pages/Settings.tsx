@@ -10,6 +10,7 @@ import { AdminPage, CopyButton, ErrorLine, Field, FieldError, GoLink, IconArrowU
 import BackupsCard from './Backups';
 import SmtpCard from '../components/SmtpCard';
 import { SETTINGS_TABS } from './adminNav';
+import PollSettingsCard from '../components/PollSettingsCard';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -224,7 +225,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
           </a>
         ))}
       </nav>
-      {tab === 'bot' && <BotCard />}
+      {tab === 'bot' && <><BotCard /><PollSettingsCard /></>}
       {tab === 'brand' && <BrandCard />}
       {tab === 'security' && (
         <>

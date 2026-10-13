@@ -75,6 +75,7 @@ export const IconMemory = make(<><rect x="4" y="7" width="16" height="10" rx="2"
 export const IconDatabase = make(<><ellipse cx="12" cy="5.5" rx="8" ry="3" /><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>);
 export const IconShield = make(<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z" />);
 export const IconClock = make(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
+export const IconWrench = make(<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />, 22);
 export const IconBot = make(<><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5" /></>);
 
 // ---- icons with a small motion of their own (classes in index.css; the motion stops for reduced motion) ----
@@ -112,5 +113,5 @@ export const ICON_SET: [string, (p: IconProps) => ReactNode][] = [
   ['LinkOut', IconLinkOut], ['Plus', IconPlus], ['Close', IconClose], ['Check', IconCheck], ['Search', IconSearch],
   ['Logout', IconLogout], ['Eye', IconEye], ['EyeOff', IconEyeOff], ['ChevronDown', IconChevronDown], ['ArrowUp', IconArrowUp],
   ['Info', IconInfo], ['Warn', IconWarn], ['Error', IconError], ['Ok', IconOk],
-  ['Disk', IconDisk], ['Memory', IconMemory], ['Database', IconDatabase], ['Shield', IconShield], ['Clock', IconClock], ['Bot', IconBot],
+  ['Disk', IconDisk], ['Memory', IconMemory], ['Database', IconDatabase], ['Shield', IconShield], ['Clock', IconClock], ['Bot', IconBot], ['Wrench', IconWrench],
 ];

@@ -65,6 +65,13 @@ describe('discord embed', () => {
     assert.ok(e.fields!.length <= 25);
   });
 
+  it('has a brand line with a link on top and a plain footer with the build and the update time as timestamp', () => {
+    assert.equal(e.author!.url, 'https://panel.example.ru');
+    assert.match(e.author!.name, /Мониторинг игровых серверов/);
+    assert.match(e.footer!.text, /^CoreGSM · vabcdef1$/);
+    assert.equal(e.timestamp, '2026-10-12T14:00:00.000Z');
+  });
+
   it('shows an offline server in red with the last-seen note', () => {
     const off = buildEmbed(server({ online: false, players: 0, playerNames: [], error: 'timeout' }), 80, 60, { lastOnlineAt: Date.UTC(2026, 9, 12, 13, 0, 0) });
     assert.equal(off.color, 0xf23f42);

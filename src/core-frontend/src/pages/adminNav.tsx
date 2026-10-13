@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { IconBell, IconCards, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
+import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -25,6 +25,7 @@ const S = {
   discord: { id: 'discord', label: 'Discord', icon: IconDiscord, desc: 'В какой канал бот публикует карточку сервера.', keywords: 'привязка канал бот сообщение embed' },
   news: { id: 'news', label: 'Новости', icon: IconNews, desc: 'Написать объявление и отправить его в Discord.', keywords: 'новость объявление публикация вайп шаблон запланировать' },
   alerts: { id: 'alerts', label: 'Оповещения', icon: IconBell, desc: 'Сообщение в Discord, если игровой сервер упал или вернулся.', keywords: 'упал недоступен уведомление падение упоминание here everyone' },
+  maintenance: { id: 'maintenance', label: 'Обслуживание', icon: IconWrench, desc: 'Окна технических работ: во время них падение сервера не считается сбоем.', keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
   cards: { id: 'cards', label: 'Карточки', icon: IconCards, desc: 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.', keywords: 'картинка баннер ссылка png' },
   users: { id: 'users', label: 'Пользователи', icon: IconUsers, desc: 'Аккаунты, роли, регистрация и правила сообщества.', keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
   journal: { id: 'journal', label: 'Журнал', icon: IconJournal, desc: 'Кто и что менял в панели, с датой и временем.', keywords: 'аудит история действия изменения кто менял лог' },
@@ -36,7 +37,7 @@ export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
   { title: 'Основное', sections: [S.servers, S.discord, S.news] },
-  { title: 'Мониторинг', sections: [S.alerts, S.cards] },
+  { title: 'Мониторинг', sections: [S.alerts, S.maintenance, S.cards] },
   { title: 'Люди', sections: [S.users, S.journal] },
   { title: 'Система', sections: [S.system, S.settings] },
 ];

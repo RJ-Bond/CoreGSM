@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import GamePicker from '../components/GamePicker';
 import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
+import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
+import { t } from '../i18n';
 
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
@@ -51,18 +53,36 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   // "advanced" is open when it already holds something (editing)
   const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country || coverUrl);
 
+  const profiles = useGameProfiles();
+  // true once the user typed a port themselves: a game change must not overwrite it
+  const portTouched = useRef(false);
+
   const pickGame = (v: string) => {
     setTest(null);
     if (v === '__custom') { setCustom(true); return; }
     setCustom(false);
     const g = GAMES.find((x) => x.id === v);
-    setF((p) => ({ ...p, game: v, port: g && (!p.host || p.port === GAMES.find((x) => x.id === p.game)?.port) ? g.port : p.port }));
+    const nextDefault = profiles?.[v]?.defaultPort ?? g?.port;
+    setF((p) => ({
+      ...p,
+      game: v,
+      port: nextPort({
+        current: p.port,
+        touched: portTouched.current,
+        hasHost: !!p.host,
+        prevDefault: profiles?.[p.game]?.defaultPort ?? GAMES.find((x) => x.id === p.game)?.port,
+        nextDefault,
+      }),
+    }));
   };
 
   const change = (patch: Partial<ServerInput>) => {
     setTest(null);
     setF((p) => ({ ...p, ...patch }));
   };
+
+  const gameProfile = custom ? undefined : profiles?.[f.game];
+  const fieldList = shownFields(gameProfile?.fields);
 
   const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0;
 
@@ -111,9 +131,11 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
             </Field>
           </div>
           <Field label="Порт">
-            <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => change({ port: Number(e.target.value) })} required />
+            <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => { portTouched.current = true; change({ port: Number(e.target.value) }); }} required />
           </Field>
         </div>
+        {gameProfile?.queryPortHint && <p className="-mt-2 text-sm font-semibold text-mute">{t('sf.queryHint', { hint: gameProfile.queryPortHint })}</p>}
+        {fieldList.length > 0 && <p className="-mt-2 text-sm font-semibold text-mute">{t('sf.fields', { list: fieldList.map((k) => t(`sf.field.${k}` as const)).join(' / ') })}</p>}
 
         <div className="space-y-2">
           <button type="button" className="btn btn-soft" onClick={runTest} disabled={!canTest || testing}>

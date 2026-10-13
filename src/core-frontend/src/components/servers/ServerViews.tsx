@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
 import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../../ui';
+import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
 export type ServersView = 'tiles' | 'list' | 'tv';
@@ -85,12 +86,13 @@ function ListRow({ s, uptime, onOpen, rx, favButton }: RowProps) {
       className={`srv-row ${s.online ? '' : 'off'}`}
       onClick={onOpen}
     >
-      <div className="srv-c-status"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash></div>
+      <div className="srv-c-status"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash></div>
       <div className="srv-c-name">
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
           <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
           <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+          {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-0.5" />}
         </div>
       </div>
       <div className="srv-c-players">
@@ -174,8 +176,9 @@ function TvCard({ s, uptime, rx }: { s: Server; uptime?: number; rx: Reactions }
           <h2 className="srv-tv-name" title={s.name}>{s.name}</h2>
           <div className="srv-tv-sub">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
         </div>
-        <div className="srv-tv-pill"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash></div>
+        <div className="srv-tv-pill"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash></div>
       </header>
+      {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-3 self-start" />}
 
       {s.online ? (
         <>

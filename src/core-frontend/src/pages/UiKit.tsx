@@ -1,7 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { AccentPicker } from '../components/AccentPicker';
 import { Gauge } from '../components/Gauge';
+import MaintenanceChip from '../components/MaintenanceChip';
+import { buildSparkline } from '../sparkline';
 import { confirmDialog, promptDialog } from '../confirm';
+import { SubscribeForm } from '../components/server/SubscribeMenu';
+import { badgeText, type SubKind } from '../notifications';
+import { unreadableSecrets } from '../security';
 import {
   AdminPage, Button, Empty, ErrorLine, FieldError, FillBar, GoLink, ICON_SET, IconBell, IconPlus, IconRefresh, IconTrash, IconEdit, Modal,
   Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StateView, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
@@ -33,6 +38,33 @@ const Row = ({ label, children }: { label?: string; children: ReactNode }) => (
 );
 
 /** one specimen (buttons, pill, field, switch, card) that is shown in a forced theme next to the other one */
+/** bell badge, subscription kinds, new-device strip and the unreadable-secrets list: the pieces of the notification and security extras */
+function NotifyExtras() {
+  const [kinds, setKinds] = useState<SubKind[]>(['free_slot']);
+  const secrets = unreadableSecrets(['discord_token', 'smtp_password', 'proxy_url']);
+  return (
+    <div className="space-y-4">
+      <Row label="Колокольчик: значок непрочитанных (до 99, дальше 99+)">
+        {[0, 3, 99, 150].map((n) => (
+          <span key={n} className="relative grid h-10 w-10 place-items-center rounded-full bg-soft text-mute">
+            <IconBell size={20} />
+            {badgeText(n) && <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-[11px] font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]">{badgeText(n)}</span>}
+          </span>
+        ))}
+      </Row>
+      <div className="max-w-md"><SubscribeForm kinds={kinds} onChange={setKinds} discordLinked={false} idPrefix="kit-sub" /></div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-2xl bg-warnbg px-4 py-3 text-warn">
+        <span className="min-w-0 flex-1 basis-60 text-sm font-bold">Вход с нового устройства: Chrome на Windows. Это были вы?</span>
+        <span className="flex gap-2"><button className="btn btn-soft btn-sm">Это я</button><button className="btn btn-danger btn-sm">Нет, выйти на всех устройствах</button></span>
+      </div>
+      <div className="space-y-2 rounded-ui-lg bg-warnbg p-4 text-warn">
+        <h3 className="font-black">Часть секретов не удалось прочитать</h3>
+        <ul className="list-disc pl-5 font-bold">{secrets.map((x) => <li key={x.id}>{x.label}</li>)}</ul>
+      </div>
+    </div>
+  );
+}
+
 function Specimen() {
   const [on, setOn] = useState(true);
   const [seg, setSeg] = useState('a');
@@ -255,6 +287,10 @@ export default function UiKitPage() {
         </Row>
       </Block>
 
+      <Block title="Уведомления и безопасность" note="Колокольчик в шапке, подписка на сервер, баннер входа с нового устройства и предупреждение о нечитаемых секретах после восстановления копии.">
+        <NotifyExtras />
+      </Block>
+
       <Block title="Диалоги">
         <Row>
           <button className="btn btn-soft" onClick={() => setDialog(true)}>Modal</button>
@@ -292,6 +328,28 @@ export default function UiKitPage() {
           <Gauge value={0.94} label="База" display="94 %" caption="критично" />
           <Gauge value={null} label="Нет данных" display="–" caption="неизвестно" />
         </div>
+      </Block>
+
+      <Block title="Обслуживание и графики состояния" note="Метка «Тех. работы до …» и статус «Обслуживание» вместо Офлайн; статичные спарклайны на странице «Система».">
+        <Row label="Статус и метка">
+          <StatusPill online={false} known maintenance />
+          <MaintenanceChip m={{ name: 'Обновление игры', until: Date.now() + 40 * 60_000 }} />
+          <div className="cover-grad flex flex-wrap items-center gap-2.5 rounded-ui-lg p-3" style={{ ['--c1' as string]: '#4338ca', ['--c2' as string]: '#7c3aed' }}>
+            <StatusPill glass online={false} known maintenance />
+            <MaintenanceChip glass m={{ name: '', until: Date.now() + 40 * 60_000 }} />
+          </div>
+        </Row>
+        <Row label="Спарклайн">
+          {[[3, 4, 3, 6, 8, 7, 9, 12, 10, 11], [5, 5, 5, 5, 5, 5]].map((v, i) => {
+            const sp = buildSparkline(v, 160, 40);
+            return (
+              <svg key={i} viewBox="0 0 160 40" width="160" height="40" className="rounded-ui-md bg-soft" role="img" aria-label={`Пример графика ${i + 1}`}>
+                <path d={sp.area} className="fill-link" opacity="0.12" />
+                <path d={sp.path} fill="none" className="stroke-link" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+              </svg>
+            );
+          })}
+        </Row>
       </Block>
 
       <Block title="Иконки" note="Один набор: сетка 24 px, штрих 2 px, цвет currentColor. Импорт из '../ui' (или из '../icons').">

@@ -29,7 +29,7 @@ export interface DiscordEmbed {
   url?: string;
   description?: string;
   color?: number;
-  author?: { name: string };
+  author?: { name: string; url?: string; icon_url?: string };
   fields?: { name: string; value: string; inline?: boolean }[];
   footer?: { text: string; icon_url?: string };
   thumbnail?: { url: string };
@@ -98,10 +98,16 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   void uptimePct;
   void intervalSec;
   const brand = extra.brandName || 'CoreGSM';
-  const version = extra.version ? ` v${extra.version.slice(0, 7)}` : '';
-  const when = stamp(s.updatedAt ?? Date.now(), extra.timeZone || 'Europe/Moscow');
-  const footer: { text: string; icon_url?: string } = { text: `${brand}${version} | Мониторинг игровых серверов | Обновлено: ${when}` };
-  if (extra.baseUrl) footer.icon_url = extra.logoUrl || `${extra.baseUrl}/logo-128.png`;
+  const version = extra.version ? ` · v${extra.version.slice(0, 7)}` : '';
+  // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
+  // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
+  const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };
+  const logo = extra.baseUrl ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
+  if (logo) footer.icon_url = logo;
+  const author: NonNullable<DiscordEmbed['author']> = { name: `${brand} · Мониторинг игровых серверов` };
+  if (extra.baseUrl) author.url = extra.baseUrl;
+  if (logo) author.icon_url = logo;
+  const timestamp = new Date(s.updatedAt ?? Date.now()).toISOString();
   const thumbnail = extra.thumbUrl ? { url: extra.thumbUrl } : undefined;
   const addr = `\`${s.address}\``;
 
@@ -111,6 +117,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
       color: accentOf(s.game) ?? COLOR.unknown,
       thumbnail,
+      author,
+      timestamp,
       footer,
     };
   }
@@ -180,6 +188,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
     fields,
+    author,
+    timestamp,
     footer,
   };
 }

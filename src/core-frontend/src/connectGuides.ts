@@ -245,3 +245,36 @@ export function connectGuide(game: string, address: string): ConnectGuide {
   }
   return { title, steps, copy, link };
 }
+
+/** a game profile's connect block (GET /games): templates use {address}, {host} and {port} */
+export interface ConnectTemplates { steam?: string; command?: string; note?: string }
+
+/** fills {address}, {host} and {port}; `fallbackPort` stands in for a missing port (the game's default) */
+export function fillConnectTemplate(tpl: string, address: string, fallbackPort?: number | string): string {
+  const addr = address.trim();
+  const { host, port } = splitAddress(addr);
+  const p = port || (fallbackPort != null ? String(fallbackPort) : '');
+  return tpl.replace(/\{address\}/g, addr).replace(/\{host\}/g, host).replace(/\{port\}/g, p);
+}
+
+/** only links that hand the user over to a game or launcher; never script or data urls */
+export const isSafeConnectHref = (href: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(href) && !/^(javascript|data|vbscript|file|blob):/i.test(href);
+
+/**
+ * The built-in guide with the server-provided connect templates applied: the command replaces (or adds) the console command,
+ * the steam template becomes the connect link. Without templates the guide is returned unchanged.
+ */
+export function applyConnectTemplates(guide: ConnectGuide, connect: ConnectTemplates | null | undefined, address: string, defaultPort?: number): ConnectGuide {
+  if (!connect) return guide;
+  let { copy, link } = guide;
+  const command = typeof connect.command === 'string' && connect.command.trim() ? fillConnectTemplate(connect.command.trim(), address, defaultPort) : '';
+  if (command) {
+    const at = copy.findIndex((c) => /команд/i.test(c.label));
+    copy = at >= 0 ? copy.map((c, i) => (i === at ? { ...c, value: command } : c)) : [copy[0], { label: 'Команда для консоли', value: command }, ...copy.slice(1)].filter(Boolean);
+  }
+  const steam = typeof connect.steam === 'string' && connect.steam.trim() ? fillConnectTemplate(connect.steam.trim(), address, defaultPort) : '';
+  if (steam && isSafeConnectHref(steam)) {
+    link = { label: steam.startsWith('steam://') ? 'Подключиться через Steam' : 'Подключиться', href: steam };
+  }
+  return { ...guide, copy, link };
+}

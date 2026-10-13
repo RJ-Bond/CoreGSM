@@ -3,7 +3,8 @@ import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
-import { connectGuide } from '../connectGuides';
+import { applyConnectTemplates, connectGuide } from '../connectGuides';
+import { useGameProfiles } from '../gameProfiles';
 import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
@@ -12,6 +13,7 @@ import HistoryChart, { type Series } from '../components/server/HistoryChart';
 import PlayersList from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
+import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
@@ -167,6 +169,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
   };
 
+  const profiles = useGameProfiles();
   const depth = useDepth<HTMLElement>();
   const [shared, setShared] = useState(false);
   // red ring once when the server goes online -> offline while this page is open
@@ -207,7 +210,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const color = gameColor(s.game);
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
-  const guide = connectGuide(s.game, s.address);
+  const profile = profiles?.[s.game];
+  const guide = applyConnectTemplates(connectGuide(s.game, s.address), profile?.connect, s.address, profile?.defaultPort);
   // placeholder versions such as 0.0.0.1 say nothing
   const realVersion = s.version && !/^0(\.0)*(\.\d+)?$/.test(s.version.trim()) ? s.version.trim() : null;
   const mode = guessMode(s.name);
@@ -422,7 +426,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
         {/* status row */}
         <div className="relative mt-3.5 flex flex-wrap items-center gap-2">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
           <LiveBadge at={s.updatedAt} />
           {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
         </div>
@@ -437,6 +441,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             address: s.address,
             ping: s.ping,
             online: s.online,
+            maintenance: s.maintenance,
             uptimePct: stats.uptimePct,
             uptimeLabel: windowShort,
             createdAt: data.createdAt ?? null,
@@ -464,6 +469,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             {shared ? <IconCheckMark /> : <IconShare />}
             Поделиться
           </button>
+          {me && <SubscribeMenu serverId={id} serverName={s.name} />}
         </div>
         {isAdmin && (
           <div className="relative mt-3 grid grid-cols-3 gap-2 border-t border-white/15 pt-3 sm:flex sm:flex-wrap sm:items-center" role="group" aria-label="Управление сервером">
