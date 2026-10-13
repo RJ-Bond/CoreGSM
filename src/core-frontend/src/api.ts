@@ -352,6 +352,7 @@ export interface Me {
   avatarSource: 'custom' | 'discord' | null;
   discordName: string | null;
   hasPassword: boolean;
+  email?: string | null;
 }
 
 export interface Session {

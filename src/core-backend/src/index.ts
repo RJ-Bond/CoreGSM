@@ -805,7 +805,7 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
 });
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
-interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null }
+interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null }
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
@@ -820,15 +820,39 @@ app.get('/api/me', auth, (req: AuthedRequest, res) => {
     avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
     discordName: u.discord_name,
     hasPassword: !u.no_password,
+    email: u.email ?? null,
   });
 });
+
+// e-mail of the account (a recovery and notification address); changing it asks for the current password
+app.put(
+  '/api/me/email',
+  auth,
+  wrap(async (req: AuthedRequest, res) => {
+    const body = z.object({ email: z.string().trim().max(254), current: z.string().optional() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Проверьте адрес' });
+    const email = body.data.email.toLowerCase();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return res.status(400).json({ error: 'Некорректный адрес электронной почты' });
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
+      return res.status(403).json({ error: 'Введите текущий пароль, чтобы изменить почту' });
+    }
+    if (email) {
+      const taken = db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(email, req.user!.id);
+      if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
+    }
+    db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
+    res.json({ ok: true, email: email || null });
+  }),
+);
 
 app.post(
   '/api/auth/password',
   auth,
   wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256) }).safeParse(req.body);
+    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256), confirm: z.string().optional() }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
+    if (body.data.confirm !== undefined && body.data.confirm !== body.data.next) return res.status(400).json({ error: 'Пароли не совпадают' });
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
     // an account created through Discord has no password yet: no current one to check
     if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {

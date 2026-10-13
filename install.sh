@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="884c0b238532"
+COREGSM_BUILD="25a695e5c70a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2068,6 +2068,7 @@ for (const ddl of [
   'ALTER TABLE users ADD COLUMN discord_name TEXT',
   'ALTER TABLE users ADD COLUMN discord_avatar TEXT',
   'ALTER TABLE users ADD COLUMN no_password INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN email TEXT',
 ]) {
   try {
     db.exec(ddl);
@@ -3530,7 +3531,7 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
 });
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
-interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null }
+interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null }
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
@@ -3545,15 +3546,39 @@ app.get('/api/me', auth, (req: AuthedRequest, res) => {
     avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
     discordName: u.discord_name,
     hasPassword: !u.no_password,
+    email: u.email ?? null,
   });
 });
+
+// e-mail of the account (a recovery and notification address); changing it asks for the current password
+app.put(
+  '/api/me/email',
+  auth,
+  wrap(async (req: AuthedRequest, res) => {
+    const body = z.object({ email: z.string().trim().max(254), current: z.string().optional() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Проверьте адрес' });
+    const email = body.data.email.toLowerCase();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return res.status(400).json({ error: 'Некорректный адрес электронной почты' });
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
+      return res.status(403).json({ error: 'Введите текущий пароль, чтобы изменить почту' });
+    }
+    if (email) {
+      const taken = db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(email, req.user!.id);
+      if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
+    }
+    db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
+    res.json({ ok: true, email: email || null });
+  }),
+);
 
 app.post(
   '/api/auth/password',
   auth,
   wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256) }).safeParse(req.body);
+    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256), confirm: z.string().optional() }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
+    if (body.data.confirm !== undefined && body.data.confirm !== body.data.next) return res.status(400).json({ error: 'Пароли не совпадают' });
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
     // an account created through Discord has no password yet: no current one to check
     if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
@@ -14349,6 +14374,7 @@ export interface Me {
   avatarSource: 'custom' | 'discord' | null;
   discordName: string | null;
   hasPassword: boolean;
+  email?: string | null;
 }
 
 export interface Session {
@@ -23918,6 +23944,7 @@ export default function ProfilePage() {
           <button className="btn btn-soft" onClick={logout}>Выйти</button>
         </div>
 
+        <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
         <DiscordCard onChanged={reload} />
         <SessionsCard />
@@ -24033,24 +24060,29 @@ function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) {
 function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChanged: () => Promise<void> }) {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [againErr, setAgainErr] = useState('');
   const [curErr, setCurErr] = useState('');
   const [nextErr, setNextErr] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const curRef = useRef<HTMLInputElement>(null);
   const nextRef = useRef<HTMLInputElement>(null);
+  const againRef = useRef<HTMLInputElement>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    setCurErr(''); setNextErr(''); setError('');
+    setCurErr(''); setNextErr(''); setAgainErr(''); setError('');
     if (hasPassword && !current) { setCurErr('Введите текущий пароль'); curRef.current?.focus(); return; }
     if (next.length < 8) { setNextErr('Пароль должен быть не короче 8 символов'); nextRef.current?.focus(); return; }
+    if (again !== next) { setAgainErr('Пароли не совпадают'); againRef.current?.focus(); return; }
     setBusy(true);
     try {
-      await api('/auth/password', 'POST', hasPassword ? { current, next } : { next });
+      await api('/auth/password', 'POST', hasPassword ? { current, next, confirm: again } : { next, confirm: again });
       toast(hasPassword ? 'Пароль изменён' : 'Пароль задан');
       setCurrent('');
       setNext('');
+      setAgain('');
       await onChanged();
     } catch (err) {
       setError((err as Error).message);
@@ -24069,8 +24101,60 @@ function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChan
       <PasswordField id="pf-next" ref={nextRef} label="Новый пароль (от 8 символов)" value={next} onChange={setNext} autoComplete="new-password" error={nextErr}>
         <PasswordStrength password={next} />
       </PasswordField>
+      <PasswordField id="pf-again" ref={againRef} label="Повторите новый пароль" value={again} onChange={(v) => { setAgain(v); setAgainErr(''); }} autoComplete="new-password" error={againErr} />
+      {again && next && again === next && !againErr && <p className="-mt-1 text-sm font-bold text-ok">Пароли совпадают</p>}
       <ErrorLine text={error} />
       <Button loading={busy}>{hasPassword ? 'Сохранить пароль' : 'Задать пароль'}</Button>
+    </form>
+  );
+}
+
+/** Account e-mail: a recovery and notification address. Changing it asks for the current password. */
+function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
+  const { me } = useAuth();
+  const [email, setEmail] = useState(me?.email ?? '');
+  const [current, setCurrent] = useState('');
+  const [error, setError] = useState('');
+  const [fieldErr, setFieldErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setEmail(me?.email ?? ''); }, [me?.email]);
+  if (!me) return null;
+  const saved = me.email ?? '';
+  const dirty = email.trim().toLowerCase() !== saved.toLowerCase();
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(''); setFieldErr('');
+    const v = email.trim();
+    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) { setFieldErr('Похоже на неверный адрес, например name@example.com'); return; }
+    if (me.hasPassword && !current) { setError('Введите текущий пароль, чтобы изменить почту'); return; }
+    setBusy(true);
+    try {
+      await api('/me/email', 'PUT', { email: v, current: me.hasPassword ? current : undefined });
+      toast(v ? 'Почта сохранена' : 'Почта удалена');
+      setCurrent('');
+      await onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} noValidate className="panel space-y-3.5 p-6">
+      <h2 className="text-lg font-black">Электронная почта</h2>
+      <p className="font-semibold text-mute">Нужна для восстановления доступа и уведомлений. Никому не показывается.</p>
+      <div>
+        <label htmlFor="pf-email" className="label">Адрес</label>
+        <input id="pf-email" className="input" type="email" inputMode="email" autoComplete="email" value={email} onChange={(e) => { setEmail(e.target.value); setFieldErr(''); }} placeholder="name@example.com" aria-invalid={fieldErr ? true : undefined} />
+        <FieldError id="pf-email-err" text={fieldErr} />
+      </div>
+      {dirty && me.hasPassword && (
+        <PasswordField id="pf-email-pass" label="Текущий пароль (для подтверждения)" value={current} onChange={setCurrent} autoComplete="current-password" />
+      )}
+      <ErrorLine text={error} />
+      <Button loading={busy} disabled={!dirty}>{email.trim() ? 'Сохранить почту' : 'Удалить почту'}</Button>
     </form>
   );
 }
