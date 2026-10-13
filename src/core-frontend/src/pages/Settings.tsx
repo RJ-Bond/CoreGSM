@@ -8,6 +8,7 @@ import { useAuth } from '../auth';
 import { Switch as ToggleSwitch } from '../components/Switch';
 import { AdminPage, CopyButton, ErrorLine, Field, FieldError, GoLink, IconArrowUp, IconCheck, IconKey, IconSettings, IconTrash, IconUsers, Logo, InviteButton, PageHead, ProxyField, SaveBadge, Section, Spinner, TextField, ago, plural, toast, useAutosave, usePoll, type ProxyType } from '../ui';
 import BackupsCard from './Backups';
+import SmtpCard from '../components/SmtpCard';
 import { SETTINGS_TABS } from './adminNav';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
@@ -228,6 +229,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       {tab === 'security' && (
         <>
           <PasswordCard />
+          <SmtpCard />
           <Section title="Вход и доступ">
             <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
             <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>

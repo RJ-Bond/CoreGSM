@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
-import { AdminPage, ErrorLine, GoLink, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -40,7 +40,8 @@ export default function SystemPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
 
-  usePoll(() => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message)), 15_000);
+  const load = () => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message));
+  usePoll(load, 15_000);
 
   const run = async () => {
     setRunning(true);
@@ -80,7 +81,7 @@ export default function SystemPage() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && !h ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {h ? (
         <>

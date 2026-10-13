@@ -901,3 +901,176 @@ html[data-flat='cf'] *, html[data-flat='cf'] *::before, html[data-flat='cf'] *::
    no longer transition by default. */
 :focus, :focus-visible { outline: 0 !important; }
 .transition { transition-property: color, background-color, fill, stroke, opacity, box-shadow, transform, filter !important; }
+
+/* =====================================================================================================
+   Quality pass: state views, foldable server sections, admin shortcuts, setup wizard,
+   appearance options (less motion / large text / high contrast) and one visible keyboard focus ring.
+   ===================================================================================================== */
+
+/* ---------- focus: every interactive element gets a box-shadow ring (outlines are removed above) ----------
+   Utilities and component shadows live in cascade layers, so this unlayered rule wins; the ring replaces the element's
+   own shadow while it is focused. Containers that receive focus from code (main, dialogs) stay quiet. */
+:focus-visible:not(main):not([role='dialog']):not([role='alertdialog']) {
+  outline: 0 !important;
+  box-shadow: 0 0 0 2px rgb(var(--page)), 0 0 0 4px rgb(var(--link)) !important;
+}
+/* inside clipping containers (segmented controls, scrolling strips, lists with overflow hidden) the ring is drawn inward */
+.seg-item:focus-visible,
+.split-item:focus-visible,
+.srv-chip:focus-visible,
+.adm-pin:focus-visible,
+.pl-row:focus-visible,
+.chip-filter:focus-visible {
+  box-shadow: inset 0 0 0 2px rgb(var(--link)) !important;
+}
+/* on covers and gradients the ring is white with a dark inner edge */
+.btn-glass:focus-visible, .btn-glass-quiet:focus-visible, .btn-cta:focus-visible, .btn-on-grad:focus-visible,
+.btn-ghost-on-grad:focus-visible, .pp-copy:focus-visible, .chip-glass a:focus-visible, .pp-v a:focus-visible {
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 0.45), 0 0 0 4px #fff !important;
+}
+a:focus-visible, button.text-link:focus-visible, .hint-more:focus-visible { border-radius: var(--r-sm); }
+.btn:focus-visible, .btn-icon:focus-visible, .row-act:focus-visible { border-radius: 9999px; }
+.row-act:focus-visible { border-radius: var(--r-md); }
+
+/* ---------- state views ---------- */
+[data-state='error'].panel { box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--bad) / 0.25); }
+
+/* ---------- server page: foldable sections and the mini table of contents ---------- */
+.srv-sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+.srv-sec.is-closed > .srv-sec-head { margin-bottom: 0; }
+.srv-sec-bare > .srv-sec-head { margin-bottom: 8px; padding: 0 4px; }
+.srv-sec-bare.is-closed > .srv-sec-head { margin-bottom: 0; }
+.srv-sec-btn {
+  display: flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px; margin: -4px -8px; padding: 4px 8px;
+  border-radius: var(--r-md); text-align: left; font: inherit; color: inherit; transition: background-color .15s ease;
+}
+.srv-sec-btn:hover { background: rgb(var(--soft)); }
+.srv-sec-chev { flex: none; color: rgb(var(--mute)); transition: transform .2s ease; }
+.srv-sec.is-closed .srv-sec-chev { transform: rotate(-90deg); }
+.srv-sec:focus { outline: 0; }
+@media (max-width: 639px) { .srv-sec-btn { min-height: 44px; } }
+
+.srv-chips { display: flex; gap: 6px; overflow-x: auto; margin-top: 6px; padding: 2px 3px 4px; max-width: 100%; }
+.srv-chip {
+  flex: none; display: inline-flex; align-items: center; min-height: 32px; border-radius: 9999px; padding: 4px 12px;
+  font-size: 13px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: color .15s ease, background-color .15s ease;
+}
+.srv-chip:hover { color: rgb(var(--ink)); }
+.srv-chip[aria-current='true'] { color: rgb(var(--ink)); background: rgb(var(--seg-on)); box-shadow: 0 0 0 1px rgb(var(--line)); }
+.srv-chip[data-closed='true']::after { content: '+'; margin-left: 5px; font-weight: 900; opacity: .7; }
+@media (max-width: 639px) { .srv-chip { min-height: 36px; } }
+
+/* ---------- admin sidebar: pins and recent sections ---------- */
+.adm-item { position: relative; display: flex; min-width: 0; flex: none; }
+.adm-pin { display: none; }
+@media (min-width: 768px) {
+  .adm-item { display: block; flex: initial; }
+  .adm-pin {
+    display: grid; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); place-items: center;
+    width: 28px; height: 28px; border-radius: 9999px; font-size: 15px; line-height: 1; color: rgb(var(--mute));
+    opacity: 0; transition: opacity .15s ease, color .15s ease, background-color .15s ease;
+  }
+  .adm-item:hover .adm-pin, .adm-item:focus-within .adm-pin, .adm-item[data-pinned='true'] .adm-pin { opacity: 1; }
+  .adm-item[data-pinned='true'] .adm-pin { color: rgb(var(--warn)); }
+  .adm-item[data-current='true'] .adm-pin, .adm-item[data-current='true'] .adm-pin:hover { color: #fff; }
+  .adm-pin:hover { background: rgb(var(--soft)); }
+}
+@media (min-width: 768px) and (hover: none) { .adm-pin { opacity: .75; } }
+/* phones: the nav is a horizontal strip; only the section you are in shows its star, right after its chip */
+@media (max-width: 767px) {
+  .adm-item[data-current='true'] .adm-pin {
+    display: grid; flex: none; place-items: center; width: 36px; height: 36px; align-self: center; border-radius: 9999px;
+    font-size: 17px; color: rgb(var(--mute)); background: rgb(var(--soft));
+  }
+  .adm-item[data-current='true'][data-pinned='true'] .adm-pin { color: rgb(var(--warn)); }
+}
+
+/* ---------- Discord setup wizard ---------- */
+.dw-steps { display: grid; gap: 10px; }
+.dw-step { display: flex; gap: 12px; border-radius: var(--r-lg); padding: 12px 14px; background: rgb(var(--soft)); }
+.dw-step[data-state='current'] { background: rgb(var(--brand) / 0.08); box-shadow: inset 0 0 0 1.5px rgb(var(--brand) / 0.4); }
+.dw-step[data-state='blocked'] { color: rgb(var(--mute)); }
+.dw-mark {
+  display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 9999px;
+  font-size: 14px; font-weight: 900; color: rgb(var(--mute)); background: rgb(var(--card));
+}
+.dw-step[data-state='done'] .dw-mark { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
+.dw-step[data-state='current'] .dw-mark { color: #fff; background: rgb(var(--brand)); }
+
+/* ---------- appearance: «Меньше движения» (html[data-motion='reduce']); the OS setting is handled by the media queries above ---------- */
+html[data-motion='reduce'] *, html[data-motion='reduce'] *::before, html[data-motion='reduce'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+html[data-motion='reduce'] :is(.auth-glow, .auth-float, .skeleton, .tile-in, .chart-reveal, .meter > i, .update-bob, .art-float, .art-float-2, .art-twinkle, .art-blink, .art-wobble, .art-spin, .toast-in, .toast-out, .pop, .fade-in, .showcase-tile, .auth-card, .auth-swap, .flash-ring, .burst i, .delta-chip) {
+  animation: none !important;
+}
+html[data-motion='reduce'] :is(.pill.live, .live-dot, .update-dot, .pill-glass-ok)::before,
+html[data-motion='reduce'] :is(.live-dot, .update-dot)::after { animation: none !important; }
+html[data-motion='reduce'] main .grid > .tile, html[data-motion='reduce'] main .grid > .panel { animation: none !important; }
+html[data-motion='reduce'] .update-progress > i { animation: none !important; width: 100%; }
+/* a spinner must still say "busy": keep a slow rotation */
+html[data-motion='reduce'] .animate-spin, html[data-motion='reduce'] .ico-refresh.spinning { animation: spin 2s linear infinite !important; }
+html[data-motion='reduce'] [data-magnetic], html[data-motion='reduce'] .depth-l1, html[data-motion='reduce'] .depth-l2 { translate: none !important; }
+html[data-motion='reduce'] .btn:active, html[data-motion='reduce'] .btn-icon:active, html[data-motion='reduce'] .tile-hover:active { transform: none !important; }
+html[data-motion='reduce'] .btn::after, html[data-motion='reduce'] .depth::before, html[data-motion='reduce'] .depth::after { display: none !important; }
+html[data-motion='reduce'] ::view-transition-group(*), html[data-motion='reduce'] ::view-transition-old(*), html[data-motion='reduce'] ::view-transition-new(*) { animation: none !important; }
+
+/* ---------- appearance: «Крупный текст» (html[data-text='large']): root 112.5 %, fixed pixel sizes follow ---------- */
+html[data-text='large'] { font-size: 112.5%; }
+html[data-text='large'] body { font-size: calc(15px * 1.125); }
+html[data-text='large'][data-density='compact'] body { font-size: calc(14px * 1.125); }
+html[data-text='large'] .text-\[10px\] { font-size: calc(10px * 1.125); }
+html[data-text='large'] :is(.text-\[11px\], .adm-group-title, .pp-k) { font-size: calc(11px * 1.125); }
+html[data-text='large'] :is(.text-\[12px\], .tab-count, .hc-legend, .split-item small) { font-size: calc(12px * 1.125); }
+html[data-text='large'] :is(.text-\[13px\], .pill, .stat-k, .stat-s, .chip-glass, .srv-chip, .pp-v code) { font-size: calc(13px * 1.125); }
+html[data-text='large'] :is(.text-\[14px\], .text-\[14\.5px\], .hint-strip, .chip-filter, .btn-glass, .pp-v) { font-size: calc(14px * 1.125); }
+html[data-text='large'] .text-\[15px\] { font-size: calc(15px * 1.125); }
+html[data-text='large'] .stat-v { font-size: calc(34px * 1.125); }
+@media (min-width: 640px) { html[data-text='large'] .stat-v { font-size: calc(40px * 1.125); } }
+
+/* ---------- appearance: «Высокий контраст» (html[data-contrast='high']): black ink, firm borders ---------- */
+:root[data-contrast='high'] {
+  --ink: 0 0 0;
+  --mute: 52 58 72;
+  --line: 140 146 160;
+  --field: 70 76 90;
+  --ok: 8 88 44;
+  --warn: 104 66 0;
+  --bad: 150 18 18;
+  --badsolid: 150 18 18;
+  --tile-border: rgb(110 116 130);
+}
+:root[data-theme='dark'][data-contrast='high'] {
+  --ink: 255 255 255;
+  --mute: 206 211 224;
+  --line: 120 126 144;
+  --field: 160 166 184;
+  --ok: 134 239 172;
+  --warn: 253 224 71;
+  --bad: 252 165 165;
+  --tile-border: rgb(255 255 255 / 0.4);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light'])[data-contrast='high'] {
+    --ink: 255 255 255;
+    --mute: 206 211 224;
+    --line: 120 126 144;
+    --field: 160 166 184;
+    --ok: 134 239 172;
+    --warn: 253 224 71;
+    --bad: 252 165 165;
+    --tile-border: rgb(255 255 255 / 0.4);
+  }
+}
+html[data-contrast='high'] .panel, html[data-contrast='high'] .tile { border-width: 2px; }
+html[data-contrast='high'] .pill { box-shadow: inset 0 0 0 1px currentColor; }
+html[data-contrast='high'] .seg { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
+html[data-contrast='high'] .seg-item[aria-pressed='true'], html[data-contrast='high'] .seg-item[aria-current='page'], html[data-contrast='high'] .seg-item.on { box-shadow: inset 0 0 0 2px rgb(var(--ink)); }
+html[data-contrast='high'] .btn-soft, html[data-contrast='high'] .btn-icon, html[data-contrast='high'] .row-act { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
+html[data-contrast='high'] .hint-strip { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
+html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline; text-underline-offset: 3px; }

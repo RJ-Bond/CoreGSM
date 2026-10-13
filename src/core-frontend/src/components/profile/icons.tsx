@@ -21,6 +21,7 @@ export function AchievementIcon({ slug, size = 22 }: { slug: string; size?: numb
 export function JournalIcon({ kind, size = 18 }: { kind: string; size?: number }): ReactNode {
   switch (kind) {
     case 'login': return <Icon size={size}><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" /></Icon>;
+    case 'login_new_device': return <Icon size={size}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></Icon>;
     case 'login_failed': return <Icon size={size}><path d="M12 3l10 18H2z" /><path d="M12 10v5M12 18h.01" /></Icon>;
     case 'password_changed': return <Icon size={size}><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></Icon>;
     case 'email_changed': return <Icon size={size}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" /></Icon>;

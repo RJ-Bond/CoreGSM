@@ -4,8 +4,9 @@ import { flushSync } from 'react-dom';
 // Small motion helpers: no animation library, CSS does the painting. Everything here is a no-op for
 // prefers-reduced-motion and for coarse pointers, and nothing throws where an API is missing.
 
+/** the OS setting, or «Меньше движения» chosen in the profile (data-motion on <html>) */
 export const prefersReducedMotion = () =>
-  typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  typeof window !== 'undefined' && (document.documentElement.dataset.motion === 'reduce' || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
 export const hasFinePointer = () =>
   typeof window !== 'undefined' && !!window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;

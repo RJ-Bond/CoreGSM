@@ -12,7 +12,7 @@ type Filter = 'all' | 'logins' | 'secrets' | 'links';
 
 const FILTERS: { id: Filter; label: TKey; kinds: string[] | null }[] = [
   { id: 'all', label: 'pf.journal.f.all', kinds: null },
-  { id: 'logins', label: 'pf.journal.f.logins', kinds: ['login', 'login_failed', 'sessions_revoked'] },
+  { id: 'logins', label: 'pf.journal.f.logins', kinds: ['login', 'login_new_device', 'login_failed', 'sessions_revoked'] },
   { id: 'secrets', label: 'pf.journal.f.secrets', kinds: ['password_changed', 'email_changed'] },
   { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked'] },
 ];
@@ -20,6 +20,7 @@ const FILTERS: { id: Filter; label: TKey; kinds: string[] | null }[] = [
 const KIND_LABEL: Record<string, TKey> = {
   login: 'pf.journal.k.login',
   login_failed: 'pf.journal.k.login_failed',
+  login_new_device: 'pf.journal.k.login_new_device',
   password_changed: 'pf.journal.k.password_changed',
   email_changed: 'pf.journal.k.email_changed',
   discord_linked: 'pf.journal.k.discord_linked',

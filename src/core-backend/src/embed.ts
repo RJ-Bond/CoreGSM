@@ -4,7 +4,7 @@
  *
  * Layout (three columns): status · address · country / game · map · players / player list.
  */
-import { gameLabel } from './games.js';
+import { gameLabel, gameProfile, gameShowsMap } from './games.js';
 
 export interface EmbedServer {
   name: string;
@@ -20,6 +20,8 @@ export interface EmbedServer {
   playerNames: string[];
   error: string | null;
   updatedAt: number | null;
+  /** planned work in progress (maintenance window) */
+  maintenance?: { name: string; until: number } | null;
 }
 
 export interface DiscordEmbed {
@@ -57,7 +59,7 @@ export interface EmbedExtra {
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
 
 /** the side stripe of an online server follows the colour of its game (others keep the status green) */
-const GAME_ACCENT: Record<string, number> = { vrising: 0x8b5cf6, icarus: 0xf5b01e };
+const accentOf = (game: string): number | undefined => gameProfile(game)?.accent;
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
@@ -107,14 +109,14 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     return {
       title: cut(s.name, 256),
       description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
-      color: GAME_ACCENT[s.game] ?? COLOR.unknown,
+      color: accentOf(s.game) ?? COLOR.unknown,
       thumbnail,
       footer,
     };
   }
 
   const lag = s.online && s.ping != null && s.ping > 100;
-  const status = !s.online ? '🔴 **Офлайн**' : lag ? '🟡 **Лаги**' : '🟢 **Онлайн**';
+  const status = !s.online && s.maintenance ? '🛠️ **Тех. работы**' : !s.online ? '🔴 **Офлайн**' : lag ? '🟡 **Лаги**' : '🟢 **Онлайн**';
   const ping = s.online && s.ping != null ? ` · ${s.ping} мс` : '';
   const pct = s.maxPlayers ? ` (${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%)` : '';
 
@@ -144,7 +146,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     { name: '⏱️ Аптайм 24 ч', value: uptime, inline: true },
     { name: '📍 Адрес', value: `${addr} ${WIDTH_PAD}`, inline: false },
     { name: '🎮 Игра', value: cut(gameLabel(s.game), 100), inline: true },
-    { name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
+    // games whose profile says "no map" (Minecraft, V Rising, ...) do not get the field at all
+    ...(gameShowsMap(s.game) ? [{ name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true }] : []),
     ...(third ? [third] : []),
   ];
 
@@ -174,7 +177,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     title: cut(s.name, 256),
     url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/#/servers/${extra.serverId}` : undefined,
     description: lines.length ? lines.join('\n') : undefined,
-    color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
+    color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
     fields,
     footer,

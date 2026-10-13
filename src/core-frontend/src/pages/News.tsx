@@ -6,7 +6,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -143,7 +143,7 @@ function NewsList() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && list.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       <Strip className="!justify-start">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
@@ -191,7 +191,7 @@ function NewsList() {
 
       {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
-      {loaded && list.length === 0 && (
+      {loaded && !error && list.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
         </Empty>
@@ -248,13 +248,14 @@ export function NewsFeed() {
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
-  usePoll(() => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true)), 30_000);
+  const load = () => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true));
+  usePoll(load, 30_000);
 
   return (
     <div className="space-y-5">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
-      <ErrorLine text={error} />
-      {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
+      {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+      {loaded && !error && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
       {!loaded && (
         <div className="mx-auto max-w-2xl space-y-4" aria-busy="true" aria-label="Загрузка">
           {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}

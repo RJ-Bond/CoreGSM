@@ -17,7 +17,7 @@ import {
 import { Preview } from '../components/news/Preview';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
-import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast } from '../ui';
 
 export { TEMPLATES };
 
@@ -180,7 +180,11 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const games = useMemo(() => gameColors(servers?.map((s) => s.game)), [servers]);
 
   if (!d) {
-    return error ? <ErrorLine text={error} /> : (
+    return error ? (
+      <StateView kind={errorKind(error)} text={errorKind(error) === 'error' ? error : undefined} onRetry={() => window.location.reload()}>
+        <a className="btn btn-soft" href="#/admin/news">К новостям</a>
+      </StateView>
+    ) : (
       <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
         <div className="skeleton h-9 w-56 rounded-full" />
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">

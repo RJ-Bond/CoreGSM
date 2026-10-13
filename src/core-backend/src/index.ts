@@ -14,11 +14,31 @@ import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
+import { maintenanceFor, occurrencesBetween, registerMaintenance, type WindowRow } from './maintenance.js';
+import { registerHealth } from './health.js';
+import { registerDeliveries } from './deliveries.js';
+import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
+import { registerGames } from './games.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel } from './profile.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
+import {
+  clearSessionCookie,
+  csrfGuard,
+  emailChanged,
+  ipLockRemaining,
+  ipLoginFailed,
+  noteLogin,
+  readCookie,
+  recentNewDevice,
+  registerSecurity,
+  securityHeaders,
+  SESSION_COOKIE,
+  setSessionCookie,
+  windowLimiter,
+} from './security.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -95,8 +115,15 @@ function normalizeProxy(raw: string, type: ProxyType): string {
 }
 
 const app = express();
+// One trusted proxy hop (the nginx container): req.ip / req.secure come from the X-Forwarded-For / X-Forwarded-Proto it
+// writes. The backend port is not published, so clients cannot spoof them; keep it that way (see security.ts).
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+app.use(securityHeaders);
+// a cookie-authenticated state-changing request must carry X-CoreGSM (CSRF guard)
+app.use('/api', csrfGuard);
+// public player pages: a coarse per-address ceiling on top of the route's own limiter
+app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 installAudit(app);
@@ -136,9 +163,10 @@ function userFromToken(token: string): { id: number; username: string; role: Rol
 }
 const lastSeen = new Map<string, number>();
 
+/** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
 function loadUser(req: Request) {
   const h = req.headers.authorization ?? '';
-  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '');
+  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readCookie(req, SESSION_COOKIE));
 }
 
 /** Starts a session and returns the signed token for it. */
@@ -206,7 +234,11 @@ function rateLimit(max: number) {
     const now = Date.now();
     const h = hits.get(key);
     if (!h || h.reset <= now) hits.set(key, { n: 1, reset: now + 60_000 });
-    else if (++h.n > max) return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.' });
+    else if (++h.n > max) {
+      const retryAfter = Math.max(1, Math.ceil((h.reset - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.', retryAfter });
+    }
     next();
   };
 }
@@ -217,7 +249,9 @@ function loginLimiter(req: Request, res: Response, next: NextFunction) {
   const now = Date.now();
   const a = attempts.get(key);
   if (a && a.reset > now && a.n >= 10) {
-    res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.' });
+    const retryAfter = Math.max(1, Math.ceil((a.reset - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.', retryAfter });
     return;
   }
   if (!a || a.reset <= now) attempts.set(key, { n: 1, reset: now + 10 * 60 * 1000 });
@@ -235,11 +269,18 @@ app.post(
   wrap(async (req, res) => {
     const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
+    // progressive lockout of the whole address after failures across several logins
+    const ipWait = ipLockRemaining(req.ip);
+    if (ipWait > 0) {
+      res.setHeader('Retry-After', String(ipWait));
+      return res.status(429).json({ error: `Слишком много неудачных попыток входа с этого адреса. Повторите через ${ipWait} с.`, retryAfter: ipWait });
+    }
     // lock out after repeated wrong passwords for the same login from the same address
     const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
     const lock = fails.get(key);
     if (lock && lock.until > Date.now()) {
       const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
+      res.setHeader('Retry-After', String(retryAfter));
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
@@ -251,6 +292,7 @@ app.post(
       f.n++;
       if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
       fails.set(key, f);
+      ipLoginFailed(req.ip, body.data.username);
       if (u) logAccount(req, u.id, 'login_failed');
       const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
       return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
@@ -259,7 +301,10 @@ app.post(
     if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
     attempts.delete(req.ip ?? 'x');
     logAccount(req, u.id, 'login');
-    res.json({ token: issueToken(u, req), username: u.username, role: u.role });
+    noteLogin(req, u.id, brand().name);
+    const token = issueToken(u, req);
+    setSessionCookie(req, res, token);
+    res.json({ token, username: u.username, role: u.role });
   }),
 );
 
@@ -310,6 +355,8 @@ app.post(
     attempts.delete(req.ip ?? 'x');
     console.log(`setup completed, admin "${b.data.username}" created`);
     const token = issueToken({ id: userId, username: b.data.username }, req);
+    setSessionCookie(req, res, token);
+    noteLogin(req, userId, brand().name);
     res.status(201).json({ token, username: b.data.username, role: 'admin' });
   }),
 );
@@ -696,6 +743,7 @@ app.get('/api/auth/check', rateLimit(30), (req, res) => {
 
 app.post(
   '/api/auth/register',
+  windowLimiter(20, 3600_000, 'Слишком много регистраций с этого адреса. Попробуйте позже.'),
   loginLimiter,
   wrap(async (req, res) => {
     if (needsSetup()) return res.status(409).json({ error: 'Панель ещё не настроена: сначала создайте администратора' });
@@ -719,7 +767,10 @@ app.post(
         db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
       );
       if (pending) return res.status(202).json({ pending: true });
-      res.status(201).json({ token: issueToken({ id, username: b.data.username }, req), username: b.data.username, role: 'player' });
+      const token = issueToken({ id, username: b.data.username }, req);
+      setSessionCookie(req, res, token);
+      noteLogin(req, id, brand().name);
+      res.status(201).json({ token, username: b.data.username, role: 'player' });
     } catch {
       res.status(409).json({ error: 'Этот логин уже занят' });
     }
@@ -802,7 +853,7 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
 });
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
-interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null }
+interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
@@ -818,9 +869,12 @@ app.get('/api/me', auth, (req: AuthedRequest, res) => {
     discordName: u.discord_name,
     hasPassword: !u.no_password,
     email: u.email ?? null,
+    emailVerified: !!u.email && !!u.email_verified,
+    newDevice: recentNewDevice(u.id),
     prefs: prefsOf(u.id),
     bannerUrl: bannerUrlOf(u.id),
     bannerPreset: bannerPresetOf(u.id),
+    unreadNotifications: unreadNotifications(u.id),
   });
 });
 
@@ -842,7 +896,10 @@ app.put(
       if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
     }
     db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
-    if ((u.email ?? '') !== email) logAccount(req, u.id, 'email_changed');
+    if ((u.email ?? '') !== email) {
+      emailChanged(u.id);
+      logAccount(req, u.id, 'email_changed');
+    }
     res.json({ ok: true, email: email || null });
   }),
 );
@@ -886,6 +943,7 @@ app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
 // logout: ends the session this very token belongs to
 app.delete('/api/sessions/current', auth, (req: AuthedRequest, res) => {
   db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(req.user!.sid ?? '', req.user!.id);
+  clearSessionCookie(req, res);
   res.json({ ok: true });
 });
 app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
@@ -916,7 +974,8 @@ app.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
   const mode = req.query.mode === 'link' ? 'link' : 'login';
   let userId = 0;
   if (mode === 'link') {
-    const u = userFromToken(String(req.query.t ?? ''));
+    // the session cookie travels with this top-level navigation; ?t= stays for older clients
+    const u = userFromToken(String(req.query.t ?? '')) ?? loadUser(req);
     if (!u) return failTo(res, 'Сначала войдите в панель, затем привяжите Discord');
     userId = u.id;
   }
@@ -970,7 +1029,10 @@ app.get(
       db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
       if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
       logAccount(req, owner.id, 'login', 'Discord');
-      return toHash(res, `auth/${issueToken(owner, req)}`);
+      noteLogin(req, owner.id, brand().name);
+      const tok = issueToken(owner, req);
+      setSessionCookie(req, res, tok);
+      return toHash(res, `auth/${tok}`);
     }
 
     // first sign-in with this Discord account: register it (when registration is open)
@@ -986,7 +1048,10 @@ app.get(
         .run(name, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), pending ? 'pending' : 'active', me.id, dname, me.avatar ?? null).lastInsertRowid,
     );
     if (pending) return failTo(res, 'Заявка отправлена. Дождитесь одобрения администратора');
-    toHash(res, `auth/${issueToken({ id, username: name }, req)}`);
+    const tok = issueToken({ id, username: name }, req);
+    setSessionCookie(req, res, tok);
+    noteLogin(req, id, brand().name);
+    toHash(res, `auth/${tok}`);
   }),
 );
 
@@ -1042,6 +1107,8 @@ function serialize(r: ServerJoin) {
     playerNames: r.player_names ? (JSON.parse(r.player_names) as string[]) : [],
     error: r.error ?? null,
     updatedAt: r.updated_at ?? null,
+    // running maintenance window for this server (alerts are muted, downtime is not counted) or null
+    maintenance: maintenanceFor(r.id),
   };
 }
 
@@ -1141,7 +1208,7 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
     .all(id, since, bucketMs);
   const agg = db
     .prepare(
-      `SELECT COUNT(*) AS samples, AVG(online) * 100 AS uptime,
+      `SELECT COUNT(*) AS samples, AVG(CASE WHEN unconfirmed = 0 AND maint = 0 THEN online END) * 100 AS uptime,
               AVG(CASE WHEN online = 1 THEN players END) AS avg_players
        FROM history WHERE server_id = ? AND ts > ?`,
     )
@@ -1157,9 +1224,13 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
          ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
       )
       .all(id, since) as { ts: number; online: number }[]
-  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak', players: null as number | null }));
+  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance', players: null as number | null }));
   // the busiest moment of the period is shown in the event feed as well
   if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
+  // planned maintenance (windows of this server and of all servers) starting in the period
+  for (const w of db.prepare('SELECT * FROM maintenance_windows WHERE server_id IS NULL OR server_id = ?').all(id) as WindowRow[]) {
+    for (const o of occurrencesBetween(w, since, Date.now())) events.push({ ts: o.start, type: 'maintenance', players: null });
+  }
   events.sort((a, b) => b.ts - a.ts);
 
   const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
@@ -1214,7 +1285,7 @@ app.get('/api/servers/:id/history', viewer, (req, res) => {
 app.get(
   '/api/card/:id(\\d+).png',
   wrap(async (req, res) => {
-    if (!publicPanel() && !userFromToken(String(req.query.t ?? ''))) return res.status(404).json({ error: 'Сервер не найден' });
+    if (!publicPanel() && !userFromToken(String(req.query.t ?? '')) && !loadUser(req)) return res.status(404).json({ error: 'Сервер не найден' });
     const buf = await renderCard(Number(req.params.id));
     if (!buf) return res.status(404).json({ error: 'Сервер не найден' });
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
@@ -1434,7 +1505,7 @@ function embedFor(serverId: number, intervalSec: number) {
   const server = getServer(serverId);
   if (!server) return null;
   const up = db
-    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ?')
+    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ? AND unconfirmed = 0 AND maint = 0')
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
@@ -1621,6 +1692,19 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
+registerSecurity({
+  app,
+  admin,
+  auth,
+  userId: (req) => (req as AuthedRequest).user!.id,
+  userFromToken,
+  publicBase,
+  baseOf,
+  brandName: () => brand().name,
+});
+registerDeliveries({ app, admin, internal });
+registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => botStatus.state === 'online' });
+registerGames(app);
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
   app,
@@ -1635,6 +1719,8 @@ registerProfile({
 registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
+registerMaintenance({ app, admin, viewer });
+registerHealth({ app, admin, bot: () => botStatus });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {

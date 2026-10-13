@@ -9,6 +9,9 @@ import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Setup from './pages/Setup';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import ServersPage from './pages/Servers';
 import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
@@ -255,7 +258,7 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
   const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
@@ -318,6 +321,20 @@ export default function App() {
     return (
       <AuthContext.Provider value={ctx}>
         <Setup onDone={() => void load()} />
+        <Toaster />
+        <ConfirmHost />
+      </AuthContext.Provider>
+    );
+  }
+
+  // e-mail flows (forgot / reset / verify): open to everybody, also while the panel is closed or someone is signed in
+  if (rawPage === 'forgot' || rawPage === 'reset' || rawPage === 'verify') {
+    const token = sub.split('/')[0];
+    return (
+      <AuthContext.Provider value={ctx}>
+        <AuthShell>
+          {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+        </AuthShell>
         <Toaster />
         <ConfirmHost />
       </AuthContext.Provider>

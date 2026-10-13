@@ -56,6 +56,30 @@ function humanDiscordError(e: unknown): string {
   return m.slice(0, 200);
 }
 
+/** Discord 429: how long to wait (ms), or 0 when the error is not a rate limit. */
+function retryAfterOf(e: unknown): number {
+  const err = e as { status?: number; retryAfter?: number; timeToReset?: number; rawError?: { retry_after?: number }; code?: number | string };
+  if (err?.status !== 429 && err?.code !== 429 && err?.timeToReset === undefined) return 0;
+  const sec = err.rawError?.retry_after;
+  const ms = err.retryAfter ?? err.timeToReset ?? (typeof sec === 'number' ? sec * 1000 : 0);
+  return Math.max(1000, Math.round(ms || 5000));
+}
+
+/** Short reason stored in the delivery log; `final` = retrying cannot help. */
+function deliveryFailure(e: unknown): { text: string; final: boolean; retryAfterMs?: number } {
+  const code = (e as { code?: number | string })?.code;
+  const wait = retryAfterOf(e);
+  if (wait) return { text: 'превышен лимит запросов Discord', final: false, retryAfterMs: wait };
+  switch (code) {
+    case 50007: return { text: 'пользователь закрыл ЛС', final: true };
+    case 10013: return { text: 'пользователь не найден', final: true };
+    case 50001:
+    case 50013: return { text: 'нет прав', final: false };
+    case 10003: return { text: 'канал не найден', final: false };
+  }
+  return { text: humanDiscordError(e).slice(0, 200), final: false };
+}
+
 // Calls to the backend inside the Docker network never use the proxy.
 async function backend(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(BACKEND + path, {
@@ -380,7 +404,7 @@ async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[]
   };
 }
 
-async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null }) {
+async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null; retryAfterMs?: number }) {
   try {
     await backend(`/internal/news/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
   } catch (e) {
@@ -423,38 +447,57 @@ async function processNews(): Promise<void> {
       }
     } catch (e) {
       log(`news ${it.id} failed:`, (e as Error).message);
-      await reportNews(it.id, { status: 'error', error: humanDiscordError(e) });
+      const wait = retryAfterOf(e);
+      await reportNews(it.id, { status: 'error', error: humanDiscordError(e), ...(wait ? { retryAfterMs: wait } : {}) });
+      if (wait) break; // Discord asked us to slow down: the rest of the batch waits for the next tick
     }
   }
 }
 
-/** alerts about game servers going down / coming back (queued by the panel) */
-async function processAlerts(): Promise<void> {
+/** Alerts (channel messages) and DMs from the panel's delivery queue; every result is reported per delivery. */
+interface DeliveryItem {
+  id: number;
+  kind: 'alert' | 'dm' | 'status';
+  target: string;
+  payload: { content?: string; mention?: 'none' | 'here' | 'everyone'; embed?: ConstructorParameters<typeof EmbedBuilder>[0] };
+}
+async function processDeliveries(): Promise<void> {
   const c = client;
   if (!c || state !== 'online') return;
-  const res = await backend('/internal/alerts/pending');
-  if (!res.ok) throw new Error(`alerts HTTP ${res.status}`);
-  const items = (await res.json()) as { id: number; channelId: string; payload: { content: string; mention: 'none' | 'here' | 'everyone'; embed: ConstructorParameters<typeof EmbedBuilder>[0] } }[];
+  const res = await backend('/internal/deliveries/pending?kinds=alert,dm');
+  if (!res.ok) throw new Error(`deliveries HTTP ${res.status}`);
+  const items = (await res.json()) as DeliveryItem[];
   for (const it of items) {
-    let body: { status: 'sent' | 'error'; error?: string } = { status: 'sent' };
+    let body: { ok: boolean; error?: string; final?: boolean; retryAfterMs?: number } = { ok: true };
+    let limited = false;
     try {
-      const channel = await c.channels.fetch(it.channelId);
-      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
-      await channel.send({
-        content: it.payload.content || undefined,
-        embeds: [new EmbedBuilder(it.payload.embed)],
-        allowedMentions: { parse: (it.payload.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
-      });
-      log(`alert ${it.id}: sent`);
+      if (it.kind === 'dm') {
+        const user = await c.users.fetch(it.target);
+        await user.send({ content: (it.payload.content ?? '').slice(0, 2000), allowedMentions: { parse: [] } });
+      } else {
+        const channel = await c.channels.fetch(it.target);
+        if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
+        await channel.send({
+          content: it.payload.content || undefined,
+          embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
+          allowedMentions: { parse: ((it.payload.mention ?? 'none') === 'none' ? [] : ['everyone']) as 'everyone'[] },
+        });
+      }
+      log(`delivery ${it.id} (${it.kind}): sent`);
     } catch (e) {
-      log(`alert ${it.id} failed:`, (e as Error).message);
-      body = { status: 'error', error: humanDiscordError(e) };
+      const f = deliveryFailure(e);
+      log(`delivery ${it.id} (${it.kind}) failed:`, (e as Error).message);
+      body = { ok: false, error: f.text, final: f.final, ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}) };
+      limited = !!f.retryAfterMs;
     }
     try {
-      await backend(`/internal/alerts/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      await backend(`/internal/deliveries/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
     } catch (e) {
-      log('alert report failed', e);
+      log('delivery report failed', e);
     }
+    // 429: stop for this tick, the remaining deliveries stay queued; a short pause between sends keeps us under the limits
+    if (limited) break;
+    await new Promise((r) => setTimeout(r, 300));
   }
 }
 
@@ -488,7 +531,7 @@ async function tick(): Promise<void> {
     await publishGuilds();
     await updateBindings();
     await processNews();
-    await processAlerts();
+    await processDeliveries();
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {

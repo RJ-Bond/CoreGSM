@@ -6,6 +6,8 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { gameLabel } from './games.js';
+import { inMaintenance } from './maintenance.js';
+import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS alert_state (
@@ -45,8 +47,26 @@ interface Payload {
 function enqueue(kind: 'down' | 'up' | 'test', serverName: string, payload: Payload) {
   const s = settings();
   const now = Date.now();
-  db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
+  // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
+  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
+  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target: s.channelId, payload });
   db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
+}
+
+// the delivery queue reports its progress back into the history rows
+registerKind('alert', {
+  onState(refId, status, error, now) {
+    // a failed attempt with a retry scheduled stays "queued" (with the last error); only a dead delivery is an error
+    const st = status === 'sent' ? 'sent' : status === 'dead' ? 'error' : status === 'sending' ? 'sending' : 'queued';
+    db.prepare("UPDATE alerts SET status = ?, error = ?, sent_at = CASE WHEN ? = 'sent' THEN ? ELSE sent_at END, updated_at = ? WHERE id = ?").run(st, error, st, now, now, refId);
+  },
+});
+
+// alerts queued by an older version (before the delivery queue existed) are moved into it once
+for (const a of db.prepare("SELECT id, channel_id, payload FROM alerts WHERE status IN ('queued','sending')").all() as { id: number; channel_id: string; payload: string }[]) {
+  if (!db.prepare("SELECT 1 FROM deliveries WHERE kind = 'alert' AND ref_id = ?").get(a.id)) {
+    enqueueDelivery({ kind: 'alert', refId: a.id, target: a.channel_id, payload: JSON.parse(a.payload) as unknown });
+  }
 }
 
 const minutes = (ms: number) => Math.max(1, Math.round(ms / 60_000));
@@ -65,6 +85,13 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     db
       .prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.game, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`)
       .get(serverId) as { n: string; game: string; display_address: string; host: string; port: number } | undefined;
+
+  // maintenance window: nothing is sent. A not yet alerted outage is forgotten, so that a real outage that is still
+  // going on when the window ends starts counting from the end of the window; an already alerted one stays as it is.
+  if (inMaintenance(serverId, now)) {
+    if (st && !st.alerted) db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
+    return;
+  }
 
   if (online) {
     if (st) {
@@ -180,35 +207,15 @@ export function registerAlerts(deps: {
     res.json(payload());
   });
 
-  // ----- the bot -----
+  // ----- the bot (compatibility shim: the bot now uses /internal/deliveries/*; ids here are delivery ids) -----
   app.get('/internal/alerts/pending', internal, (_req, res) => {
-    const now = Date.now();
-    const rows = db.prepare("SELECT id, channel_id, payload FROM alerts WHERE status = 'queued' OR (status = 'sending' AND updated_at < ?)").all(now - 2 * 60_000) as {
-      id: number;
-      channel_id: string;
-      payload: string;
-    }[];
-    const claim = db.prepare("UPDATE alerts SET status = 'sending', updated_at = ? WHERE id = ?");
-    res.json(
-      rows.map((r) => {
-        claim.run(now, r.id);
-        return { id: r.id, channelId: r.channel_id, payload: JSON.parse(r.payload) as Payload };
-      }),
-    );
+    res.json(claimDue(['alert']).map((d) => ({ id: d.id, channelId: d.target, payload: d.payload as Payload })));
   });
 
   app.patch('/internal/alerts/:id', internal, (req, res) => {
     const b = z.object({ status: z.enum(['sent', 'error']), error: z.string().max(300).nullable().optional() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad body' });
-    const now = Date.now();
-    db.prepare('UPDATE alerts SET status = ?, error = ?, sent_at = CASE WHEN ? = \'sent\' THEN ? ELSE sent_at END, updated_at = ? WHERE id = ?').run(
-      b.data.status,
-      b.data.error ?? null,
-      b.data.status,
-      now,
-      now,
-      Number(req.params.id),
-    );
+    reportResult(Number(req.params.id), b.data.status === 'sent' ? { ok: true } : { ok: false, error: b.data.error ?? 'Ошибка отправки' });
     res.json({ ok: true });
   });
 }

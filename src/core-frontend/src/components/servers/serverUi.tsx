@@ -1,6 +1,7 @@
 // Pieces of the servers page: reactions to changes, capacity bar, empty states, skeletons.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Server } from '../../api';
+import { StateView } from '../StateView';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -104,14 +105,7 @@ export function CapacityBar({ players, max, color, onDark = false, big = false, 
 
 // ---------- empty states (item 8) ----------
 function EmptyState({ art, title, text, children }: { art: ReactNode; title: string; text: string; children?: ReactNode }) {
-  return (
-    <div className="panel fade-in flex flex-col items-center gap-2 px-6 py-10 text-center">
-      {art}
-      <h3 className="mt-1 text-lg font-black">{title}</h3>
-      <p className="max-w-sm font-semibold text-mute">{text}</p>
-      {children && <div className="mt-2 flex flex-wrap items-center justify-center gap-2">{children}</div>}
-    </div>
-  );
+  return <StateView kind="empty" art={art} title={title} text={text}>{children}</StateView>;
 }
 
 export function NoServersState({ isAdmin }: { isAdmin: boolean }) {

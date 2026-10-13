@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -175,7 +175,7 @@ export default function BackupsCard() {
       title="Резервные копии"
       description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
     >
-      <ErrorLine text={error} />
+      {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
 
       <div className="flex flex-wrap items-center gap-3">
         <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? 'Готовлю…' : 'Скачать полную копию'}</button>
@@ -265,7 +265,7 @@ export default function BackupsCard() {
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
-          <p className="font-semibold text-mute">Пока нет сохранённых копий. Нажмите «Создать копию на сервере» или включите расписание.</p>
+          <StateView kind="empty" compact bare title="Копий пока нет" text="Нажмите «Создать копию на сервере» или включите расписание." className="rounded-2xl bg-soft" />
         ) : (
           <ul className="divide-y divide-line rounded-2xl border border-line">
             {info.items.map((b) => (

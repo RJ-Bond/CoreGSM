@@ -36,6 +36,7 @@ export function uaLabel(ua: string | undefined): string {
 export type AccountEventKind =
   | 'login'
   | 'login_failed'
+  | 'login_new_device'
   | 'password_changed'
   | 'email_changed'
   | 'discord_linked'

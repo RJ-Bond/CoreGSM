@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from './db.js';
+import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 
 const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
 fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -35,6 +36,22 @@ try {
 } catch {
   /* column already exists */
 }
+// delivery retries: failed attempts so far and the earliest time of the next one (see deliveries.ts)
+for (const ddl of ['ALTER TABLE news ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE news ADD COLUMN next_try_at INTEGER']) {
+  try {
+    db.exec(ddl);
+  } catch {
+    /* column already exists */
+  }
+}
+// a manual retry from the deliveries list puts the item back into the queue it came from
+registerKind('news', {
+  retry(refId, payload) {
+    const q = payload.action === 'edit' ? 'edit_queued' : payload.action === 'delete' ? 'delete_queued' : 'queued';
+    db.prepare("UPDATE news SET status = ?, attempts = 0, next_try_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND test = 0").run(q, Date.now(), refId);
+  },
+});
+
 try {
   // 1 = a test send (never shown in lists, cleaned up after an hour)
   db.exec('ALTER TABLE news ADD COLUMN test INTEGER NOT NULL DEFAULT 0');
@@ -702,11 +719,11 @@ export function registerNews(deps: {
     db.prepare('DELETE FROM news WHERE test = 1 AND updated_at < ?').run(now - 3600_000);
     const rows = db
       .prepare(
-        `SELECT * FROM news WHERE status IN ('queued','edit_queued','delete_queued')
+        `SELECT * FROM news WHERE (status IN ('queued','edit_queued','delete_queued') AND (next_try_at IS NULL OR next_try_at <= ?))
            OR (status = 'scheduled' AND scheduled_at <= ?)
            OR (status = 'sending' AND updated_at < ?)`,
       )
-      .all(now, now - 5 * 60_000) as NewsRow[];
+      .all(now, now, now - 5 * 60_000) as NewsRow[];
     const claim = db.prepare("UPDATE news SET status = 'sending', updated_at = ? WHERE id = ?");
     const out = rows.map((r) => {
       const action = r.status === 'edit_queued' ? 'edit' : r.status === 'delete_queued' ? 'delete' : 'send';
@@ -727,12 +744,30 @@ export function registerNews(deps: {
         status: z.enum(['sent', 'error', 'deleted']),
         messageId: z.string().max(40).nullable().optional(),
         error: z.string().max(300).nullable().optional(),
+        /** Discord 429: do not retry before this many ms */
+        retryAfterMs: z.number().int().min(0).max(3600_000).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad body' });
     const id = Number(req.params.id);
     const now = Date.now();
+    const before = db.prepare('SELECT status, channel_id, payload, attempts, test FROM news WHERE id = ?').get(id) as
+      | { status: string; channel_id: string; payload: string; attempts: number; test: number }
+      | undefined;
+    const action = before?.status === 'edit_queued' ? 'edit' : before?.status === 'delete_queued' ? 'delete' : 'send';
+    const ledger = (status: 'sent' | 'error' | 'dead', attempts: number, error: string | null, nextTryAt: number | null) => {
+      if (!before || before.test) return;
+      let summary = '';
+      try {
+        const p = JSON.parse(before.payload) as NewsPayload;
+        summary = String(p.embed?.title || p.content || '').slice(0, 120);
+      } catch {
+        /* informational only */
+      }
+      ledgerRecord({ kind: 'news', refId: id, target: before.channel_id, status, attempts, error, nextTryAt, payload: { action, summary }, now });
+    };
     if (b.data.status === 'deleted') {
+      ledger('sent', (before?.attempts ?? 0) + 1, null, null);
       db.prepare('DELETE FROM news WHERE id = ?').run(id);
     } else if (db.prepare('SELECT 1 FROM news WHERE id = ? AND test = 1').get(id)) {
       db.prepare('UPDATE news SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(
@@ -748,7 +783,8 @@ export function registerNews(deps: {
         const next = nextOccurrence(prev.scheduled_at, prev.repeat, now);
         db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('scheduled', ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now);
       }
-      db.prepare("UPDATE news SET status = 'sent', message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(
+      ledger('sent', (before?.attempts ?? 0) + 1, null, null);
+      db.prepare("UPDATE news SET status = 'sent', attempts = 0, next_try_at = NULL, message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(
         b.data.messageId ?? null,
         now,
         b.data.error ?? null,
@@ -756,9 +792,18 @@ export function registerNews(deps: {
         id,
       );
     } else {
-      // a failed edit/delete keeps the posted message ("sent"), a failed post becomes "error"
-      const row = db.prepare('SELECT message_id FROM news WHERE id = ?').get(id) as { message_id: string | null } | undefined;
-      db.prepare('UPDATE news SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(row?.message_id ? 'sent' : 'error', b.data.error ?? 'Ошибка отправки', now, id);
+      const err = b.data.error ?? 'Ошибка отправки';
+      const plan = planFailure(before?.attempts ?? 0, now, { retryAfterMs: b.data.retryAfterMs });
+      if (plan.status === 'error') {
+        // retry later with backoff: a post goes back to the queue, an edit/delete simply waits (its status is untouched)
+        db.prepare("UPDATE news SET status = CASE WHEN status = 'sending' THEN 'queued' ELSE status END, attempts = ?, next_try_at = ?, error = ?, updated_at = ? WHERE id = ?").run(plan.attempts, plan.nextTryAt, err, now, id);
+        ledger('error', plan.attempts, err, plan.nextTryAt);
+      } else {
+        // out of attempts: a failed edit/delete keeps the posted message ("sent"), a failed post becomes "error"
+        const row = db.prepare('SELECT message_id FROM news WHERE id = ?').get(id) as { message_id: string | null } | undefined;
+        db.prepare('UPDATE news SET status = ?, attempts = ?, next_try_at = NULL, error = ?, updated_at = ? WHERE id = ?').run(row?.message_id ? 'sent' : 'error', Math.min(plan.attempts, MAX_ATTEMPTS), err, now, id);
+        ledger('dead', plan.attempts, err, null);
+      }
     }
     res.json({ ok: true });
   });

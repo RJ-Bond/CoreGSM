@@ -7,6 +7,9 @@ import path from 'node:path';
 export interface Api {
   base: string;
   setupCode: string;
+  /** data directory and database file of this instance */
+  dir: string;
+  dbPath: string;
   stop: () => Promise<void>;
   call: (method: string, url: string, opts?: { token?: string; body?: unknown; raw?: BodyInit; headers?: Record<string, string> }) => Promise<{ status: number; body: any }>;
 }
@@ -87,6 +90,8 @@ export async function startBackend(extraEnv: Record<string, string> = {}): Promi
   return {
     base,
     setupCode,
+    dir,
+    dbPath: env.DB_PATH,
     call,
     stop: async () => {
       child.kill();

@@ -56,11 +56,14 @@ export { Button } from './components/Button';
 export type { ButtonProps } from './components/Button';
 export { Switch } from './components/Switch';
 export { SplitButton } from './components/SplitButton';
+export { StateView, LoadError, errorKind } from './components/StateView';
+export type { StateKind } from './components/StateView';
+import { StateView } from './components/StateView';
 export type { SplitItem } from './components/SplitButton';
 export { useFlashOnChange, useDepth, useDensity, setDensity, prefersReducedMotion } from './useMotion';
 export type { Density } from './useMotion';
 
-const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+const reducedMotion = () => typeof window !== 'undefined' && (document.documentElement.dataset.motion === 'reduce' || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
 /** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
 export function useTween(value: number, ms = 600): number {
@@ -626,15 +629,9 @@ export function ErrorLine({ text }: { text: string }) {
   return text ? <p className="rounded-2xl bg-badbg px-4 py-2.5 font-bold text-bad" role="alert">{text}</p> : null;
 }
 
+/** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
 export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
-  return (
-    <div className="panel fade-in flex flex-col items-center gap-2 px-6 py-10 text-center">
-      {art ?? <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>}
-      <h3 className="text-lg font-black">{title}</h3>
-      <p className="max-w-sm font-semibold text-mute">{text}</p>
-      {children}
-    </div>
-  );
+  return <StateView kind="empty" title={title} text={text} art={art}>{children}</StateView>;
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */

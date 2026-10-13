@@ -142,6 +142,10 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         {t('login.remember')}
       </label>
 
+      <p className="-mt-1 text-sm font-bold">
+        <a href="#/forgot" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.link')}</a>
+      </p>
+
       <ErrorLine text={error} />
       <Button className="w-full" magnetic loading={busy} disabled={locked}>
         {busy ? t('login.checking') : t('login.submit')}

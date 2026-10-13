@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
-import { AdminPage, Empty, ErrorLine, IconJournal, PageHead, fmtDateTime, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, usePoll } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -9,7 +9,8 @@ export default function JournalPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
-  usePoll(() => api<Row[]>('/audit?limit=300').then((r) => { setRows(r); setError(''); }).catch((e: Error) => setError(e.message)), 20_000);
+  const load = () => api<Row[]>('/audit?limit=300').then((r) => { setRows(r); setError(''); }).catch((e: Error) => setError(e.message));
+  usePoll(load, 20_000);
 
   const needle = q.trim().toLowerCase();
   const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
@@ -26,7 +27,7 @@ export default function JournalPage() {
         />
       )}
     >
-      <ErrorLine text={error} />
+      {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
       {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
       {shown.length > 0 && (

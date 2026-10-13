@@ -1,11 +1,79 @@
-const KEY = 'coregsm_token';
+/**
+ * Session handling. The session lives in an HttpOnly cookie (coregsm_session) that the server sets on sign-in; the page
+ * never sees the token, so it cannot be stolen by a script. What is kept locally is only a hint (below) so that guests
+ * do not probe /api/me on every start.
+ *
+ * getToken() is still used by older code that builds `Authorization: Bearer ...` itself: it returns the token held in
+ * memory (legacy migration / a fresh sign-in), or a harmless marker while the cookie session is believed to be active.
+ * The server ignores a Bearer value that is not a valid token and falls back to the cookie.
+ */
+const LEGACY_KEY = 'coregsm_token';
+const HINT_KEY = 'coregsm_signed';
+const MARKER = 'cookie-session';
+let memToken = '';
 
-export const getToken = () => {
-  try { return localStorage.getItem(KEY) ?? ''; } catch { return ''; }
+const hintOff = () => {
+  try { return localStorage.getItem(HINT_KEY) === '0'; } catch { return false; }
 };
+const writeHint = (on: boolean) => {
+  try { localStorage.setItem(HINT_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+};
+
+export const getToken = (): string => memToken || (hintOff() ? '' : MARKER);
+
+/** a real token from a sign-in response or the Discord redirect; '' = signed out */
 export const setToken = (t: string) => {
-  try { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); } catch { /* ignore */ }
+  if (!t) {
+    memToken = '';
+    writeHint(false);
+    try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
+    return;
+  }
+  memToken = t;
+  writeHint(true);
+  // the login responses already set the cookie; the Discord redirect and old clients get it here (idempotent)
+  void fetch('/api/auth/session', { method: 'POST', headers: { Authorization: `Bearer ${t}` } })
+    .then((r) => { if (r.ok) memToken = ''; })
+    .catch(() => undefined);
 };
+
+// every request to our API proves it comes from this page (the server's CSRF guard for cookie sessions)
+if (typeof window !== 'undefined' && !(window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch) {
+  (window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch = true;
+  const native = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const u = new URL(url, window.location.href);
+      if (u.origin === window.location.origin && u.pathname.startsWith('/api/')) {
+        const headers = new Headers(init?.headers ?? (typeof input === 'object' && 'headers' in input ? input.headers : undefined));
+        headers.set('X-CoreGSM', '1');
+        return native(input, { ...init, headers, credentials: 'same-origin' });
+      }
+    } catch { /* fall through to the plain call */ }
+    return native(input, init);
+  };
+}
+
+// a token left by an older version: use it once to get the cookie, then forget it
+try {
+  const old = localStorage.getItem(LEGACY_KEY);
+  if (old) {
+    memToken = old;
+    void fetch('/api/auth/session', { method: 'POST', headers: { Authorization: `Bearer ${old}` } })
+      .then((r) => {
+        if (r.ok) {
+          memToken = '';
+          writeHint(true);
+          try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
+        } else if (r.status === 401) {
+          memToken = '';
+          try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
+        }
+      })
+      .catch(() => undefined);
+  }
+} catch { /* storage blocked */ }
 
 export interface Server {
   id: number;
@@ -84,7 +152,8 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      // only a real in-memory token (legacy migration); the cookie session needs no header
+      ...(memToken ? { Authorization: `Bearer ${memToken}` } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -105,6 +174,20 @@ export interface SettingsInfo {
   discordSecretSet?: boolean;
   discordClientId?: string | null;
   discordRedirect?: string;
+}
+
+/** SMTP settings (administrator); the password is never returned */
+export interface SmtpInfo {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  from: string;
+  passwordSet: boolean;
+  /** letters can be sent */
+  ready: boolean;
+  /** trusted address used in letter links; null = unknown (reset letters are not sent) */
+  publicBase: string | null;
 }
 
 export interface BotStatus {
@@ -353,6 +436,10 @@ export interface Me {
   discordName: string | null;
   hasPassword: boolean;
   email?: string | null;
+  /** the address was confirmed by a link from a letter */
+  emailVerified?: boolean;
+  /** a sign-in from an unseen device within the last 24 h */
+  newDevice?: { ts: number; label: string } | null;
   /** language and regional settings (absent on older servers) */
   prefs?: Prefs;
   /** "/api/..." url of the uploaded banner, null when there is none */

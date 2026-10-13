@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from 'react';
 import { api, type Server } from '../api';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
-import { AdminPage, Burst, Empty, ErrorLine, IconCards, IconCheck, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
+import { AdminPage, Burst, Empty, ErrorLine, IconCards, LoadError, IconCheck, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -55,13 +55,13 @@ export default function CardsPage() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!loaded && (
         <div className="grid gap-5 xl:grid-cols-2" aria-busy="true" aria-label="Загрузка">
           {[0, 1].map((i) => <div key={i} className="skeleton panel h-[330px]" />)}
         </div>
       )}
-      {loaded && servers.length === 0 && (
+      {loaded && !error && servers.length === 0 && (
         <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»: для каждого появится своя картинка.">
           <a className="btn mt-3" href="#/admin/servers/new">Добавить сервер</a>
         </Empty>

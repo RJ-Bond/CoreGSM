@@ -31,6 +31,7 @@ import { once } from 'node:events';
 import * as tar from 'tar';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
+import { canDecrypt, isEncrypted, isSecretKey } from './secrets.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
@@ -419,6 +420,27 @@ async function unpack(file: string, stage: string): Promise<void> {
  * Validates an uploaded/stored backup (tar.gz, encrypted tar.gz or a legacy raw SQLite file) and stages it for the
  * swap at the next start. Throws BackupError with a Russian message when the file is not acceptable.
  */
+/** secret settings of the staged copy that this host's key cannot decrypt (reported to the panel after a restore) */
+let stagedUnreadable: string[] = [];
+
+function unreadableSecrets(file: string): string[] {
+  let t: InstanceType<typeof Database> | null = null;
+  try {
+    t = new Database(file, { readonly: true, fileMustExist: true });
+    const rows = t.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+    return rows.filter((r) => isSecretKey(r.key) && isEncrypted(r.value) && !canDecrypt(r.value)).map((r) => r.key);
+  } catch {
+    return [];
+  } finally {
+    try {
+      t?.close();
+    } catch {
+      /* ignore */
+    }
+    for (const ext of ['-wal', '-shm']) rmrf(`${file}${ext}`);
+  }
+}
+
 export async function stageRestore(file: string, passphrase: string | null): Promise<void> {
   const stage = fs.mkdtempSync(path.join(DATA_DIR, '.restore-stage-'));
   const tmp: string[] = [];
@@ -448,6 +470,8 @@ export async function stageRestore(file: string, passphrase: string | null): Pro
     }
     const bad = validateDb(path.join(stage, 'coregsm.db'));
     if (bad) throw new BackupError(bad);
+    // secrets are encrypted with SECRETS_KEY / JWT_SECRET of the host that made the copy: say so instead of failing later
+    stagedUnreadable = unreadableSecrets(path.join(stage, 'coregsm.db'));
     rmrf(PENDING_DIR);
     fs.renameSync(stage, PENDING_DIR);
   } catch (e) {
@@ -554,7 +578,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
         rmrf(upload);
       }
       // the swap happens at start-up (see db.ts); the container restarts by itself
-      res.json({ ok: true, restarting: true });
+      res.json({ ok: true, restarting: true, unreadableSecrets: stagedUnreadable });
       restartSoon();
     }),
   );
@@ -639,7 +663,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       const given = z.object({ passphrase: z.string().max(200).optional() }).safeParse(req.body ?? {});
       const pass = (given.success && given.data.passphrase) || backupSettings().passphrase;
       await stageRestore(f.file, pass || null);
-      res.json({ ok: true, restarting: true });
+      res.json({ ok: true, restarting: true, unreadableSecrets: stagedUnreadable });
       restartSoon();
     }),
   );

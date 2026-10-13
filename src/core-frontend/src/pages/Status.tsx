@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api, type StatusDay, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, IconServers, PageHead, StatusPill, ago, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, StatusPill, ago, usePoll } from '../ui';
 
 const dayColor = (pct: number | null) =>
   pct == null ? 'bg-line' : pct >= 99.9 ? 'bg-ok' : pct >= 95 ? 'bg-ok/60' : pct >= 80 ? 'bg-warn' : 'bg-bad';
@@ -81,16 +81,16 @@ export default function StatusPage() {
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
 
-  usePoll(() => {
+  const load = () =>
     api<StatusInfo>('/status')
       .then((r) => { setData(r); setError(''); })
       .catch((e: Error) => setError(e.message));
-  }, 60_000);
+  usePoll(load, 60_000);
 
   return (
     <div className="space-y-5">
       <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов за последние 30 дней" />
-      <ErrorLine text={error} />
+      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
         <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
