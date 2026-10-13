@@ -398,7 +398,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              className="btn-icon md:w-auto md:gap-2.5 md:!pl-3.5 md:!pr-2"
+              className="btn-soft hdr-search"
               aria-label={t('hdr.searchAria')}
               aria-haspopup="dialog"
               title={t('hdr.searchTitle')}
