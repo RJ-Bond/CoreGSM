@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
-import { PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
+import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -177,14 +177,17 @@ export default function AdminStart() {
   ];
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconStart />}
-        title="Начало работы"
-        subtitle={me ? `Здравствуйте, ${me.username}! Пять шагов, и панель готова` : 'Пять шагов, и панель готова'}
-        hint="Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели."
-        help={<p>Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.</p>}
-      />
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconStart />}
+          title="Начало работы"
+          subtitle={me ? `Здравствуйте, ${me.username}! Пять шагов, и панель готова` : 'Пять шагов, и панель готова'}
+          hint="Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели."
+          help={<p>Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.</p>}
+        />
+      )}
+    >
 
       {s.loading ? (
         <StartSkeleton />
@@ -296,14 +299,14 @@ export default function AdminStart() {
           ))}
         </div>
       </section>
-    </div>
+    </AdminPage>
   );
 }
 
 function MapRow({ id, label, desc, icon }: { id: string; label: string; desc: string; icon: ReactNode }) {
   return (
     <li>
-      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-2xl px-2 py-2 transition hover:bg-soft">
+      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-ui-lg px-2 py-2 transition hover:bg-soft">
         <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-soft text-link">{icon}</span>
         <span className="min-w-0">
           <span className="block font-extrabold leading-tight">{label}</span>

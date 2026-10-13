@@ -6,6 +6,10 @@ import { getToken, type Server } from './api';
 import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
 import { GAME_IMAGE, gameAbbr, gameGradient } from './games';
 import { gameIconPath, ICON_PATHS } from './gameIcons';
+import { IconAuto, IconCheck, IconClose, IconCopy, IconError, IconEye, IconEyeOff, IconInfo, IconMoon, IconOk, IconSun } from './icons';
+
+// one icon set (24 px grid, 2 px stroke, currentColor): see icons.tsx; every icon is re-exported from here
+export * from './icons';
 
 /**
  * Calls `fn` now and then every `ms` milliseconds.
@@ -217,64 +221,6 @@ export function plural(n: number, forms: [string, string, string]): string {
   return forms[2];
 }
 
-// ---------- icons (24x24, stroke follows the text colour) ----------
-function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {children}
-    </svg>
-  );
-}
-export const IconServers = () => (
-  <Icon><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01" /></Icon>
-);
-export const IconCards = () => (
-  <Icon><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.5" /><path d="M21 16l-5-5-8 8" /></Icon>
-);
-export const IconDiscord = () => (
-  <Icon><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></Icon>
-);
-export const IconSettings = () => (
-  <Icon><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></Icon>
-);
-export const IconNews = () => (
-  <Icon><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8 8 0 0 1 0 12" /></Icon>
-);
-const IconSun = () => (
-  <Icon><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Icon>
-);
-const IconMoon = () => (
-  <Icon><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></Icon>
-);
-const IconAuto = () => (
-  <Icon><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></Icon>
-);
-export const IconCopy = () => (
-  <Icon size={16}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></Icon>
-);
-/** circular arrows; turns on click and spins while `spinning` (busy) */
-export const IconRefresh = ({ spinning = false }: { spinning?: boolean }) => (
-  <span className={`ico-refresh inline-grid ${spinning ? 'spinning' : ''}`} aria-hidden>
-    <Icon size={16}><path d="M20 11a8 8 0 0 0-14.5-4.1M4 4v4h4M4 13a8 8 0 0 0 14.5 4.1M20 20v-4h-4" /></Icon>
-  </span>
-);
-/** arrow that nudges forward when its button is hovered */
-export const IconArrow = () => (
-  <span className="ico-nudge inline-grid" aria-hidden>
-    <Icon size={16}><path d="M5 12h14M13 6l6 6-6 6" /></Icon>
-  </span>
-);
-export const IconCheckMark = () => (
-  <span className="star-pop inline-grid" aria-hidden>
-    <Icon size={16}><path d="M5 12.5l4.5 4.5L19 7.5" /></Icon>
-  </span>
-);
-export const IconShare = () => (
-  <span className="ico-share inline-grid" aria-hidden>
-    <Icon size={16}><path d="M7 17L17 7M9 7h8v8" /></Icon>
-  </span>
-);
-
 /** a few dots flying out of the centre of the parent (the parent must be `relative`); CSS only */
 export function Burst({ count = 8, radius = 17 }: { count?: number; radius?: number }) {
   return (
@@ -354,12 +300,12 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="pop panel max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-3xl sm:p-6"
+        className="pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
           <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label="Закрыть">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+            <IconClose />
           </button>
         </div>
         {children}
@@ -755,35 +701,90 @@ export function Wordmark({ className = '' }: { className?: string }) {
 
 // ---------- toasts: short confirmations that do not interrupt ----------
 type ToastKind = 'ok' | 'err' | 'info';
-interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: { label: string; href: string } }
+/** an action button in a toast: `onClick` (undo and the like; the toast closes after it) or `href` (a link in a new tab) */
+export interface ToastAction { label: string; onClick?: () => void; href?: string }
+export interface ToastOptions {
+  kind?: ToastKind;
+  /** how long it stays, ms (default 3.5 s; 8 s for errors and links; 6 s when there is an action button) */
+  duration?: number;
+  action?: ToastAction;
+  /** called once when the toast goes away: 'action' (its button was pressed), 'dismiss' (closed by hand), 'timeout' */
+  onClose?: (reason: 'action' | 'dismiss' | 'timeout') => void;
+}
+interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: ToastAction; duration: number; onClose?: ToastOptions['onClose'] }
 let toasts: ToastItem[] = [];
 let toastSeq = 0;
+const toastTimers = new Map<number, number>();
 const toastListeners = new Set<(t: ToastItem[]) => void>();
 const emitToasts = () => toastListeners.forEach((l) => l(toasts));
 
-/** `ms`: how long it stays; errors stay longer (8 s) by default. Every toast can also be dismissed by hand. */
-export function toast(text: string, kind: ToastKind = 'ok', ms?: number, action?: { label: string; href: string }) {
-  const t: ToastItem = { id: ++toastSeq, text, kind, action };
-  toasts = [...toasts, t].slice(-4);
+const armToast = (id: number, ms: number) => {
+  window.clearTimeout(toastTimers.get(id));
+  toastTimers.set(id, window.setTimeout(() => dismissToast(id, 'timeout'), ms));
+};
+
+/**
+ * Shows a toast.
+ *   toast('Сохранено')                                   // green
+ *   toast('Не удалось', 'err')                           // red, stays longer
+ *   toast('Удалено', { action: { label: 'Отменить', onClick: undo }, duration: 6000 })
+ * The old positional form toast(text, kind, ms, { label, href }) keeps working. Returns the toast id.
+ */
+export function toast(text: string, kindOrOptions: ToastKind | ToastOptions = 'ok', ms?: number, action?: ToastAction): number {
+  const o: ToastOptions = typeof kindOrOptions === 'string' ? { kind: kindOrOptions, duration: ms, action } : kindOrOptions;
+  const kind = o.kind ?? 'ok';
+  const duration = o.duration ?? (kind === 'err' ? 8000 : o.action?.onClick ? 6000 : o.action ? 8000 : 3500);
+  const t: ToastItem = { id: ++toastSeq, text, kind, action: o.action, duration, onClose: o.onClose };
+  const next = [...toasts, t];
+  // the oldest ones are pushed out: they count as timed out, so a pending "delete after the undo window" still happens
+  const evicted = next.slice(0, Math.max(0, next.length - 4));
+  toasts = next.slice(-4);
+  evicted.forEach((e) => { window.clearTimeout(toastTimers.get(e.id)); toastTimers.delete(e.id); e.onClose?.('timeout'); });
   emitToasts();
-  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : action ? 8000 : 3500));
+  armToast(t.id, duration);
+  return t.id;
 }
 
-export function dismissToast(id: number) {
+export function dismissToast(id: number, reason: 'action' | 'dismiss' | 'timeout' = 'dismiss') {
   const t = toasts.find((x) => x.id === id);
   if (!t || t.leaving) return;
+  window.clearTimeout(toastTimers.get(id));
+  toastTimers.delete(id);
   // it springs out first (about 200 ms), then it is removed
   toasts = toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
   emitToasts();
-  setTimeout(() => {
+  t.onClose?.(reason);
+  window.setTimeout(() => {
     toasts = toasts.filter((x) => x.id !== id);
     emitToasts();
   }, 200);
 }
 
 /**
+ * «Удалено. Отменить»: the caller hides the item at once and passes `commit` (the real, irreversible request).
+ * `commit` runs when the toast times out or is closed by hand, and also when the page is left; it does not run
+ * after «Отменить», which calls `restore`. Use it only where the removal can wait a few seconds without harm.
+ */
+export function undoable({ text, commit, restore, duration = 6000, label = 'Отменить' }: { text: string; commit: () => unknown; restore: () => void; duration?: number; label?: string }) {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    window.removeEventListener('pagehide', finish);
+    void commit();
+  };
+  window.addEventListener('pagehide', finish);
+  toast(text, {
+    duration,
+    action: { label, onClick: () => { if (settled) return; settled = true; window.removeEventListener('pagehide', finish); restore(); } },
+    onClose: (reason) => { if (reason !== 'action') finish(); },
+  });
+}
+
+/**
  * Two sibling live regions (never nested): errors are announced assertively (role=alert), the rest politely.
- * They sit above the phone navigation bar and the home-indicator safe area.
+ * They sit above the phone navigation bar and the home-indicator safe area. A toast with an action stops its timer
+ * while the pointer or the keyboard focus is on it.
  */
 export function Toaster() {
   const [list, setList] = useState<ToastItem[]>(toasts);
@@ -791,19 +792,38 @@ export function Toaster() {
     toastListeners.add(setList);
     return () => { toastListeners.delete(setList); };
   }, []);
-  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-card text-ink ring-line' } as const;
+  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-raised text-ink ring-line' } as const;
+  const kindIcon = { ok: <IconOk size={18} />, err: <IconError size={18} />, info: <IconInfo size={18} /> };
+  const hold = (t: ToastItem) => { if (t.action?.onClick) window.clearTimeout(toastTimers.get(t.id)); };
+  const release = (t: ToastItem) => { if (t.action?.onClick && !t.leaving) armToast(t.id, Math.min(t.duration, 4000)); };
   const item = (t: ToastItem) => (
-    <div key={t.id} className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
-      <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
+    <div
+      key={t.id}
+      onPointerEnter={() => hold(t)}
+      onPointerLeave={() => release(t)}
+      onFocusCapture={() => hold(t)}
+      onBlurCapture={() => release(t)}
+      className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
+    >
+      <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
-      {t.action && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
+      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
+      {t.action?.onClick && (
+        <button
+          type="button"
+          onClick={() => { t.action?.onClick?.(); dismissToast(t.id, 'action'); }}
+          className="shrink-0 rounded-full bg-ink/10 px-3 py-1.5 font-extrabold hover:underline max-sm:min-h-[44px]"
+        >
+          {t.action.label}
+        </button>
+      )}
       <button
         type="button"
-        onClick={() => dismissToast(t.id)}
+        onClick={() => dismissToast(t.id, 'dismiss')}
         className="grid h-9 w-9 shrink-0 place-items-center rounded-full opacity-80 hover:opacity-100 max-sm:h-11 max-sm:w-11"
         aria-label="Закрыть уведомление"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+        <IconClose size={14} />
       </button>
     </div>
   );
@@ -938,13 +958,6 @@ export function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
 export function FieldError({ id, text }: { id: string; text?: string }) {
   return text ? <p id={id} className="mt-1.5 text-sm font-bold text-bad" role="alert">{text}</p> : null;
 }
-
-const IconEye = () => (
-  <Icon size={20}><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></Icon>
-);
-const IconEyeOff = () => (
-  <Icon size={20}><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.4 4.5-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /></Icon>
-);
 
 /** password input with a show/hide button, a Caps Lock warning and an inline error */
 export const PasswordField = forwardRef<
@@ -1119,26 +1132,100 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
   );
 }
 
-// ---------- small action icons (18 px) shared by the admin pages ----------
-const I18 = ({ children }: { children: ReactNode }) => <Icon size={18}>{children}</Icon>;
-export const IconEdit = () => <I18><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></I18>;
-export const IconTrash = () => <I18><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></I18>;
-export const IconPause = () => <I18><path d="M8 5v14M16 5v14" /></I18>;
-export const IconPlay = () => <I18><path d="M7 4.5v15l12-7.5z" /></I18>;
-export const IconKey = () => <I18><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M16 7l3 3" /></I18>;
-export const IconDownload = () => <I18><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></I18>;
-export const IconRestore = () => <I18><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" /><path d="M12 8v4l3 2" /></I18>;
-export const IconCopyPlus = () => <I18><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></I18>;
-export const IconLinkOut = () => <I18><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></I18>;
-export const IconUsers = () => (
-  <Icon size={22}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></Icon>
-);
-export const IconJournal = () => (
-  <Icon size={22}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></Icon>
-);
-export const IconSystem = () => (
-  <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>
-);
-export const IconStart = () => (
-  <Icon size={22}><path d="M5 21V4M5 4h11l-2 4 2 4H5" /></Icon>
-);
+// ---------- admin page grid: one rhythm for every page of the admin area ----------
+export { useAutosave } from './autosave';
+export type { SaveStatus, AutosaveOptions } from './autosave';
+import type { SaveStatus } from './autosave';
+
+/**
+ * Root of an admin page: PageHead first, then sections 20 px apart. `narrow` (forms: settings, alerts) caps the
+ * content at 48rem; the PageHead always spans the full width, so titles sit at the same place on every page.
+ */
+export function AdminPage({ head, narrow = false, children }: { head: ReactNode; narrow?: boolean; children: ReactNode }) {
+  return (
+    <div className="space-y-5">
+      {head}
+      <div className={`space-y-5 ${narrow ? 'max-w-3xl' : ''}`}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
+ * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
+ */
+export function Section({ title, description, actions, children, className = '', id, tone = 'panel', ...rest }: {
+  title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
+  tone?: 'panel' | 'soft'; 'data-tour'?: string;
+}) {
+  const hid = useId();
+  return (
+    <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
+      {(title || actions) && (
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0 flex-1 basis-56">
+            {title && <h2 id={hid} className={`${tone === 'soft' ? 'text-base' : 'text-lg'} font-black`}>{title}</h2>}
+            {description && <p className="mt-0.5 font-semibold text-mute">{description}</p>}
+          </div>
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+/** a slim one-line card (channel pickers, toolbars): same panel, tighter padding */
+export function Strip({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3 ${className}`}>{children}</div>;
+}
+
+/** «Сохраняется… / Сохранено / Не сохранено»: the state of an autosaved field; `retry` shows «Повторить» after a failure */
+export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?: string; retry?: () => void }) {
+  let body: ReactNode = null;
+  if (status === 'dirty') body = <span className="text-mute">Изменено…</span>;
+  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />Сохраняется…</span>;
+  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />Сохранено</span>;
+  else if (status === 'error') {
+    body = (
+      <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
+        Не сохранено{error ? `: ${error}` : ''}
+        {retry && <button type="button" className="font-extrabold underline" onClick={retry}>Повторить</button>}
+      </span>
+    );
+  }
+  return <span className="min-h-[1.25rem] text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
+}
+
+/**
+ * Label + input + message under the field. `error` (validation) is red and replaces the hint; `save` shows the
+ * autosave state on the label row. Pass the rest of the input attributes through.
+ */
+export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, ...rest }: {
+  id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: ReactNode;
+  save?: { status: SaveStatus; error?: string; retry?: () => void }; className?: string; multiline?: boolean;
+  type?: string; placeholder?: string; maxLength?: number; disabled?: boolean; autoComplete?: string; rows?: number;
+  onBlur?: () => void; inputMode?: 'text' | 'url' | 'numeric'; spellCheck?: boolean;
+}) {
+  const describedBy = [error ? `${id}-err` : '', hint && !error ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
+  const common = {
+    id,
+    className: `input ${className}`,
+    value,
+    onChange: (e: { target: { value: string } }) => onChange(e.target.value),
+    'aria-invalid': error ? true : undefined,
+    'aria-describedby': describedBy,
+    ...rest,
+  };
+  return (
+    <div>
+      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3">
+        <label htmlFor={id} className="text-sm font-extrabold text-mute">{label}</label>
+        {save && <SaveBadge status={save.status} error={save.error} retry={save.retry} />}
+      </div>
+      {multiline ? <textarea {...common} /> : <input {...common} />}
+      <FieldError id={`${id}-err`} text={error} />
+      {hint && !error && <p id={`${id}-hint`} className="mt-1.5 text-sm font-semibold text-mute">{hint}</p>}
+    </div>
+  );
+}

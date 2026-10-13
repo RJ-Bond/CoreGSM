@@ -110,7 +110,7 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
       )}
       {limit && list.length > 0 && moreHref && (
         <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
-          Вся лента · {events.length} {plural(events.length, ['событие', 'события', 'событий'])} →
+          Все события →<span className="font-semibold text-mute">· {events.length} {plural(events.length, ['событие', 'события', 'событий'])}</span>
         </a>
       )}
     </div>

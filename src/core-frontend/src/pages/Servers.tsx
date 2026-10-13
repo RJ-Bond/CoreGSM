@@ -3,8 +3,9 @@ import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
-import { ServersArt } from '../components/Illustrations';
-import { AnimatedNumber, Burst, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
@@ -43,11 +44,6 @@ function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: s
       </span>
     </button>
   );
-}
-
-/** a red ring over the tile, once, when its server went online -> offline while the page was open */
-function useWentOffline(s: { online: boolean; hasStatus: boolean }): boolean {
-  return useFlashOnChange(s.online || !s.hasStatus, (prev, next) => prev && !next);
 }
 
 type Filter = 'all' | 'online' | 'offline' | 'fav';
@@ -91,7 +87,9 @@ function ServerList() {
   const [updatedAt, setUpdatedAt] = useState(0);
   const [filter, setFilterState] = useState<Filter>(() => {
     try {
-      const v = localStorage.getItem(FILTER_KEY);
+      // deep link: #/servers?filter=online
+      const q = window.location.hash.match(/[?&]filter=(\w+)/)?.[1];
+      const v = q ?? localStorage.getItem(FILTER_KEY);
       return v === 'online' || v === 'offline' || v === 'fav' ? v : 'all';
     } catch {
       return 'all';
@@ -106,12 +104,17 @@ function ServerList() {
     }
   };
 
+  const [view, setViewState] = useState<ServersView>(readView);
+  const setView = (v: ServersView) => { setViewState(v); saveView(v); };
+
   const load = () =>
     api<Server[]>('/servers')
       .then((s) => { setServers(s); setError(''); setUpdatedAt(Date.now()); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
-  usePoll(load, 10_000);
+  // the TV mode refreshes twice as often
+  usePoll(load, view === 'tv' ? 5_000 : 10_000);
+  const rx = useServerReactions(servers, loaded);
   // 30-day availability comes from the public status endpoint; the tile is simply hidden when it has no data
   usePoll(
     () => api<StatusInfo>('/status')
@@ -148,6 +151,10 @@ function ServerList() {
   const effFilter: Filter = filter === 'fav' && !me ? 'all' : filter;
   const filtered = effFilter === 'all' ? [] : sorted.filter((s) => (effFilter === 'online' ? s.online : effFilter === 'offline' ? !s.online : favs.includes(s.id)));
 
+  const effView: ServersView = servers.length === 0 ? 'tiles' : view;
+  const visible = effFilter === 'all' ? sorted : filtered;
+  const resetFilter = () => setFilter('all');
+
   const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
   const stats: { k: string; v: ReactNode; s: string; i: string; r?: number }[] = [
@@ -182,46 +189,65 @@ function ServerList() {
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
-      {servers.length > 1 && (
-        <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
-          {([
-            ['all', `Все · ${servers.length}`],
-            ['online', `Онлайн · ${online.length}`],
-            ['offline', `Недоступные · ${offlineCount}`],
-            ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
-          ] as [Filter, string][]).map(([id, label]) => (
-            <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
-          ))}
-        </nav>
+      {servers.length > 0 && (
+        <div className="srv-bar">
+          {servers.length > 1 ? (
+            <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+              {([
+                ['all', `Все · ${servers.length}`],
+                ['online', `Онлайн · ${online.length}`],
+                ['offline', `Недоступные · ${offlineCount}`],
+                ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
+              ] as [Filter, string][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
+              ))}
+            </nav>
+          ) : <span />}
+          <div className="seg" role="group" aria-label="Вид списка">
+            {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
+              <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
+            ))}
+          </div>
+        </div>
       )}
       <ErrorLine text={error} />
 
-      {!loaded && (
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
-          <div className="skeleton tile col-span-2 h-72 lg:col-span-6 lg:row-span-2 lg:h-auto" />
-          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton tile h-32 lg:col-span-3" />)}
-          {[0, 1, 2].map((i) => <div key={i} className="skeleton tile col-span-2 h-60 sm:col-span-1 lg:col-span-3" />)}
-        </div>
+      {!loaded && (effView === 'list' ? <ListSkeleton /> : <TilesSkeleton />)}
+
+      {loaded && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
+
+      {servers.length > 0 && visible.length === 0 && (
+        effFilter === 'fav' && favCount === 0
+          ? <NoFavsState onReset={resetFilter} />
+          : <NoMatchState what={effFilter === 'offline' ? 'offline' : 'online'} onReset={resetFilter} />
       )}
 
-      {loaded && servers.length === 0 && (
-        <Empty art={<ServersArt />} title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'} text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже.'}>
-          {isAdmin && <a className="btn mt-3" href="#/admin/servers">Добавить в админке</a>}
-        </Empty>
+      {servers.length > 0 && visible.length > 0 && effView === 'list' && (
+        <ServersList
+          servers={visible}
+          uptime={uptime}
+          rx={rx}
+          favOf={(id) => (me ? favs.includes(id) : null)}
+          onOpen={open}
+          renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
+        />
       )}
 
-      {servers.length > 0 && effFilter !== 'all' && (
+      {servers.length > 0 && visible.length > 0 && effView === 'tv' && (
+        <ServersTv servers={visible} uptime={uptime} rx={rx} updatedAt={updatedAt} onExit={() => setView('tiles')} />
+      )}
+
+      {servers.length > 0 && effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
         <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
           {filtered.map((s, i) => (
-            <SmallTile key={s.id} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
+            <SmallTile key={s.id} rx={rx} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
           ))}
-          {filtered.length === 0 && <p className="tile col-span-2 p-6 text-center font-bold text-mute lg:col-span-12">Подходящих серверов нет</p>}
         </div>
       )}
 
-      {servers.length > 0 && effFilter === 'all' && (
+      {servers.length > 0 && effView === 'tiles' && effFilter === 'all' && (
         <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {hero && <HeroTile key={hero.id} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
+          {hero && <HeroTile key={hero.id} rx={rx} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
 
           {stats.map((t, i) => (
             <div
@@ -244,7 +270,7 @@ function ServerList() {
           ))}
 
           {rest.map((s, i) => (
-            <SmallTile key={s.id} s={s} idx={i + 1 + stats.length} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
+            <SmallTile key={s.id} rx={rx} s={s} idx={i + 1 + stats.length} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
           ))}
         </div>
       )}
@@ -252,11 +278,11 @@ function ServerList() {
   );
 }
 
-function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const depth = useDepth<HTMLElement>();
-  const flash = useWentOffline(s);
+  const r = reactionOf(rx, s.id);
   return (
     <article
       className="depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
@@ -266,7 +292,6 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
     >
       <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
       <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
-      {flash && <span className="flash-ring" aria-hidden />}
 
       <div className="relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
@@ -281,7 +306,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
         </div>
       </div>
@@ -289,10 +314,11 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
       {s.online ? (
         <>
           <div className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
-            <AnimatedNumber value={s.players} pulse delta className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" />
+            <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
             {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
           </div>
+          <CapacityBar className="relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
           <div className="relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
@@ -315,17 +341,16 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
-  const flash = useWentOffline(s);
+  const r = reactionOf(rx, s.id);
   return (
     <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
-      {flash && <span className="flash-ring" aria-hidden />}
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
         </div>
       </div>
@@ -340,10 +365,11 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
       {s.online ? (
         <>
           <div className="flex items-baseline gap-1.5 px-1.5">
-            <AnimatedNumber value={s.players} pulse delta className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" />
+            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
+          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
           <div className="px-1.5"><Spark serverId={s.id} color={gameColor(s.game)} /></div>
         </>
       ) : (

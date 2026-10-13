@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -171,14 +171,10 @@ export default function BackupsCard() {
   const disabled = restoring || busy != null;
 
   return (
-    <div className="panel space-y-5 p-6">
-      <div>
-        <h2 className="text-lg font-black">Резервные копии</h2>
-        <p className="font-semibold text-mute">
-          В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип.
-          Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными.
-        </p>
-      </div>
+    <Section
+      title="Резервные копии"
+      description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
+    >
       <ErrorLine text={error} />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -196,7 +192,7 @@ export default function BackupsCard() {
         </label>
       </div>
 
-      <form onSubmit={saveSettings} className="space-y-4 rounded-2xl bg-soft p-4">
+      <form onSubmit={saveSettings} className="space-y-4 rounded-ui-lg bg-soft p-4">
         <h3 className="font-black">Расписание и хранение</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Автоматические копии">
@@ -290,6 +286,6 @@ export default function BackupsCard() {
           </ul>
         )}
       </div>
-    </div>
+    </Section>
   );
 }

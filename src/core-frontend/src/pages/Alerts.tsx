@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
-import { ErrorLine, GoLink, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, IconBell, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -13,13 +13,6 @@ interface AlertsInfo {
   mention: 'none' | 'here' | 'everyone';
   recent: { id: number; kind: 'down' | 'up' | 'test'; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
 }
-
-const IconBell = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-  </svg>
-);
-export { IconBell };
 
 const KIND = {
   down: { label: 'Сервер упал', cls: 'pill-bad' },
@@ -50,16 +43,20 @@ export default function AlertsPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconBell />}
-        title="Оповещения"
-        subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся"
-        hint="Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся."
-        help={<p>Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.</p>}
-      >
-        <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>Отправить тестовое сообщение</button>
-      </PageHead>
+    <AdminPage
+      narrow
+      head={(
+        <PageHead
+          icon={<IconBell />}
+          title="Оповещения"
+          subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся"
+          hint="Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся."
+          help={<p>Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.</p>}
+        >
+          <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>Отправить тестовое сообщение</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
       {tokenSet === false && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
@@ -68,7 +65,7 @@ export default function AlertsPage() {
       )}
 
       {info && (
-        <div className="panel space-y-5 p-6">
+        <Section>
           <label className="flex cursor-pointer items-start gap-3">
             <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Оповещения включены' : 'Оповещения выключены')} />
             <span>
@@ -108,13 +105,11 @@ export default function AlertsPage() {
               <p className="mt-1 text-sm font-semibold text-mute">Сообщение о возвращении сервера всегда без упоминания.</p>
             </div>
           </div>
-
-        </div>
+        </Section>
       )}
 
-      <div className="panel space-y-3 p-6">
-        <h2 className="text-lg font-black">Последние оповещения</h2>
-        {!info && <div className="skeleton h-14 rounded-2xl" aria-busy="true" aria-label="Загрузка" />}
+      <Section title="Последние оповещения">
+        {!info && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />}
         {info && info.recent.length === 0 && (
           <div className="fade-in flex flex-col items-center gap-1 py-2 text-center">
             <AlertsArt />
@@ -136,7 +131,7 @@ export default function AlertsPage() {
             </li>
           ))}
         </ul>
-      </div>
-    </div>
+      </Section>
+    </AdminPage>
   );
 }

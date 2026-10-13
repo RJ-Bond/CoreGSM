@@ -6,7 +6,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -39,6 +39,9 @@ const excerpt = (n: NewsItem) => {
 
 function NewsList() {
   const [items, setItems] = useState<NewsItem[]>([]);
+  // items removed with «Отменить» pending stay hidden until the request is sent
+  const [hidden, setHidden] = useState<number[]>([]);
+  const list = items.filter((n) => !hidden.includes(n.id));
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -101,30 +104,53 @@ function NewsList() {
   };
   const remove = async (n: NewsItem) => {
     const sent = n.status === 'sent';
-    if (!(await confirmDialog({ title: 'Удалить новость?', text: sent ? 'Сообщение также будет удалено из Discord.' : undefined, confirmLabel: 'Удалить', danger: true }))) return;
-    await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
-    void load();
+    // a published news item also removes the Discord message: that stays behind a confirmation
+    if (sent || BUSY.has(n.status)) {
+      if (!(await confirmDialog({ title: 'Удалить новость?', text: sent ? 'Сообщение также будет удалено из Discord.' : undefined, confirmLabel: 'Удалить', danger: true }))) return;
+      await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
+      void load();
+      return;
+    }
+    // a draft or a scheduled item never reached Discord: it disappears at once and can be taken back for 6 s
+    setHidden((h) => [...h, n.id]);
+    undoable({
+      text: `Новость «${n.title}» удалена`,
+      restore: () => setHidden((h) => h.filter((x) => x !== n.id)),
+      commit: async () => {
+        try {
+          await api(`/news/${n.id}`, 'DELETE');
+        } catch (e) {
+          setError((e as Error).message);
+          toast('Не удалось удалить новость', 'err');
+        }
+        setHidden((h) => h.filter((x) => x !== n.id));
+        void load();
+      },
+    });
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconNews />}
-        title="Новости"
-        subtitle="Публикации от имени бота в Discord"
-        hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
-        help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
-      >
-        <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconNews />}
+          title="Новости"
+          subtitle="Публикации от имени бота в Discord"
+          hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
+          help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
+        >
+          <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
 
-      <div className="panel flex flex-wrap items-center gap-2 px-5 py-3">
+      <Strip className="!justify-start">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
         {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`#/admin/news/new/${t.id}`}>{t.label}</a>)}
-      </div>
+      </Strip>
 
-      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+      <Strip>
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
           <div className="font-black">
@@ -137,9 +163,9 @@ function NewsList() {
             <ChannelPicker id="news-default-channel" value={settings?.channelId ?? ''} onChange={(v) => void setChannel(v)} />
           </div>
         )}
-      </div>
+      </Strip>
 
-      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+      <Strip>
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Тестовый канал</div>
           <div className="font-black">
@@ -156,16 +182,16 @@ function NewsList() {
             <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => { if (v) void setTestChannel(v); }} />
           </div>
         )}
-      </div>
+      </Strip>
 
       <div className="seg" role="group" aria-label="Вид списка">
         <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => pickView('list')}>Список</button>
         <button type="button" className="seg-item" aria-pressed={view === 'calendar'} onClick={() => pickView('calendar')}>Календарь</button>
       </div>
 
-      {view === 'calendar' && items.length > 0 && <NewsCalendar items={items} onMove={(n, day) => void reschedule(n, day)} />}
+      {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
-      {loaded && items.length === 0 && (
+      {loaded && list.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
         </Empty>
@@ -178,7 +204,7 @@ function NewsList() {
       )}
 
       <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
-        {items.map((n) => {
+        {list.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
             <article key={n.id} className="panel flex flex-col gap-3 overflow-hidden p-5" style={{ borderTop: `4px solid ${color}` }}>
@@ -206,7 +232,7 @@ function NewsList() {
           );
         })}
       </div>
-    </div>
+    </AdminPage>
   );
 }
 
