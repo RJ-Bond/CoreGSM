@@ -16,6 +16,7 @@ import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
 import { maintenanceFor, occurrencesBetween, registerMaintenance, type WindowRow } from './maintenance.js';
 import { registerHealth } from './health.js';
+import { registerOverview } from './overview.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
 import { registerGames } from './games.js';
@@ -1721,6 +1722,7 @@ registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.l
 registerBackups({ app, admin });
 registerMaintenance({ app, admin, viewer });
 registerHealth({ app, admin, bot: () => botStatus });
+registerOverview({ app, viewer });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {

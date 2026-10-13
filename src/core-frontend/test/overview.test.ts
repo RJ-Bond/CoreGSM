@@ -1,0 +1,91 @@
+import { describe, expect, it } from 'vitest';
+import type { Server } from '../src/api';
+import { capLevel, capacityPct, slotsInfo } from '../src/components/servers/capacity';
+import { chartPoints, needsAttention, pickHero, pulseOf } from '../src/components/servers/overviewLogic';
+import { excerptOf } from '../src/components/servers/WhatsNew';
+import { t } from '../src/i18n';
+
+const srv = (id: number, o: Partial<Server> = {}): Server => ({
+  id, name: `S${id}`, customName: '', nameAuto: false, game: 'minecraft', host: '', port: 0, queryPort: null, displayAddress: '', country: '', coverUrl: null,
+  address: `h${id}:1`, hasStatus: true, online: true, players: 0, maxPlayers: 20, map: null, version: null, ping: 20, playerNames: [], error: null, updatedAt: 0, maintenance: null, ...o,
+}) as Server;
+
+describe('capacity', () => {
+  it('computes the fill percentage and its level', () => {
+    expect(capacityPct(5, 20)).toBe(25);
+    expect(capacityPct(5, 0)).toBe(0);
+    expect(capacityPct(30, 20)).toBe(100);
+    expect(capLevel(74)).toBe('ok');
+    expect(capLevel(75)).toBe('warm');
+    expect(capLevel(89)).toBe('warm');
+    expect(capLevel(90)).toBe('hot');
+  });
+
+  it('reports free slots, almost full and full', () => {
+    expect(slotsInfo(8, 20)).toEqual({ kind: 'free', free: 12 });
+    expect(slotsInfo(18, 20)).toEqual({ kind: 'almost', free: 2 });
+    expect(slotsInfo(20, 20)).toEqual({ kind: 'full', free: 0 });
+    expect(slotsInfo(25, 20)).toEqual({ kind: 'full', free: 0 });
+    expect(slotsInfo(3, 0)).toBeNull();
+  });
+
+  it('words the free slots with plural forms', () => {
+    expect(t('srv.slots.free', { n: 12 })).toBe('Свободно 12 мест');
+    expect(t('srv.slots.free', { n: 1 })).toBe('Свободно 1 место');
+    expect(t('srv.slots.free', { n: 3 })).toBe('Свободно 3 места');
+    expect(t('srv.slots.full')).toBe('Мест нет');
+    expect(t('srv.slots.almost')).toBe('Почти полон');
+  });
+});
+
+describe('hero pick', () => {
+  it('puts a server with a problem first', () => {
+    const list = [srv(1, { players: 15 }), srv(2, { online: false, players: 0 }), srv(3, { players: 18 })];
+    expect(pickHero(list, [3])).toEqual({ server: list[1], reason: 'attention' });
+  });
+
+  it('ignores a server in maintenance and one that never answered', () => {
+    const m = srv(2, { online: false, maintenance: { name: 'x', until: null } });
+    const fresh = srv(3, { online: false, hasStatus: false });
+    expect(needsAttention(m)).toBe(false);
+    expect(needsAttention(fresh)).toBe(false);
+  });
+
+  it('treats a lagging server as a problem, after the offline ones', () => {
+    const list = [srv(1, { ping: 250 }), srv(2, { online: false })];
+    expect(pickHero(list, [])?.server.id).toBe(2);
+    expect(pickHero([list[0]], [])).toEqual({ server: list[0], reason: 'attention' });
+  });
+
+  it('takes the favourite with the most players, then the busiest', () => {
+    const list = [srv(1, { players: 4 }), srv(2, { players: 9 }), srv(3, { players: 12 })];
+    expect(pickHero(list, [1, 2])).toEqual({ server: list[1], reason: 'fav' });
+    expect(pickHero(list, [])).toEqual({ server: list[2], reason: 'busiest' });
+    expect(pickHero([], [])).toBeNull();
+  });
+
+  it('says maintenance when the picked server is in a window', () => {
+    const list = [srv(1, { players: 4, maintenance: { name: 'x', until: null } })];
+    expect(pickHero(list, [])?.reason).toBe('maintenance');
+  });
+});
+
+describe('pulse state', () => {
+  it('is red for an offline server, amber for lag and maintenance, green otherwise', () => {
+    expect(pulseOf([srv(1), srv(2)]).state).toBe('ok');
+    expect(pulseOf([srv(1), srv(2, { online: false })]).state).toBe('bad');
+    expect(pulseOf([srv(1, { ping: 300 })]).state).toBe('warn');
+    expect(pulseOf([srv(1, { online: false, maintenance: { name: 'x', until: null } })]).state).toBe('maint');
+    expect(pulseOf([srv(1, { hasStatus: false, online: false })]).state).toBe('wait');
+  });
+});
+
+describe('chart and excerpt', () => {
+  it('scales the points into the window', () => {
+    const pts = chartPoints([{ ts: 0, players: 5 }, { ts: 50, players: 10 }], 0, 100);
+    expect(pts).toEqual([{ x: 0, y: 0.5 }, { x: 0.5, y: 1 }]);
+  });
+  it('cuts markdown out of the news teaser', () => {
+    expect(excerptOf({ payload: { content: '', mention: 'none', embed: { description: '**Bold** [link](http://x) text' } } })).toBe('Bold link text');
+  });
+});

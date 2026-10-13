@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c309fafe6ee7"
+COREGSM_BUILD="fdbabf9e9bae"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3682,6 +3682,7 @@ import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
 import { maintenanceFor, occurrencesBetween, registerMaintenance, type WindowRow } from './maintenance.js';
 import { registerHealth } from './health.js';
+import { registerOverview } from './overview.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
 import { registerGames } from './games.js';
@@ -5387,6 +5388,7 @@ registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.l
 registerBackups({ app, admin });
 registerMaintenance({ app, admin, viewer });
 registerHealth({ app, admin, bot: () => botStatus });
+registerOverview({ app, viewer });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
@@ -7013,6 +7015,154 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
     add('discord-net', 'Доступ к Discord', ds ? 'ok' : 'fail', getSetting('proxy_url') ? 'Работа идёт через прокси' : ds ? 'Доступен напрямую' : 'Нет ответа. Включите прокси в настройках бота');
     res.json({ at: Date.now(), checks });
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/overview.ts" << '__COREGSM_EOF__'
+/**
+ * Data for the main page (additive, read-only):
+ *   GET /api/overview?hours=24   total players over time, the peak, current totals, active / upcoming maintenance
+ *   GET /api/events/recent?limit=8   the latest up / down / peak / maintenance events across all servers
+ * Both are public like /api/status (the `viewer` middleware decides who may look).
+ */
+import type { Express, RequestHandler } from 'express';
+import { db } from './db.js';
+import { nextOccurrence, occurrenceAt, occurrencesBetween, type WindowRow } from './maintenance.js';
+
+const NAME_SQL = `COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)`;
+const DAY = 86_400_000;
+const POINTS = 96;
+
+export interface OverviewPoint {
+  ts: number;
+  players: number;
+  online: number;
+}
+
+/** sums the last sample of every server in every time bucket */
+export function overviewPoints(since: number, bucketMs: number): OverviewPoint[] {
+  const rows = db
+    .prepare(
+      `SELECT b, server_id, players, online FROM (
+         SELECT ts / CAST(? AS INTEGER) AS b, server_id, players, online,
+                ROW_NUMBER() OVER (PARTITION BY server_id, ts / CAST(? AS INTEGER) ORDER BY ts DESC) AS rn
+         FROM history WHERE ts > ?
+       ) WHERE rn = 1`,
+    )
+    .all(bucketMs, bucketMs, since) as { b: number; server_id: number; players: number; online: number }[];
+  const sums = new Map<number, OverviewPoint>();
+  for (const r of rows) {
+    const p = sums.get(r.b) ?? { ts: r.b * bucketMs, players: 0, online: 0 };
+    if (r.online) {
+      p.players += r.players;
+      p.online += 1;
+    }
+    sums.set(r.b, p);
+  }
+  return [...sums.values()].sort((a, b) => a.ts - b.ts);
+}
+
+export function peakOf(points: OverviewPoint[]): { ts: number; players: number } | null {
+  let best: OverviewPoint | null = null;
+  for (const p of points) if (p.players > 0 && (!best || p.players >= best.players)) best = p;
+  return best ? { ts: best.ts, players: best.players } : null;
+}
+
+export interface RecentEvent {
+  ts: number;
+  serverId: number | null;
+  serverName: string | null;
+  type: 'up' | 'down' | 'peak' | 'maintenance';
+  players?: number;
+  /** the window title (maintenance events only) */
+  name?: string;
+}
+
+/** the same sources as `details.events` of a single server, taken for every server and merged */
+export function recentEvents(limit: number, now = Date.now()): RecentEvent[] {
+  const names = new Map<number, string>();
+  for (const r of db.prepare(`SELECT s.id, ${NAME_SQL} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as { id: number; n: string }[]) names.set(r.id, r.n);
+
+  const out: RecentEvent[] = [];
+  const week = now - 7 * DAY;
+  const flips = db
+    .prepare(
+      `SELECT server_id, ts, online FROM (
+         SELECT server_id, ts, online, LAG(online) OVER (PARTITION BY server_id ORDER BY ts) AS prev FROM history WHERE ts > ?
+       ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 300`,
+    )
+    .all(week) as { server_id: number; ts: number; online: number }[];
+  for (const f of flips) {
+    if (names.has(f.server_id)) out.push({ ts: f.ts, serverId: f.server_id, serverName: names.get(f.server_id) ?? null, type: f.online ? 'up' : 'down' });
+  }
+  // the busiest moment of the last 24 h of every server
+  const peaks = db
+    .prepare('SELECT server_id, MAX(players) AS players, ts FROM history WHERE ts > ? GROUP BY server_id HAVING MAX(players) > 0')
+    .all(now - DAY) as { server_id: number; players: number; ts: number }[];
+  for (const p of peaks) {
+    if (names.has(p.server_id)) out.push({ ts: p.ts, serverId: p.server_id, serverName: names.get(p.server_id) ?? null, type: 'peak', players: p.players });
+  }
+  for (const w of db.prepare('SELECT * FROM maintenance_windows').all() as WindowRow[]) {
+    if (w.server_id != null && !names.has(w.server_id)) continue;
+    for (const o of occurrencesBetween(w, week, now)) {
+      out.push({ ts: o.start, serverId: w.server_id, serverName: w.server_id == null ? null : names.get(w.server_id) ?? null, type: 'maintenance', name: w.name });
+    }
+  }
+  out.sort((a, b) => b.ts - a.ts);
+  return out.slice(0, limit);
+}
+
+export interface OverviewMaintenance {
+  id: number;
+  serverId: number | null;
+  serverName: string | null;
+  name: string;
+  startTs: number;
+  endTs: number;
+  active: boolean;
+}
+
+/** windows running now plus those starting within a week; running first, then by start */
+export function maintenanceOutlook(now = Date.now()): OverviewMaintenance[] {
+  const names = new Map<number, string>();
+  for (const r of db.prepare(`SELECT s.id, ${NAME_SQL} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as { id: number; n: string }[]) names.set(r.id, r.n);
+  const out: OverviewMaintenance[] = [];
+  for (const w of db.prepare('SELECT * FROM maintenance_windows ORDER BY id').all() as WindowRow[]) {
+    if (w.server_id != null && !names.has(w.server_id)) continue;
+    const cur = occurrenceAt(w, now);
+    const occ = cur ?? nextOccurrence(w, now);
+    if (!occ || (!cur && occ.start - now > 7 * DAY)) continue;
+    out.push({ id: w.id, serverId: w.server_id, serverName: w.server_id == null ? null : names.get(w.server_id) ?? null, name: w.name, startTs: occ.start, endTs: occ.end, active: !!cur });
+  }
+  return out.sort((a, b) => Number(b.active) - Number(a.active) || a.startTs - b.startTs).slice(0, 10);
+}
+
+export function registerOverview({ app, viewer }: { app: Express; viewer: RequestHandler }): void {
+  app.get('/api/overview', viewer, (req, res) => {
+    const hoursRaw = Number(req.query.hours ?? 24);
+    const hours = Math.min(168, Math.max(1, Number.isFinite(hoursRaw) ? hoursRaw : 24));
+    const now = Date.now();
+    const bucketMs = Math.max(60_000, Math.ceil((hours * 3_600_000) / POINTS));
+    const points = overviewPoints(now - hours * 3_600_000, bucketMs);
+    const cur = db.prepare('SELECT COUNT(*) AS servers FROM servers').get() as { servers: number };
+    const live = db
+      .prepare('SELECT COUNT(*) AS online, COALESCE(SUM(players), 0) AS players FROM status WHERE online = 1 AND server_id IN (SELECT id FROM servers)')
+      .get() as { online: number; players: number };
+    res.json({
+      hours,
+      bucketMs,
+      points,
+      peak: peakOf(points),
+      totals: { players: live.players, servers: cur.servers, online: live.online },
+      maintenance: maintenanceOutlook(now),
+    });
+  });
+
+  app.get('/api/events/recent', viewer, (req, res) => {
+    const n = Number(req.query.limit ?? 8);
+    const limit = Math.min(50, Math.max(1, Number.isFinite(n) ? Math.floor(n) : 8));
+    res.json(recentEvents(limit));
+  });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -28781,6 +28931,267 @@ export function exportFileName(title: string, hours: number, ts: number): string
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/BulkBar.tsx" << '__COREGSM_EOF__'
+// Administrator bulk actions on the servers page: poll now, maintenance window, favourites. Russian only (admin area).
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { api, type Server } from '../../api';
+import { Field, Modal, toast, ErrorLine } from '../../ui';
+import { fromLocalInput, toLocalInput, validateWindow } from '../../maintenance';
+
+type Dur = '30' | '60' | '120' | 'until';
+
+/** the maintenance dialog: one window per selected server */
+function MaintenanceDialog({ servers, onClose, onDone }: { servers: Server[]; onClose: () => void; onDone: () => void }) {
+  const [name, setName] = useState('Плановые работы');
+  const [dur, setDur] = useState<Dur>('60');
+  const [until, setUntil] = useState(() => toLocalInput(Date.now() + 3 * 3600_000));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const range = (): { startTs: number; endTs: number | null } => {
+    const startTs = Math.floor(Date.now() / 60_000) * 60_000;
+    return { startTs, endTs: dur === 'until' ? fromLocalInput(until) : startTs + Number(dur) * 60_000 };
+  };
+  const preview = range();
+  const problem = validateWindow({ name, startTs: preview.startTs, endTs: preview.endTs, repeat: 'none' });
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (problem || busy) return;
+    const { startTs, endTs } = range();
+    setBusy(true);
+    setError('');
+    let ok = 0;
+    for (const s of servers) {
+      try {
+        await api('/maintenance', 'POST', { serverId: s.id, name: name.trim(), startTs, endTs, repeat: 'none' });
+        ok++;
+      } catch (err) {
+        setError(`«${s.name}»: ${(err as Error).message}`);
+        setBusy(false);
+        if (ok) toast(`Создано окон: ${ok} из ${servers.length}`, 'err');
+        return;
+      }
+    }
+    toast(ok === 1 ? 'Окно обслуживания создано' : `Окна обслуживания созданы: ${ok}`);
+    onDone();
+  };
+
+  return (
+    <Modal title="Окно обслуживания" onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+        <p className="text-sm font-semibold text-mute">
+          Для каждого из выбранных серверов ({servers.length}) будет создано своё окно. Уведомления на это время приглушаются, простой не считается в аптайм.
+        </p>
+        <Field label="Название">
+          <input className="input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <div role="group" aria-label="Длительность">
+          <span className="label">Длительность</span>
+          <div className="flex flex-wrap gap-2">
+            {([['30', '30 минут'], ['60', '1 час'], ['120', '2 часа'], ['until', 'До времени']] as [Dur, string][]).map(([v, label]) => (
+              <button key={v} type="button" className={`chip-filter ${dur === v ? 'on' : ''}`} aria-pressed={dur === v} onClick={() => setDur(v)}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {dur === 'until' && (
+          <Field label="Окончание"><input className="input" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} /></Field>
+        )}
+        {problem && name.trim() !== '' && <p className="text-sm font-bold text-bad">{problem}</p>}
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-end gap-2.5">
+          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="submit" className="btn" disabled={!!problem || busy}>{busy ? 'Создаём…' : 'Создать окна'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit, onReload, onFavs }: {
+  selected: Server[];
+  visible: Server[];
+  favs: number[];
+  onSelectAll: () => void;
+  onClear: () => void;
+  onExit: () => void;
+  onReload: () => void;
+  onFavs: (next: number[]) => void;
+}) {
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [dialog, setDialog] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+  const n = selected.length;
+  const busy = progress != null;
+
+  const refreshAll = async () => {
+    if (busy || n === 0) return;
+    const list = [...selected];
+    let fail = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (alive.current) setProgress({ done: i, total: list.length });
+      try {
+        await api(`/servers/${list[i].id}/refresh`, 'POST');
+      } catch {
+        fail++;
+      }
+    }
+    if (alive.current) setProgress(null);
+    toast(fail ? `Опрошено ${list.length - fail} из ${list.length}, ошибок: ${fail}` : list.length === 1 ? 'Сервер опрошен' : `Опрошено серверов: ${list.length}`, fail ? 'err' : 'ok');
+    onReload();
+  };
+
+  const setFav = async (on: boolean) => {
+    if (busy || n === 0) return;
+    const ids = selected.map((s) => s.id).filter((id) => favs.includes(id) !== on);
+    if (ids.length === 0) { toast(on ? 'Все выбранные уже в избранном' : 'Выбранных нет в избранном', 'info'); return; }
+    onFavs(on ? [...favs, ...ids] : favs.filter((id) => !ids.includes(id)));
+    const res = await Promise.allSettled(ids.map((id) => api(`/favorites/${id}`, on ? 'PUT' : 'DELETE')));
+    const bad = res.filter((r) => r.status === 'rejected').length;
+    toast(bad ? `Не удалось изменить: ${bad}` : on ? `В избранное добавлено: ${ids.length}` : `Убрано из избранного: ${ids.length}`, bad ? 'err' : 'ok');
+  };
+
+  return (
+    <>
+      <div className="srv-bulk" role="toolbar" aria-label="Действия с выбранными серверами">
+        <div className="srv-bulk-count" aria-live="polite">
+          {busy ? `Опрос ${progress.done + 1} из ${progress.total}…` : n === 0 ? 'Ничего не выбрано' : `Выбрано: ${n}`}
+        </div>
+        <div className="srv-bulk-actions">
+          <button type="button" className="btn btn-soft" onClick={onSelectAll} disabled={busy || n === visible.length}>Выбрать все</button>
+          <button type="button" className="btn btn-soft" onClick={onClear} disabled={busy || n === 0}>Сбросить</button>
+          <button type="button" className="btn" onClick={() => void refreshAll()} disabled={busy || n === 0}>Опросить сейчас</button>
+          <button type="button" className="btn btn-soft" onClick={() => setDialog(true)} disabled={busy || n === 0}>Окно обслуживания…</button>
+          <button type="button" className="btn btn-soft" onClick={() => void setFav(true)} disabled={busy || n === 0}>Добавить в избранное</button>
+          <button type="button" className="btn btn-soft" onClick={() => void setFav(false)} disabled={busy || n === 0}>Убрать</button>
+          <button type="button" className="btn btn-soft" onClick={onExit}>Готово (Esc)</button>
+        </div>
+      </div>
+      {dialog && <MaintenanceDialog servers={selected} onClose={() => setDialog(false)} onDone={() => { setDialog(false); onReload(); }} />}
+    </>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/PulseStrip.tsx" << '__COREGSM_EOF__'
+// The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
+import { useId } from 'react';
+import { AnimatedNumber, fmtTime, LAG_PING } from '../../ui';
+import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
+import { t, useI18n } from '../../i18n';
+import type { Server } from '../../api';
+import { chartPoints, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
+
+const ICON: Record<PulseState, JSX.Element> = {
+  ok: <IconOk size={24} />,
+  warn: <IconWarn size={24} />,
+  bad: <IconError size={24} />,
+  maint: <IconWrench size={24} />,
+  wait: <IconClock size={24} />,
+};
+
+function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
+  const gid = useId().replace(/:/g, '');
+  const { t: tr } = useI18n();
+  if (!data || data.points.length < 2) {
+    return <div className="pulse-chart pulse-chart-empty">{tr('srv.pulse.noChart')}</div>;
+  }
+  const end = Math.max(now, data.points[data.points.length - 1].ts + data.bucketMs);
+  const start = end - data.hours * 3_600_000;
+  const pts = chartPoints(data.points, start, end);
+  const W = 240;
+  const H = 56;
+  const pad = 4;
+  const X = (x: number) => x * W;
+  const Y = (y: number) => H - pad - y * (H - pad * 2);
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`).join('');
+  const area = `${line}L${X(pts[pts.length - 1].x).toFixed(1)} ${H}L${X(pts[0].x).toFixed(1)} ${H}Z`;
+  const max = Math.max(1, ...data.points.map((p) => p.players));
+  const peak = data.peak;
+  const pk = peak ? { x: Math.max(0, Math.min(1, (peak.ts - start) / (end - start))), y: peak.players / max } : null;
+  return (
+    <figure className="pulse-chart" aria-label={tr('srv.pulse.chart')}>
+      <div className="pulse-plot">
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-hidden>
+          <defs>
+            <linearGradient id={`pg${gid}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="currentColor" stopOpacity=".32" />
+              <stop offset="1" stopColor="currentColor" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={area} fill={`url(#pg${gid})`} />
+          <path d={line} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        </svg>
+        {pk && peak && (
+          <span className="pulse-peak" style={{ left: `${pk.x * 100}%`, top: `${((Y(pk.y)) / H) * 100}%` }} aria-hidden />
+        )}
+      </div>
+      <figcaption>
+        <span>{tr('srv.pulse.hours', { n: data.hours })}</span>
+        {peak ? <span className="pulse-peak-text">{tr('srv.pulse.peak', { n: peak.players, time: fmtTime(peak.ts) })}</span> : <span>{tr('srv.pulse.noPeak')}</span>}
+      </figcaption>
+    </figure>
+  );
+}
+
+export function PulseStrip({ servers, overview, uptime, now }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number }) {
+  useI18n();
+  const { state, problems } = pulseOf(servers);
+  const online = servers.filter((s) => s.online);
+  const players = online.reduce((n, s) => n + s.players, 0);
+  const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
+  const avg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
+
+  let title: string;
+  let sub = '';
+  if (state === 'bad' || state === 'warn') {
+    const first = problems[0];
+    title = t('srv.pulse.problems', { name: first.name });
+    sub = problems.length > 1 ? t('srv.pulse.more', { n: problems.length - 1 }) : first.online ? t('srv.pulse.slow') : t('srv.pulse.noAnswer');
+  } else if (state === 'maint') {
+    const m = servers.filter((s) => s.maintenance);
+    title = t('srv.pulse.maint');
+    sub = m.length === 1 ? m[0].name : t('srv.pulse.maintN', { n: m.length });
+  } else if (state === 'wait') {
+    title = t('srv.pulse.wait');
+  } else {
+    title = t('srv.pulse.ok');
+    sub = t('srv.pulse.okSub', { n: online.length });
+  }
+
+  return (
+    <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
+      <div className="pulse-state" role="status">
+        <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
+        <div className="min-w-0">
+          <div className="pulse-title">{title}</div>
+          {sub && <div className="pulse-sub">{sub}</div>}
+        </div>
+      </div>
+      <dl className="pulse-nums">
+        <div>
+          <dt>{t('srv.pulse.players')}</dt>
+          <dd><AnimatedNumber value={players} pulse /></dd>
+        </div>
+        <div>
+          <dt>{t('srv.pulse.servers')}</dt>
+          <dd>{online.length}<small>/{servers.length}</small></dd>
+        </div>
+        <div>
+          <dt>{t('srv.pulse.ping')}</dt>
+          <dd className={avg != null && avg > LAG_PING ? 'text-warn' : ''}>{avg == null ? '–' : <>{avg}<small> {t('srv.unit.ms')}</small></>}</dd>
+        </div>
+        <div>
+          <dt>{t('srv.pulse.uptime')}</dt>
+          <dd>{uptime == null ? '–' : <>{(Math.round(uptime * 10) / 10).toLocaleString(undefined, { maximumFractionDigits: 1 })}<small>%</small></>}</dd>
+        </div>
+      </dl>
+      <PlayersChart data={overview} now={now} />
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/ServerViews.tsx" << '__COREGSM_EOF__'
 // The «Список» and «ТВ» views of the servers page.
 import { useEffect, useRef, useState } from 'react';
@@ -28859,18 +29270,38 @@ interface RowProps {
   onOpen: () => void;
   rx: Reactions;
   favButton: React.ReactNode;
+  /** selection mode of the bulk actions: the row gets a checkbox and a click toggles it */
+  select?: SelectProps;
 }
 
-function ListRow({ s, uptime, onOpen, rx, favButton }: RowProps) {
+/** selection mode (administrators): `has` tells whether a server is selected */
+export interface SelectProps {
+  on: boolean;
+  has: (id: number) => boolean;
+  toggle: (id: number) => void;
+}
+
+function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
   const r = reactionOf(rx, s.id);
   const lag = isLag(s);
   return (
     <div
-     
-      className={`srv-row ${s.online ? '' : 'off'}`}
-      onClick={onOpen}
+      className={`srv-row ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
-      <div className="srv-c-status"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash></div>
+      <div className="srv-c-status">
+        {select?.on && (
+          <input
+            type="checkbox"
+            className="srv-check"
+            checked={select.has(s.id)}
+            onChange={() => select.toggle(s.id)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Выбрать: ${s.name}`}
+          />
+        )}
+        <StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
+      </div>
       <div className="srv-c-name">
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
@@ -28900,7 +29331,8 @@ function ListRow({ s, uptime, onOpen, rx, favButton }: RowProps) {
   );
 }
 
-export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav }: {
+export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select }: {
+  select?: SelectProps;
   servers: Server[];
   uptime: Map<number, number>;
   rx: Reactions;
@@ -28909,7 +29341,7 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav }: {
   renderFav: (s: Server, on: boolean) => React.ReactNode;
 }) {
   return (
-    <div className="panel srv-list fade-in" aria-label="Серверы">
+    <div className={`panel srv-list fade-in ${select?.on ? "selecting" : ""}`} aria-label="Серверы">
       <div className="srv-row srv-head">
         <div className="srv-c-status">Статус</div>
         <div className="srv-c-name">Сервер</div>
@@ -28931,6 +29363,7 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav }: {
             onOpen={() => onOpen(s)}
             rx={rx}
             favButton={fav != null ? renderFav(s, fav) : null}
+            select={select}
           />
         );
       })}
@@ -29134,11 +29567,244 @@ export function NoMatchArt() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/WhatsNew.tsx" << '__COREGSM_EOF__'
+// «Что нового»: the latest news item, planned maintenance and the last events of all servers.
+import { useEffect, useState } from 'react';
+import { api, type PublicNews } from '../../api';
+import { t, useI18n } from '../../i18n';
+import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
+import { IconChevronDown } from '../../icons';
+import { StateView } from '../StateView';
+import type { OverviewData, RecentEvent } from './overviewLogic';
+
+const OPEN_KEY = 'coregsm_whatsnew_open';
+
+export function readOpen(): boolean {
+  try {
+    return localStorage.getItem(OPEN_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+const saveOpen = (v: boolean) => {
+  try {
+    localStorage.setItem(OPEN_KEY, v ? '1' : '0');
+  } catch {
+    /* not remembered */
+  }
+};
+
+/** a plain-text teaser: markdown marks removed */
+export function excerptOf(n: Pick<PublicNews, 'payload'>, max = 150): string {
+  const raw = n.payload?.embed?.description || n.payload?.content || '';
+  const s = raw.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/^\s*[-*•]\s+/gm, '• ').replace(/[*_~`|>#]/g, '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max).trimEnd()}…` : s;
+}
+
+const DOT: Record<RecentEvent['type'], string> = { up: 'bg-ok', down: 'bg-bad', peak: 'bg-link', maintenance: 'bg-warn' };
+
+function eventText(e: RecentEvent): string {
+  const name = e.serverName ?? t('srv.new.allServers');
+  switch (e.type) {
+    case 'up': return t('srv.new.ev.up', { name });
+    case 'down': return t('srv.new.ev.down', { name });
+    case 'peak': return t('srv.new.ev.peak', { name, n: e.players ?? 0 });
+    default: return t('srv.new.ev.maint', { name: e.serverName ? `${e.name || ''} · ${e.serverName}`.replace(/^ · /, '') : e.name || name });
+  }
+}
+
+export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle: () => void; overview: OverviewData | null }) {
+  useI18n();
+  const [news, setNews] = useState<PublicNews | null | undefined>(undefined);
+  const [events, setEvents] = useState<RecentEvent[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  // nothing is fetched while the block is folded
+  usePoll(() => {
+    if (!open) return;
+    return Promise.all([
+      api<PublicNews[]>('/news')
+        .then((l) => setNews(l.find((n) => n.status === 'sent' || n.status === 'edit_queued') ?? null))
+        .catch(() => setNews(null)),
+      api<RecentEvent[]>('/events/recent?limit=8')
+        .then((l) => { setEvents(l); setFailed(false); })
+        .catch(() => setFailed(true)),
+    ]);
+  }, 60_000);
+
+  const maint = overview?.maintenance ?? [];
+  const bodyId = 'srv-whatsnew-body';
+  return (
+    <aside className="panel srv-new" aria-label={t('srv.new.title')}>
+      <h2 className="m-0">
+        <button type="button" className="srv-new-head" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
+          <span className="font-black">{t('srv.new.title')}</span>
+          <span aria-hidden className={`srv-new-chev ${open ? 'open' : ''}`}><IconChevronDown /></span>
+        </button>
+      </h2>
+      {open && (
+        <div id={bodyId} className="srv-new-body">
+          <section>
+            <h3 className="srv-new-h">{t('srv.new.news')}</h3>
+            {news === undefined ? (
+              <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
+            ) : news ? (
+              <a href="#/news" className="srv-new-news">
+                <span className="srv-new-news-title">{news.title || t('srv.new.untitled')}</span>
+                {excerptOf(news) && <span className="srv-new-news-text">{excerptOf(news)}</span>}
+                {news.sentAt && <span className="srv-new-date">{fmtDateTime(news.sentAt)}</span>}
+              </a>
+            ) : (
+              <StateView bare compact title={t('srv.new.noNews')} text="" />
+            )}
+          </section>
+
+          <section>
+            <h3 className="srv-new-h">{t('srv.new.maint')}</h3>
+            {maint.length === 0 ? (
+              <StateView bare compact title={t('srv.new.noMaint')} text="" />
+            ) : (
+              <ul className="srv-new-list">
+                {maint.map((m) => (
+                  <li key={m.id}>
+                    <span className={`srv-new-dot ${m.active ? 'bg-warn' : 'bg-mute'}`} aria-hidden />
+                    <div className="min-w-0">
+                      <div className="truncate font-extrabold">{m.name}{m.serverName ? ` · ${m.serverName}` : ''}</div>
+                      <div className="text-[13px] font-bold text-mute">
+                        {m.active ? t('srv.new.until', { time: fmtDateTime(m.endTs) }) : t('srv.new.from', { from: fmtDateTime(m.startTs), to: fmtTime(m.endTs) })}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h3 className="srv-new-h">{t('srv.new.events')}</h3>
+            {events === null && !failed ? (
+              <div className="skeleton h-24 rounded-2xl" aria-busy="true" />
+            ) : failed && !events ? (
+              <StateView bare compact kind="error" title={t('srv.new.evFail')} text="" />
+            ) : !events || events.length === 0 ? (
+              <StateView bare compact title={t('srv.new.noEvents')} text="" />
+            ) : (
+              <ul className="srv-new-list">
+                {events.map((e, i) => (
+                  <li key={`${e.type}-${e.serverId}-${e.ts}-${i}`}>
+                    <span className={`srv-new-dot ${DOT[e.type]}`} aria-hidden />
+                    <a className="srv-new-ev" href={e.serverId != null ? `#/servers/${e.serverId}/events` : '#/servers'}>
+                      <span className="block truncate font-bold">{eventText(e)}</span>
+                      <span className="text-[13px] font-bold text-mute" title={fmtDateTime(e.ts)}>{ago(e.ts)}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+/** the folded state is remembered; kept here so the page does not touch localStorage itself */
+export function useWhatsNewOpen(): [boolean, () => void] {
+  const [open, setOpen] = useState(readOpen);
+  useEffect(() => saveOpen(open), [open]);
+  return [open, () => setOpen((v) => !v)];
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/capacity.ts" << '__COREGSM_EOF__'
+// Capacity helpers: how full a server is and how many free slots it has (pure, covered by tests).
+export type CapLevel = 'ok' | 'warm' | 'hot';
+export type SlotsKind = 'free' | 'almost' | 'full';
+
+export const capacityPct = (players: number, max: number) => (max > 0 ? Math.max(0, Math.min(100, Math.round((players / max) * 100))) : 0);
+
+/** the bar colour: the game accent, amber from 75 %, red from 90 % */
+export const capLevel = (pct: number): CapLevel => (pct >= 90 ? 'hot' : pct >= 75 ? 'warm' : 'ok');
+
+/**
+ * Free places: «Свободно 12 мест» (kind 'free'), «Почти полон» (90 % and more, kind 'almost'), «Мест нет» (kind 'full').
+ * null when the server did not report a limit.
+ */
+export function slotsInfo(players: number, max: number): { kind: SlotsKind; free: number } | null {
+  if (!(max > 0)) return null;
+  const free = Math.max(0, max - Math.max(0, players));
+  if (free === 0) return { kind: 'full', free };
+  return { kind: capacityPct(players, max) >= 90 ? 'almost' : 'free', free };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/overviewLogic.ts" << '__COREGSM_EOF__'
+// Pure logic of the main page: the hero pick, the state of the pulse strip. Covered by tests.
+import type { Server } from '../../api';
+import { LAG_PING } from '../../ui';
+
+export type HeroReason = 'attention' | 'maintenance' | 'fav' | 'busiest' | null;
+
+/** a server that needs a look: not answering (after a first answer) or slow, outside a maintenance window */
+export const needsAttention = (s: Server): boolean => !s.maintenance && s.hasStatus && (!s.online || (s.ping != null && s.ping > LAG_PING));
+
+export function pickHero(servers: Server[], favs: number[]): { server: Server; reason: HeroReason } | null {
+  if (servers.length === 0) return null;
+  const withReason = (server: Server, reason: HeroReason) => ({ server, reason: server.maintenance && reason !== 'attention' ? ('maintenance' as const) : reason });
+  // offline first, then laggy ones
+  const bad = servers.filter(needsAttention).sort((a, b) => Number(a.online) - Number(b.online) || b.players - a.players || a.id - b.id);
+  if (bad[0]) return { server: bad[0], reason: 'attention' };
+  const fav = servers.filter((s) => favs.includes(s.id)).sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players || a.id - b.id);
+  if (fav[0]) return withReason(fav[0], 'fav');
+  const busiest = servers.filter((s) => s.online).sort((a, b) => b.players - a.players || a.id - b.id);
+  if (busiest[0]) return withReason(busiest[0], 'busiest');
+  return withReason(servers[0], null);
+}
+
+export type PulseState = 'ok' | 'warn' | 'bad' | 'maint' | 'wait';
+
+export function pulseOf(servers: Server[]): { state: PulseState; problems: Server[] } {
+  const problems = servers.filter(needsAttention);
+  if (problems.some((s) => !s.online)) return { state: 'bad', problems };
+  if (problems.length) return { state: 'warn', problems };
+  if (servers.some((s) => s.maintenance)) return { state: 'maint', problems };
+  if (servers.length > 0 && servers.every((s) => !s.hasStatus)) return { state: 'wait', problems };
+  return { state: 'ok', problems };
+}
+
+export interface OverviewData {
+  hours: number;
+  bucketMs: number;
+  points: { ts: number; players: number; online: number }[];
+  peak: { ts: number; players: number } | null;
+  totals: { players: number; servers: number; online: number };
+  maintenance: { id: number; serverId: number | null; serverName: string | null; name: string; startTs: number; endTs: number; active: boolean }[];
+}
+
+export interface RecentEvent {
+  ts: number;
+  serverId: number | null;
+  serverName: string | null;
+  type: 'up' | 'down' | 'peak' | 'maintenance';
+  players?: number;
+  name?: string;
+}
+
+/** x/y positions (0..1, y up = more players) of the chart points for a window ending at `end` */
+export function chartPoints(points: { ts: number; players: number }[], start: number, end: number): { x: number; y: number }[] {
+  const max = Math.max(1, ...points.map((p) => p.players));
+  const span = Math.max(1, end - start);
+  return points.map((p) => ({ x: Math.max(0, Math.min(1, (p.ts - start) / span)), y: p.players / max }));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/serverUi.tsx" << '__COREGSM_EOF__'
 // Pieces of the servers page: reactions to changes, capacity bar, empty states, skeletons.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Server } from '../../api';
 import { StateView } from '../StateView';
+import { t, useI18n } from '../../i18n';
+import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -29215,27 +29881,43 @@ export function CountReact({ r, onDark = false, children }: { r: Reaction; onDar
   );
 }
 
-// ---------- capacity (item 5) ----------
-export const capacityPct = (players: number, max: number) => (max > 0 ? Math.max(0, Math.min(100, Math.round((players / max) * 100))) : 0);
+// ---------- capacity ----------
+export { capacityPct } from './capacity';
 
-export function CapacityBar({ players, max, color, onDark = false, big = false, showPct = true, className = '' }: { players: number; max: number; color: string; onDark?: boolean; big?: boolean; showPct?: boolean; className?: string }) {
-  const pct = capacityPct(players, max);
-  const hot = pct >= 90;
+/** «Свободно 12 мест» / «Почти полон» / «Мест нет» */
+export function SlotsText({ players, max, onDark = false, big = false, className = '' }: { players: number; max: number; onDark?: boolean; big?: boolean; className?: string }) {
+  useI18n();
+  const info = slotsInfo(players, max);
+  if (!info) return null;
+  const text = info.kind === 'full' ? t('srv.slots.full') : info.kind === 'almost' ? t('srv.slots.almost') : t('srv.slots.free', { n: info.free });
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      <div
-        className={`srv-cap ${onDark ? 'on-dark' : ''} ${hot ? 'hot' : ''} ${big ? 'big' : ''}`}
-        style={{ ['--cap' as string]: color }}
-        role="meter"
-        aria-label="Заполненность сервера"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct}
-        title={hot ? `Почти полный: ${pct}%` : `${pct}% мест занято`}
-      >
-        <i style={{ width: `${pct}%` }} />
+    <span className={`srv-slots ${info.kind} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''} ${className}`} title={info.kind === 'almost' ? t('srv.slots.freeOf', { n: info.free }) : undefined}>
+      {text}
+    </span>
+  );
+}
+
+export function CapacityBar({ players, max, color, onDark = false, big = false, showPct = true, slots = true, className = '' }: { players: number; max: number; color: string; onDark?: boolean; big?: boolean; showPct?: boolean; slots?: boolean; className?: string }) {
+  const pct = capacityPct(players, max);
+  const level = capLevel(pct);
+  return (
+    <div className={`flex flex-col gap-1 ${className}`}>
+      <div className="flex items-center gap-2">
+        <div
+          className={`srv-cap ${onDark ? 'on-dark' : ''} ${level} ${big ? 'big' : ''}`}
+          style={{ ['--cap' as string]: color }}
+          role="meter"
+          aria-label={t('srv.cap.label')}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          title={level === 'hot' ? t('srv.cap.nearFull', { pct }) : t('srv.cap.taken', { pct })}
+        >
+          <i style={{ width: `${pct}%` }} />
+        </div>
+        {showPct && <span className={`srv-pct ${level} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''}`}>{pct}%</span>}
       </div>
-      {showPct && <span className={`srv-pct ${hot ? 'hot' : ''} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''}`}>{pct}%</span>}
+      {slots && <SlotsText players={players} max={max} onDark={onDark} big={big} />}
     </div>
   );
 }
@@ -29297,11 +29979,12 @@ function SkeletonHero() {
   );
 }
 
-function SkeletonStat() {
+function SkeletonPulse() {
   return (
-    <div className="tile flex min-h-[128px] flex-col gap-2 p-4 lg:col-span-3">
-      <div className="flex items-start justify-between"><Bar w="50%" /><div className="skeleton h-8 w-8 rounded-xl" /></div>
-      <div className="mt-auto space-y-2"><Bar w={80} h={28} className="!rounded-xl" /><Bar w="60%" /><Bar w="100%" h={6} /></div>
+    <div className="tile col-span-2 flex min-h-[112px] flex-wrap items-center gap-4 p-4 lg:col-span-12">
+      <div className="skeleton h-11 w-11 shrink-0 rounded-2xl" />
+      <div className="min-w-[160px] flex-1 space-y-2"><Bar w="55%" h={18} /><Bar w="35%" /></div>
+      <div className="skeleton h-14 min-w-[180px] flex-1 rounded-2xl" />
     </div>
   );
 }
@@ -29321,9 +30004,9 @@ function SkeletonSmall() {
 export function TilesSkeleton() {
   return (
     <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
+      <SkeletonPulse />
       <SkeletonHero />
-      {[0, 1, 2, 3].map((i) => <SkeletonStat key={i} />)}
-      {[0, 1, 2].map((i) => <SkeletonSmall key={i} />)}
+      {[0, 1, 2, 3].map((i) => <SkeletonSmall key={i} />)}
     </div>
   );
 }
@@ -31920,6 +32603,54 @@ const en: Record<keyof typeof ru, string> = {
   'sf.field.mode': 'mode',
   'sf.field.version': 'version',
   'sf.field.players': 'players',
+  // ---- servers page: pulse strip, hero, capacity, what's new ----
+  'srv.slots.free': '{n} slot free|{n} slots free',
+  'srv.slots.freeOf': 'Free slots: {n}',
+  'srv.slots.full': 'Full',
+  'srv.slots.almost': 'Almost full',
+  'srv.cap.label': 'Server load',
+  'srv.cap.nearFull': 'Almost full: {pct}%',
+  'srv.cap.taken': '{pct}% of slots taken',
+  'srv.unit.ms': 'ms',
+  'srv.pulse.label': 'Servers at a glance',
+  'srv.pulse.ok': 'All systems running',
+  'srv.pulse.okSub': '{n} server online|{n} servers online',
+  'srv.pulse.problems': 'Problems: {name}',
+  'srv.pulse.more': 'and {n} more',
+  'srv.pulse.slow': 'High ping',
+  'srv.pulse.noAnswer': 'Not responding',
+  'srv.pulse.maint': 'Maintenance in progress',
+  'srv.pulse.maintN': '{n} server in maintenance|{n} servers in maintenance',
+  'srv.pulse.wait': 'Waiting for the first data',
+  'srv.pulse.players': 'Players now',
+  'srv.pulse.servers': 'Servers online',
+  'srv.pulse.ping': 'Average ping',
+  'srv.pulse.uptime': '30-day uptime',
+  'srv.pulse.noChart': 'The chart appears once history is collected',
+  'srv.pulse.chart': 'Total players on all servers over the last day',
+  'srv.pulse.hours': 'Last {n} h',
+  'srv.pulse.peak': 'Peak {n} at {time}',
+  'srv.pulse.noPeak': 'No peak yet',
+  'srv.hero.attention': 'Needs attention',
+  'srv.hero.maintenance': 'Maintenance in progress',
+  'srv.hero.fav': 'Favourite',
+  'srv.hero.busiest': 'Busiest',
+  'srv.new.title': "What's new",
+  'srv.new.news': 'News',
+  'srv.new.untitled': 'Untitled',
+  'srv.new.noNews': 'No news yet',
+  'srv.new.maint': 'Maintenance',
+  'srv.new.noMaint': 'No planned maintenance',
+  'srv.new.until': 'in progress, until {time}',
+  'srv.new.from': '{from} – {to}',
+  'srv.new.events': 'Events',
+  'srv.new.evFail': "Couldn't load events",
+  'srv.new.noEvents': 'No events yet',
+  'srv.new.allServers': 'All servers',
+  'srv.new.ev.up': '{name} is back online',
+  'srv.new.ev.down': '{name} went offline',
+  'srv.new.ev.peak': '{name}: peak of {n} players',
+  'srv.new.ev.maint': 'Maintenance: {name}',
 };
 
 export default en;
@@ -32346,6 +33077,54 @@ const ru = {
   'sf.field.mode': 'режим',
   'sf.field.version': 'версия',
   'sf.field.players': 'игроки',
+  // ---- servers page: pulse strip, hero, capacity, what's new ----
+  'srv.slots.free': 'Свободно {n} место|Свободно {n} места|Свободно {n} мест',
+  'srv.slots.freeOf': 'Свободно мест: {n}',
+  'srv.slots.full': 'Мест нет',
+  'srv.slots.almost': 'Почти полон',
+  'srv.cap.label': 'Заполненность сервера',
+  'srv.cap.nearFull': 'Почти полный: {pct}%',
+  'srv.cap.taken': '{pct}% мест занято',
+  'srv.unit.ms': 'мс',
+  'srv.pulse.label': 'Сводка по серверам',
+  'srv.pulse.ok': 'Всё работает',
+  'srv.pulse.okSub': '{n} сервер онлайн|{n} сервера онлайн|{n} серверов онлайн',
+  'srv.pulse.problems': 'Есть проблемы: {name}',
+  'srv.pulse.more': 'и ещё {n}',
+  'srv.pulse.slow': 'Высокий пинг',
+  'srv.pulse.noAnswer': 'Сервер не отвечает',
+  'srv.pulse.maint': 'Идёт обслуживание',
+  'srv.pulse.maintN': '{n} сервер на обслуживании|{n} сервера на обслуживании|{n} серверов на обслуживании',
+  'srv.pulse.wait': 'Ждём первые данные',
+  'srv.pulse.players': 'Игроков сейчас',
+  'srv.pulse.servers': 'Серверов онлайн',
+  'srv.pulse.ping': 'Средний пинг',
+  'srv.pulse.uptime': 'Аптайм 30 дн',
+  'srv.pulse.noChart': 'График появится, когда накопится история',
+  'srv.pulse.chart': 'Игроков на всех серверах за сутки',
+  'srv.pulse.hours': 'За {n} ч',
+  'srv.pulse.peak': 'Пик {n} в {time}',
+  'srv.pulse.noPeak': 'Пика пока нет',
+  'srv.hero.attention': 'Нужно внимание',
+  'srv.hero.maintenance': 'Сейчас идёт обслуживание',
+  'srv.hero.fav': 'Избранный',
+  'srv.hero.busiest': 'Самый загруженный',
+  'srv.new.title': 'Что нового',
+  'srv.new.news': 'Новости',
+  'srv.new.untitled': 'Без заголовка',
+  'srv.new.noNews': 'Новостей пока нет',
+  'srv.new.maint': 'Обслуживание',
+  'srv.new.noMaint': 'Работ не запланировано',
+  'srv.new.until': 'идёт, до {time}',
+  'srv.new.from': '{from} – {to}',
+  'srv.new.events': 'События',
+  'srv.new.evFail': 'Не удалось загрузить события',
+  'srv.new.noEvents': 'Событий пока нет',
+  'srv.new.allServers': 'Все серверы',
+  'srv.new.ev.up': '{name} снова онлайн',
+  'srv.new.ev.down': '{name} недоступен',
+  'srv.new.ev.peak': '{name}: пик {n} игроков',
+  'srv.new.ev.maint': 'Обслуживание: {name}',
 };
 
 export default ru;
@@ -37293,15 +38072,20 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from 'react';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
-import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
+import { ServersList, ServersTv, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import { PulseStrip } from '../components/servers/PulseStrip';
+import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
+import { BulkBar } from '../components/servers/BulkBar';
+import { pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
@@ -37419,27 +38203,27 @@ function ServerList() {
     5 * 60_000,
   );
 
+  // total players over the last 24 h (the pulse strip) and planned maintenance (the news block)
+  const [overview, setOverview] = useState<OverviewData | null>(null);
+  const [overviewAt, setOverviewAt] = useState(0);
+  usePoll(
+    () => api<OverviewData>('/overview?hours=24').then((o) => { setOverview(o); setOverviewAt(Date.now()); }).catch(() => undefined),
+    60_000,
+  );
+  const [wnOpen, toggleWn] = useWhatsNewOpen();
+
   const sorted = useMemo(
     () => [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)) || Number(b.online) - Number(a.online)),
     [servers, favs],
   );
   const online = servers.filter((s) => s.online);
-  const players = online.reduce((n, s) => n + s.players, 0);
-  const slots = online.reduce((n, s) => n + s.maxPlayers, 0);
-  const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
-  const avg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
   const upVals = servers.map((s) => uptime.get(s.id)).filter((v): v is number => v != null);
   const upAvg = upVals.length ? upVals.reduce((a, b) => a + b, 0) / upVals.length : null;
-  const upLow = upVals.filter((v) => v < 99).length;
 
-  // the hero: the first favourite (online ones first), otherwise the busiest online server
-  const hero = useMemo(() => {
-    if (sorted.length === 0) return null;
-    const fav = sorted.find((s) => favs.includes(s.id));
-    if (fav) return fav;
-    const busiest = [...online].sort((a, b) => b.players - a.players)[0];
-    return busiest ?? sorted[0];
-  }, [sorted, favs, online]);
+  // the hero by meaning: a server that needs attention, else the busiest favourite, else the busiest server
+  const picked = useMemo(() => pickHero(sorted, me ? favs : []), [sorted, favs, me]);
+  const hero = picked?.server ?? null;
+  const heroReason: HeroReason = picked?.reason ?? null;
   const rest = sorted.filter((s) => s.id !== hero?.id);
   const offlineCount = servers.filter((s) => !s.online).length;
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -37451,28 +38235,37 @@ function ServerList() {
   const visible = effFilter === 'all' ? sorted : filtered;
   const resetFilter = () => setFilter('all');
 
+  // ---- bulk selection (administrators; not in the TV mode) ----
+  const [selecting, setSelecting] = useState(false);
+  const [sel, setSel] = useState<number[]>([]);
+  const canSelect = isAdmin && effView !== 'tv' && servers.length > 0;
+  const selOn = canSelect && selecting;
+  const selectedServers = servers.filter((s) => sel.includes(s.id));
+  const exitSelect = () => { setSelecting(false); setSel([]); };
+  useEffect(() => {
+    if (!selOn) return;
+    const onKey = (e: KeyboardEvent) => {
+      // a dialog on top closes itself first
+      if (e.key === 'Escape' && !document.querySelector('[role="dialog"]')) exitSelect();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selOn]);
+  const select: SelectProps | undefined = selOn
+    ? { on: true, has: (id) => sel.includes(id), toggle: (id) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id])) }
+    : undefined;
+
   const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
-  const stats: { k: string; v: ReactNode; s: string; i: string; r?: number }[] = [
-    { i: 'M3 6h18M3 12h18M3 18h18', k: plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), v: <AnimatedNumber value={servers.length} />, s: `${online.length} онлайн`, r: servers.length ? online.length / servers.length : 0 },
-    { i: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8', k: 'Игроков сейчас', v: <AnimatedNumber value={players} pulse />, s: slots > 0 ? `из ${slots} мест` : 'нет серверов онлайн', r: slots > 0 ? players / slots : 0 },
-    {
-      i: 'M22 12h-4l-3 9L9 3l-3 9H2',
-      k: 'Средний пинг',
-      v: avg == null ? '–' : <><AnimatedNumber value={avg} /><small> мс</small></>,
-      s: avg == null ? 'нет данных' : avg > LAG_PING ? 'высокий' : 'в норме',
-      r: avg == null ? 0 : Math.min(1, avg / 200),
-    },
-  ];
-  if (upAvg != null) {
-    stats.push({
-      i: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
-      k: 'Аптайм 30 дн',
-      v: <>{(Math.round(upAvg * 10) / 10).toLocaleString('ru-RU')}<small>%</small></>,
-      s: upLow === 0 ? 'без сбоев' : `${upLow} ${plural(upLow, ['сервер', 'сервера', 'серверов'])} ниже 99%`,
-      r: upAvg / 100,
-    });
-  }
+  const tileProps = (s: Server, idx: number) => ({
+    rx,
+    s,
+    idx,
+    fav: me ? favs.includes(s.id) : null,
+    onFav: () => void toggleFav(s.id),
+    onOpen: () => open(s),
+    select,
+  });
 
   return (
     <div className="space-y-5">
@@ -37484,6 +38277,10 @@ function ServerList() {
         <LiveBadge at={updatedAt} />
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
+
+      {loaded && servers.length > 0 && effView !== 'tv' && (
+        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
+      )}
 
       {servers.length > 0 && (
         <div className="srv-bar">
@@ -37499,10 +38296,17 @@ function ServerList() {
               ))}
             </nav>
           ) : <span />}
-          <div className="seg" role="group" aria-label="Вид списка">
-            {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
-              <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {canSelect && (
+              <button type="button" className={`btn btn-soft ${selOn ? 'srv-sel-on' : ''}`} aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
+                {selOn ? 'Отменить выбор' : 'Выбрать'}
+              </button>
+            )}
+            <div className="seg" role="group" aria-label="Вид списка">
+              {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -37512,88 +38316,113 @@ function ServerList() {
 
       {loaded && !error && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
 
-      {servers.length > 0 && visible.length === 0 && (
-        effFilter === 'fav' && favCount === 0
-          ? <NoFavsState onReset={resetFilter} />
-          : <NoMatchState what={effFilter === 'offline' ? 'offline' : 'online'} onReset={resetFilter} />
-      )}
-
-      {servers.length > 0 && visible.length > 0 && effView === 'list' && (
-        <ServersList
-          servers={visible}
-          uptime={uptime}
-          rx={rx}
-          favOf={(id) => (me ? favs.includes(id) : null)}
-          onOpen={open}
-          renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
-        />
-      )}
-
-      {servers.length > 0 && visible.length > 0 && effView === 'tv' && (
+      {servers.length > 0 && effView === 'tv' && visible.length > 0 && (
         <ServersTv servers={visible} uptime={uptime} rx={rx} updatedAt={updatedAt} onExit={() => setView('tiles')} />
       )}
 
-      {servers.length > 0 && effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
-        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {filtered.map((s, i) => (
-            <SmallTile key={s.id} rx={rx} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
-          ))}
+      {servers.length > 0 && effView !== 'tv' && (
+        <div className="srv-split" data-open={wnOpen}>
+          <div className="min-w-0 space-y-5">
+            {visible.length === 0 && (
+              effFilter === 'fav' && favCount === 0
+                ? <NoFavsState onReset={resetFilter} />
+                : <NoMatchState what={effFilter === 'offline' ? 'offline' : 'online'} onReset={resetFilter} />
+            )}
+
+            {visible.length > 0 && effView === 'list' && (
+              <ServersList
+                servers={visible}
+                uptime={uptime}
+                rx={rx}
+                favOf={(id) => (me ? favs.includes(id) : null)}
+                onOpen={open}
+                select={select}
+                renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
+              />
+            )}
+
+            {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
+              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+                {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
+              </div>
+            )}
+
+            {effView === 'tiles' && effFilter === 'all' && (
+              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} uptime={uptime.get(hero.id)} />}
+                {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
+              </div>
+            )}
+          </div>
+          <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />
         </div>
       )}
 
-      {servers.length > 0 && effView === 'tiles' && effFilter === 'all' && (
-        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {hero && <HeroTile key={hero.id} rx={rx} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
-
-          {stats.map((t, i) => (
-            <div
-              key={t.k}
-              style={stagger(i + 1)}
-              className={`tile tile-in flex flex-col gap-1 p-4 sm:p-[18px] ${stats.length === 3 && i === 2 ? 'col-span-2 lg:col-span-6' : 'col-span-1 lg:col-span-3'}`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="stat-k">{t.k}</div>
-                <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-soft text-link">
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={t.i} /></svg>
-                </span>
-              </div>
-              <div className="mt-auto">
-                <div className="stat-v">{t.v}</div>
-                <div className="stat-s mt-0.5">{t.s}</div>
-                {t.r != null && <div className="meter mt-2.5" aria-hidden><i style={{ width: `${Math.round(Math.max(0, Math.min(1, t.r)) * 100)}%` }} /></div>}
-              </div>
-            </div>
-          ))}
-
-          {rest.map((s, i) => (
-            <SmallTile key={s.id} rx={rx} s={s} idx={i + 1 + stats.length} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
-          ))}
-        </div>
+      {selOn && (
+        <BulkBar
+          selected={selectedServers}
+          visible={visible}
+          favs={favs}
+          onSelectAll={() => setSel(visible.map((s) => s.id))}
+          onClear={() => setSel([])}
+          onExit={exitSelect}
+          onReload={() => void load()}
+          onFavs={setFavs}
+        />
       )}
     </div>
   );
 }
 
-function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+/** the checkbox of the selection mode in a corner of a card */
+function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
+  return (
+    <input
+      type="checkbox"
+      className={`srv-check srv-check-card ${className}`}
+      checked={select.has(s.id)}
+      onChange={() => select.toggle(s.id)}
+      onClick={(e) => e.stopPropagation()}
+      aria-label={`Выбрать: ${s.name}`}
+    />
+  );
+}
+
+/** in the selection mode a link toggles the card instead of leaving the page */
+const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElement>) => {
+  e.stopPropagation();
+  if (select?.on) {
+    e.preventDefault();
+    select.toggle(s.id);
+  }
+};
+
+function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
+  useI18n();
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const depth = useDepth<HTMLElement>();
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className="depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
-      style={{ ...stagger(idx), background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
-      onClick={onOpen}
+      className={`depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
+      style={{
+        ...stagger(idx),
+        background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
+        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? '0 0 0 3px rgb(var(--bad) / .85), ' : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
+      }}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
       {...depth}
     >
       <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
       <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
+      {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
 
       <div className="relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
-            <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{s.name}</a>
+            <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
             <span>{gameLabel(s.game)}</span>
@@ -37601,6 +38430,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s
             <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
           </div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
+          {reason && <span className={`hero-reason ${reason === 'attention' ? 'attn' : ''}`}>{t(`srv.hero.${reason}` as const)}</span>}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -37638,12 +38468,17 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const r = reactionOf(rx, s.id);
   return (
-    <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
+    <article
+      className={`tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3 ${select?.has(s.id) ? 'srv-selected' : ''}`}
+      style={stagger(idx)}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+    >
+      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
@@ -37654,7 +38489,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Serve
 
       <div className="px-1.5">
         <h3 className="line-clamp-2 break-words text-[14.5px] font-extrabold leading-tight" title={s.name}>
-          <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-link">{s.name}</a>
+          <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
@@ -39935,15 +40770,26 @@ __COREGSM_EOF__
 .srv-cap { flex: 1 1 auto; min-width: 0; height: 6px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
 .srv-cap.big { height: 14px; }
 .srv-cap > i { display: block; height: 100%; border-radius: 9999px; background: var(--cap, rgb(var(--brand))); transition: width .8s cubic-bezier(.2, .8, .2, 1), background-color .4s ease; }
-.srv-cap.hot > i { background: rgb(var(--warn)) repeating-linear-gradient(135deg, rgb(255 255 255 / .38) 0 4px, transparent 4px 8px); }
+.srv-cap.warm > i { background: rgb(var(--warn)); }
+.srv-cap.hot > i { background: rgb(var(--bad)) repeating-linear-gradient(135deg, rgb(255 255 255 / .38) 0 4px, transparent 4px 8px); }
 .srv-cap.on-dark { background: rgb(255 255 255 / .25); }
 .srv-cap.on-dark > i { background: #fff; }
-.srv-cap.on-dark.hot > i { background: #fbbf24 repeating-linear-gradient(135deg, rgb(255 255 255 / .45) 0 4px, transparent 4px 8px); }
+.srv-cap.on-dark.warm > i { background: #fbbf24; }
+.srv-cap.on-dark.hot > i { background: #f87171 repeating-linear-gradient(135deg, rgb(255 255 255 / .45) 0 4px, transparent 4px 8px); }
 .srv-pct { flex: none; min-width: 2.6em; text-align: right; font-size: 12px; font-weight: 800; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; transition: color .3s ease; }
-.srv-pct.hot { color: rgb(var(--warn)); }
+.srv-pct.warm { color: rgb(var(--warn)); }
+.srv-pct.hot { color: rgb(var(--bad)); }
 .srv-pct.on-dark { color: rgb(255 255 255 / .9); }
-.srv-pct.on-dark.hot { color: #fde68a; }
+.srv-pct.on-dark.warm { color: #fde68a; }
+.srv-pct.on-dark.hot { color: #fecaca; }
 .srv-pct.big { font-size: clamp(16px, 1.5vw, 26px); }
+.srv-slots { font-size: 12.5px; font-weight: 800; line-height: 1.2; color: rgb(var(--mute)); }
+.srv-slots.almost { color: rgb(var(--warn)); }
+.srv-slots.full { color: rgb(var(--bad)); }
+.srv-slots.on-dark { color: rgb(255 255 255 / .9); }
+.srv-slots.on-dark.almost { color: #fde68a; }
+.srv-slots.on-dark.full { color: #fecaca; }
+.srv-slots.big { font-size: clamp(14px, 1.2vw, 22px); }
 
 /* ---------- reactions to changes ---------- */
 .srv-num { position: relative; display: inline-block; border-radius: 10px; }
@@ -40077,6 +40923,111 @@ __COREGSM_EOF__
   .srv-cap > i { transition: none; }
   .srv-chip { opacity: 1; }
 }
+
+/* ---------- pulse strip ---------- */
+.pulse {
+  --pulse: var(--brand); --pulse-bg: var(--soft);
+  display: grid; align-items: center; gap: 14px 24px; padding: 14px 18px; border-radius: 22px;
+  grid-template-columns: minmax(180px, 1.25fr) auto minmax(200px, 1fr);
+  background: rgb(var(--pulse-bg) / .85); box-shadow: inset 0 0 0 1px rgb(var(--pulse) / .28);
+  transition: background-color .4s ease, box-shadow .4s ease;
+}
+.pulse-ok { --pulse: var(--ok); --pulse-bg: var(--okbg); }
+.pulse-warn, .pulse-maint { --pulse: var(--warn); --pulse-bg: var(--warnbg); }
+.pulse-bad { --pulse: var(--bad); --pulse-bg: var(--badbg); }
+.pulse-wait { --pulse: var(--mute); --pulse-bg: var(--soft); }
+.pulse-state { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pulse-icon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 16px; color: rgb(var(--pulse)); background: rgb(var(--card) / .7); }
+.pulse-title { font-size: 17px; font-weight: 800; line-height: 1.2; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.pulse-sub { margin-top: 2px; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); overflow-wrap: anywhere; }
+.pulse-nums { display: grid; grid-template-columns: repeat(4, auto); gap: 4px 22px; margin: 0; }
+.pulse-nums dt { font-size: 11.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
+.pulse-nums dd { margin: 2px 0 0; font-size: 22px; font-weight: 800; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pulse-nums dd small { font-size: .62em; font-weight: 700; color: rgb(var(--mute)); letter-spacing: 0; }
+.pulse-chart { margin: 0; min-width: 0; color: rgb(var(--pulse)); }
+.pulse-plot { position: relative; height: 56px; }
+.pulse-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.pulse-peak { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 9999px; background: rgb(var(--card)); box-shadow: 0 0 0 2.5px currentColor; pointer-events: none; }
+.pulse-chart figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.pulse-peak-text { color: rgb(var(--ink)); }
+.pulse-chart-empty { display: grid; place-items: center; min-height: 56px; padding: 0 8px; text-align: center; font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); }
+@media (max-width: 1023px) {
+  .pulse { grid-template-columns: minmax(0, 1fr) minmax(200px, 1fr); }
+  .pulse-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; }
+}
+@media (max-width: 560px) {
+  .pulse { grid-template-columns: minmax(0, 1fr); padding: 14px; }
+  .pulse-nums { grid-row: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .pulse-nums dd { font-size: 20px; }
+}
+
+/* ---------- hero: why this server ---------- */
+.hero-reason {
+  display: inline-flex; align-items: center; margin-top: 8px; padding: 3px 10px; border-radius: 9999px;
+  font-size: 12px; font-weight: 800; letter-spacing: .01em; color: #fff; background: rgb(255 255 255 / .22);
+}
+.hero-reason.attn { color: rgb(var(--bad)); background: #fff; }
+
+/* ---------- selection mode (administrators) ---------- */
+.srv-check {
+  appearance: none; -webkit-appearance: none; flex: none; width: 22px; height: 22px; margin: 0; border-radius: 7px; cursor: pointer;
+  border: 2px solid rgb(var(--mute) / .7); background: rgb(var(--card)); transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.srv-check:checked { border-color: rgb(var(--brand)); background: rgb(var(--brand)) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / 80% no-repeat; }
+.srv-check:focus, .srv-check:focus-visible { outline: 0 !important; }
+.srv-check:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
+.srv-check-card { position: absolute; z-index: 5; }
+.tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
+.srv-sel-on { box-shadow: inset 0 0 0 2px rgb(var(--brand) / .55); }
+.srv-c-status { display: flex; align-items: center; gap: 10px; }
+.srv-list.selecting .srv-row { grid-template-columns: 150px minmax(0, 2.2fr) minmax(0, 1.5fr) 72px 88px minmax(0, 1.3fr) 44px; }
+.srv-row.selected { background: rgb(var(--brand) / .09); }
+@media (max-width: 860px) {
+  .srv-list.selecting .srv-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
+
+.srv-bulk {
+  position: sticky; bottom: 14px; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px;
+  padding: 10px 14px; border-radius: 20px; background: rgb(var(--card)); border: 1px solid var(--tile-border); box-shadow: var(--shadow-soft), 0 10px 30px -10px rgb(0 0 0 / .35);
+}
+.srv-bulk-count { font-weight: 800; font-variant-numeric: tabular-nums; }
+.srv-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.srv-bulk-actions .btn { min-height: 40px; padding-top: 6px; padding-bottom: 6px; }
+@media (max-width: 767px) {
+  .srv-bulk { bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px)); }
+  .srv-bulk-actions { width: 100%; }
+  .srv-bulk-actions .btn { flex: 1 1 auto; }
+}
+
+/* ---------- «Что нового» ---------- */
+.srv-split { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 1280px) {
+  .srv-split[data-open='true'] { grid-template-columns: minmax(0, 1fr) 320px; }
+}
+.srv-new { padding: 6px; }
+.srv-new-head { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: 16px; font-size: 16px; text-align: left; transition: background-color .15s ease; }
+.srv-new-head:hover { background: rgb(var(--soft) / .7); }
+.srv-new-head:focus, .srv-new-head:focus-visible { outline: 0 !important; }
+.srv-new-head:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
+.srv-new-chev { display: grid; place-items: center; color: rgb(var(--mute)); transition: transform .2s ease; }
+.srv-new-chev.open { transform: rotate(180deg); }
+.srv-new-body { display: flex; flex-direction: column; gap: 14px; padding: 4px 10px 12px; }
+.srv-new-h { margin: 0 0 6px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
+.srv-new-news { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 16px; background: rgb(var(--soft) / .7); transition: background-color .15s ease; }
+.srv-new-news:hover { background: rgb(var(--soft)); }
+.srv-new-news-title { font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.srv-new-news-text { font-size: 13.5px; font-weight: 600; color: rgb(var(--mute)); overflow-wrap: anywhere; }
+.srv-new-date { font-size: 12.5px; font-weight: 800; color: rgb(var(--mute)); }
+.srv-new-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.srv-new-list li { display: flex; align-items: flex-start; gap: 10px; padding: 6px 4px; border-radius: 12px; }
+.srv-new-dot { flex: none; width: 9px; height: 9px; margin-top: 7px; border-radius: 9999px; }
+.srv-new-ev { display: block; min-width: 0; flex: 1; }
+.srv-new-ev:hover span:first-child { color: rgb(var(--link)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .srv-new-chev, .srv-check, .pulse { transition: none; }
+}
+html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check, html[data-motion='reduce'] .pulse { transition: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'

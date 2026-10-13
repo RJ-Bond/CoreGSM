@@ -75,18 +75,38 @@ interface RowProps {
   onOpen: () => void;
   rx: Reactions;
   favButton: React.ReactNode;
+  /** selection mode of the bulk actions: the row gets a checkbox and a click toggles it */
+  select?: SelectProps;
 }
 
-function ListRow({ s, uptime, onOpen, rx, favButton }: RowProps) {
+/** selection mode (administrators): `has` tells whether a server is selected */
+export interface SelectProps {
+  on: boolean;
+  has: (id: number) => boolean;
+  toggle: (id: number) => void;
+}
+
+function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
   const r = reactionOf(rx, s.id);
   const lag = isLag(s);
   return (
     <div
-     
-      className={`srv-row ${s.online ? '' : 'off'}`}
-      onClick={onOpen}
+      className={`srv-row ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
-      <div className="srv-c-status"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash></div>
+      <div className="srv-c-status">
+        {select?.on && (
+          <input
+            type="checkbox"
+            className="srv-check"
+            checked={select.has(s.id)}
+            onChange={() => select.toggle(s.id)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Выбрать: ${s.name}`}
+          />
+        )}
+        <StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
+      </div>
       <div className="srv-c-name">
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
@@ -116,7 +136,8 @@ function ListRow({ s, uptime, onOpen, rx, favButton }: RowProps) {
   );
 }
 
-export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav }: {
+export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select }: {
+  select?: SelectProps;
   servers: Server[];
   uptime: Map<number, number>;
   rx: Reactions;
@@ -125,7 +146,7 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav }: {
   renderFav: (s: Server, on: boolean) => React.ReactNode;
 }) {
   return (
-    <div className="panel srv-list fade-in" aria-label="Серверы">
+    <div className={`panel srv-list fade-in ${select?.on ? "selecting" : ""}`} aria-label="Серверы">
       <div className="srv-row srv-head">
         <div className="srv-c-status">Статус</div>
         <div className="srv-c-name">Сервер</div>
@@ -147,6 +168,7 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav }: {
             onOpen={() => onOpen(s)}
             rx={rx}
             favButton={fav != null ? renderFav(s, fav) : null}
+            select={select}
           />
         );
       })}
