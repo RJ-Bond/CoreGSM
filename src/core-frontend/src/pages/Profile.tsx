@@ -55,6 +55,7 @@ export default function ProfilePage() {
           <button className="btn btn-soft" onClick={logout}>Выйти</button>
         </div>
 
+        <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
         <DiscordCard onChanged={reload} />
         <SessionsCard />
@@ -170,24 +171,29 @@ function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) {
 function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChanged: () => Promise<void> }) {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [againErr, setAgainErr] = useState('');
   const [curErr, setCurErr] = useState('');
   const [nextErr, setNextErr] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const curRef = useRef<HTMLInputElement>(null);
   const nextRef = useRef<HTMLInputElement>(null);
+  const againRef = useRef<HTMLInputElement>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    setCurErr(''); setNextErr(''); setError('');
+    setCurErr(''); setNextErr(''); setAgainErr(''); setError('');
     if (hasPassword && !current) { setCurErr('Введите текущий пароль'); curRef.current?.focus(); return; }
     if (next.length < 8) { setNextErr('Пароль должен быть не короче 8 символов'); nextRef.current?.focus(); return; }
+    if (again !== next) { setAgainErr('Пароли не совпадают'); againRef.current?.focus(); return; }
     setBusy(true);
     try {
-      await api('/auth/password', 'POST', hasPassword ? { current, next } : { next });
+      await api('/auth/password', 'POST', hasPassword ? { current, next, confirm: again } : { next, confirm: again });
       toast(hasPassword ? 'Пароль изменён' : 'Пароль задан');
       setCurrent('');
       setNext('');
+      setAgain('');
       await onChanged();
     } catch (err) {
       setError((err as Error).message);
@@ -206,8 +212,60 @@ function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChan
       <PasswordField id="pf-next" ref={nextRef} label="Новый пароль (от 8 символов)" value={next} onChange={setNext} autoComplete="new-password" error={nextErr}>
         <PasswordStrength password={next} />
       </PasswordField>
+      <PasswordField id="pf-again" ref={againRef} label="Повторите новый пароль" value={again} onChange={(v) => { setAgain(v); setAgainErr(''); }} autoComplete="new-password" error={againErr} />
+      {again && next && again === next && !againErr && <p className="-mt-1 text-sm font-bold text-ok">Пароли совпадают</p>}
       <ErrorLine text={error} />
       <Button loading={busy}>{hasPassword ? 'Сохранить пароль' : 'Задать пароль'}</Button>
+    </form>
+  );
+}
+
+/** Account e-mail: a recovery and notification address. Changing it asks for the current password. */
+function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
+  const { me } = useAuth();
+  const [email, setEmail] = useState(me?.email ?? '');
+  const [current, setCurrent] = useState('');
+  const [error, setError] = useState('');
+  const [fieldErr, setFieldErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setEmail(me?.email ?? ''); }, [me?.email]);
+  if (!me) return null;
+  const saved = me.email ?? '';
+  const dirty = email.trim().toLowerCase() !== saved.toLowerCase();
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(''); setFieldErr('');
+    const v = email.trim();
+    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) { setFieldErr('Похоже на неверный адрес, например name@example.com'); return; }
+    if (me.hasPassword && !current) { setError('Введите текущий пароль, чтобы изменить почту'); return; }
+    setBusy(true);
+    try {
+      await api('/me/email', 'PUT', { email: v, current: me.hasPassword ? current : undefined });
+      toast(v ? 'Почта сохранена' : 'Почта удалена');
+      setCurrent('');
+      await onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} noValidate className="panel space-y-3.5 p-6">
+      <h2 className="text-lg font-black">Электронная почта</h2>
+      <p className="font-semibold text-mute">Нужна для восстановления доступа и уведомлений. Никому не показывается.</p>
+      <div>
+        <label htmlFor="pf-email" className="label">Адрес</label>
+        <input id="pf-email" className="input" type="email" inputMode="email" autoComplete="email" value={email} onChange={(e) => { setEmail(e.target.value); setFieldErr(''); }} placeholder="name@example.com" aria-invalid={fieldErr ? true : undefined} />
+        <FieldError id="pf-email-err" text={fieldErr} />
+      </div>
+      {dirty && me.hasPassword && (
+        <PasswordField id="pf-email-pass" label="Текущий пароль (для подтверждения)" value={current} onChange={setCurrent} autoComplete="current-password" />
+      )}
+      <ErrorLine text={error} />
+      <Button loading={busy} disabled={!dirty}>{email.trim() ? 'Сохранить почту' : 'Удалить почту'}</Button>
     </form>
   );
 }

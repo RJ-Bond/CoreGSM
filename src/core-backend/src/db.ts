@@ -140,6 +140,7 @@ for (const ddl of [
   'ALTER TABLE users ADD COLUMN discord_name TEXT',
   'ALTER TABLE users ADD COLUMN discord_avatar TEXT',
   'ALTER TABLE users ADD COLUMN no_password INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN email TEXT',
 ]) {
   try {
     db.exec(ddl);
