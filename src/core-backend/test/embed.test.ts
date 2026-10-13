@@ -47,7 +47,7 @@ describe('discord embed', () => {
 
   it('links the players that do not fit to the panel', () => {
     const list = e.fields!.find((x) => /Сейчас в игре/.test(x.name))!;
-    assert.match(list.value, /и ещё 10/);
+    assert.match(list.value, /и ещё 23/);
     assert.match(list.value, /\(https:\/\/panel\.example\.ru\/#\/servers\/7\/players\)/);
   });
 
@@ -70,6 +70,19 @@ describe('discord embed', () => {
     assert.match(e.author!.name, /Мониторинг игровых серверов/);
     assert.match(e.footer!.text, /^CoreGSM · vabcdef1$/);
     assert.equal(e.timestamp, '2026-10-12T14:00:00.000Z');
+  });
+
+
+  it('lists 5 names by default and as many as the setting says; 0 leaves only the counter', () => {
+    const names = (x: ReturnType<typeof buildEmbed>) => x.fields!.find((f) => /Сейчас в игре/.test(f.name))!.value;
+    const def = buildEmbed(server(), 100, 60, { baseUrl: 'https://p.example.ru', serverId: 3 });
+    assert.match(names(def), /и ещё 23/);
+    assert.equal(names(def).split('\n')[0]!.split(' · ').length, 3);
+    const ten = buildEmbed(server(), 100, 60, { playersShown: 10, baseUrl: 'https://p.example.ru', serverId: 3 });
+    assert.match(names(ten), /и ещё 18/);
+    const zero = buildEmbed(server(), 100, 60, { playersShown: 0, baseUrl: 'https://p.example.ru', serverId: 3 });
+    assert.doesNotMatch(names(zero), /Player0/);
+    assert.match(names(zero), /и ещё 28/);
   });
 
   it('shows an offline server in red with the last-seen note', () => {

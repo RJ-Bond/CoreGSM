@@ -10,7 +10,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
 patchGatewayAgent(() => gatewayAgent);
-const { AttachmentBuilder, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
+const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
 
 interface Binding {
@@ -313,7 +313,17 @@ async function buildPayload(b: Binding) {
       if (f && f.length > 6) raws[i].fields = f.slice(0, 6);
     }
   }
-  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components: [] };
+  // link buttons (no interactions to handle): «Все игроки» opens the players tab of the server in the panel;
+  // one button per server for up to 5 servers, the label is the server name when there are several
+  const buttons: InstanceType<typeof ButtonBuilder>[] = [];
+  for (const r of raws.slice(0, 5)) {
+    const url = (r as { url?: string }).url;
+    if (!url || !/^https?:\/\//.test(url)) continue;
+    const label = multi ? `👥 ${String(r.title ?? 'Сервер').slice(0, 70)}` : '👥 Все игроки на сайте';
+    buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(label).setURL(`${url.replace(/\/$/, '')}/players`));
+  }
+  const components = buttons.length ? [new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(buttons)] : [];
+  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components };
 }
 
 async function update(c: DiscordClient, b: Binding): Promise<void> {
