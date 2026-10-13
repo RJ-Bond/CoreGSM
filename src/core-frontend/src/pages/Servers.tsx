@@ -7,7 +7,7 @@ import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
-import { ServersList, ServersTv, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -119,7 +119,7 @@ function ServerList() {
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   // the TV mode refreshes twice as often
-  usePoll(load, view === 'tv' ? 5_000 : 10_000);
+  usePoll(load, 10_000);
   const rx = useServerReactions(servers, loaded);
   // 30-day availability comes from the public status endpoint; the tile is simply hidden when it has no data
   usePoll(
@@ -164,7 +164,7 @@ function ServerList() {
   // ---- bulk selection (administrators; not in the TV mode) ----
   const [selecting, setSelecting] = useState(false);
   const [sel, setSel] = useState<number[]>([]);
-  const canSelect = isAdmin && effView !== 'tv' && servers.length > 0;
+  const canSelect = isAdmin && servers.length > 0;
   const selOn = canSelect && selecting;
   const selectedServers = servers.filter((s) => sel.includes(s.id));
   const exitSelect = () => { setSelecting(false); setSel([]); };
@@ -204,7 +204,7 @@ function ServerList() {
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
-      {loaded && servers.length > 0 && effView !== 'tv' && (
+      {loaded && servers.length > 0 && (
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
       )}
 
@@ -229,8 +229,8 @@ function ServerList() {
               </button>
             )}
             <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
+              {([['tiles', 'Плитки'], ['list', 'Список']] as [ServersView, string][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
               ))}
             </div>
           </div>
@@ -242,11 +242,7 @@ function ServerList() {
 
       {loaded && !error && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
 
-      {servers.length > 0 && effView === 'tv' && visible.length > 0 && (
-        <ServersTv servers={visible} uptime={uptime} rx={rx} updatedAt={updatedAt} onExit={() => setView('tiles')} />
-      )}
-
-      {servers.length > 0 && effView !== 'tv' && (
+      {servers.length > 0 && (
         <div className="srv-split" data-open={wnOpen}>
           <div className="min-w-0 space-y-5">
             {visible.length === 0 && (

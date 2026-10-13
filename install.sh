@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9a74ebeb9f07"
+COREGSM_BUILD="1b97cba00fe6"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -29291,13 +29291,13 @@ import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../.
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
-export type ServersView = 'tiles' | 'list' | 'tv';
+export type ServersView = 'tiles' | 'list';
 export const VIEW_KEY = 'coregsm_servers_view';
 
 export function readView(): ServersView {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    return v === 'list' || v === 'tv' ? v : 'tiles';
+    return v === 'list' ? v : 'tiles';
   } catch {
     return 'tiles';
   }
@@ -29461,123 +29461,6 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, sel
 }
 
 // ---------- TV ----------
-function useNow(ms: number): Date {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(new Date()), ms);
-    return () => window.clearInterval(t);
-  }, [ms]);
-  return now;
-}
-
-function TvCard({ s, uptime, rx }: { s: Server; uptime?: number; rx: Reactions }) {
-  const r = reactionOf(rx, s.id);
-  const lag = isLag(s);
-  const color = gameColor(s.game);
-  return (
-    <article className={`srv-tv-card ${s.online ? '' : 'off'}`} style={{ ['--accent' as string]: color }}>
-      <header className="flex items-center gap-4">
-        <GameAvatar game={s.game} size={64} />
-        <div className="min-w-0 flex-1">
-          <h2 className="srv-tv-name" title={s.name}>{s.name}</h2>
-          <div className="srv-tv-sub">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
-        </div>
-        <div className="srv-tv-pill"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash></div>
-      </header>
-      {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-3 self-start" />}
-
-      {s.online ? (
-        <>
-          <div className="srv-tv-count">
-            <CountReact r={r}><AnimatedNumber value={s.players} className="srv-tv-big" /></CountReact>
-            <span className="srv-tv-max">/ {s.maxPlayers}<small>{plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</small></span>
-          </div>
-          <CapacityBar players={s.players} max={s.maxPlayers} color={color} big />
-        </>
-      ) : (
-        <div className="srv-tv-down">
-          <div className="text-[clamp(22px,2.4vw,40px)] font-black leading-tight">{s.hasStatus ? 'Сервер не отвечает' : 'Ожидаем первый ответ'}</div>
-          {s.hasStatus && <div className="mt-1 text-[clamp(14px,1.3vw,22px)] font-bold opacity-80">Последний ответ: {ago(s.updatedAt)}</div>}
-        </div>
-      )}
-
-      <footer className="srv-tv-foot">
-        <span>{s.online && s.ping != null ? <>пинг <b className={lag ? 'text-warn' : ''}>{s.ping} мс</b></> : 'пинг –'}</span>
-        {uptime != null && <span>аптайм <b>{fmtUp(uptime)}</b></span>}
-        <span className="truncate font-mono">{s.address}</span>
-      </footer>
-    </article>
-  );
-}
-
-/** a full-screen wall display: big cards, clock, no admin chrome. Esc or the button leaves it. */
-export function ServersTv({ servers, uptime, rx, updatedAt, onExit }: {
-  servers: Server[];
-  uptime: Map<number, number>;
-  rx: Reactions;
-  updatedAt: number;
-  onExit: () => void;
-}) {
-  const now = useNow(1000);
-  const root = useRef<HTMLDivElement>(null);
-  const exitRef = useRef(onExit);
-  exitRef.current = onExit;
-
-  useEffect(() => {
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const el = root.current;
-    // full screen where the browser allows it (needs the click that opened the mode); the overlay works without it
-    try {
-      void el?.requestFullscreen?.().catch(() => undefined);
-    } catch {
-      /* not available */
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') exitRef.current(); };
-    const onFs = () => { if (!document.fullscreenElement) exitRef.current(); };
-    window.addEventListener('keydown', onKey);
-    document.addEventListener('fullscreenchange', onFs);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onKey);
-      document.removeEventListener('fullscreenchange', onFs);
-      try {
-        if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
-      } catch {
-        /* ignore */
-      }
-    };
-  }, []);
-
-  const online = servers.filter((s) => s.online);
-  const players = online.reduce((n, s) => n + s.players, 0);
-  const slots = online.reduce((n, s) => n + s.maxPlayers, 0);
-  const n = servers.length;
-  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
-
-  return createPortal(
-    <div ref={root} className="srv-tv" role="dialog" aria-label="ТВ-режим">
-      <div className="srv-tv-top">
-        <div className="srv-tv-clock">
-          <div className="srv-tv-time">{now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
-          <div className="srv-tv-date">{now.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
-        </div>
-        <div className="srv-tv-total">
-          <div className="srv-tv-total-n"><AnimatedNumber value={players} /><small>{slots > 0 ? ` / ${slots}` : ''}</small></div>
-          <div className="srv-tv-total-k">игроков онлайн · серверов {online.length} из {n}</div>
-        </div>
-        <div className="srv-tv-actions">
-          <span className="srv-tv-live"><span className="live-dot" aria-hidden />{updatedAt ? `обновлено ${ago(updatedAt)}` : 'загрузка'}</span>
-          <button type="button" className="btn btn-soft" onClick={onExit} autoFocus>Выйти (Esc)</button>
-        </div>
-      </div>
-      <div className="srv-tv-grid" style={{ ['--cols' as string]: cols }}>
-        {servers.map((s) => <TvCard key={s.id} s={s} uptime={uptime.get(s.id)} rx={rx} />)}
-      </div>
-    </div>,
-    document.body,
-  );
-}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/ServersArt.tsx" << '__COREGSM_EOF__'
@@ -38172,7 +38055,7 @@ import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
-import { ServersList, ServersTv, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -38284,7 +38167,7 @@ function ServerList() {
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   // the TV mode refreshes twice as often
-  usePoll(load, view === 'tv' ? 5_000 : 10_000);
+  usePoll(load, 10_000);
   const rx = useServerReactions(servers, loaded);
   // 30-day availability comes from the public status endpoint; the tile is simply hidden when it has no data
   usePoll(
@@ -38329,7 +38212,7 @@ function ServerList() {
   // ---- bulk selection (administrators; not in the TV mode) ----
   const [selecting, setSelecting] = useState(false);
   const [sel, setSel] = useState<number[]>([]);
-  const canSelect = isAdmin && effView !== 'tv' && servers.length > 0;
+  const canSelect = isAdmin && servers.length > 0;
   const selOn = canSelect && selecting;
   const selectedServers = servers.filter((s) => sel.includes(s.id));
   const exitSelect = () => { setSelecting(false); setSel([]); };
@@ -38369,7 +38252,7 @@ function ServerList() {
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
-      {loaded && servers.length > 0 && effView !== 'tv' && (
+      {loaded && servers.length > 0 && (
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
       )}
 
@@ -38394,8 +38277,8 @@ function ServerList() {
               </button>
             )}
             <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
+              {([['tiles', 'Плитки'], ['list', 'Список']] as [ServersView, string][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
               ))}
             </div>
           </div>
@@ -38407,11 +38290,7 @@ function ServerList() {
 
       {loaded && !error && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
 
-      {servers.length > 0 && effView === 'tv' && visible.length > 0 && (
-        <ServersTv servers={visible} uptime={uptime} rx={rx} updatedAt={updatedAt} onExit={() => setView('tiles')} />
-      )}
-
-      {servers.length > 0 && effView !== 'tv' && (
+      {servers.length > 0 && (
         <div className="srv-split" data-open={wnOpen}>
           <div className="min-w-0 space-y-5">
             {visible.length === 0 && (
