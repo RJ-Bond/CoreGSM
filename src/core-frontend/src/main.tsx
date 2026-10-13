@@ -6,6 +6,7 @@ import './index.css';
 import './styles/servers.css';
 import './styles/detail.css';
 import './styles/system.css';
+import './styles/profile.css';
 import App from './App';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 

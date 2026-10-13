@@ -30,8 +30,11 @@ export function removeAvatar(userId: number): void {
 
 const TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
-export function registerAvatars(deps: { app: Express; auth: RequestHandler; userId: (req: express.Request) => number }): void {
-  const { app, auth, userId } = deps;
+export function registerAvatars(deps: { app: Express; auth: RequestHandler; userId: (req: express.Request) => number;
+  /** called after the picture was set or removed (account journal) */
+  onChange?: (req: express.Request, userId: number, what: string) => void;
+}): void {
+  const { app, auth, userId, onChange } = deps;
 
   app.put('/api/me/avatar', auth, express.raw({ type: TYPES, limit: '3mb' }), async (req, res) => {
     const body = req.body as Buffer;
@@ -47,6 +50,7 @@ export function registerAvatars(deps: { app: Express; auth: RequestHandler; user
       ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256);
       const png = await canvas.toBuffer('png');
       fs.writeFileSync(fileOf(userId(req)), png, { mode: 0o644 });
+      onChange?.(req, userId(req), 'загружен');
       res.json({ avatarUrl: customAvatarUrl(userId(req)) });
     } catch {
       res.status(400).json({ error: 'Не удалось прочитать картинку: выберите PNG, JPG или WebP' });
@@ -55,6 +59,7 @@ export function registerAvatars(deps: { app: Express; auth: RequestHandler; user
 
   app.delete('/api/me/avatar', auth, (req, res) => {
     removeAvatar(userId(req));
+    onChange?.(req, userId(req), 'убран');
     res.json({ ok: true });
   });
 

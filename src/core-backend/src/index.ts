@@ -15,6 +15,7 @@ import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
+import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel } from './profile.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
@@ -140,14 +141,6 @@ function loadUser(req: Request) {
   return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '');
 }
 
-/** "Chrome · Windows" from a User-Agent string */
-function uaLabel(ua: string | undefined): string {
-  const s = ua ?? '';
-  const browser = /Edg\//.test(s) ? 'Edge' : /OPR\/|Opera/.test(s) ? 'Opera' : /Firefox\//.test(s) ? 'Firefox' : /Chrome\//.test(s) ? 'Chrome' : /Safari\//.test(s) ? 'Safari' : 'Браузер';
-  const os = /Windows/.test(s) ? 'Windows' : /Android/.test(s) ? 'Android' : /iPhone|iPad|iOS/.test(s) ? 'iOS' : /Mac OS X|Macintosh/.test(s) ? 'macOS' : /Linux/.test(s) ? 'Linux' : '';
-  return os ? `${browser} · ${os}` : browser;
-}
-
 /** Starts a session and returns the signed token for it. */
 function issueToken(u: { id: number; username: string }, req: Request): string {
   const sid = crypto.randomBytes(12).toString('hex');
@@ -258,12 +251,14 @@ app.post(
       f.n++;
       if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
       fails.set(key, f);
+      if (u) logAccount(req, u.id, 'login_failed');
       const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
       return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
     }
     fails.delete(key);
     if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
     attempts.delete(req.ip ?? 'x');
+    logAccount(req, u.id, 'login');
     res.json({ token: issueToken(u, req), username: u.username, role: u.role });
   }),
 );
@@ -773,6 +768,7 @@ app.put(
     const r = db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), id);
     if (!r.changes) return res.status(404).json({ error: 'Пользователь не найден' });
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+    logAccount(req, id, 'password_changed', 'сброшен администратором');
     res.json({ ok: true });
   }),
 );
@@ -785,6 +781,7 @@ app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   if (u.role === 'admin' && u.status === 'active' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
   removeAvatar(id);
+  removeBanner(id);
   res.json({ ok: true });
 });
 
@@ -821,6 +818,9 @@ app.get('/api/me', auth, (req: AuthedRequest, res) => {
     discordName: u.discord_name,
     hasPassword: !u.no_password,
     email: u.email ?? null,
+    prefs: prefsOf(u.id),
+    bannerUrl: bannerUrlOf(u.id),
+    bannerPreset: bannerPresetOf(u.id),
   });
 });
 
@@ -842,6 +842,7 @@ app.put(
       if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
     }
     db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
+    if ((u.email ?? '') !== email) logAccount(req, u.id, 'email_changed');
     res.json({ ok: true, email: email || null });
   }),
 );
@@ -861,6 +862,7 @@ app.post(
     db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(bcrypt.hashSync(body.data.next, 12), req.user!.id);
     // other devices have to sign in again with the new password
     db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
+    logAccount(req, req.user!.id, 'password_changed');
     res.json({ ok: true });
   }),
 );
@@ -878,6 +880,7 @@ app.get('/api/sessions', auth, (req: AuthedRequest, res) => {
 });
 app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
   const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
+  if (r.changes) logAccount(req, req.user!.id, 'sessions_revoked', `завершено: ${r.changes}`);
   res.json({ ok: true, revoked: r.changes });
 });
 // logout: ends the session this very token belongs to
@@ -888,6 +891,7 @@ app.delete('/api/sessions/current', auth, (req: AuthedRequest, res) => {
 app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
   const r = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user!.id);
   if (!r.changes) return res.status(404).json({ error: 'Сеанс не найден' });
+  logAccount(req, req.user!.id, 'sessions_revoked', 'завершён один сеанс');
   res.json({ ok: true });
 });
 
@@ -895,6 +899,7 @@ app.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
   const u = db.prepare('SELECT no_password FROM users WHERE id = ?').get(req.user!.id) as { no_password: number };
   if (u.no_password) return res.status(409).json({ error: 'Сначала задайте пароль в профиле: иначе войти будет нечем' });
   db.prepare('UPDATE users SET discord_id = NULL, discord_name = NULL, discord_avatar = NULL WHERE id = ?').run(req.user!.id);
+  logAccount(req, req.user!.id, 'discord_unlinked');
   res.json({ ok: true });
 });
 
@@ -957,12 +962,14 @@ app.get(
     if (st.mode === 'link') {
       if (owner && owner.id !== st.userId) return toHash(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
       db.prepare('UPDATE users SET discord_id = ?, discord_name = ?, discord_avatar = ? WHERE id = ?').run(me.id, dname, me.avatar ?? null, st.userId);
+      logAccount(req, st.userId, 'discord_linked', dname);
       return toHash(res, 'profile');
     }
 
     if (owner) {
       db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
       if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
+      logAccount(req, owner.id, 'login', 'Discord');
       return toHash(res, `auth/${issueToken(owner, req)}`);
     }
 
@@ -1614,7 +1621,17 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
-registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
+registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
+registerProfile({
+  app,
+  auth,
+  rateLimit,
+  userId: (req) => (req as AuthedRequest).user!.id,
+  avatarOf: (id) => {
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserFull | undefined;
+    return customAvatarUrl(id) ?? (u ? avatarUrl(u) : null);
+  },
+});
 registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });

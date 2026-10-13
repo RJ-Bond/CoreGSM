@@ -39,8 +39,8 @@ const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
 const MAGIC = Buffer.from('CGSMENC1');
 const HEADER_LEN = 8 + 16 + 12;
 const NAME_RE = /^coregsm-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual)\.tar\.gz(\.enc)?$/;
-const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png)$/;
-const DIR_ENTRIES = new Set(['news', 'covers', 'avatars']);
+const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png|banners|banners\/\d{1,9}\.jpg)$/;
+const DIR_ENTRIES = new Set(['news', 'covers', 'avatars', 'banners']);
 
 /** user-facing error (message is shown in the panel) */
 export class BackupError extends Error {
@@ -214,6 +214,7 @@ export async function buildArchive(dest: string, passphrase: string | null): Pro
     for (const [dir, re] of [
       ['covers', /^\d{1,9}(@s)?\.jpg$/],
       ['avatars', /^\d{1,9}\.png$/],
+      ['banners', /^\d{1,9}\.jpg$/],
     ] as const) {
       const src = path.join(DATA_DIR, dir);
       if (!fs.existsSync(src)) continue;
