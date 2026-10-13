@@ -101,7 +101,7 @@ export default function SubscribeMenu({
             <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} />
             <ErrorLine text={error} />
             <div className="flex justify-end gap-2">
-              <button type="button" className="btn btn-soft" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
               <Button loading={busy}>{t('sub.save')}</Button>
             </div>
           </form>

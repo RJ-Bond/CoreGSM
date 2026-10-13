@@ -28,7 +28,7 @@ export default function EmailVerifyState() {
   return (
     <div className="space-y-2">
       <p className="text-sm font-bold text-warn">{t('pf.emailv.unverified')}</p>
-      <button type="button" className="btn-soft btn-sm" disabled={busy} onClick={() => void send()}>{t('pf.emailv.send')}</button>
+      <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void send()}>{t('pf.emailv.send')}</button>
       {error && <p className="text-sm font-bold text-bad" role="alert">{error}</p>}
     </div>
   );

@@ -32,7 +32,7 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
 const Up = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 15l6-6 6 6" /></svg>;
 const Down = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9l6 6 6-6" /></svg>;
 
-const iconBtn = 'grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-card text-mute transition hover:text-ink disabled:opacity-40';
+const iconBtn = 'btn-icon-sm shrink-0';
 
 export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRow[]; onChange: (f: FieldRow[]) => void; variables?: NewsVariable[] }) {
   const [drag, setDrag] = useState<number | null>(null);

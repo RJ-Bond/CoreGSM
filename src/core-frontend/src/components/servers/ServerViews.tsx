@@ -59,7 +59,7 @@ function CopyAddress({ text, className = '' }: { text: string; className?: strin
     timer.current = window.setTimeout(() => setDone(false), 1500);
   };
   return (
-    <button type="button" onClick={(e) => void copy(e)} className={`srv-copy ${done ? 'done' : ''} ${className}`} title="Скопировать адрес" aria-label={`Скопировать адрес ${text}`}>
+    <button type="button" onClick={(e) => void copy(e)} className={`${done ? 'btn-success' : 'btn-soft'} btn-xs max-w-full ${className}`} title="Скопировать адрес" aria-label={`Скопировать адрес ${text}`}>
       <span className="truncate font-mono">{text}</span>
       <span aria-hidden className="shrink-0">{done ? '✓' : '⧉'}</span>
     </button>

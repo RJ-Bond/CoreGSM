@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="25f6bcf6c194"
+COREGSM_BUILD="211aa65abea5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -21192,7 +21192,7 @@ export default function App() {
           <Wordmark className="text-2xl" />
           <p className="text-lg font-black" role="alert">{t('hdr.offlineTitle')}</p>
           <p className="font-semibold text-mute">{t('hdr.offlineText')}</p>
-          <button className="btn w-full" onClick={() => void load()}>{t('common.retry')}</button>
+          <button className="btn btn-block" onClick={() => void load()}>{t('common.retry')}</button>
         </div>
         <Toaster />
       </div>
@@ -21279,7 +21279,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              className="grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10 md:inline-flex md:w-auto md:items-center md:gap-2.5 md:pl-3.5 md:pr-2"
+              className="btn-icon md:w-auto md:gap-2.5 md:!pl-3.5 md:!pr-2"
               aria-label={t('hdr.searchAria')}
               aria-haspopup="dialog"
               title={t('hdr.searchTitle')}
@@ -21304,7 +21304,7 @@ export default function App() {
                 </a>
                 <button
                   onClick={() => void logout()}
-                  className="grid place-items-center rounded-full font-extrabold text-mute transition hover:bg-soft hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-3.5 sm:py-2"
+                  className="btn-ghost btn-sm"
                   aria-label={t('hdr.logout')}
                   title={t('hdr.logout')}
                 >
@@ -21314,8 +21314,8 @@ export default function App() {
               </>
             ) : (
               <>
-                <a href="#/login" className="inline-flex items-center rounded-full bg-soft px-4 py-2 font-extrabold text-ink hover:text-link max-sm:min-h-[44px]">{t('hdr.login')}</a>
-                {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">{t('hdr.register')}</a>}
+                <a href="#/login" className="btn btn-soft btn-sm">{t('hdr.login')}</a>
+                {access.registration && <a href="#/register" className="btn btn-sm hidden sm:inline-flex">{t('hdr.register')}</a>}
               </>
             )}
           </div>
@@ -22575,8 +22575,12 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** busy: a spinner precedes the label, the button is disabled and announces aria-busy */
   loading?: boolean;
-  variant?: 'primary' | 'soft' | 'danger';
-  size?: 'md' | 'sm';
+  /** primary (default) is the one main action of a view; soft / outline are secondary, ghost is tertiary, danger* destroys, link is an inline text action */
+  variant?: 'primary' | 'soft' | 'outline' | 'ghost' | 'danger' | 'danger-solid' | 'success' | 'success-solid' | 'warn' | 'link';
+  /** xs 28px, sm 34px (toolbars), md 42px (forms, default), lg 50px */
+  size?: 'xs' | 'sm' | 'md' | 'lg';
+  /** full width */
+  block?: boolean;
   /** leans toward a mouse pointer (key call-to-action buttons only) */
   magnetic?: boolean;
 }
@@ -22590,12 +22594,26 @@ export function BtnSpinner() {
   );
 }
 
-/** The panel's button: `.btn` styling plus a loading state. `type` is not forced, so a Button inside a form still submits. */
+/** The panel's button: button-system styling (see styles/buttons.css) plus a loading state. `type` is not forced, so a Button inside a form still submits. */
+const VARIANT_CLASS: Record<NonNullable<ButtonProps['variant']>, string> = {
+  primary: 'btn',
+  soft: 'btn btn-soft',
+  outline: 'btn btn-outline',
+  ghost: 'btn btn-ghost',
+  danger: 'btn btn-danger',
+  'danger-solid': 'btn btn-danger-solid',
+  success: 'btn btn-success',
+  'success-solid': 'btn btn-success-solid',
+  warn: 'btn btn-warn',
+  link: 'btn-link',
+};
+const SIZE_CLASS = { xs: 'btn-xs', sm: 'btn-sm', md: '', lg: 'btn-lg' } as const;
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { loading = false, variant = 'primary', size = 'md', magnetic = false, className = '', disabled, children, ...rest },
+  { loading = false, variant = 'primary', size = 'md', block = false, magnetic = false, className = '', disabled, children, ...rest },
   ref,
 ) {
-  const cls = ['btn', variant === 'soft' ? 'btn-soft' : variant === 'danger' ? 'btn-danger' : '', size === 'sm' ? 'btn-sm' : '', className]
+  const cls = [VARIANT_CLASS[variant], SIZE_CLASS[size], block ? 'btn-block' : '', className]
     .filter(Boolean)
     .join(' ');
   return (
@@ -22673,8 +22691,8 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
         </div>
         <MissingNote guild={guild} channelId={value} />
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm font-extrabold">
-          <button type="button" className="text-link hover:underline" onClick={() => setManual(true)}>Ввести ID вручную</button>
-          <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+          <button type="button" className="btn-link" onClick={() => setManual(true)}>Ввести ID вручную</button>
+          <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
         </div>
       </div>
     );
@@ -22687,8 +22705,8 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
         Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».
       </p>
       <div className="flex gap-4 text-sm font-extrabold">
-        {hasList && <button type="button" className="text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
-        <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+        {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>Выбрать из списка</button>}
+        <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
       </div>
     </div>
   );
@@ -22883,7 +22901,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
           <button
             type="button"
             onClick={onClose}
-            className="hidden rounded-lg bg-soft px-2 py-1 text-xs font-extrabold text-mute hover:text-ink sm:inline"
+            className="btn-soft btn-xs max-sm:hidden"
             aria-label="Закрыть поиск"
           >
             Esc
@@ -22891,7 +22909,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
           <button
             type="button"
             onClick={onClose}
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute hover:text-ink sm:hidden"
+            className="btn-icon shrink-0 sm:hidden"
             aria-label="Закрыть поиск"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -23217,7 +23235,7 @@ export function DiscordWizard({
             <IconRefresh spinning={busy} />
             Проверить
           </button>
-          {onClose && <button type="button" className="btn btn-soft btn-sm" onClick={onClose}>Скрыть</button>}
+          {onClose && <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Скрыть</button>}
         </div>
       </div>
       <ol className="dw-steps">
@@ -23277,7 +23295,7 @@ export default function EmailVerifyState() {
   return (
     <div className="space-y-2">
       <p className="text-sm font-bold text-warn">{t('pf.emailv.unverified')}</p>
-      <button type="button" className="btn-soft btn-sm" disabled={busy} onClick={() => void send()}>{t('pf.emailv.send')}</button>
+      <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void send()}>{t('pf.emailv.send')}</button>
       {error && <p className="text-sm font-bold text-bad" role="alert">{error}</p>}
     </div>
   );
@@ -23986,7 +24004,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
         ref={btn}
         type="button"
         onClick={toggle}
-        className="relative grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10"
+        className="btn-icon relative"
         aria-label={label}
         title={t('bell.title')}
         aria-haspopup="dialog"
@@ -24011,7 +24029,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
         >
           <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
             <h2 className="text-base font-black">{t('bell.title')}</h2>
-            <button type="button" className="rounded-full px-2 py-1.5 text-sm font-extrabold text-link hover:underline disabled:opacity-50 max-sm:min-h-[44px]" onClick={readAll} disabled={unread === 0}>
+            <button type="button" className="btn-link" onClick={readAll} disabled={unread === 0}>
               {t('bell.readAll')}
             </button>
           </div>
@@ -24324,13 +24342,13 @@ export default function SmtpCard() {
         {note && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{note}</p>}
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn" disabled={busy || !!portErr}>Сохранить</button>
-          {info?.passwordSet && <button type="button" className="btn-soft" onClick={() => void clearPassword()}>Удалить пароль</button>}
+          {info?.passwordSet && <button type="button" className="btn btn-soft" onClick={() => void clearPassword()}>Удалить пароль</button>}
         </div>
       </form>
 
       <div className="space-y-2 border-t pt-4">
         <TextField id="smtp-to" label="Отправить пробное письмо на" value={to} onChange={setTo} type="email" placeholder="you@example.com" autoComplete="email" />
-        <button type="button" className="btn-soft" disabled={testing || !to.trim() || !info?.ready} onClick={() => void test()}>
+        <button type="button" className="btn btn-soft" disabled={testing || !to.trim() || !info?.ready} onClick={() => void test()}>
           {testing ? 'Отправляю…' : 'Отправить пробное письмо'}
         </button>
       </div>
@@ -24835,7 +24853,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         <h2 id="tour-title" className="text-lg font-black leading-snug">{step.title}</h2>
         <p id="tour-text" className="font-semibold leading-relaxed text-mute">{step.text}</p>
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <button type="button" className="rounded-full px-3 py-2 font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px]" onClick={onClose}>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
             Пропустить
           </button>
           <div className="flex gap-2">
@@ -24988,10 +25006,10 @@ export function ChecklistModal({
       </ul>
       {errors.length > 0 && <p className="mt-3 text-sm font-bold text-bad" role="alert">Исправьте ошибки, чтобы продолжить.</p>}
       <div className="mt-5 flex flex-wrap gap-2">
+        <Button variant="ghost" onClick={onClose}>Назад к редактору</Button>
         <Button className="flex-1" loading={busy} disabled={errors.length > 0} onClick={onConfirm}>
           {warns.length > 0 ? `${verb} всё равно` : verb}
         </Button>
-        <Button variant="soft" onClick={onClose}>Назад к редактору</Button>
       </div>
     </Modal>
   );
@@ -25277,7 +25295,7 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
 const Up = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 15l6-6 6 6" /></svg>;
 const Down = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9l6 6 6-6" /></svg>;
 
-const iconBtn = 'grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-card text-mute transition hover:text-ink disabled:opacity-40';
+const iconBtn = 'btn-icon-sm shrink-0';
 
 export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRow[]; onChange: (f: FieldRow[]) => void; variables?: NewsVariable[] }) {
   const [drag, setDrag] = useState<number | null>(null);
@@ -25477,8 +25495,8 @@ export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestore
             <VersionPreview payload={open.payload} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={() => setOpen(null)}>Закрыть</Button>
             <Button className="flex-1" loading={busy} disabled={locked} onClick={() => void restore()}>Восстановить эту версию</Button>
-            <Button variant="soft" onClick={() => setOpen(null)}>Закрыть</Button>
           </div>
           {locked && <p className="mt-2 text-xs font-semibold text-mute">Новость сейчас отправляется, подождите.</p>}
         </Modal>
@@ -25567,7 +25585,7 @@ export function ImageDrop({
           className={`rounded-2xl border-2 border-dashed p-3 text-center transition ${hot ? 'border-brand bg-brand/10' : 'border-line'}`}
         >
           {allowUpload && (
-            <button type="button" disabled={busy} onClick={() => input.current?.click()} className="w-full py-2 text-sm font-bold text-mute hover:text-ink">
+            <button type="button" disabled={busy} onClick={() => input.current?.click()} className="btn btn-ghost btn-sm btn-block">
               {busy ? 'Загрузка…' : 'Перетащите картинку сюда или нажмите, чтобы выбрать файл'}
               <span className="block text-xs font-semibold">PNG, JPEG, GIF, WebP до 8 МБ. Можно вставить из буфера (Ctrl+V) в текст.</span>
             </button>
@@ -25654,7 +25672,7 @@ const Btn = ({ onClick, title, children, on }: { onClick: () => void; title: str
     aria-pressed={on}
     onMouseDown={(e) => e.preventDefault()}
     onClick={onClick}
-    className="grid h-8 min-w-8 place-items-center rounded-lg px-1.5 text-sm font-bold text-ink transition hover:bg-soft"
+    className="btn-ghost btn-xs min-w-8"
   >
     {children}
   </button>
@@ -26626,8 +26644,8 @@ export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       </button>
       <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
       <div className="flex gap-3 text-sm font-extrabold">
-        <button type="button" className="text-link hover:underline" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>
-        {me.avatarSource === 'custom' && <button type="button" className="text-mute hover:text-bad hover:underline" onClick={() => void remove()} disabled={busy}>{me.discordName ? t('pf.avatar.fromDiscord') : t('common.remove')}</button>}
+        <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>
+        {me.avatarSource === 'custom' && <button type="button" className="btn-link-danger" onClick={() => void remove()} disabled={busy}>{me.discordName ? t('pf.avatar.fromDiscord') : t('common.remove')}</button>}
       </div>
       <p className="max-w-[12rem] text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>
       {error && <p className="max-w-[12rem] text-center text-xs font-bold text-bad" role="alert">{error}</p>}
@@ -26735,8 +26753,8 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
           </p>
           {offRatio && <p className="rounded-2xl bg-warnbg px-4 py-2.5 text-sm font-bold text-warn" role="status">{t('pf.banner.ratioWarn')}</p>}
           <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn btn-ghost" onClick={() => setPending(null)} disabled={busy}>{t('common.cancel')}</button>
             <Button loading={busy} onClick={() => void save()}>{t('pf.banner.apply')}</Button>
-            <button type="button" className="btn btn-soft" onClick={() => setPending(null)} disabled={busy}>{t('common.cancel')}</button>
           </div>
         </div>
       ) : (
@@ -27565,7 +27583,7 @@ function BigCopy({ label, value, id }: { label: string; value: string; id: strin
       <div id={id} className="mb-1 text-[13px] font-extrabold text-mute">{label}</div>
       <div className="cn-big">
         <code title={value} aria-labelledby={id}>{value}</code>
-        <button type="button" className="btn" onClick={() => void copy()} aria-describedby={id}>
+        <button type="button" className="btn btn-lg" onClick={() => void copy()} aria-describedby={id}>
           {done ? <IconCheckMark /> : <IconCopy />}
           <span aria-live="polite">{done ? t('srv.cn.copied') : t('srv.cn.copy')}</span>
         </button>
@@ -27631,7 +27649,7 @@ export default function ConnectTab({ game, address, sections }: { game: string; 
             <div className="min-w-0 flex-1 space-y-3">
               <h3 className="cn-h">{t('srv.cn.s3')}</h3>
               {guide.link ? (
-                <a href={guide.link.href} className="btn cn-go" data-magnetic>{guide.link.label}</a>
+                <a href={guide.link.href} className="btn btn-lg btn-block sm:w-auto" data-magnetic>{guide.link.label}</a>
               ) : (
                 <p className="font-semibold leading-snug text-mute">{t('srv.cn.s3text')}</p>
               )}
@@ -29237,7 +29255,7 @@ export default function SubscribeMenu({
             <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} />
             <ErrorLine text={error} />
             <div className="flex justify-end gap-2">
-              <button type="button" className="btn btn-soft" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
               <Button loading={busy}>{t('sub.save')}</Button>
             </div>
           </form>
@@ -29567,7 +29585,7 @@ function MaintenanceDialog({ servers, onClose, onDone }: { servers: Server[]; on
         {problem && name.trim() !== '' && <p className="text-sm font-bold text-bad">{problem}</p>}
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2.5">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <button type="submit" className="btn" disabled={!!problem || busy}>{busy ? 'Создаём…' : 'Создать окна'}</button>
         </div>
       </form>
@@ -29822,7 +29840,7 @@ function CopyAddress({ text, className = '' }: { text: string; className?: strin
     timer.current = window.setTimeout(() => setDone(false), 1500);
   };
   return (
-    <button type="button" onClick={(e) => void copy(e)} className={`srv-copy ${done ? 'done' : ''} ${className}`} title="Скопировать адрес" aria-label={`Скопировать адрес ${text}`}>
+    <button type="button" onClick={(e) => void copy(e)} className={`${done ? 'btn-success' : 'btn-soft'} btn-xs max-w-full ${className}`} title="Скопировать адрес" aria-label={`Скопировать адрес ${text}`}>
       <span className="truncate font-mono">{text}</span>
       <span aria-hidden className="shrink-0">{done ? '✓' : '⧉'}</span>
     </button>
@@ -30417,7 +30435,7 @@ const Bar = ({ w, h = 12, className = '' }: { w: number | string; h?: number; cl
 
 function SkeletonHero() {
   return (
-    <div className="tile col-span-2 flex min-h-[280px] flex-col gap-3 p-5 lg:col-span-6 lg:row-span-2 lg:p-6">
+    <div className="srv-hero tile flex min-h-[280px] flex-col gap-3 p-5 lg:p-6">
       <div className="flex items-start gap-3">
         <div className="skeleton h-12 w-12 shrink-0 rounded-2xl" />
         <div className="flex-1 space-y-2 pt-1"><Bar w="62%" h={18} /><Bar w="38%" /></div>
@@ -30432,7 +30450,7 @@ function SkeletonHero() {
 
 function SkeletonPulse() {
   return (
-    <div className="tile col-span-2 flex min-h-[112px] flex-wrap items-center gap-4 p-4 lg:col-span-12">
+    <div className="tile col-span-full flex min-h-[112px] flex-wrap items-center gap-4 p-4">
       <div className="skeleton h-11 w-11 shrink-0 rounded-2xl" />
       <div className="min-w-[160px] flex-1 space-y-2"><Bar w="55%" h={18} /><Bar w="35%" /></div>
       <div className="skeleton h-14 min-w-[180px] flex-1 rounded-2xl" />
@@ -30442,7 +30460,7 @@ function SkeletonPulse() {
 
 function SkeletonSmall() {
   return (
-    <div className="tile col-span-2 flex min-h-[236px] flex-col gap-2 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3">
+    <div className="tile flex min-h-[270px] flex-col gap-2 p-3 pb-4">
       <div className="skeleton h-[88px] rounded-[18px]" />
       <div className="space-y-2 px-1.5 pt-1"><Bar w="75%" h={15} /><Bar w="40%" /></div>
       <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="!rounded-lg" /><Bar w={34} /></div>
@@ -30454,7 +30472,7 @@ function SkeletonSmall() {
 
 export function TilesSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
+    <div className="srv-grid" aria-busy="true" aria-label="Загрузка">
       <SkeletonPulse />
       <SkeletonHero />
       {[0, 1, 2, 3].map((i) => <SkeletonSmall key={i} />)}
@@ -30714,9 +30732,9 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
         )}
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           {!readOnly && (
-            <button type="button" data-cancel className="btn btn-soft min-h-[44px]" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
+            <button type="button" data-cancel className="btn btn-ghost" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
           )}
-          <button data-ok className={`btn min-h-[44px] ${o.danger ? 'btn-solid-danger' : ''}`}>
+          <button data-ok className={`btn ${o.danger ? 'btn-danger-solid' : ''}`}>
             {o.confirmLabel ?? (readOnly ? 'Готово' : o.danger ? 'Удалить' : 'Подтвердить')}
           </button>
         </div>
@@ -31587,6 +31605,7 @@ __COREGSM_EOF__
   --bad: 185 40 40;
   --badbg: 254 226 226;
   --badsolid: 185 40 40;
+  --oksolid: 21 128 61;
   --seg-on: 255 255 255;
   --tile-border: rgb(231 233 240);
   --glass: rgb(255 255 255 / 0.74);
@@ -31707,34 +31726,7 @@ __COREGSM_EOF__
 }
 
 @layer components {
-  /* primary: gradient pill with a soft coloured shadow */
-  .btn {
-    @apply relative inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 font-extrabold text-white transition active:scale-[.97] disabled:opacity-50 disabled:pointer-events-none max-sm:min-h-[44px];
-    /* a top highlight over the brand -> brand-2 gradient: custom brand colours flow through both variables */
-    background-image:
-      linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0) 52%),
-      linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 1px 2px rgb(var(--brand) / 0.25), 0 8px 18px -6px rgb(var(--brand) / 0.55);
-  }
-  /* soft light sweep across the button on hover (the pseudo-element inherits the pill shape, so nothing needs clipping) */
-  .btn::after {
-    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-    background: linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 0.34) 50%, transparent 62%) no-repeat;
-    background-size: 260% 100%; background-position: 130% 0;
-    transition: background-position .7s cubic-bezier(.2, .7, .2, 1);
-  }
-  .btn:hover { filter: brightness(1.06) saturate(1.05); }
-  .btn:hover::after { background-position: -30% 0; }
-  .btn:active { box-shadow: inset 0 2px 8px rgb(0 0 0 / 0.28), 0 1px 2px rgb(var(--brand) / 0.2); filter: brightness(.97); }
-  .btn-soft { @apply bg-soft text-link hover:bg-line; background-image: none; box-shadow: none; }
-  .btn-soft::after, .btn-danger::after { display: none; }
-  .btn-soft:hover, .btn-soft:active { filter: none; }
-  .btn-soft:active, .btn-danger:active { box-shadow: inset 0 2px 6px rgb(0 0 0 / 0.12); }
-  .btn-danger { @apply bg-badbg text-bad hover:bg-bad/20; background-image: none; box-shadow: none; }
-  .btn-danger:hover, .btn-danger:active { filter: none; }
-  .btn-sm { @apply px-3 py-1 text-sm max-sm:min-h-[44px] max-sm:px-4; }
-  /* square icon button; 44px on phones */
-  .btn-icon { @apply inline-grid h-10 w-10 place-items-center rounded-full bg-soft text-mute transition hover:text-link max-sm:h-11 max-sm:w-11; }
+  /* buttons (.btn, .btn-soft, .btn-icon ...): styles/buttons.css */
   .input { @apply w-full rounded-ui-lg border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-none disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px]; }
   .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
   /* the tile: white card, 26px radius, layered soft shadow */
@@ -31777,8 +31769,6 @@ __COREGSM_EOF__
   .stat-s { @apply text-[13px] font-bold text-mute; }
   /* translucent chip on a gradient tile */
   .chip-on-grad { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold text-white; background: rgba(255, 255, 255, 0.22); }
-  .btn-on-grad { @apply inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#12141a] transition hover:bg-white/90 active:scale-[.98] max-sm:min-h-[44px]; }
-  .btn-ghost-on-grad { @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-extrabold text-white transition hover:brightness-90 active:scale-[.98] max-sm:min-h-[44px]; background: rgba(0, 0, 0, 0.22); }
   .tile-hover { transition: transform .18s ease, box-shadow .18s ease; }
   .tile-hover:hover { transform: translateY(-2px); box-shadow: var(--shadow-3); }
   @media (prefers-reduced-motion: reduce) { .tile-hover:hover { transform: none; } }
@@ -31954,50 +31944,7 @@ main .grid > :nth-child(n+7) { animation-delay: 300ms; }
 /* the page colour also paints the canvas, so a view-transition slide never shows a white edge */
 html { background-color: rgb(var(--page)); }
 
-/* ---------- loading button ---------- */
-.btn[aria-busy='true']:disabled { opacity: .88; }
-.btn-spin { width: 1rem; height: 1rem; flex-shrink: 0; }
-
-/* ---------- magnetic CTAs (positioned by installMagnetic() in useMotion.ts through the `translate` property) ---------- */
-[data-magnetic] {
-  transition: translate .26s cubic-bezier(.2, .8, .2, 1), transform .15s ease, box-shadow .2s ease, filter .2s ease, background-color .2s ease, opacity .2s ease;
-}
-
-/* ---------- split button ---------- */
-.split { position: relative; display: inline-flex; max-width: 100%; }
-.split > .split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; min-width: 0; }
-.split > .split-caret {
-  border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: .7rem; padding-right: .7rem;
-  box-shadow: inset 1px 0 0 rgb(255 255 255 / 0.28), inset 0 1px 0 rgb(255 255 255 / 0.22), 0 8px 18px -6px rgb(var(--brand) / 0.55);
-}
-.split > .split-caret svg { transition: transform .25s cubic-bezier(.34, 1.4, .5, 1); }
-.split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
-.split-menu {
-  position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
-  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--raised)); border: 1px solid var(--tile-border);
-  box-shadow: var(--shadow-3);
-  transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) both;
-}
-.split-menu[data-up='true'] { bottom: calc(100% + 6px); transform-origin: bottom right; }
-.split-menu[data-up='false'] { top: calc(100% + 6px); }
-.split-item {
-  display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
-  border-radius: var(--r-md); padding: .55rem .8rem; font-weight: 800; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
-}
-.split-item small { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
-.split-item:hover, .split-item:focus-visible { background: rgb(var(--soft)); outline: none; }
-.split-item:focus-visible { box-shadow: inset 0 0 0 2px rgb(var(--link)); }
-.split-item:disabled { opacity: .5; }
-@keyframes split-in { from { opacity: 0; transform: translateY(-6px) scale(.96); } to { opacity: 1; transform: none; } }
-
-/* ---------- animated icons inside buttons ---------- */
-.ico-refresh { transition: transform .55s cubic-bezier(.3, 1.3, .5, 1); }
-:is(.btn, .btn-on-grad, .btn-ghost-on-grad):active .ico-refresh { transform: rotate(200deg); transition-duration: .15s; }
-.ico-refresh.spinning { animation: spin .85s linear infinite; }
-.ico-nudge { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
-:is(.btn, .btn-on-grad, .btn-ghost-on-grad, a):hover > .ico-nudge { transform: translateX(3px); }
-.ico-share { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
-:is(.btn, .btn-on-grad, .btn-ghost-on-grad):hover .ico-share { transform: translate(1.5px, -1.5px); }
+/* animated glyphs inside buttons: styles/buttons.css */
 
 /* copy -> check with a small burst */
 .copy-ico { position: relative; display: inline-grid; width: 16px; height: 16px; place-items: center; flex-shrink: 0; }
@@ -32217,8 +32164,6 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 :root[data-density='compact'] .space-y-2\.5 > :not([hidden]) ~ :not([hidden]) { margin-top: .4rem; }
 :root[data-density='compact'] .tile, :root[data-density='compact'] .panel { border-radius: 20px; }
 :root[data-density='compact'] .stat-v { font-size: 28px; }
-:root[data-density='compact'] .btn { padding: .35rem .95rem; }
-:root[data-density='compact'] .btn-sm { padding: .15rem .65rem; }
 :root[data-density='compact'] .input { padding-top: .35rem; padding-bottom: .35rem; }
 :root[data-density='compact'] .seg-item { padding: .3rem .8rem; }
 :root[data-density='compact'] .pill { padding-top: .05rem; padding-bottom: .05rem; }
@@ -32240,8 +32185,7 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 
 /* ---------- reduced motion: nothing moves, state changes are instant ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .btn::after, .depth::before, .depth::after { display: none !important; }
-  .btn:active, .btn-icon:active { transform: none !important; }
+  .depth::before, .depth::after { display: none !important; }
   [data-magnetic] { translate: none !important; }
   .depth-l1, .depth-l2 { translate: none !important; }
   .roll-col, .switch::before, .seg[data-ind]::before, .split-menu, .star-pop, .toast-in, .toast-out, .delta-chip, .flash-ring,
@@ -32281,30 +32225,13 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 @media (prefers-reduced-motion: reduce) { .update-dot::after { animation: none; } }
 /* ghost buttons on the update hero: light glass instead of dark */
 .update-hero .btn-ghost-on-grad { background: rgb(255 255 255 / .2); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .38); }
-.update-hero .btn-ghost-on-grad:hover { filter: none; background: rgb(255 255 255 / .3); }
+.update-hero .btn-ghost-on-grad:hover { background: rgb(255 255 255 / .3); }
 
-/* compact icon actions in admin rows */
-.row-act { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--mute)); transition: background-color .15s ease, color .15s ease, transform .15s ease; }
-.row-act:hover { background: rgb(var(--brand) / .12); color: rgb(var(--link)); }
-.row-act:active { transform: scale(.94); }
-.row-act:disabled { opacity: .55; pointer-events: none; }
-.row-act-danger:hover { background: rgb(var(--bad) / .14); color: rgb(var(--bad)); }
-@media (max-width: 639px) { .row-act { width: 44px; height: 44px; } }
+/* compact icon actions in admin rows: .row-act, styles/buttons.css */
 
 /* ---------- server page: banner, tabs, players, events ---------- */
 .chip-glass { display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; padding: 4px 11px; font-size: 13px; font-weight: 800; color: #fff; background: rgba(8, 10, 20, 0.34); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); max-width: 100%; }
-.btn-glass { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; border-radius: 9999px; padding: 0 16px; font-size: 14px; font-weight: 800; color: #fff; background: rgba(255, 255, 255, 0.18); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); transition: background .15s ease, transform .15s ease; white-space: nowrap; }
-.btn-glass:hover { background: rgba(255, 255, 255, 0.28); }
-.btn-glass:active { transform: scale(.98); }
-.btn-glass-quiet { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; border-radius: 9999px; padding: 0 12px; font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.92); background: rgba(8, 10, 20, 0.22); transition: background .15s ease; white-space: nowrap; }
-.btn-glass-quiet:hover { background: rgba(8, 10, 20, 0.4); }
-.btn-glass-quiet:disabled { opacity: .6; }
-.btn-glass-danger { color: #ffd6d6; }
-.btn-glass-danger:hover { background: rgba(220, 38, 38, 0.55); color: #fff; }
-.btn-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; border-radius: 9999px; padding: 0 22px; font-size: 15px; font-weight: 900; color: #12141a; background: #fff; box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.5); transition: transform .15s ease, box-shadow .15s ease; text-align: center; }
-.btn-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -6px rgba(0, 0, 0, 0.55); }
-.btn-cta:active { transform: scale(.98); }
-@media (max-width: 639px) { .btn-glass { min-height: 44px; } .btn-glass-quiet { min-height: 44px; padding: 0 8px; } }
+/* glass / cta buttons: styles/buttons.css */
 
 /* status glow around the banner: green online, amber lag, red offline; it follows the theme's status colours */
 .srv-glow { --g: var(--ok); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.08), 0 0 0 1px rgb(var(--g) / 0.5), 0 16px 46px -14px rgb(var(--g) / 0.6); }
@@ -32372,7 +32299,6 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 }
 .pill-glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgb(12 14 26 / 0.6); }
 .chip-glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(8, 10, 20, 0.5); }
-.btn-glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(255, 255, 255, 0.24); }
 .srv-tabbar.is-stuck { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgb(var(--page) / 0.96); }
 .auth-card { -webkit-backdrop-filter: none; backdrop-filter: none; }
 /* the page entrance is a plain fade: no transform on the big container that holds the whole page */
@@ -32482,13 +32408,11 @@ html[data-flat='cf'] *, html[data-flat='cf'] *::before, html[data-flat='cf'] *::
   box-shadow: inset 0 0 0 2px rgb(var(--link)) !important;
 }
 /* on covers and gradients the ring is white with a dark inner edge */
-.btn-glass:focus-visible, .btn-glass-quiet:focus-visible, .btn-cta:focus-visible, .btn-on-grad:focus-visible,
+.btn-glass:focus-visible, .btn-glass-quiet:focus-visible, .btn-icon-glass:focus-visible, .btn-cta:focus-visible, .btn-on-grad:focus-visible,
 .btn-ghost-on-grad:focus-visible, .pp-copy:focus-visible, .chip-glass a:focus-visible, .pp-v a:focus-visible {
   box-shadow: 0 0 0 2px rgb(0 0 0 / 0.45), 0 0 0 4px #fff !important;
 }
 a:focus-visible, button.text-link:focus-visible, .hint-more:focus-visible { border-radius: var(--r-sm); }
-.btn:focus-visible, .btn-icon:focus-visible, .row-act:focus-visible { border-radius: 9999px; }
-.row-act:focus-visible { border-radius: var(--r-md); }
 
 /* ---------- state views ---------- */
 [data-state='error'].panel { box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--bad) / 0.25); }
@@ -32574,8 +32498,8 @@ html[data-motion='reduce'] .update-progress > i { animation: none !important; wi
 /* a spinner must still say "busy": keep a slow rotation */
 html[data-motion='reduce'] .animate-spin, html[data-motion='reduce'] .ico-refresh.spinning { animation: spin 2s linear infinite !important; }
 html[data-motion='reduce'] [data-magnetic], html[data-motion='reduce'] .depth-l1, html[data-motion='reduce'] .depth-l2 { translate: none !important; }
-html[data-motion='reduce'] .btn:active, html[data-motion='reduce'] .btn-icon:active, html[data-motion='reduce'] .tile-hover:active { transform: none !important; }
-html[data-motion='reduce'] .btn::after, html[data-motion='reduce'] .depth::before, html[data-motion='reduce'] .depth::after { display: none !important; }
+html[data-motion='reduce'] .tile-hover:active { transform: none !important; }
+html[data-motion='reduce'] .depth::before, html[data-motion='reduce'] .depth::after { display: none !important; }
 html[data-motion='reduce'] ::view-transition-group(*), html[data-motion='reduce'] ::view-transition-old(*), html[data-motion='reduce'] ::view-transition-new(*) { animation: none !important; }
 
 /* ---------- appearance: «Крупный текст» (html[data-text='large']): root 112.5 %, fixed pixel sizes follow ---------- */
@@ -32586,7 +32510,7 @@ html[data-text='large'] .text-\[10px\] { font-size: calc(10px * 1.125); }
 html[data-text='large'] :is(.text-\[11px\], .adm-group-title, .pp-k) { font-size: calc(11px * 1.125); }
 html[data-text='large'] :is(.text-\[12px\], .tab-count, .hc-legend, .split-item small) { font-size: calc(12px * 1.125); }
 html[data-text='large'] :is(.text-\[13px\], .pill, .stat-k, .stat-s, .chip-glass, .srv-chip, .pp-v code) { font-size: calc(13px * 1.125); }
-html[data-text='large'] :is(.text-\[14px\], .text-\[14\.5px\], .hint-strip, .chip-filter, .btn-glass, .pp-v) { font-size: calc(14px * 1.125); }
+html[data-text='large'] :is(.text-\[14px\], .text-\[14\.5px\], .hint-strip, .chip-filter, .pp-v) { font-size: calc(14px * 1.125); }
 html[data-text='large'] .text-\[15px\] { font-size: calc(15px * 1.125); }
 html[data-text='large'] .stat-v { font-size: calc(34px * 1.125); }
 @media (min-width: 640px) { html[data-text='large'] .stat-v { font-size: calc(40px * 1.125); } }
@@ -32629,7 +32553,6 @@ html[data-contrast='high'] .panel, html[data-contrast='high'] .tile { border-wid
 html[data-contrast='high'] .pill { box-shadow: inset 0 0 0 1px currentColor; }
 html[data-contrast='high'] .seg { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
 html[data-contrast='high'] .seg-item[aria-pressed='true'], html[data-contrast='high'] .seg-item[aria-current='page'], html[data-contrast='high'] .seg-item.on { box-shadow: inset 0 0 0 2px rgb(var(--ink)); }
-html[data-contrast='high'] .btn-soft, html[data-contrast='high'] .btn-icon, html[data-contrast='high'] .row-act { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
 html[data-contrast='high'] .hint-strip { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
 html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline; text-underline-offset: 3px; }
 __COREGSM_EOF__
@@ -33751,6 +33674,8 @@ import './styles/servers.css';
 import './styles/detail.css';
 import './styles/system.css';
 import './styles/profile.css';
+// the button system last: one source of truth for every .btn* class
+import './styles/buttons.css';
 import App from './App';
 import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
@@ -34168,7 +34093,7 @@ function UpdateBanner() {
           </>
         )}
       </div>
-      <a href="#/admin/settings/updates" className="btn-on-grad relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
+      <a href="#/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
     </div>
   );
 }
@@ -34199,7 +34124,7 @@ function CertWarning() {
       <span className="min-w-0 flex-1">{text} <a href="#/admin/system" className="underline">Подробнее</a></span>
       <button
         type="button"
-        className="rounded-full px-2 py-0.5 font-extrabold hover:bg-black/5"
+        className="btn-icon-ghost btn-icon-sm btn-tone"
         aria-label="Скрыть предупреждение до конца сессии"
         onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
       >
@@ -34570,12 +34495,12 @@ export default function AdminStart() {
                       {st.state === 'done' ? 'Открыть' : st.cta}
                     </a>
                     {st.state !== 'done' && !skipped && (
-                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px]" onClick={() => s.skip(st.id)}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.skip(st.id)}>
                         Пропустить
                       </button>
                     )}
                     {skipped && (
-                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-link hover:underline max-sm:min-h-[44px]" onClick={() => s.unskip(st.id)}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.unskip(st.id)}>
                         Вернуть шаг
                       </button>
                     )}
@@ -35366,7 +35291,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         />
       )}
       {loaded && settings && wizard.complete && !wizardOpen && (
-        <p className="text-sm font-bold"><button type="button" className="text-link hover:underline max-sm:min-h-[44px]" onClick={() => setWizardOpen(true)}>Мастер подключения</button></p>
+        <p className="text-sm font-bold"><button type="button" className="btn-link" onClick={() => setWizardOpen(true)}>Мастер подключения</button></p>
       )}
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
@@ -35585,8 +35510,8 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             </Field>
             <MissingNote guild={guild} channelId={f.channelId} />
             <div className="flex flex-wrap gap-x-4 gap-y-1">
-              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
-              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+              <button type="button" className="btn-link" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
             </div>
           </>
         ) : (
@@ -35602,8 +35527,8 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
                   : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1">
-              {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
-              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+              {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>Выбрать из списка</button>}
+              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
             </div>
           </>
         )}
@@ -35623,7 +35548,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
         </label>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <Button loading={busy}>Сохранить</Button>
         </div>
       </form>
@@ -36257,7 +36182,7 @@ export default function MaintenancePage() {
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={`Изменить окно «${w.name}»`}><IconEdit size={16} />Изменить</button>
-                <button type="button" className="btn btn-danger btn-sm" onClick={() => remove(w)} aria-label={`Удалить окно «${w.name}»`}><IconTrash size={16} /></button>
+                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={`Удалить окно «${w.name}»`}><IconTrash size={16} /></button>
               </div>
             </li>
           ))}
@@ -36326,7 +36251,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
         <FieldError id="maint-problem" text={f.name.trim() && f.start && f.end ? problem ?? undefined : undefined} />
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <button type="submit" className="btn" disabled={!!problem || busy}>{busy && <Spinner />}Сохранить</button>
         </div>
       </form>
@@ -36988,8 +36913,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                 <option value="monthly">Каждый месяц</option>
               </select>
               <div className="flex gap-2">
+                <Button variant="ghost" onClick={() => setScheduling(false)}>Отмена</Button>
                 <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => request('schedule')}>Запланировать</Button>
-                <Button variant="soft" onClick={() => setScheduling(false)}>Отмена</Button>
               </div>
             </div>
           )}
@@ -37001,7 +36926,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           {settings?.testChannelId
             ? <>Тест уйдёт в {settings.testChannelName ? `# ${settings.testChannelName}` : `канал ${settings.testChannelId}`}{settings.testGuildName ? ` · ${settings.testGuildName}` : ''}. </>
             : 'Тестовый канал не задан: тест уйдёт в канал новости. '}
-          <button type="button" className="font-extrabold text-link hover:underline" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать'}</button>
+          <button type="button" className="btn-link" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать'}</button>
         </span>
         {pickTest && <div className="w-full"><ChannelPicker id="news-test-channel" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} /></div>}
       </div>
@@ -37027,8 +36952,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           tone="info"
           action={
             <span className="flex gap-3">
-              <button type="button" className="font-extrabold underline" onClick={doRestore}>Восстановить</button>
-              <button type="button" className="font-extrabold underline" onClick={dropRestore}>Отбросить</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={doRestore}>Восстановить</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={dropRestore}>Отбросить</button>
             </span>
           }
         >
@@ -37100,7 +37025,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                 {PRESETS.map((p) => {
                   const on = presetOf(e)?.id === p.id;
                   return (
-                    <button key={p.id} type="button" aria-pressed={on} onClick={() => setE(applyPreset(e, p))} className={`btn btn-sm ${on ? '' : 'btn-soft'}`}>
+                    <button key={p.id} type="button" aria-pressed={on} onClick={() => setE(applyPreset(e, p))} className="btn btn-soft btn-sm">
                       <span aria-hidden className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full" style={{ background: hex(p.color) }} />{p.icon} {p.label}
                     </button>
                   );
@@ -37856,7 +37781,7 @@ export default function Register({ onDone }: { onDone: () => void }) {
           <FieldError id="reg-accept-err" text={errs.accept} />
           <button
             type="button"
-            className="mt-1.5 text-sm font-extrabold text-link hover:underline"
+            className="btn-link mt-1.5"
             aria-expanded={showRules}
             aria-controls="reg-rules"
             onClick={() => setShowRules((v) => !v)}
@@ -38042,12 +37967,12 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
     <button
       type="button"
       onClick={() => { if (!on) setPops((n) => n + 1); onClick(); }}
-      className="btn-glass !h-11 !w-11 shrink-0 !px-0 text-xl leading-none"
+      className="btn-icon-glass shrink-0"
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`${on ? 'Убрать из избранного' : 'В избранное'}: ${name}`}
       aria-pressed={on}
     >
-      <span className="star-wrap">
+      <span className="star-wrap text-xl leading-none">
         <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
         {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
       </span>
@@ -38663,7 +38588,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <button className="btn" disabled={busy || !canTest}>{busy ? 'Сохраняю…' : 'Сохранить'}</button>
         </div>
       </form>
@@ -38708,18 +38633,19 @@ function greeting(name: string): string {
   return `${hello}, ${name.trim() || name}`;
 }
 
-function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: string; onClick: () => void; className?: string }) {
+/** `className` colours the star; `glass` is the variant for covers (white star on a translucent disc) */
+function FavButton({ on, name, onClick, className = '', glass = false }: { on: boolean; name: string; onClick: () => void; className?: string; glass?: boolean }) {
   // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
   const [pops, setPops] = useState(0);
   return (
     <button
       onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
-      className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${className}`}
+      className={glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`В избранное: ${name}`}
       aria-pressed={on}
     >
-      <span className="star-wrap">
+      <span className={`star-wrap text-xl leading-none ${className}`}>
         <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
         {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
       </span>
@@ -38899,7 +38825,7 @@ function ServerList() {
           ) : <span />}
           <div className="flex flex-wrap items-center gap-2.5">
             {canSelect && (
-              <button type="button" className={`btn btn-soft ${selOn ? 'srv-sel-on' : ''}`} aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
+              <button type="button" className="btn btn-soft" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
               </button>
             )}
@@ -38939,13 +38865,13 @@ function ServerList() {
             )}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
-              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+              <div className="fade-in srv-grid">
                 {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
               </div>
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
-              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+              <div className="fade-in srv-grid">
                 {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} uptime={uptime.get(hero.id)} />}
                 {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
               </div>
@@ -39002,7 +38928,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
+      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
       style={{
         ...stagger(idx),
         background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
@@ -39031,7 +38957,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
-          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
         </div>
       </div>
 
@@ -39071,21 +38997,21 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3 ${select?.has(s.id) ? 'srv-selected' : ''}`}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''}`}
       style={stagger(idx)}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
-        <GameAvatar game={s.game} size={40} glass vtId={s.id} />
+      <div className={`flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
+        <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
-          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
         </div>
       </div>
 
       <div className="px-1.5">
-        <h3 className="line-clamp-2 break-words text-[14.5px] font-extrabold leading-tight" title={s.name}>
+        <h3 className="line-clamp-2 break-words text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
@@ -39095,8 +39021,8 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       {s.online ? (
         <>
           <div className="flex items-baseline gap-1.5 px-1.5">
-            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
-            <span className="font-bold text-mute">/ {s.maxPlayers}</span>
+            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
+            <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
@@ -39470,7 +39396,7 @@ function BotCard() {
       <FieldError id="set-token-err" text={tokenWarn} />
       </div>
       {tokenSet && (
-        <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
+        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>Удалить сохранённый токен</button>
       )}
 
       <Field label="Прокси (необязательно)">
@@ -39510,7 +39436,7 @@ function BotCard() {
           />
         </Field>
         {secretSet && (
-          <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={() => void removeSecret()}>Удалить Client Secret</button>
+          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>Удалить Client Secret</button>
         )}
         {info?.discordRedirect && (
           <div>
@@ -39790,20 +39716,20 @@ function UpdateCard() {
         <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
           {state === 'available' && (
             <>
-              <button className="btn-on-grad min-h-[46px] px-6 text-base shadow-pop" onClick={apply} disabled={busy || running || !info?.canApply}>
+              <button className="btn-on-grad btn-lg" onClick={apply} disabled={busy || running || !info?.canApply}>
                 {busy ? 'Отправляю…' : 'Обновить сейчас'}
               </button>
-              <a className="btn btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
+              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
             </>
           )}
           {(state === 'latest' || state === 'unknown') && (
             <button className="btn" onClick={check} disabled={busy || running}>{busy ? 'Проверяю…' : 'Проверить обновления'}</button>
           )}
           {state === 'available' && (
-            <button className="btn btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
+            <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
           )}
           {info?.canRollback && state !== 'running' && (
-            <button className={`btn ${state === 'available' ? 'btn-ghost-on-grad' : 'btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
+            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
           )}
         </div>
 
@@ -39824,7 +39750,7 @@ function UpdateCard() {
         {showOldFailure && info?.job && (
           <div className="relative mt-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
             <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
-            <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+            <button type="button" className="btn-link btn-link-tone" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
           </div>
         )}
         <div className="relative"><ErrorLine text={error} /></div>
@@ -40470,6 +40396,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/UiKit.tsx" << '__COREGSM_EOF__'
 import { useState, type ReactNode } from 'react';
 import { AccentPicker } from '../components/AccentPicker';
+import { BtnSpinner } from '../components/Button';
+import { SplitButton } from '../components/SplitButton';
 import { Gauge } from '../components/Gauge';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { buildSparkline } from '../sparkline';
@@ -40535,6 +40463,85 @@ function NotifyExtras() {
   );
 }
 
+/** the button system: every variant at every size, then the states; `compact` is the short version shown in both themes */
+const BTN_VARIANTS: [string, string][] = [
+  ['btn', 'Основная'], ['btn btn-soft', 'Мягкая'], ['btn btn-outline', 'Контур'], ['btn btn-ghost', 'Призрачная'],
+  ['btn btn-danger', 'Опасная'], ['btn btn-danger-solid', 'Удалить'], ['btn btn-success', 'Успех'], ['btn btn-success-solid', 'Готово'], ['btn btn-warn', 'Внимание'],
+];
+const BTN_SIZES: [string, string][] = [['btn-xs', 'XS 28'], ['btn-sm', 'SM 34'], ['', 'MD 42'], ['btn-lg', 'LG 50']];
+
+function ButtonKit({ compact = false }: { compact?: boolean }) {
+  const [pressed, setPressed] = useState({ a: true, b: false });
+  const [group, setGroup] = useState('week');
+  const sizes = compact ? BTN_SIZES.filter(([c]) => c === 'btn-sm' || c === '') : BTN_SIZES;
+  return (
+    <div className="space-y-4">
+      {sizes.map(([sz, name]) => (
+        <Row key={name} label={`Размер ${name} px`}>
+          {BTN_VARIANTS.map(([cls, label]) => <button key={cls} type="button" className={`${cls} ${sz}`}>{label}</button>)}
+        </Row>
+      ))}
+      <Row label="Недоступные (disabled)">
+        {BTN_VARIANTS.map(([cls, label]) => <button key={cls} type="button" className={cls} disabled>{label}</button>)}
+      </Row>
+      <Row label="Загрузка (aria-busy, спиннер перед текстом)">
+        {BTN_VARIANTS.map(([cls, label]) => <button key={cls} type="button" className={cls} disabled aria-busy="true"><BtnSpinner />{label}</button>)}
+      </Row>
+      <Row label="Переключатели (aria-pressed)">
+        <button type="button" className="btn btn-soft" aria-pressed={pressed.a} onClick={() => setPressed((p) => ({ ...p, a: !p.a }))}>Включено</button>
+        <button type="button" className="btn btn-soft" aria-pressed={pressed.b} onClick={() => setPressed((p) => ({ ...p, b: !p.b }))}>Выключено</button>
+        <button type="button" className="btn btn-outline" aria-pressed>Контур</button>
+        <button type="button" className="btn btn-ghost" aria-pressed>Призрачная</button>
+        <button type="button" className="btn-icon" aria-pressed aria-label="Закреплено"><IconBell /></button>
+      </Row>
+      <Row label="С иконкой и во всю ширину">
+        <button type="button" className="btn"><IconPlus size={16} />С иконкой</button>
+        <button type="button" className="btn btn-soft btn-sm"><IconRefresh size={16} />Обновить</button>
+        <button type="button" className="btn btn-outline btn-sm"><IconEdit size={16} />Изменить</button>
+        <button type="button" className="btn btn-danger btn-sm"><IconTrash size={16} />Удалить</button>
+        <button type="button" className="btn btn-block">Во всю ширину</button>
+      </Row>
+      <Row label="Иконки-кнопки (всегда с aria-label)">
+        <button type="button" className="btn-icon" aria-label="Обновить"><IconRefresh /></button>
+        <button type="button" className="btn-icon-sm" aria-label="Обновить"><IconRefresh size={16} /></button>
+        <button type="button" className="btn-icon-ghost" aria-label="Обновить"><IconRefresh /></button>
+        <button type="button" className="btn-icon-danger" aria-label="Удалить"><IconTrash /></button>
+        <button type="button" className="row-act" aria-label="Изменить"><IconEdit /></button>
+        <button type="button" className="row-act row-act-danger" aria-label="Удалить"><IconTrash /></button>
+        <button type="button" className="btn-icon" aria-label="Недоступно" disabled><IconRefresh /></button>
+      </Row>
+      <Row label="Текстовые: действие внутри текста">
+        <span className="text-sm font-semibold">Обновите данные: <button type="button" className="btn-link">обновить список</button> или <button type="button" className="btn-link-danger">удалить токен</button>.</span>
+      </Row>
+      <Row label="Группа и составная кнопка">
+        <span className="btn-group" role="group" aria-label="Период">
+          {[['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц']].map(([k, label]) => (
+            <button key={k} type="button" className="btn btn-soft btn-sm" aria-pressed={group === k} onClick={() => setGroup(k)}>{label}</button>
+          ))}
+        </span>
+        <span className="btn-group" role="group" aria-label="Действия">
+          <button type="button" className="btn btn-outline btn-sm">Назад</button>
+          <button type="button" className="btn btn-outline btn-sm">Вперёд</button>
+        </span>
+        <SplitButton label="Опросить" onClick={() => undefined} items={[{ key: 'a', label: 'Опросить все', hint: 'Все выбранные', onSelect: () => undefined }, { key: 'b', label: 'Только онлайн', onSelect: () => undefined }]} />
+      </Row>
+      <Row label="На градиенте и на обложке">
+        <div className="cover-grad flex flex-wrap items-center gap-2.5 rounded-ui-lg p-4" style={{ ['--c1' as string]: '#4338ca', ['--c2' as string]: '#7c3aed' }}>
+          <button type="button" className="btn-cta">Подключиться</button>
+          <button type="button" className="btn-on-grad">Белая</button>
+          <button type="button" className="btn-ghost-on-grad">Прозрачная</button>
+          <button type="button" className="btn-glass"><IconBell size={18} />Подписаться</button>
+          <button type="button" className="btn-glass-quiet">Тихая</button>
+          <button type="button" className="btn-glass-quiet btn-glass-danger">Опасная</button>
+          <button type="button" className="btn-icon-glass" aria-label="В избранное">☆</button>
+          <button type="button" className="btn-glass" disabled>Недоступна</button>
+          <span className="chip-on-grad">Чип</span>
+        </div>
+      </Row>
+    </div>
+  );
+}
+
 function Specimen() {
   const [on, setOn] = useState(true);
   const [seg, setSeg] = useState('a');
@@ -40550,6 +40557,7 @@ function Specimen() {
           <span className="pill pill-bad">ОФЛАЙН</span>
           <span className="pill pill-mute">ОЖИДАНИЕ</span>
         </div>
+        <ButtonKit compact />
         <input className="input" defaultValue="Поле ввода" aria-label="Пример поля" />
         <label className="flex items-center gap-3 text-sm font-bold"><Switch checked={on} onChange={setOn} /> Переключатель</label>
         <div className="seg">
@@ -40620,31 +40628,16 @@ export default function UiKitPage() {
         </Row>
       </Block>
 
-      <Block title="Кнопки" note="Одна основная кнопка на экран, остальные мягкие. На телефоне высота не меньше 44 px.">
-        <Row label="Варианты">
-          <button className="btn">Основная</button>
-          <button className="btn btn-soft">Мягкая</button>
-          <button className="btn btn-danger">Опасная</button>
-          <button className="btn btn-solid-danger">Удалить</button>
-          <a className="btn btn-soft" href="#/_ui">Ссылка-кнопка</a>
-        </Row>
-        <Row label="Размеры и состояния">
-          <button className="btn btn-sm">Малая</button>
-          <button className="btn" disabled>Недоступна</button>
+      <Block
+        title="Кнопки"
+        note="Одна основная кнопка на экран, остальные мягкие или контурные; «Отмена» призрачная, опасное с подтверждением. В диалогах основная справа. Размеры: XS и SM в панелях инструментов и строках, MD в формах, LG для главного действия на экране. На телефоне высота не меньше 44 px. Иконка-кнопка всегда с aria-label."
+      >
+        <ButtonKit />
+        <Row label="Компонент Button (loading, variant, size)">
           <Button loading={busy} onClick={() => { setBusy(true); window.setTimeout(() => setBusy(false), 1500); }}>{busy ? 'Сохраняю…' : 'С индикатором'}</Button>
-          <button className="btn"><IconPlus size={16} />С иконкой</button>
-        </Row>
-        <Row label="Иконки-кнопки">
-          <button type="button" className="btn-icon" aria-label="Обновить"><IconRefresh /></button>
-          <button type="button" className="row-act" aria-label="Изменить"><IconEdit /></button>
-          <button type="button" className="row-act row-act-danger" aria-label="Удалить"><IconTrash /></button>
-        </Row>
-        <Row label="На градиенте">
-          <div className="cover-grad flex flex-wrap items-center gap-2.5 rounded-ui-lg p-4" style={{ ['--c1' as string]: '#4338ca', ['--c2' as string]: '#7c3aed' }}>
-            <button className="btn-on-grad">Белая</button>
-            <button className="btn-ghost-on-grad">Прозрачная</button>
-            <span className="chip-on-grad">Чип</span>
-          </div>
+          <Button variant="outline" size="sm">Контур</Button>
+          <Button variant="ghost" size="sm">Призрачная</Button>
+          <Button variant="danger-solid" size="lg">Крупная опасная</Button>
         </Row>
       </Block>
 
@@ -41159,6 +41152,361 @@ export function downsample(values: (number | null)[], max: number): (number | nu
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'
+/* buttons: the single source of truth for every button in the panel (imported in main.tsx after index.css and the other styles).
+
+   Rules (see the black-square notes in index.css): no transform / translate / scale on buttons, hover and press feedback by
+   background-color, colour, box-shadow and opacity only (<= .18s), border colours never transition (rings are inset
+   box-shadows), no outline styling (the focus ring is the unlayered :focus-visible rule at the end of index.css), no
+   backdrop-filter / will-change / filter, no endless animation except the spinner.
+
+   Anatomy of a button: --b-* custom properties describe the look of a variant, one generic rule paints them.
+     --b-bg / --b-bg-h  background colour at rest / on hover      --b-fg / --b-fg-h  text colour
+     --b-img            background image (primary gradient)        --b-hl             1px inner top highlight
+     --b-ring           1px inset ring                             --b-ovl            full inset wash (hover darkens / lightens)
+     --b-drop           outer shadow                               -h / -a suffix: hover / pressed value (fall back to rest)
+   Every variant class also works on its own (`btn-soft` without `btn`), `btn btn-soft` is the same thing.
+
+   Variants   .btn (primary) .btn-soft .btn-outline .btn-ghost .btn-danger .btn-danger-solid (= .btn-solid-danger)
+              .btn-success .btn-success-solid .btn-warn .btn-link (.btn-link-danger)
+   Sizes      .btn-xs 28px  .btn-sm 34px  (default 42px)  .btn-lg 50px  .btn-block (full width)
+   Icon       .btn-icon 40px  .btn-icon-sm 32px  .btn-icon-ghost  .btn-icon-danger  (always give them an aria-label); .row-act (compact row action)
+   Groups     .btn-group joins buttons with a 1px gap
+   Context    on a gradient: .btn-on-grad .btn-ghost-on-grad  .btn-cta ; on a cover: .btn-glass .btn-glass-quiet .btn-glass-danger .btn-icon-glass .pp-copy
+   State      :disabled / [aria-disabled='true'] / [aria-busy='true'] / [aria-pressed='true']
+   All sizes are rem: «Крупный текст» scales buttons together with the text. */
+
+/* ---------- shared base ----------
+   Layout properties live in :where() (zero specificity): a utility class on the element (hidden, w-full, rounded-xl,
+   min-h-*, max-sm:hidden) always wins. Paint properties that Tailwind's preflight also sets (padding, font, colour,
+   background) are at class specificity; do not fight them with utilities, use the size and variant classes. */
+:where(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+) {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--b-gap, .5rem);
+  min-height: max(var(--b-h, 2.625rem), var(--tap, 0px));
+  border-radius: 9999px;
+  text-align: center; text-decoration: none; letter-spacing: .01em;
+  cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+) {
+  --b-h: 2.625rem; --b-px: 1.1rem; --b-fs: .9375rem; --b-gap: .5rem;
+  --b-img: none; --b-bg: transparent; --b-fg: rgb(var(--ink));
+  --b-hl: inset 0 1px 0 0 transparent; --b-ring: inset 0 0 0 1px transparent;
+  --b-ovl: inset 0 0 0 999px transparent; --b-drop: 0 0 0 0 transparent;
+  padding: .3rem var(--b-px);
+  font-size: var(--b-fs); font-weight: 800; line-height: 1.2;
+  color: var(--b-fg); background-color: var(--b-bg); background-image: var(--b-img);
+  box-shadow: var(--b-hl), var(--b-ring), var(--b-ovl), var(--b-drop);
+  /* colours and shadows only: no border/outline colour, no transform */
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease, opacity .15s ease;
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet
+) > svg { flex: none; width: 1.1em; height: 1.1em; }
+:is(.btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-icon-glass, .pp-copy) > svg { flex: none; }
+
+/* ---------- states ---------- */
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+):where(:not(:disabled, [aria-disabled='true'])):hover {
+  background-color: var(--b-bg-h, var(--b-bg)); color: var(--b-fg-h, var(--b-fg));
+  box-shadow: var(--b-hl-h, var(--b-hl)), var(--b-ring-h, var(--b-ring)), var(--b-ovl-h, var(--b-ovl)), var(--b-drop-h, var(--b-drop));
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+):where(:not(:disabled, [aria-disabled='true'])):active {
+  background-color: var(--b-bg-a, var(--b-bg-h, var(--b-bg))); color: var(--b-fg-a, var(--b-fg-h, var(--b-fg)));
+  box-shadow: var(--b-hl-a, var(--b-hl)), var(--b-ring-a, var(--b-ring-h, var(--b-ring))), var(--b-ovl-a, var(--b-ovl-h, var(--b-ovl))), var(--b-drop-a, var(--b-drop));
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+):is(:disabled, [aria-disabled='true']) { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* busy: the label stays, a spinner precedes it (Button component); the button is disabled but should not look dead */
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass
+)[aria-busy='true']:is(:disabled, [aria-disabled='true']) { opacity: .85; cursor: progress; }
+.btn-spin { width: 1rem; height: 1rem; flex-shrink: 0; }
+
+/* ---------- primary ---------- */
+.btn {
+  --b-fg: #fff;
+  --b-bg: rgb(var(--brand));
+  /* brand -> brand-2: custom accent colours flow through both variables; the game accent changes --brand */
+  --b-img: linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
+  --b-hl: inset 0 1px 0 0 rgb(255 255 255 / .22);
+  --b-drop: 0 1px 2px rgb(var(--brand) / .25), 0 8px 18px -8px rgb(var(--brand) / .5);
+  --b-ovl-h: inset 0 0 0 999px rgb(255 255 255 / .06);
+  --b-drop-h: 0 1px 2px rgb(var(--brand) / .3), 0 10px 22px -8px rgb(var(--brand) / .65);
+  --b-hl-a: inset 0 2px 8px 0 rgb(0 0 0 / .26);
+  --b-ovl-a: inset 0 0 0 999px rgb(0 0 0 / .06);
+  --b-drop-a: 0 1px 1px rgb(var(--brand) / .2), 0 2px 6px -3px rgb(var(--brand) / .4);
+}
+
+/* ---------- soft (secondary): brand-tinted surface ---------- */
+.btn-soft {
+  --b-img: none; --b-fg: rgb(var(--link));
+  --b-bg: rgb(var(--brand) / .1); --b-bg-h: rgb(var(--brand) / .12);
+  --b-ring-h: inset 0 0 0 1px rgb(var(--brand) / .35);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+
+/* ---------- outline ---------- */
+.btn-outline {
+  --b-img: none; --b-fg: rgb(var(--ink));
+  --b-bg: transparent; --b-bg-h: rgb(var(--soft));
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ring: inset 0 0 0 1px rgb(var(--line)); --b-ring-h: inset 0 0 0 1px rgb(var(--field) / .6);
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .1); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+
+/* ---------- ghost (tertiary) ---------- */
+.btn-ghost {
+  --b-img: none; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink));
+  --b-bg: transparent; --b-bg-h: rgb(var(--soft));
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent; --b-ring: inset 0 0 0 1px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .1); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+
+/* ---------- status variants: soft and solid ---------- */
+.btn-danger {
+  --b-img: none; --b-fg: rgb(var(--bad));
+  --b-bg: rgb(var(--badbg)); --b-bg-h: rgb(var(--badbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--bad) / .45);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+.btn-success {
+  --b-img: none; --b-fg: rgb(var(--ok));
+  --b-bg: rgb(var(--okbg)); --b-bg-h: rgb(var(--okbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--ok) / .45);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+.btn-warn {
+  --b-img: none; --b-fg: rgb(var(--warn));
+  --b-bg: rgb(var(--warnbg)); --b-bg-h: rgb(var(--warnbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--warn) / .45);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+/* solid: white text on a dark fill; hover darkens (a lighter fill would drop under 4.5:1 in the dark theme) */
+:is(.btn-danger-solid, .btn-solid-danger, .btn-success-solid) {
+  --b-img: none; --b-fg: #fff;
+  --b-hl: inset 0 1px 0 0 rgb(255 255 255 / .2); --b-ring: inset 0 0 0 1px transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px rgb(0 0 0 / .1);
+  --b-hl-a: inset 0 2px 8px 0 rgb(0 0 0 / .3); --b-ovl-a: inset 0 0 0 999px rgb(0 0 0 / .12);
+}
+:is(.btn-danger-solid, .btn-solid-danger) {
+  --b-bg: rgb(var(--badsolid));
+  --b-drop: 0 1px 2px rgb(var(--badsolid) / .25), 0 8px 18px -8px rgb(var(--badsolid) / .5);
+  --b-drop-h: 0 1px 2px rgb(var(--badsolid) / .3), 0 10px 22px -8px rgb(var(--badsolid) / .6);
+  --b-drop-a: 0 1px 1px rgb(var(--badsolid) / .2);
+}
+.btn-success-solid {
+  --b-bg: rgb(var(--oksolid));
+  --b-drop: 0 1px 2px rgb(var(--oksolid) / .25), 0 8px 18px -8px rgb(var(--oksolid) / .5);
+  --b-drop-h: 0 1px 2px rgb(var(--oksolid) / .3), 0 10px 22px -8px rgb(var(--oksolid) / .6);
+  --b-drop-a: 0 1px 1px rgb(var(--oksolid) / .2);
+}
+
+/* ---------- text-only inline button: a link that performs an action ---------- */
+:is(.btn-link, .btn-link-danger) {
+  --b-h: 0px; --b-px: 0px; --b-fs: inherit; --b-gap: .35rem;
+  --b-img: none; --b-bg: transparent; --b-fg: rgb(var(--link));
+  position: relative; min-height: 0; padding: 0; border-radius: var(--r-sm);
+  text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; text-decoration-thickness: 1.5px;
+  font-size: inherit; box-shadow: none; vertical-align: baseline;
+}
+:where(.btn-link, .btn-link-danger) { display: inline; }
+.btn-link-danger { --b-fg: rgb(var(--bad)); }
+/* a text action inside a coloured notice: keeps the notice's text colour and stays underlined */
+.btn-link-tone { --b-fg: inherit; text-decoration-color: currentColor; }
+:is(.btn-link, .btn-link-danger):where(:not(:disabled, [aria-disabled='true'])):hover { text-decoration-color: currentColor; box-shadow: none; }
+:is(.btn-link, .btn-link-danger):active { opacity: .75; }
+/* a bigger hit area on phones without moving the text */
+@media (max-width: 639px) {
+  :is(.btn-link, .btn-link-danger)::before { content: ''; position: absolute; inset: -.7rem -.4rem; }
+}
+
+/* ---------- icon buttons: always carry an aria-label ---------- */
+:is(.btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-icon-glass, .pp-copy) {
+  --b-px: 0px; --b-i: 2.5rem;
+  place-items: center; min-height: 0; padding: 0; flex: none;
+}
+:where(.btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-icon-glass, .pp-copy) {
+  display: inline-grid; min-height: 0;
+  width: max(var(--b-i), var(--tap, 0px)); height: max(var(--b-i), var(--tap, 0px));
+}
+:is(.btn-icon, .btn-icon-sm, .btn-icon-danger, .row-act) {
+  --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link));
+  --b-bg: rgb(var(--soft)); --b-bg-h: rgb(var(--brand) / .12);
+}
+.btn-icon-sm { --b-i: 2rem; }
+.row-act { --b-i: 2.375rem; }
+.btn-icon-ghost {
+  --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink));
+  --b-bg: transparent; --b-bg-h: rgb(var(--soft));
+}
+.row-act-danger { --b-bg-h: rgb(var(--badbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--bad) / .45); --b-fg-h: rgb(var(--bad)); }
+.btn-icon-danger { --b-bg-h: rgb(var(--badbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--bad) / .45); --b-fg-h: rgb(var(--bad)); }
+/* a button that is also a toggle: brand tint with an inner ring */
+:is(.btn-soft, .btn-outline, .btn-ghost, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .row-act)[aria-pressed='true'] {
+  --b-fg: rgb(var(--link)); --b-fg-h: rgb(var(--link));
+  --b-bg: rgb(var(--brand) / .12); --b-bg-h: rgb(var(--brand) / .12);
+  --b-ring: inset 0 0 0 1.5px rgb(var(--brand) / .55); --b-ring-h: inset 0 0 0 1.5px rgb(var(--brand) / .7);
+}
+
+/* ---------- button on a coloured status surface (toast, notice): keeps the surface's text colour ---------- */
+.btn-tone {
+  --b-fg: inherit; --b-fg-h: inherit; --b-bg: rgb(var(--ink) / .1); --b-bg-h: rgb(var(--ink) / .18); --b-ring: inset 0 0 0 1px transparent; --b-ring-h: inset 0 0 0 1px transparent;
+  --b-img: none; --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-drop-h: 0 0 0 0 transparent; --b-ovl-h: inset 0 0 0 999px transparent;
+}
+
+/* ---------- group: buttons joined with a 1px gap, the outer ends are round ---------- */
+.btn-group { display: inline-flex; max-width: 100%; gap: 1px; vertical-align: middle; }
+.btn-group > * { border-radius: 0; flex: 0 1 auto; }
+.btn-group > :first-child { border-top-left-radius: 9999px; border-bottom-left-radius: 9999px; }
+.btn-group > :last-child { border-top-right-radius: 9999px; border-bottom-right-radius: 9999px; }
+.btn-group > :only-child { border-radius: 9999px; }
+.btn-group > :focus-visible { z-index: 1; }
+
+/* ---------- split button (main action + chevron) ---------- */
+.split { position: relative; display: inline-flex; max-width: 100%; gap: 1px; }
+.split > .split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; min-width: 0; }
+.split > .split-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; --b-px: .7rem; }
+.split > .split-caret svg { transition: transform .25s cubic-bezier(.34, 1.4, .5, 1); }
+.split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
+.split-menu {
+  position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
+  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--raised)); border: 1px solid var(--tile-border);
+  box-shadow: var(--shadow-3);
+  transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) backwards;
+}
+.split-menu[data-up='true'] { bottom: calc(100% + 6px); transform-origin: bottom right; }
+.split-menu[data-up='false'] { top: calc(100% + 6px); }
+.split-item {
+  display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
+  border-radius: var(--r-md); padding: .55rem .8rem; font-weight: 800; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
+  transition: background-color .15s ease;
+}
+.split-item small { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+.split-item:hover, .split-item:focus-visible { background: rgb(var(--soft)); }
+.split-item:disabled { opacity: .5; cursor: not-allowed; }
+@keyframes split-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------- on a gradient (update hero, banners) ---------- */
+/* a context button used together with .btn must not inherit the primary gradient, glow or highlight */
+:is(.btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) {
+  --b-img: none; --b-hl: inset 0 1px 0 0 transparent; --b-ring: inset 0 0 0 1px transparent; --b-ovl: inset 0 0 0 999px transparent; --b-drop: 0 0 0 0 transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 1px 0 0 transparent; --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+.btn-on-grad {
+  --b-fs: .875rem; --b-h: 2.375rem; --b-px: 1.1rem;
+  --b-fg: #12141a; --b-bg: #fff; --b-bg-h: rgb(255 255 255 / .9); --b-bg-a: rgb(255 255 255 / .82);
+  --b-drop: 0 4px 14px -6px rgb(0 0 0 / .4); --b-drop-h: 0 6px 16px -6px rgb(0 0 0 / .45); --b-drop-a: 0 1px 3px -1px rgb(0 0 0 / .3);
+}
+.btn-ghost-on-grad {
+  --b-fs: .875rem; --b-h: 2.375rem; --b-px: 1.1rem;
+  --b-fg: #fff; --b-bg: rgb(0 0 0 / .24); --b-bg-h: rgb(0 0 0 / .36); --b-bg-a: rgb(0 0 0 / .44);
+  --b-ring: inset 0 0 0 1px rgb(255 255 255 / .16);
+}
+/* the white call-to-action on a cover */
+.btn-cta {
+  --b-h: 3rem; --b-px: 1.5rem; --b-fs: 1rem; --b-gap: .5rem;
+  --b-fg: #12141a; --b-bg: #fff; --b-bg-h: rgb(255 255 255 / .92); --b-bg-a: rgb(255 255 255 / .84);
+  --b-drop: 0 6px 18px -6px rgb(0 0 0 / .5); --b-drop-h: 0 10px 22px -6px rgb(0 0 0 / .55); --b-drop-a: 0 2px 6px -2px rgb(0 0 0 / .4);
+  font-weight: 900;
+}
+
+/* ---------- on a cover: translucent white / dark glass (no backdrop-filter, see the black-square notes) ---------- */
+.btn-glass {
+  --b-fg: #fff; --b-bg: rgb(255 255 255 / .24); --b-bg-h: rgb(255 255 255 / .34); --b-bg-a: rgb(255 255 255 / .2);
+  --b-ring: inset 0 0 0 1px rgb(255 255 255 / .3);
+}
+.btn-glass-quiet {
+  --b-h: 2.125rem; --b-px: .9rem; --b-fs: .875rem; --b-gap: .4rem;
+  --b-fg: rgb(255 255 255 / .94); --b-bg: rgb(8 10 20 / .3); --b-bg-h: rgb(8 10 20 / .46); --b-bg-a: rgb(8 10 20 / .56);
+}
+.btn-glass-danger { --b-fg: #ffd6d6; --b-fg-h: #fff; --b-bg-h: rgb(185 28 28 / .75); --b-bg-a: rgb(185 28 28 / .85); }
+.btn-icon-glass {
+  --b-i: 2.75rem; --b-fs: 1.25rem;
+  --b-fg: #fff; --b-bg: rgb(255 255 255 / .24); --b-bg-h: rgb(255 255 255 / .34); --b-bg-a: rgb(255 255 255 / .2);
+  --b-ring: inset 0 0 0 1px rgb(255 255 255 / .3);
+}
+/* a smaller glass disc (favourite star on a tile) */
+.btn-icon-glass.btn-icon-sm { --b-i: 2rem; }
+/* the copy button inside the passport on the banner */
+.pp-copy {
+  --b-i: 1.875rem; --b-fg: #fff; --b-bg: rgb(255 255 255 / .18); --b-bg-h: rgb(255 255 255 / .3); --b-bg-a: rgb(255 255 255 / .24);
+}
+.pp-copy { position: relative; }
+.pp-copy::before { content: ''; position: absolute; inset: -.4rem; }
+
+/* ---------- sizes ---------- */
+.btn-xs { --b-h: 1.75rem; --b-px: .7rem; --b-fs: .78125rem; --b-gap: .35rem; }
+.btn-sm { --b-h: 2.125rem; --b-px: .9rem; --b-fs: .875rem; --b-gap: .4rem; }
+.btn-lg { --b-h: 3.125rem; --b-px: 1.5rem; --b-fs: 1rem; --b-gap: .6rem; }
+:is(.btn-link, .btn-link-danger).btn-sm, :is(.btn-link, .btn-link-danger).btn-xs, :is(.btn-link, .btn-link-danger).btn-lg { --b-h: 0px; --b-px: 0px; min-height: 0; padding: 0; font-size: inherit; }
+:where(.btn-block) { display: flex; width: 100%; }
+
+/* ---------- phones: touch targets of at least 44px (everything except inline links and the passport copy) ---------- */
+@media (max-width: 639px) {
+  :is(
+    .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn,
+    .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+    .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass
+  ) { --tap: 2.75rem; }
+  .btn-glass-quiet { --b-px: .7rem; }
+}
+
+/* ---------- density «Компактная»: a little lower, same shapes ---------- */
+:root[data-density='compact'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn):not(.btn-xs, .btn-sm, .btn-lg) { --b-h: 2.25rem; --b-px: .95rem; }
+:root[data-density='compact'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn).btn-sm { --b-h: 1.875rem; --b-px: .75rem; }
+
+/* ---------- animated glyphs inside buttons (small, so transform is fine) ---------- */
+.ico-refresh { transition: transform .55s cubic-bezier(.3, 1.3, .5, 1); }
+:is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-on-grad, .btn-ghost-on-grad, .btn-glass, .btn-glass-quiet):active .ico-refresh { transform: rotate(200deg); transition-duration: .15s; }
+.ico-refresh.spinning { animation: spin .85s linear infinite; }
+.ico-nudge { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
+:is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-on-grad, .btn-ghost-on-grad, a):hover > .ico-nudge { transform: translateX(3px); }
+.ico-share { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
+:is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-on-grad, .btn-ghost-on-grad):hover .ico-share { transform: translate(1.5px, -1.5px); }
+
+/* ---------- magnetic call-to-action buttons: the attribute stays, the lean is off (no translate on buttons) ---------- */
+[data-magnetic] { translate: none !important; }
+
+/* ---------- accessibility options ---------- */
+html[data-contrast='high'] :is(.btn-soft, .btn-icon, .btn-icon-sm, .btn-icon-danger, .row-act, .btn-danger, .btn-success, .btn-warn) { --b-ring: inset 0 0 0 1px rgb(var(--field)); --b-ring-h: inset 0 0 0 1px rgb(var(--ink)); }
+html[data-contrast='high'] :is(.btn-outline, .btn-ghost, .btn-icon-ghost) { --b-ring: inset 0 0 0 1px rgb(var(--field)); --b-ring-h: inset 0 0 0 1px rgb(var(--ink)); }
+html[data-contrast='high'] :is(.btn-link, .btn-link-danger) { text-decoration-color: currentColor; }
+@media (prefers-reduced-motion: reduce) {
+  :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) { transition: none !important; }
+  .split > .split-caret svg, .split-item { transition: none !important; }
+}
+html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) { transition: none !important; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
 /* detail: styles owned by the server page workstream (see main.tsx)
    Rules: no transform transitions on blocks, no infinite animations, entrance = fill-mode backwards,
@@ -41186,13 +41534,6 @@ __COREGSM_EOF__
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
 .pp-v a { text-decoration: underline; text-underline-offset: 3px; }
-.pp-copy {
-  display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 9999px;
-  color: #fff; background: rgba(255, 255, 255, 0.18); transition: background .15s ease;
-}
-.pp-copy:hover { background: rgba(255, 255, 255, 0.3); }
-.pp-copy:focus, .pp-copy:focus-visible { outline: 0; }
-.pp-copy:focus-visible { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
 .pp-tone-ok { color: #86efac; }
 .pp-tone-warn { color: #fde68a; }
 .pp-tone-bad { color: #fecaca; }
@@ -41227,7 +41568,6 @@ __COREGSM_EOF__
   min-width: 0; flex: 1 1 200px; overflow-x: auto; white-space: nowrap; padding: 10px 12px; border-radius: 12px;
   background: rgb(var(--card)); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700;
 }
-.cn-big .btn { min-height: 44px; padding-left: 18px; padding-right: 18px; font-size: 15px; }
 .cn-step { display: flex; gap: 12px; }
 .cn-num {
   display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 9999px;
@@ -41238,7 +41578,7 @@ __COREGSM_EOF__
 
 @media (prefers-reduced-motion: reduce) {
   .hc-fade, .pl-more { animation: none !important; }
-  .pl-row, .pp-copy { transition: none !important; }
+  .pl-row { transition: none !important; }
 }
 
 /* ======================================================================
@@ -41369,9 +41709,6 @@ __COREGSM_EOF__
 .cn-sub { margin: 0; padding-left: 18px; display: grid; gap: 6px; list-style: disc; font-weight: 600; line-height: 1.4; }
 .cn-sub li::marker { color: rgb(var(--mute)); }
 .cn-big code { font-size: 16px; }
-.cn-big .btn { min-height: 48px; }
-.cn-go { min-height: 52px; width: 100%; font-size: 16px; }
-@media (min-width: 640px) { .cn-go { width: auto; } }
 .cn-part { display: inline; padding: 2px 4px; margin-right: 6px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; background: transparent; color: rgb(var(--link)); }
 .cn-part code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; }
 .cn-part:focus, .cn-part:focus-visible { outline: 0 !important; }
@@ -41607,16 +41944,6 @@ __COREGSM_EOF__
 .srv-c-players { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .srv-c-ping, .srv-c-up { font-weight: 800; font-size: 14px; font-variant-numeric: tabular-nums; }
 .srv-c-fav { display: flex; justify-content: flex-end; }
-.srv-copy {
-  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 5px 10px; border-radius: 10px;
-  font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); background: rgb(var(--soft));
-  transition: background-color .15s ease, color .15s ease;
-}
-.srv-copy:hover { color: rgb(var(--ink)); background: rgb(var(--line)); }
-.srv-copy.done { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
-.srv-copy:focus, .srv-copy:focus-visible { outline: 0; }
-.srv-copy:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
-
 @media (max-width: 860px) {
   .srv-head { display: none; }
   .srv-row {
@@ -41730,7 +42057,6 @@ __COREGSM_EOF__
 .srv-check:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
 .srv-check-card { position: absolute; z-index: 5; }
 .tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
-.srv-sel-on { box-shadow: inset 0 0 0 2px rgb(var(--brand) / .55); }
 .srv-c-status { display: flex; align-items: center; gap: 10px; }
 .srv-list.selecting .srv-row { grid-template-columns: 150px minmax(0, 2.2fr) minmax(0, 1.5fr) 72px 88px minmax(0, 1.3fr) 44px; }
 .srv-row.selected { background: rgb(var(--brand) / .09); }
@@ -41744,7 +42070,6 @@ __COREGSM_EOF__
 }
 .srv-bulk-count { font-weight: 800; font-variant-numeric: tabular-nums; }
 .srv-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.srv-bulk-actions .btn { min-height: 40px; padding-top: 6px; padding-bottom: 6px; }
 @media (max-width: 767px) {
   .srv-bulk { bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px)); }
   .srv-bulk-actions { width: 100%; }
@@ -41753,7 +42078,8 @@ __COREGSM_EOF__
 
 /* ---------- «Что нового» ---------- */
 .srv-split { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); align-items: start; }
-@media (min-width: 1280px) {
+/* the «Что нового» column appears only when the cards keep a comfortable width next to it */
+@media (min-width: 1600px) {
   .srv-split[data-open='true'] { grid-template-columns: minmax(0, 1fr) 320px; }
 }
 .srv-new { padding: 6px; }
@@ -41780,17 +42106,20 @@ __COREGSM_EOF__
   .srv-new-chev, .srv-check, .pulse { transition: none; }
 }
 html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check, html[data-motion='reduce'] .pulse { transition: none; }
+
+/* cards grid: as many comfortable columns as fit (min 270px); the hero takes two columns and two rows on wide screens */
+.srv-grid { display: grid; gap: 16px; grid-auto-flow: dense; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); }
+.srv-grid > .srv-hero { grid-column: 1 / -1; }
+@media (min-width: 900px) {
+  .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
+}
+.srv-tile { min-width: 0; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'
 /* system: styles owned by one workstream (see main.tsx): UI kit, gauges, autosave, accents, confirm dialog.
    Rules that apply here: no transform transitions on big blocks, no infinite animations (except spinners and the
    skeleton), entrance animations use fill-mode backwards, no outline styling, no backdrop-filter / will-change. */
-
-/* red confirm button: a solid fill (white text >= 4.5:1 in both themes), no gradient */
-.btn-solid-danger { background-image: none; background-color: rgb(var(--badsolid)); box-shadow: var(--shadow-1); }
-.btn-solid-danger::after { display: none; }
-.btn-solid-danger:hover { filter: brightness(1.1); }
 
 /* ---------- arc gauge (System page): static SVG, the arc is drawn by stroke-dasharray, no animation ---------- */
 .gauge { position: relative; display: grid; place-items: center; }
@@ -42215,7 +42544,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
-          <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label={t('common.close')}>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
             <IconClose />
           </button>
         </div>
@@ -42505,7 +42834,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
     }
   };
   return (
-    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : tone === 'glass' ? 'btn-glass' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
+    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad btn-sm' : tone === 'glass' ? 'btn-glass btn-sm' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
       <span className="copy-ico" data-done={done} aria-hidden>
         <span className="ico-copy inline-grid"><IconCopy /></span>
         <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -42714,12 +43043,12 @@ export function Toaster() {
     >
       <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
-      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
+      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="btn-ghost btn-tone btn-xs shrink-0">{t.action.label}</a>}
       {t.action?.onClick && (
         <button
           type="button"
           onClick={() => { t.action?.onClick?.(); dismissToast(t.id, 'action'); }}
-          className="shrink-0 rounded-full bg-ink/10 px-3 py-1.5 font-extrabold hover:underline max-sm:min-h-[44px]"
+          className="btn-ghost btn-tone btn-xs shrink-0"
         >
           {t.action.label}
         </button>
@@ -42727,7 +43056,7 @@ export function Toaster() {
       <button
         type="button"
         onClick={() => dismissToast(t.id, 'dismiss')}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full opacity-80 hover:opacity-100 max-sm:h-11 max-sm:w-11"
+        className="btn-icon-ghost btn-icon-sm btn-tone shrink-0"
         aria-label={tr('toast.close')}
       >
         <IconClose size={14} />
@@ -42916,7 +43245,7 @@ export const PasswordField = forwardRef<
         />
         <button
           type="button"
-          className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11"
+          className="btn-icon-ghost btn-icon-sm absolute right-1 top-1/2 -translate-y-1/2"
           onClick={() => setShown((v) => !v)}
           aria-label={shown ? t('pw.hide') : t('pw.show')}
           aria-pressed={shown}
@@ -43097,7 +43426,7 @@ export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?
     body = (
       <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
         Не сохранено{error ? `: ${error}` : ''}
-        {retry && <button type="button" className="font-extrabold underline" onClick={retry}>Повторить</button>}
+        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>Повторить</button>}
       </span>
     );
   }
@@ -43154,10 +43483,12 @@ export const hasFinePointer = () =>
 
 // ---------- magnetic call-to-action buttons: [data-magnetic] leans up to 6 px toward a mouse pointer ----------
 let magneticOn = false;
+/** off: buttons do not move any more (black-square rules: no translate on buttons); the data-magnetic attribute stays in the markup */
+const MAGNETIC_ENABLED = false as boolean;
 
 /** Call once. Elements opt in with the `data-magnetic` attribute (the Button component has a `magnetic` prop). */
 export function installMagnetic() {
-  if (magneticOn || typeof window === 'undefined') return;
+  if (!MAGNETIC_ENABLED || magneticOn || typeof window === 'undefined') return;
   magneticOn = true;
   const MAX = 6;
   const REACH = 26;

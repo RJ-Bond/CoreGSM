@@ -1,0 +1,352 @@
+/* buttons: the single source of truth for every button in the panel (imported in main.tsx after index.css and the other styles).
+
+   Rules (see the black-square notes in index.css): no transform / translate / scale on buttons, hover and press feedback by
+   background-color, colour, box-shadow and opacity only (<= .18s), border colours never transition (rings are inset
+   box-shadows), no outline styling (the focus ring is the unlayered :focus-visible rule at the end of index.css), no
+   backdrop-filter / will-change / filter, no endless animation except the spinner.
+
+   Anatomy of a button: --b-* custom properties describe the look of a variant, one generic rule paints them.
+     --b-bg / --b-bg-h  background colour at rest / on hover      --b-fg / --b-fg-h  text colour
+     --b-img            background image (primary gradient)        --b-hl             1px inner top highlight
+     --b-ring           1px inset ring                             --b-ovl            full inset wash (hover darkens / lightens)
+     --b-drop           outer shadow                               -h / -a suffix: hover / pressed value (fall back to rest)
+   Every variant class also works on its own (`btn-soft` without `btn`), `btn btn-soft` is the same thing.
+
+   Variants   .btn (primary) .btn-soft .btn-outline .btn-ghost .btn-danger .btn-danger-solid (= .btn-solid-danger)
+              .btn-success .btn-success-solid .btn-warn .btn-link (.btn-link-danger)
+   Sizes      .btn-xs 28px  .btn-sm 34px  (default 42px)  .btn-lg 50px  .btn-block (full width)
+   Icon       .btn-icon 40px  .btn-icon-sm 32px  .btn-icon-ghost  .btn-icon-danger  (always give them an aria-label); .row-act (compact row action)
+   Groups     .btn-group joins buttons with a 1px gap
+   Context    on a gradient: .btn-on-grad .btn-ghost-on-grad  .btn-cta ; on a cover: .btn-glass .btn-glass-quiet .btn-glass-danger .btn-icon-glass .pp-copy
+   State      :disabled / [aria-disabled='true'] / [aria-busy='true'] / [aria-pressed='true']
+   All sizes are rem: «Крупный текст» scales buttons together with the text. */
+
+/* ---------- shared base ----------
+   Layout properties live in :where() (zero specificity): a utility class on the element (hidden, w-full, rounded-xl,
+   min-h-*, max-sm:hidden) always wins. Paint properties that Tailwind's preflight also sets (padding, font, colour,
+   background) are at class specificity; do not fight them with utilities, use the size and variant classes. */
+:where(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+) {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--b-gap, .5rem);
+  min-height: max(var(--b-h, 2.625rem), var(--tap, 0px));
+  border-radius: 9999px;
+  text-align: center; text-decoration: none; letter-spacing: .01em;
+  cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+) {
+  --b-h: 2.625rem; --b-px: 1.1rem; --b-fs: .9375rem; --b-gap: .5rem;
+  --b-img: none; --b-bg: transparent; --b-fg: rgb(var(--ink));
+  --b-hl: inset 0 1px 0 0 transparent; --b-ring: inset 0 0 0 1px transparent;
+  --b-ovl: inset 0 0 0 999px transparent; --b-drop: 0 0 0 0 transparent;
+  padding: .3rem var(--b-px);
+  font-size: var(--b-fs); font-weight: 800; line-height: 1.2;
+  color: var(--b-fg); background-color: var(--b-bg); background-image: var(--b-img);
+  box-shadow: var(--b-hl), var(--b-ring), var(--b-ovl), var(--b-drop);
+  /* colours and shadows only: no border/outline colour, no transform */
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease, opacity .15s ease;
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet
+) > svg { flex: none; width: 1.1em; height: 1.1em; }
+:is(.btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-icon-glass, .pp-copy) > svg { flex: none; }
+
+/* ---------- states ---------- */
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+):where(:not(:disabled, [aria-disabled='true'])):hover {
+  background-color: var(--b-bg-h, var(--b-bg)); color: var(--b-fg-h, var(--b-fg));
+  box-shadow: var(--b-hl-h, var(--b-hl)), var(--b-ring-h, var(--b-ring)), var(--b-ovl-h, var(--b-ovl)), var(--b-drop-h, var(--b-drop));
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+):where(:not(:disabled, [aria-disabled='true'])):active {
+  background-color: var(--b-bg-a, var(--b-bg-h, var(--b-bg))); color: var(--b-fg-a, var(--b-fg-h, var(--b-fg)));
+  box-shadow: var(--b-hl-a, var(--b-hl)), var(--b-ring-a, var(--b-ring-h, var(--b-ring))), var(--b-ovl-a, var(--b-ovl-h, var(--b-ovl))), var(--b-drop-a, var(--b-drop));
+}
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
+):is(:disabled, [aria-disabled='true']) { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* busy: the label stays, a spinner precedes it (Button component); the button is disabled but should not look dead */
+:is(
+  .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
+  .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+  .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass
+)[aria-busy='true']:is(:disabled, [aria-disabled='true']) { opacity: .85; cursor: progress; }
+.btn-spin { width: 1rem; height: 1rem; flex-shrink: 0; }
+
+/* ---------- primary ---------- */
+.btn {
+  --b-fg: #fff;
+  --b-bg: rgb(var(--brand));
+  /* brand -> brand-2: custom accent colours flow through both variables; the game accent changes --brand */
+  --b-img: linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
+  --b-hl: inset 0 1px 0 0 rgb(255 255 255 / .22);
+  --b-drop: 0 1px 2px rgb(var(--brand) / .25), 0 8px 18px -8px rgb(var(--brand) / .5);
+  --b-ovl-h: inset 0 0 0 999px rgb(255 255 255 / .06);
+  --b-drop-h: 0 1px 2px rgb(var(--brand) / .3), 0 10px 22px -8px rgb(var(--brand) / .65);
+  --b-hl-a: inset 0 2px 8px 0 rgb(0 0 0 / .26);
+  --b-ovl-a: inset 0 0 0 999px rgb(0 0 0 / .06);
+  --b-drop-a: 0 1px 1px rgb(var(--brand) / .2), 0 2px 6px -3px rgb(var(--brand) / .4);
+}
+
+/* ---------- soft (secondary): brand-tinted surface ---------- */
+.btn-soft {
+  --b-img: none; --b-fg: rgb(var(--link));
+  --b-bg: rgb(var(--brand) / .1); --b-bg-h: rgb(var(--brand) / .12);
+  --b-ring-h: inset 0 0 0 1px rgb(var(--brand) / .35);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+
+/* ---------- outline ---------- */
+.btn-outline {
+  --b-img: none; --b-fg: rgb(var(--ink));
+  --b-bg: transparent; --b-bg-h: rgb(var(--soft));
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ring: inset 0 0 0 1px rgb(var(--line)); --b-ring-h: inset 0 0 0 1px rgb(var(--field) / .6);
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .1); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+
+/* ---------- ghost (tertiary) ---------- */
+.btn-ghost {
+  --b-img: none; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink));
+  --b-bg: transparent; --b-bg-h: rgb(var(--soft));
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent; --b-ring: inset 0 0 0 1px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .1); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+
+/* ---------- status variants: soft and solid ---------- */
+.btn-danger {
+  --b-img: none; --b-fg: rgb(var(--bad));
+  --b-bg: rgb(var(--badbg)); --b-bg-h: rgb(var(--badbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--bad) / .45);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+.btn-success {
+  --b-img: none; --b-fg: rgb(var(--ok));
+  --b-bg: rgb(var(--okbg)); --b-bg-h: rgb(var(--okbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--ok) / .45);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+.btn-warn {
+  --b-img: none; --b-fg: rgb(var(--warn));
+  --b-bg: rgb(var(--warnbg)); --b-bg-h: rgb(var(--warnbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--warn) / .45);
+  --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 2px 6px 0 rgb(var(--ink) / .14); --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+/* solid: white text on a dark fill; hover darkens (a lighter fill would drop under 4.5:1 in the dark theme) */
+:is(.btn-danger-solid, .btn-solid-danger, .btn-success-solid) {
+  --b-img: none; --b-fg: #fff;
+  --b-hl: inset 0 1px 0 0 rgb(255 255 255 / .2); --b-ring: inset 0 0 0 1px transparent; --b-ovl: inset 0 0 0 999px transparent;
+  --b-ovl-h: inset 0 0 0 999px rgb(0 0 0 / .1);
+  --b-hl-a: inset 0 2px 8px 0 rgb(0 0 0 / .3); --b-ovl-a: inset 0 0 0 999px rgb(0 0 0 / .12);
+}
+:is(.btn-danger-solid, .btn-solid-danger) {
+  --b-bg: rgb(var(--badsolid));
+  --b-drop: 0 1px 2px rgb(var(--badsolid) / .25), 0 8px 18px -8px rgb(var(--badsolid) / .5);
+  --b-drop-h: 0 1px 2px rgb(var(--badsolid) / .3), 0 10px 22px -8px rgb(var(--badsolid) / .6);
+  --b-drop-a: 0 1px 1px rgb(var(--badsolid) / .2);
+}
+.btn-success-solid {
+  --b-bg: rgb(var(--oksolid));
+  --b-drop: 0 1px 2px rgb(var(--oksolid) / .25), 0 8px 18px -8px rgb(var(--oksolid) / .5);
+  --b-drop-h: 0 1px 2px rgb(var(--oksolid) / .3), 0 10px 22px -8px rgb(var(--oksolid) / .6);
+  --b-drop-a: 0 1px 1px rgb(var(--oksolid) / .2);
+}
+
+/* ---------- text-only inline button: a link that performs an action ---------- */
+:is(.btn-link, .btn-link-danger) {
+  --b-h: 0px; --b-px: 0px; --b-fs: inherit; --b-gap: .35rem;
+  --b-img: none; --b-bg: transparent; --b-fg: rgb(var(--link));
+  position: relative; min-height: 0; padding: 0; border-radius: var(--r-sm);
+  text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; text-decoration-thickness: 1.5px;
+  font-size: inherit; box-shadow: none; vertical-align: baseline;
+}
+:where(.btn-link, .btn-link-danger) { display: inline; }
+.btn-link-danger { --b-fg: rgb(var(--bad)); }
+/* a text action inside a coloured notice: keeps the notice's text colour and stays underlined */
+.btn-link-tone { --b-fg: inherit; text-decoration-color: currentColor; }
+:is(.btn-link, .btn-link-danger):where(:not(:disabled, [aria-disabled='true'])):hover { text-decoration-color: currentColor; box-shadow: none; }
+:is(.btn-link, .btn-link-danger):active { opacity: .75; }
+/* a bigger hit area on phones without moving the text */
+@media (max-width: 639px) {
+  :is(.btn-link, .btn-link-danger)::before { content: ''; position: absolute; inset: -.7rem -.4rem; }
+}
+
+/* ---------- icon buttons: always carry an aria-label ---------- */
+:is(.btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-icon-glass, .pp-copy) {
+  --b-px: 0px; --b-i: 2.5rem;
+  place-items: center; min-height: 0; padding: 0; flex: none;
+}
+:where(.btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-icon-glass, .pp-copy) {
+  display: inline-grid; min-height: 0;
+  width: max(var(--b-i), var(--tap, 0px)); height: max(var(--b-i), var(--tap, 0px));
+}
+:is(.btn-icon, .btn-icon-sm, .btn-icon-danger, .row-act) {
+  --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link));
+  --b-bg: rgb(var(--soft)); --b-bg-h: rgb(var(--brand) / .12);
+}
+.btn-icon-sm { --b-i: 2rem; }
+.row-act { --b-i: 2.375rem; }
+.btn-icon-ghost {
+  --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink));
+  --b-bg: transparent; --b-bg-h: rgb(var(--soft));
+}
+.row-act-danger { --b-bg-h: rgb(var(--badbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--bad) / .45); --b-fg-h: rgb(var(--bad)); }
+.btn-icon-danger { --b-bg-h: rgb(var(--badbg)); --b-ring-h: inset 0 0 0 1px rgb(var(--bad) / .45); --b-fg-h: rgb(var(--bad)); }
+/* a button that is also a toggle: brand tint with an inner ring */
+:is(.btn-soft, .btn-outline, .btn-ghost, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .row-act)[aria-pressed='true'] {
+  --b-fg: rgb(var(--link)); --b-fg-h: rgb(var(--link));
+  --b-bg: rgb(var(--brand) / .12); --b-bg-h: rgb(var(--brand) / .12);
+  --b-ring: inset 0 0 0 1.5px rgb(var(--brand) / .55); --b-ring-h: inset 0 0 0 1.5px rgb(var(--brand) / .7);
+}
+
+/* ---------- button on a coloured status surface (toast, notice): keeps the surface's text colour ---------- */
+.btn-tone {
+  --b-fg: inherit; --b-fg-h: inherit; --b-bg: rgb(var(--ink) / .1); --b-bg-h: rgb(var(--ink) / .18); --b-ring: inset 0 0 0 1px transparent; --b-ring-h: inset 0 0 0 1px transparent;
+  --b-img: none; --b-hl: inset 0 1px 0 0 transparent; --b-drop: 0 0 0 0 transparent; --b-drop-h: 0 0 0 0 transparent; --b-ovl-h: inset 0 0 0 999px transparent;
+}
+
+/* ---------- group: buttons joined with a 1px gap, the outer ends are round ---------- */
+.btn-group { display: inline-flex; max-width: 100%; gap: 1px; vertical-align: middle; }
+.btn-group > * { border-radius: 0; flex: 0 1 auto; }
+.btn-group > :first-child { border-top-left-radius: 9999px; border-bottom-left-radius: 9999px; }
+.btn-group > :last-child { border-top-right-radius: 9999px; border-bottom-right-radius: 9999px; }
+.btn-group > :only-child { border-radius: 9999px; }
+.btn-group > :focus-visible { z-index: 1; }
+
+/* ---------- split button (main action + chevron) ---------- */
+.split { position: relative; display: inline-flex; max-width: 100%; gap: 1px; }
+.split > .split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; min-width: 0; }
+.split > .split-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; --b-px: .7rem; }
+.split > .split-caret svg { transition: transform .25s cubic-bezier(.34, 1.4, .5, 1); }
+.split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
+.split-menu {
+  position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
+  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--raised)); border: 1px solid var(--tile-border);
+  box-shadow: var(--shadow-3);
+  transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) backwards;
+}
+.split-menu[data-up='true'] { bottom: calc(100% + 6px); transform-origin: bottom right; }
+.split-menu[data-up='false'] { top: calc(100% + 6px); }
+.split-item {
+  display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
+  border-radius: var(--r-md); padding: .55rem .8rem; font-weight: 800; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
+  transition: background-color .15s ease;
+}
+.split-item small { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+.split-item:hover, .split-item:focus-visible { background: rgb(var(--soft)); }
+.split-item:disabled { opacity: .5; cursor: not-allowed; }
+@keyframes split-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------- on a gradient (update hero, banners) ---------- */
+/* a context button used together with .btn must not inherit the primary gradient, glow or highlight */
+:is(.btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) {
+  --b-img: none; --b-hl: inset 0 1px 0 0 transparent; --b-ring: inset 0 0 0 1px transparent; --b-ovl: inset 0 0 0 999px transparent; --b-drop: 0 0 0 0 transparent;
+  --b-ovl-h: inset 0 0 0 999px transparent; --b-drop-h: 0 0 0 0 transparent;
+  --b-hl-a: inset 0 1px 0 0 transparent; --b-ovl-a: inset 0 0 0 999px transparent; --b-drop-a: 0 0 0 0 transparent;
+}
+.btn-on-grad {
+  --b-fs: .875rem; --b-h: 2.375rem; --b-px: 1.1rem;
+  --b-fg: #12141a; --b-bg: #fff; --b-bg-h: rgb(255 255 255 / .9); --b-bg-a: rgb(255 255 255 / .82);
+  --b-drop: 0 4px 14px -6px rgb(0 0 0 / .4); --b-drop-h: 0 6px 16px -6px rgb(0 0 0 / .45); --b-drop-a: 0 1px 3px -1px rgb(0 0 0 / .3);
+}
+.btn-ghost-on-grad {
+  --b-fs: .875rem; --b-h: 2.375rem; --b-px: 1.1rem;
+  --b-fg: #fff; --b-bg: rgb(0 0 0 / .24); --b-bg-h: rgb(0 0 0 / .36); --b-bg-a: rgb(0 0 0 / .44);
+  --b-ring: inset 0 0 0 1px rgb(255 255 255 / .16);
+}
+/* the white call-to-action on a cover */
+.btn-cta {
+  --b-h: 3rem; --b-px: 1.5rem; --b-fs: 1rem; --b-gap: .5rem;
+  --b-fg: #12141a; --b-bg: #fff; --b-bg-h: rgb(255 255 255 / .92); --b-bg-a: rgb(255 255 255 / .84);
+  --b-drop: 0 6px 18px -6px rgb(0 0 0 / .5); --b-drop-h: 0 10px 22px -6px rgb(0 0 0 / .55); --b-drop-a: 0 2px 6px -2px rgb(0 0 0 / .4);
+  font-weight: 900;
+}
+
+/* ---------- on a cover: translucent white / dark glass (no backdrop-filter, see the black-square notes) ---------- */
+.btn-glass {
+  --b-fg: #fff; --b-bg: rgb(255 255 255 / .24); --b-bg-h: rgb(255 255 255 / .34); --b-bg-a: rgb(255 255 255 / .2);
+  --b-ring: inset 0 0 0 1px rgb(255 255 255 / .3);
+}
+.btn-glass-quiet {
+  --b-h: 2.125rem; --b-px: .9rem; --b-fs: .875rem; --b-gap: .4rem;
+  --b-fg: rgb(255 255 255 / .94); --b-bg: rgb(8 10 20 / .3); --b-bg-h: rgb(8 10 20 / .46); --b-bg-a: rgb(8 10 20 / .56);
+}
+.btn-glass-danger { --b-fg: #ffd6d6; --b-fg-h: #fff; --b-bg-h: rgb(185 28 28 / .75); --b-bg-a: rgb(185 28 28 / .85); }
+.btn-icon-glass {
+  --b-i: 2.75rem; --b-fs: 1.25rem;
+  --b-fg: #fff; --b-bg: rgb(255 255 255 / .24); --b-bg-h: rgb(255 255 255 / .34); --b-bg-a: rgb(255 255 255 / .2);
+  --b-ring: inset 0 0 0 1px rgb(255 255 255 / .3);
+}
+/* a smaller glass disc (favourite star on a tile) */
+.btn-icon-glass.btn-icon-sm { --b-i: 2rem; }
+/* the copy button inside the passport on the banner */
+.pp-copy {
+  --b-i: 1.875rem; --b-fg: #fff; --b-bg: rgb(255 255 255 / .18); --b-bg-h: rgb(255 255 255 / .3); --b-bg-a: rgb(255 255 255 / .24);
+}
+.pp-copy { position: relative; }
+.pp-copy::before { content: ''; position: absolute; inset: -.4rem; }
+
+/* ---------- sizes ---------- */
+.btn-xs { --b-h: 1.75rem; --b-px: .7rem; --b-fs: .78125rem; --b-gap: .35rem; }
+.btn-sm { --b-h: 2.125rem; --b-px: .9rem; --b-fs: .875rem; --b-gap: .4rem; }
+.btn-lg { --b-h: 3.125rem; --b-px: 1.5rem; --b-fs: 1rem; --b-gap: .6rem; }
+:is(.btn-link, .btn-link-danger).btn-sm, :is(.btn-link, .btn-link-danger).btn-xs, :is(.btn-link, .btn-link-danger).btn-lg { --b-h: 0px; --b-px: 0px; min-height: 0; padding: 0; font-size: inherit; }
+:where(.btn-block) { display: flex; width: 100%; }
+
+/* ---------- phones: touch targets of at least 44px (everything except inline links and the passport copy) ---------- */
+@media (max-width: 639px) {
+  :is(
+    .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn,
+    .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
+    .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass
+  ) { --tap: 2.75rem; }
+  .btn-glass-quiet { --b-px: .7rem; }
+}
+
+/* ---------- density «Компактная»: a little lower, same shapes ---------- */
+:root[data-density='compact'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn):not(.btn-xs, .btn-sm, .btn-lg) { --b-h: 2.25rem; --b-px: .95rem; }
+:root[data-density='compact'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn).btn-sm { --b-h: 1.875rem; --b-px: .75rem; }
+
+/* ---------- animated glyphs inside buttons (small, so transform is fine) ---------- */
+.ico-refresh { transition: transform .55s cubic-bezier(.3, 1.3, .5, 1); }
+:is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-on-grad, .btn-ghost-on-grad, .btn-glass, .btn-glass-quiet):active .ico-refresh { transform: rotate(200deg); transition-duration: .15s; }
+.ico-refresh.spinning { animation: spin .85s linear infinite; }
+.ico-nudge { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
+:is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-on-grad, .btn-ghost-on-grad, a):hover > .ico-nudge { transform: translateX(3px); }
+.ico-share { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1); }
+:is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-on-grad, .btn-ghost-on-grad):hover .ico-share { transform: translate(1.5px, -1.5px); }
+
+/* ---------- magnetic call-to-action buttons: the attribute stays, the lean is off (no translate on buttons) ---------- */
+[data-magnetic] { translate: none !important; }
+
+/* ---------- accessibility options ---------- */
+html[data-contrast='high'] :is(.btn-soft, .btn-icon, .btn-icon-sm, .btn-icon-danger, .row-act, .btn-danger, .btn-success, .btn-warn) { --b-ring: inset 0 0 0 1px rgb(var(--field)); --b-ring-h: inset 0 0 0 1px rgb(var(--ink)); }
+html[data-contrast='high'] :is(.btn-outline, .btn-ghost, .btn-icon-ghost) { --b-ring: inset 0 0 0 1px rgb(var(--field)); --b-ring-h: inset 0 0 0 1px rgb(var(--ink)); }
+html[data-contrast='high'] :is(.btn-link, .btn-link-danger) { text-decoration-color: currentColor; }
+@media (prefers-reduced-motion: reduce) {
+  :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) { transition: none !important; }
+  .split > .split-caret svg, .split-item { transition: none !important; }
+}
+html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) { transition: none !important; }

@@ -56,8 +56,8 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
         </div>
         <MissingNote guild={guild} channelId={value} />
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm font-extrabold">
-          <button type="button" className="text-link hover:underline" onClick={() => setManual(true)}>Ввести ID вручную</button>
-          <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+          <button type="button" className="btn-link" onClick={() => setManual(true)}>Ввести ID вручную</button>
+          <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
         </div>
       </div>
     );
@@ -70,8 +70,8 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
         Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».
       </p>
       <div className="flex gap-4 text-sm font-extrabold">
-        {hasList && <button type="button" className="text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
-        <button type="button" className="text-link hover:underline" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+        {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>Выбрать из списка</button>}
+        <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
       </div>
     </div>
   );

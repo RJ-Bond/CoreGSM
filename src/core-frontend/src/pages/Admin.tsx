@@ -199,7 +199,7 @@ function UpdateBanner() {
           </>
         )}
       </div>
-      <a href="#/admin/settings/updates" className="btn-on-grad relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
+      <a href="#/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
     </div>
   );
 }
@@ -230,7 +230,7 @@ function CertWarning() {
       <span className="min-w-0 flex-1">{text} <a href="#/admin/system" className="underline">Подробнее</a></span>
       <button
         type="button"
-        className="rounded-full px-2 py-0.5 font-extrabold hover:bg-black/5"
+        className="btn-icon-ghost btn-icon-sm btn-tone"
         aria-label="Скрыть предупреждение до конца сессии"
         onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
       >

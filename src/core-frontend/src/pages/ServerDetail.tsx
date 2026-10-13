@@ -77,12 +77,12 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
     <button
       type="button"
       onClick={() => { if (!on) setPops((n) => n + 1); onClick(); }}
-      className="btn-glass !h-11 !w-11 shrink-0 !px-0 text-xl leading-none"
+      className="btn-icon-glass shrink-0"
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`${on ? 'Убрать из избранного' : 'В избранное'}: ${name}`}
       aria-pressed={on}
     >
-      <span className="star-wrap">
+      <span className="star-wrap text-xl leading-none">
         <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
         {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
       </span>

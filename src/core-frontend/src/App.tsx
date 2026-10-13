@@ -311,7 +311,7 @@ export default function App() {
           <Wordmark className="text-2xl" />
           <p className="text-lg font-black" role="alert">{t('hdr.offlineTitle')}</p>
           <p className="font-semibold text-mute">{t('hdr.offlineText')}</p>
-          <button className="btn w-full" onClick={() => void load()}>{t('common.retry')}</button>
+          <button className="btn btn-block" onClick={() => void load()}>{t('common.retry')}</button>
         </div>
         <Toaster />
       </div>
@@ -398,7 +398,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              className="grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10 md:inline-flex md:w-auto md:items-center md:gap-2.5 md:pl-3.5 md:pr-2"
+              className="btn-icon md:w-auto md:gap-2.5 md:!pl-3.5 md:!pr-2"
               aria-label={t('hdr.searchAria')}
               aria-haspopup="dialog"
               title={t('hdr.searchTitle')}
@@ -423,7 +423,7 @@ export default function App() {
                 </a>
                 <button
                   onClick={() => void logout()}
-                  className="grid place-items-center rounded-full font-extrabold text-mute transition hover:bg-soft hover:text-bad max-sm:h-11 max-sm:w-11 sm:px-3.5 sm:py-2"
+                  className="btn-ghost btn-sm"
                   aria-label={t('hdr.logout')}
                   title={t('hdr.logout')}
                 >
@@ -433,8 +433,8 @@ export default function App() {
               </>
             ) : (
               <>
-                <a href="#/login" className="inline-flex items-center rounded-full bg-soft px-4 py-2 font-extrabold text-ink hover:text-link max-sm:min-h-[44px]">{t('hdr.login')}</a>
-                {access.registration && <a href="#/register" className="btn hidden sm:inline-flex">{t('hdr.register')}</a>}
+                <a href="#/login" className="btn btn-soft btn-sm">{t('hdr.login')}</a>
+                {access.registration && <a href="#/register" className="btn btn-sm hidden sm:inline-flex">{t('hdr.register')}</a>}
               </>
             )}
           </div>

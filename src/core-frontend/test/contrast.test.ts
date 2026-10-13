@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { contrast, parseTriplet, WHITE, type RGB } from '../src/colors';
+import { BLACK, contrast, mix, parseTriplet, WHITE, type RGB } from '../src/colors';
 
 /**
  * WCAG contrast of the design tokens of index.css, read straight from the CSS custom properties.
@@ -32,7 +32,7 @@ const themes: [string, Record<string, RGB>][] = [['light', light], ['dark', dark
 const TEXT_ON_SURFACES = ['ink', 'mute', 'link', 'ok', 'warn', 'bad'];
 const SURFACES = ['card', 'soft', 'page'];
 const PILLS: [string, string][] = [['ok', 'okbg'], ['warn', 'warnbg'], ['bad', 'badbg']];
-const FILLS = ['brand', 'brand-2', 'badsolid'];
+const FILLS = ['brand', 'brand-2', 'badsolid', 'oksolid'];
 
 describe('design tokens: contrast', () => {
   it('reads every token it needs', () => {
@@ -66,6 +66,32 @@ describe('design tokens: contrast', () => {
           expect(contrast(WHITE, t[fill])).toBeGreaterThanOrEqual(4.5);
         });
       }
+      // buttons (styles/buttons.css): the tints are translucent colours over whatever surface the button sits on
+      for (const surface of SURFACES) {
+        const bg = t[surface];
+        const tints: [string, string, number][] = [
+          ['btn-soft', 'link', 0.1], ['btn-soft hover, toggle pressed, icon hover', 'link', 0.12],
+        ];
+        for (const [label, text, a] of tints) {
+          it(`${label}: ${text} on brand ${a} over ${surface} >= 4.5:1`, () => {
+            expect(contrast(t[text], mix(bg, t.brand, a))).toBeGreaterThanOrEqual(4.5);
+          });
+        }
+        it(`ghost / outline hover: ink and mute on soft; pressed ring text stays readable on ${surface}`, () => {
+          expect(contrast(t.ink, t.soft)).toBeGreaterThanOrEqual(4.5);
+          expect(contrast(t.mute, t.soft)).toBeGreaterThanOrEqual(4.5);
+        });
+      }
+      // status buttons keep their pill fill on hover (the feedback is a ring), so the pill pairs above cover them
+      it('primary button on hover (6% white wash) keeps white text >= 4.5:1 on both gradient ends', () => {
+        for (const end of ['brand', 'brand-2']) expect(contrast(WHITE, mix(t[end], WHITE, 0.06)), end).toBeGreaterThanOrEqual(4.5);
+      });
+      it('solid buttons darken on hover and pressed: white text stays >= 4.5:1', () => {
+        for (const fill of ['badsolid', 'oksolid']) {
+          expect(contrast(WHITE, mix(t[fill], BLACK, 0.1)), fill).toBeGreaterThanOrEqual(4.5);
+          expect(contrast(WHITE, mix(t[fill], BLACK, 0.12)), fill).toBeGreaterThanOrEqual(4.5);
+        }
+      });
       for (const surface of SURFACES) {
         it(`field (input border) on ${surface} >= 3:1`, () => {
           expect(contrast(t.field, t[surface])).toBeGreaterThanOrEqual(3);

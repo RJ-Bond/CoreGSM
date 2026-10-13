@@ -13,10 +13,12 @@ export const hasFinePointer = () =>
 
 // ---------- magnetic call-to-action buttons: [data-magnetic] leans up to 6 px toward a mouse pointer ----------
 let magneticOn = false;
+/** off: buttons do not move any more (black-square rules: no translate on buttons); the data-magnetic attribute stays in the markup */
+const MAGNETIC_ENABLED = false as boolean;
 
 /** Call once. Elements opt in with the `data-magnetic` attribute (the Button component has a `magnetic` prop). */
 export function installMagnetic() {
-  if (magneticOn || typeof window === 'undefined') return;
+  if (!MAGNETIC_ENABLED || magneticOn || typeof window === 'undefined') return;
   magneticOn = true;
   const MAX = 6;
   const REACH = 26;

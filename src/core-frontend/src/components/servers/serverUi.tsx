@@ -165,7 +165,7 @@ const Bar = ({ w, h = 12, className = '' }: { w: number | string; h?: number; cl
 
 function SkeletonHero() {
   return (
-    <div className="tile col-span-2 flex min-h-[280px] flex-col gap-3 p-5 lg:col-span-6 lg:row-span-2 lg:p-6">
+    <div className="srv-hero tile flex min-h-[280px] flex-col gap-3 p-5 lg:p-6">
       <div className="flex items-start gap-3">
         <div className="skeleton h-12 w-12 shrink-0 rounded-2xl" />
         <div className="flex-1 space-y-2 pt-1"><Bar w="62%" h={18} /><Bar w="38%" /></div>
@@ -180,7 +180,7 @@ function SkeletonHero() {
 
 function SkeletonPulse() {
   return (
-    <div className="tile col-span-2 flex min-h-[112px] flex-wrap items-center gap-4 p-4 lg:col-span-12">
+    <div className="tile col-span-full flex min-h-[112px] flex-wrap items-center gap-4 p-4">
       <div className="skeleton h-11 w-11 shrink-0 rounded-2xl" />
       <div className="min-w-[160px] flex-1 space-y-2"><Bar w="55%" h={18} /><Bar w="35%" /></div>
       <div className="skeleton h-14 min-w-[180px] flex-1 rounded-2xl" />
@@ -190,7 +190,7 @@ function SkeletonPulse() {
 
 function SkeletonSmall() {
   return (
-    <div className="tile col-span-2 flex min-h-[236px] flex-col gap-2 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3">
+    <div className="tile flex min-h-[270px] flex-col gap-2 p-3 pb-4">
       <div className="skeleton h-[88px] rounded-[18px]" />
       <div className="space-y-2 px-1.5 pt-1"><Bar w="75%" h={15} /><Bar w="40%" /></div>
       <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="!rounded-lg" /><Bar w={34} /></div>
@@ -202,7 +202,7 @@ function SkeletonSmall() {
 
 export function TilesSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
+    <div className="srv-grid" aria-busy="true" aria-label="Загрузка">
       <SkeletonPulse />
       <SkeletonHero />
       {[0, 1, 2, 3].map((i) => <SkeletonSmall key={i} />)}

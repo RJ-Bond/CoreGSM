@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { AccentPicker } from '../components/AccentPicker';
+import { BtnSpinner } from '../components/Button';
+import { SplitButton } from '../components/SplitButton';
 import { Gauge } from '../components/Gauge';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { buildSparkline } from '../sparkline';
@@ -65,6 +67,85 @@ function NotifyExtras() {
   );
 }
 
+/** the button system: every variant at every size, then the states; `compact` is the short version shown in both themes */
+const BTN_VARIANTS: [string, string][] = [
+  ['btn', 'Основная'], ['btn btn-soft', 'Мягкая'], ['btn btn-outline', 'Контур'], ['btn btn-ghost', 'Призрачная'],
+  ['btn btn-danger', 'Опасная'], ['btn btn-danger-solid', 'Удалить'], ['btn btn-success', 'Успех'], ['btn btn-success-solid', 'Готово'], ['btn btn-warn', 'Внимание'],
+];
+const BTN_SIZES: [string, string][] = [['btn-xs', 'XS 28'], ['btn-sm', 'SM 34'], ['', 'MD 42'], ['btn-lg', 'LG 50']];
+
+function ButtonKit({ compact = false }: { compact?: boolean }) {
+  const [pressed, setPressed] = useState({ a: true, b: false });
+  const [group, setGroup] = useState('week');
+  const sizes = compact ? BTN_SIZES.filter(([c]) => c === 'btn-sm' || c === '') : BTN_SIZES;
+  return (
+    <div className="space-y-4">
+      {sizes.map(([sz, name]) => (
+        <Row key={name} label={`Размер ${name} px`}>
+          {BTN_VARIANTS.map(([cls, label]) => <button key={cls} type="button" className={`${cls} ${sz}`}>{label}</button>)}
+        </Row>
+      ))}
+      <Row label="Недоступные (disabled)">
+        {BTN_VARIANTS.map(([cls, label]) => <button key={cls} type="button" className={cls} disabled>{label}</button>)}
+      </Row>
+      <Row label="Загрузка (aria-busy, спиннер перед текстом)">
+        {BTN_VARIANTS.map(([cls, label]) => <button key={cls} type="button" className={cls} disabled aria-busy="true"><BtnSpinner />{label}</button>)}
+      </Row>
+      <Row label="Переключатели (aria-pressed)">
+        <button type="button" className="btn btn-soft" aria-pressed={pressed.a} onClick={() => setPressed((p) => ({ ...p, a: !p.a }))}>Включено</button>
+        <button type="button" className="btn btn-soft" aria-pressed={pressed.b} onClick={() => setPressed((p) => ({ ...p, b: !p.b }))}>Выключено</button>
+        <button type="button" className="btn btn-outline" aria-pressed>Контур</button>
+        <button type="button" className="btn btn-ghost" aria-pressed>Призрачная</button>
+        <button type="button" className="btn-icon" aria-pressed aria-label="Закреплено"><IconBell /></button>
+      </Row>
+      <Row label="С иконкой и во всю ширину">
+        <button type="button" className="btn"><IconPlus size={16} />С иконкой</button>
+        <button type="button" className="btn btn-soft btn-sm"><IconRefresh size={16} />Обновить</button>
+        <button type="button" className="btn btn-outline btn-sm"><IconEdit size={16} />Изменить</button>
+        <button type="button" className="btn btn-danger btn-sm"><IconTrash size={16} />Удалить</button>
+        <button type="button" className="btn btn-block">Во всю ширину</button>
+      </Row>
+      <Row label="Иконки-кнопки (всегда с aria-label)">
+        <button type="button" className="btn-icon" aria-label="Обновить"><IconRefresh /></button>
+        <button type="button" className="btn-icon-sm" aria-label="Обновить"><IconRefresh size={16} /></button>
+        <button type="button" className="btn-icon-ghost" aria-label="Обновить"><IconRefresh /></button>
+        <button type="button" className="btn-icon-danger" aria-label="Удалить"><IconTrash /></button>
+        <button type="button" className="row-act" aria-label="Изменить"><IconEdit /></button>
+        <button type="button" className="row-act row-act-danger" aria-label="Удалить"><IconTrash /></button>
+        <button type="button" className="btn-icon" aria-label="Недоступно" disabled><IconRefresh /></button>
+      </Row>
+      <Row label="Текстовые: действие внутри текста">
+        <span className="text-sm font-semibold">Обновите данные: <button type="button" className="btn-link">обновить список</button> или <button type="button" className="btn-link-danger">удалить токен</button>.</span>
+      </Row>
+      <Row label="Группа и составная кнопка">
+        <span className="btn-group" role="group" aria-label="Период">
+          {[['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц']].map(([k, label]) => (
+            <button key={k} type="button" className="btn btn-soft btn-sm" aria-pressed={group === k} onClick={() => setGroup(k)}>{label}</button>
+          ))}
+        </span>
+        <span className="btn-group" role="group" aria-label="Действия">
+          <button type="button" className="btn btn-outline btn-sm">Назад</button>
+          <button type="button" className="btn btn-outline btn-sm">Вперёд</button>
+        </span>
+        <SplitButton label="Опросить" onClick={() => undefined} items={[{ key: 'a', label: 'Опросить все', hint: 'Все выбранные', onSelect: () => undefined }, { key: 'b', label: 'Только онлайн', onSelect: () => undefined }]} />
+      </Row>
+      <Row label="На градиенте и на обложке">
+        <div className="cover-grad flex flex-wrap items-center gap-2.5 rounded-ui-lg p-4" style={{ ['--c1' as string]: '#4338ca', ['--c2' as string]: '#7c3aed' }}>
+          <button type="button" className="btn-cta">Подключиться</button>
+          <button type="button" className="btn-on-grad">Белая</button>
+          <button type="button" className="btn-ghost-on-grad">Прозрачная</button>
+          <button type="button" className="btn-glass"><IconBell size={18} />Подписаться</button>
+          <button type="button" className="btn-glass-quiet">Тихая</button>
+          <button type="button" className="btn-glass-quiet btn-glass-danger">Опасная</button>
+          <button type="button" className="btn-icon-glass" aria-label="В избранное">☆</button>
+          <button type="button" className="btn-glass" disabled>Недоступна</button>
+          <span className="chip-on-grad">Чип</span>
+        </div>
+      </Row>
+    </div>
+  );
+}
+
 function Specimen() {
   const [on, setOn] = useState(true);
   const [seg, setSeg] = useState('a');
@@ -80,6 +161,7 @@ function Specimen() {
           <span className="pill pill-bad">ОФЛАЙН</span>
           <span className="pill pill-mute">ОЖИДАНИЕ</span>
         </div>
+        <ButtonKit compact />
         <input className="input" defaultValue="Поле ввода" aria-label="Пример поля" />
         <label className="flex items-center gap-3 text-sm font-bold"><Switch checked={on} onChange={setOn} /> Переключатель</label>
         <div className="seg">
@@ -150,31 +232,16 @@ export default function UiKitPage() {
         </Row>
       </Block>
 
-      <Block title="Кнопки" note="Одна основная кнопка на экран, остальные мягкие. На телефоне высота не меньше 44 px.">
-        <Row label="Варианты">
-          <button className="btn">Основная</button>
-          <button className="btn btn-soft">Мягкая</button>
-          <button className="btn btn-danger">Опасная</button>
-          <button className="btn btn-solid-danger">Удалить</button>
-          <a className="btn btn-soft" href="#/_ui">Ссылка-кнопка</a>
-        </Row>
-        <Row label="Размеры и состояния">
-          <button className="btn btn-sm">Малая</button>
-          <button className="btn" disabled>Недоступна</button>
+      <Block
+        title="Кнопки"
+        note="Одна основная кнопка на экран, остальные мягкие или контурные; «Отмена» призрачная, опасное с подтверждением. В диалогах основная справа. Размеры: XS и SM в панелях инструментов и строках, MD в формах, LG для главного действия на экране. На телефоне высота не меньше 44 px. Иконка-кнопка всегда с aria-label."
+      >
+        <ButtonKit />
+        <Row label="Компонент Button (loading, variant, size)">
           <Button loading={busy} onClick={() => { setBusy(true); window.setTimeout(() => setBusy(false), 1500); }}>{busy ? 'Сохраняю…' : 'С индикатором'}</Button>
-          <button className="btn"><IconPlus size={16} />С иконкой</button>
-        </Row>
-        <Row label="Иконки-кнопки">
-          <button type="button" className="btn-icon" aria-label="Обновить"><IconRefresh /></button>
-          <button type="button" className="row-act" aria-label="Изменить"><IconEdit /></button>
-          <button type="button" className="row-act row-act-danger" aria-label="Удалить"><IconTrash /></button>
-        </Row>
-        <Row label="На градиенте">
-          <div className="cover-grad flex flex-wrap items-center gap-2.5 rounded-ui-lg p-4" style={{ ['--c1' as string]: '#4338ca', ['--c2' as string]: '#7c3aed' }}>
-            <button className="btn-on-grad">Белая</button>
-            <button className="btn-ghost-on-grad">Прозрачная</button>
-            <span className="chip-on-grad">Чип</span>
-          </div>
+          <Button variant="outline" size="sm">Контур</Button>
+          <Button variant="ghost" size="sm">Призрачная</Button>
+          <Button variant="danger-solid" size="lg">Крупная опасная</Button>
         </Row>
       </Block>
 
