@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1b97cba00fe6"
+COREGSM_BUILD="25f6bcf6c194"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -27536,28 +27536,58 @@ export const isObject = (v: unknown) => !!v && typeof v === 'object' && !Array.i
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { applyConnectTemplates, connectGuide } from '../../connectGuides';
 import { useGameProfiles } from '../../gameProfiles';
-import { CopyButton, Notice } from '../../ui';
+import { t, useI18n } from '../../i18n';
+import { IconCheckMark, IconCopy, Notice, toast } from '../../ui';
 import { SectionCard, type SectionState } from './Sections';
 import QrCode from './QrCode';
 import { stagger } from './helpers';
 
-/** «Как подключиться»: what to paste (big copy buttons), numbered steps, QR code for a phone */
+/** a big value with a big «Копировать» button */
+function BigCopy({ label, value, id }: { label: string; value: string; id: string }) {
+  const [done, setDone] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setDone(true);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setDone(false), 1600);
+    } catch {
+      toast(value, 'info', 8000);
+    }
+  };
+  return (
+    <div className="min-w-0">
+      <div id={id} className="mb-1 text-[13px] font-extrabold text-mute">{label}</div>
+      <div className="cn-big">
+        <code title={value} aria-labelledby={id}>{value}</code>
+        <button type="button" className="btn" onClick={() => void copy()} aria-describedby={id}>
+          {done ? <IconCheckMark /> : <IconCopy />}
+          <span aria-live="polite">{done ? t('srv.cn.copied') : t('srv.cn.copy')}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** «Как подключиться»: three numbered steps (copy, open the game, connect) and a QR code for a phone */
 export default function ConnectTab({ game, address, sections }: { game: string; address: string; sections: SectionState }) {
+  useI18n();
+  const uid = useId();
   const profile = useGameProfiles()?.[game];
   const guide = applyConnectTemplates(connectGuide(game, address), profile?.connect, address, profile?.defaultPort);
   const note = typeof profile?.connect?.note === 'string' ? profile.connect.note.trim() : '';
-  // values to paste: address first, the console command and the steam link where they exist
-  const values = [
-    ...guide.copy.filter((c) => c.label === 'Адрес' || /команд/i.test(c.label)),
-    ...(guide.link && guide.link.href.startsWith('steam://') ? [{ label: 'Ссылка Steam', value: guide.link.href }] : []),
-    ...guide.copy.filter((c) => c.label === 'Хост' || c.label === 'Порт'),
-  ];
+  const addr = guide.copy.find((c) => c.label === 'Адрес') ?? { label: 'Адрес', value: address.trim() };
+  const command = guide.copy.find((c) => /команд/i.test(c.label));
+  const steam = guide.link && guide.link.href.startsWith('steam://') ? guide.link : null;
+  const parts = guide.copy.filter((c) => c.label === 'Хост' || c.label === 'Порт');
   const qrOptions = [
-    ...(guide.link ? [{ k: 'link', label: 'Ссылка', value: guide.link.href }] : []),
-    { k: 'addr', label: 'Адрес', value: address.trim() },
+    ...(guide.link ? [{ k: 'link', label: t('srv.cn.qrLink'), value: guide.link.href }] : []),
+    { k: 'addr', label: t('srv.cn.qrAddr'), value: address.trim() },
   ];
   const [qk, setQk] = useState(qrOptions[0].k);
   const qr = qrOptions.find((o) => o.k === qk) ?? qrOptions[0];
@@ -27565,48 +27595,63 @@ export default function ConnectTab({ game, address, sections }: { game: string; 
   return (
     <div className="grid gap-3.5 lg:grid-cols-12">
       <SectionCard id="cn-steps" state={sections} className="lg:col-span-7" style={stagger(0)} title={guide.title}>
-
         {note && <div className="mb-4"><Notice tone="info">{note}</Notice></div>}
 
-        <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Что вставить</h3>
-        <ul className="mb-5 space-y-2.5">
-          {values.map((c) => (
-            <li key={c.label} className="min-w-0">
-              <div className="mb-1 text-[13px] font-extrabold text-mute">{c.label}</div>
-              <div className="cn-big">
-                <code title={c.value}>{c.value}</code>
-                <CopyButton text={c.value} label="Копировать" />
-              </div>
-            </li>
-          ))}
-        </ul>
-
-        <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Шаги</h3>
-        <ol className="space-y-3.5">
-          {guide.steps.map((s, i) => (
-            <li key={i} className="cn-step">
-              <span className="cn-num" aria-hidden>{i + 1}</span>
-              <p className="min-w-0 break-words pt-1 font-semibold leading-snug"><span className="sr-only">Шаг {i + 1}. </span>{s}</p>
-            </li>
-          ))}
+        <ol className="cn-wizard">
+          <li className="cn-step cn-step-big">
+            <span className="cn-num" aria-hidden>1</span>
+            <div className="min-w-0 flex-1 space-y-3">
+              <h3 className="cn-h">{t('srv.cn.s1')}</h3>
+              <BigCopy id={`${uid}-a`} label={addr.label} value={addr.value} />
+              {command && <BigCopy id={`${uid}-c`} label={command.label} value={command.value} />}
+              {steam && <BigCopy id={`${uid}-s`} label={t('srv.cn.steamLink')} value={steam.href} />}
+              {parts.length > 0 && (
+                <p className="text-sm font-semibold text-mute">
+                  {t('srv.cn.parts')}{' '}
+                  {parts.map((p) => (
+                    <button key={p.label} type="button" className="cn-part" onClick={() => void navigator.clipboard?.writeText(p.value).then(() => toast(t('srv.cn.copied')), () => toast(p.value, 'info', 6000))}>
+                      {p.label}: <code>{p.value}</code>
+                    </button>
+                  ))}
+                </p>
+              )}
+            </div>
+          </li>
+          <li className="cn-step cn-step-big">
+            <span className="cn-num" aria-hidden>2</span>
+            <div className="min-w-0 flex-1 space-y-2">
+              <h3 className="cn-h">{t('srv.cn.s2')}</h3>
+              <ul className="cn-sub">
+                {guide.steps.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </div>
+          </li>
+          <li className="cn-step cn-step-big">
+            <span className="cn-num" aria-hidden>3</span>
+            <div className="min-w-0 flex-1 space-y-3">
+              <h3 className="cn-h">{t('srv.cn.s3')}</h3>
+              {guide.link ? (
+                <a href={guide.link.href} className="btn cn-go" data-magnetic>{guide.link.label}</a>
+              ) : (
+                <p className="font-semibold leading-snug text-mute">{t('srv.cn.s3text')}</p>
+              )}
+            </div>
+          </li>
         </ol>
-        {guide.link && (
-          <a href={guide.link.href} className="btn mt-5 w-full sm:w-auto" data-magnetic>{guide.link.label}</a>
-        )}
       </SectionCard>
 
-      <SectionCard id="cn-qr" state={sections} className="lg:col-span-5" style={stagger(1)} title="QR-код для телефона">
+      <SectionCard id="cn-qr" state={sections} className="lg:col-span-5" style={stagger(1)} title={t('srv.cn.qrTitle')}>
         <p className="mb-3 text-sm font-semibold text-mute">
-          Наведите камеру: {qr.k === 'link' ? 'ссылка откроется в Steam' : 'адрес сервера окажется в телефоне, останется вставить его в игру'}.
+          {qr.k === 'link' ? t('srv.cn.qrHintLink') : t('srv.cn.qrHintAddr')}
         </p>
         {qrOptions.length > 1 && (
-          <div className="seg mb-3" role="group" aria-label="Что зашифровать в QR-коде">
+          <div className="seg mb-3" role="group" aria-label={t('srv.cn.qrWhat')}>
             {qrOptions.map((o) => (
               <button key={o.k} type="button" className="seg-item" aria-pressed={qk === o.k} onClick={() => setQk(o.k)}>{o.label}</button>
             ))}
           </div>
         )}
-        <QrCode text={qr.value} label={`QR-код: ${qr.value}`} />
+        <QrCode text={qr.value} label={`QR: ${qr.value}`} />
         <p className="mt-3 break-all text-center font-mono text-xs font-semibold text-mute">{qr.value}</p>
       </SectionCard>
     </div>
@@ -27617,21 +27662,19 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/EventsFeed.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState } from 'react';
 import type { ServerDetails } from '../../api';
+import { StateView } from '../StateView';
+import { t, useI18n } from '../../i18n';
 import { ago, plural } from '../../ui';
 import { fmtDuration } from './helpers';
+import { EVENT_FILTERS, eventCounts, filterEvents, groupByDay, type EventFilter } from './serverLogic';
 
 type Ev = ServerDetails['events'][number];
-type Filter = 'all' | 'fail' | 'peak';
-
-const dayKey = (ts: number) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
-function dayTitle(ts: number): string {
-  const d = new Date(ts);
-  const t = new Date();
-  if (dayKey(ts) === dayKey(t.getTime())) return 'Сегодня';
-  const y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
-  if (dayKey(ts) === dayKey(y.getTime())) return 'Вчера';
-  return d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
-}
+const dayTitle = (kind: 'today' | 'yesterday' | 'date', ts: number): string =>
+  kind === 'today' ? t('srv.ev.today') : kind === 'yesterday' ? t('srv.ev.yesterday')
+    : new Date(ts).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+const FILTER_KEY: Record<EventFilter, 'srv.ev.all' | 'srv.ev.down' | 'srv.ev.up' | 'srv.ev.peak' | 'srv.ev.maint'> = {
+  all: 'srv.ev.all', down: 'srv.ev.down', up: 'srv.ev.up', peak: 'srv.ev.peak', maintenance: 'srv.ev.maint',
+};
 const absTime = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
@@ -27651,7 +27694,8 @@ function title(e: Ev, downFor: number | null, stillDown: boolean): string {
 }
 
 export default function EventsFeed({ events, online, limit, moreHref }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string }) {
-  const [filter, setFilter] = useState<Filter>('all');
+  useI18n();
+  const [filter, setFilter] = useState<EventFilter>('all');
 
   // how long every outage lasted: the nearest later 'up'
   const downFor = useMemo(() => {
@@ -27665,41 +27709,30 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
     return m;
   }, [events]);
   const newestDown = events.find((e) => e.type === 'down' || e.type === 'up');
-  const failCount = events.filter((e) => e.type === 'down').length;
-  const peakCount = events.filter((e) => e.type === 'peak').length;
-
-  const list = events.filter((e) => (filter === 'all' ? true : filter === 'peak' ? e.type === 'peak' : e.type !== 'peak'));
+  const counts = eventCounts(events);
+  const list = filterEvents(events, filter);
   const shown = limit ? list.slice(0, limit) : list;
-
-  const groups: { key: string; title: string; items: Ev[] }[] = [];
-  for (const e of shown) {
-    const k = dayKey(e.ts);
-    const g = groups[groups.length - 1];
-    if (g && g.key === k) g.items.push(e);
-    else groups.push({ key: k, title: dayTitle(e.ts), items: [e] });
-  }
-
-  const chips: [Filter, string, number][] = [['all', 'Все', events.length], ['fail', 'Сбои', failCount], ['peak', 'Пики', peakCount]];
+  const groups = groupByDay(shown).map((g) => ({ ...g, title: dayTitle(g.kind, g.ts) }));
 
   return (
     <div>
       {!limit && (
-        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label="Фильтр событий">
-          {chips.map(([k, label, n]) => (
-            <button key={k} type="button" className={`chip-filter ${filter === k ? 'on' : ''}`} aria-pressed={filter === k} onClick={() => setFilter(k)}>
-              {label}<span className="opacity-70"> {n}</span>
+        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label={t('srv.ev.filter')}>
+          {EVENT_FILTERS.map((k) => (
+            <button key={k} type="button" className={`chip-filter ${filter === k ? 'on' : ''} ${k !== 'all' && counts[k] === 0 && filter !== k ? 'is-zero' : ''}`} aria-pressed={filter === k} onClick={() => setFilter(k)}>
+              {t(FILTER_KEY[k])}<span className="ml-1 opacity-70">{counts[k]}</span>
             </button>
           ))}
         </div>
       )}
       {shown.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
-          <span className="grid h-12 w-12 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-          </span>
-          <p className="font-extrabold">{filter === 'peak' ? 'Пиков за период пока не было' : 'За период сбоев не было'}</p>
-          <p className="max-w-xs text-sm font-semibold text-mute">{filter === 'peak' ? 'Рекорд появится, когда на сервере соберутся игроки.' : 'Сервер отвечал всё время: событий для показа нет.'}</p>
-        </div>
+        <StateView
+          kind="empty"
+          bare
+          compact
+          title={filter === 'all' ? t('srv.ev.emptyAll') : filter === 'peak' ? t('srv.ev.emptyPeak') : filter === 'maintenance' ? t('srv.ev.emptyMaint') : filter === 'up' ? t('srv.ev.emptyUp') : t('srv.ev.emptyDown')}
+          text={filter === 'all' ? t('srv.ev.emptyAllText') : filter === 'peak' ? t('srv.ev.emptyPeakText') : t('srv.ev.emptyFilterText')}
+        />
       ) : (
         <div className="space-y-4">
           {groups.map((g) => (
@@ -27737,11 +27770,74 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Hero.tsx" << '__COREGSM_EOF__'
+import { t, useI18n } from '../../i18n';
+import { AnimatedNumber } from '../../ui';
+import { IconBell } from '../../ui';
+import MaintenanceChip from '../MaintenanceChip';
+import { CapacityBar } from '../servers/serverUi';
+
+export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
+
+/**
+ * The state of the server at a glance (inside the banner): a big player counter, the fill bar with «Свободно N мест»,
+ * the maintenance chip, and, when the server is full, «Сообщить, когда будет место».
+ */
+export default function Hero({
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify,
+}: {
+  online: boolean;
+  hasStatus: boolean;
+  players: number;
+  max: number;
+  maintenance?: { name: string; until: number | null } | null;
+  freeSlot: FreeSlotState;
+  onNotify: () => void;
+}) {
+  useI18n();
+  return (
+    <section className="srv-hero relative" aria-label={t('srv.hero.label')}>
+      <div className="srv-hero-top">
+        <div className="srv-hero-count" aria-live="polite">
+          {online ? (
+            <>
+              <span className="srv-hero-n"><AnimatedNumber value={players} delta /></span>
+              {max > 0 && <span className="srv-hero-max">/{max}</span>}
+              <span className="srv-hero-unit">{t('srv.hero.players')}</span>
+            </>
+          ) : (
+            <>
+              <span className="srv-hero-n">–</span>
+              <span className="srv-hero-unit">{hasStatus ? t('srv.hero.offline') : t('srv.hero.waiting')}</span>
+            </>
+          )}
+        </div>
+        {maintenance && <MaintenanceChip m={maintenance} glass />}
+      </div>
+      {online && max > 0 && <CapacityBar className="mt-2.5" players={players} max={max} color="#fff" onDark big />}
+      {freeSlot !== 'hidden' && (
+        <div className="mt-3">
+          {freeSlot === 'subscribed' ? (
+            <p className="srv-hero-sub"><IconBell size={16} />{t('srv.freeSlot.subscribed')}</p>
+          ) : freeSlot === 'guest' ? (
+            <a className="btn-glass" href="#/login"><IconBell size={18} />{t('srv.freeSlot.login')}</a>
+          ) : (
+            <button type="button" className="btn-glass" onClick={onNotify} aria-haspopup="dialog"><IconBell size={18} />{t('srv.freeSlot.button')}</button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/HistoryChart.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
-import { fmtDateTime, plural, smoothPath, toast } from '../../ui';
+import { t, useI18n } from '../../i18n';
+import { fmtDateTime, smoothPath, toast } from '../../ui';
 import { exportFileName, pingTone, TONE_TEXT } from './helpers';
+import { findPeak, peakWhen } from './serverLogic';
 
 type Point = ServerDetails['points'][number];
 type Ev = ServerDetails['events'][number];
@@ -27784,6 +27880,7 @@ const fullTime = (ts: number) =>
 export default function HistoryChart({
   points, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '',
 }: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string }) {
+  useI18n();
   const L = 38, R = 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
@@ -27802,7 +27899,7 @@ export default function HistoryChart({
     measure();
     return () => ro.disconnect();
   }, []);
-  const H = W < 520 ? 210 : 260;
+  const H = W < 520 ? 230 : 320;
 
   const now = Date.now();
   const winStart = now - hours * 3600_000;
@@ -27878,6 +27975,13 @@ export default function HistoryChart({
   const lastSeg = segments[segments.length - 1];
   const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
   const unit = series === 'ping' ? 'мс' : '';
+  const peak = findPeak(points.filter((p) => p.ts >= t0), series);
+  const longRange = hours > 36;
+  const peakText = peak
+    ? series === 'ping'
+      ? t(longRange ? 'srv.chart.peakPingDate' : 'srv.chart.peakPing', { n: peak.value, time: peakWhen(peak.ts, hours) })
+      : t(longRange ? 'srv.chart.peakDate' : 'srv.chart.peak', { n: peak.value, time: peakWhen(peak.ts, hours) })
+    : '';
   const capLine = series === 'players' && max > 0 && max <= yMax;
 
   const describe = (p: Point) => {
@@ -27905,7 +28009,7 @@ export default function HistoryChart({
     if (!el || saving) return;
     setSaving(true);
     try {
-      const props = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'stop-color', 'stop-opacity'];
+      const props = ['paint-order', 'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'stop-color', 'stop-opacity'];
       const clone = el.cloneNode(true) as SVGSVGElement;
       const src = [el, ...Array.from(el.querySelectorAll('*'))];
       const dst = [clone, ...Array.from(clone.querySelectorAll('*'))] as SVGElement[];
@@ -28014,6 +28118,18 @@ export default function HistoryChart({
           {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}
+      <div className="hc-head">
+        <span className="hc-cap">{series === 'ping' ? t('srv.chart.axisPing') : t('srv.chart.axisPlayers')}</span>
+        <span className="hc-notes">
+          {peakText && <span className="hc-note">{peakText}</span>}
+          {endPt && (
+            <span className="hc-now" style={{ ['--hc' as string]: color }}>
+              <i aria-hidden />
+              {t('srv.chart.now', { n: `${endPt.v}${unit ? ` ${unit}` : ''}` })}
+            </span>
+          )}
+        </span>
+      </div>
       <div
         ref={wrap}
         className="hc-wrap relative rounded-2xl"
@@ -28066,10 +28182,26 @@ export default function HistoryChart({
               </g>
             );
           })}
+          {peak && peak.ts >= t0 && (
+            <circle cx={x(peak.ts)} cy={y(peak.value)} r="7" fill="none" style={{ stroke: color }} strokeWidth="2" opacity="0.9" />
+          )}
           {endPt && !hp && (
             <>
               <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="9" style={{ fill: color }} opacity="0.22" />
-              <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="4.5" style={{ fill: color }} className="stroke-card" strokeWidth="2" />
+              <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="5.5" style={{ fill: color }} className="stroke-card" strokeWidth="2.5" />
+              <text
+                x={Math.min(W - R, Math.max(L + 16, x(endPt.ts) + 4))}
+                y={y(endPt.v) - 14 < T + 10 ? y(endPt.v) + 24 : y(endPt.v) - 14}
+                textAnchor="end"
+                className="fill-ink stroke-card"
+                fontSize="14"
+                fontWeight="800"
+                strokeWidth="4"
+                paintOrder="stroke"
+                strokeLinejoin="round"
+              >
+                {endPt.v}{unit ? ` ${unit}` : ''}
+              </text>
             </>
           )}
           {marks.map((m) => {
@@ -28120,12 +28252,9 @@ export default function HistoryChart({
       </div>
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <p className="text-xs font-bold text-mute">
-        {seriesName}{unit ? `, ${unit}` : ''}
+        {t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}
         {hp && hv != null && series === 'ping' && (
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
-        )}
-        {series === 'players' && points.length > 0 && (
-          <span className="ml-2 font-semibold">максимум за период: {Math.max(...points.map((p) => p.players))} {plural(Math.max(...points.map((p) => p.players)), ['игрок', 'игрока', 'игроков'])}</span>
         )}
       </p>
       <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title="Сохранить график как картинку PNG">
@@ -28150,10 +28279,189 @@ export default function HistoryChart({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
-  cat > "$APP_DIR/core-frontend/src/components/server/Passport.tsx" << '__COREGSM_EOF__'
+  cat > "$APP_DIR/core-frontend/src/components/server/Metrics.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
+import { t, useI18n } from '../../i18n';
+import { AnimatedNumber, fmtDateTime } from '../../ui';
+import { capLevel } from '../servers/capacity';
+import { metricFill } from './serverLogic';
+
+export interface MetricsData {
+  online: boolean;
+  hasStatus: boolean;
+  players: number;
+  maxPlayers: number;
+  peak: number | null;
+  peakAt: number | null;
+  uptimePct: number | null;
+  avg: number | null;
+  samples: number;
+  /** «за 24 часа» */
+  windowLabel: string;
+}
+
+function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'warm' | 'hot' }) {
+  return (
+    <div className="srv-metric">
+      <div className="stat-k">{k}</div>
+      <div className="srv-metric-v">{v}</div>
+      <div className="srv-metric-bar" aria-hidden><i className={level ? `is-${level}` : undefined} style={{ width: `${fill}%` }} /></div>
+      {hint != null && <div className="srv-metric-h">{hint}</div>}
+    </div>
+  );
+}
+
+/** one compact row: Сейчас · Пик · Аптайм · В среднем (small value, a hint and a static mini bar) */
+export default function Metrics({ d, withSamples = false }: { d: MetricsData; withSamples?: boolean }) {
+  useI18n();
+  const nowPct = metricFill(d.players, d.maxPlayers);
+  return (
+    <div className={`srv-metrics ${withSamples ? 'has-5' : ''}`}>
+      <Cell
+        k="Сейчас"
+        v={d.online ? <><AnimatedNumber value={d.players} delta />{d.maxPlayers > 0 && <span className="srv-metric-of">/{d.maxPlayers}</span>}</> : '–'}
+        hint={d.online ? (d.maxPlayers > 0 ? t('srv.cap.taken', { pct: nowPct }) : '') : d.hasStatus ? 'недоступен' : 'ждём ответ'}
+        fill={d.online ? nowPct : 0}
+        level={capLevel(nowPct)}
+      />
+      <Cell
+        k="Пик"
+        v={d.peak == null ? '–' : String(d.peak)}
+        hint={d.peakAt ? fmtDateTime(d.peakAt) : undefined}
+        fill={metricFill(d.peak, d.maxPlayers)}
+      />
+      <Cell
+        k="Аптайм"
+        v={d.uptimePct == null ? '–' : `${d.uptimePct}%`}
+        hint={d.windowLabel}
+        fill={d.uptimePct ?? 0}
+      />
+      <Cell
+        k="В среднем"
+        v={d.avg == null ? '–' : String(d.avg)}
+        hint="пока онлайн"
+        fill={metricFill(d.avg, d.maxPlayers)}
+      />
+      {withSamples && <Cell k="Измерений" v={String(d.samples)} hint={d.windowLabel} fill={0} />}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/MoreMenu.tsx" << '__COREGSM_EOF__'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { t, useI18n } from '../../i18n';
+
+export interface MoreItem {
+  key: string;
+  label: ReactNode;
+  icon?: ReactNode;
+  onSelect: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  /** a thin line above the item */
+  divider?: boolean;
+}
+
+/**
+ * «Ещё»: a menu button with a popover. Keyboard: Enter / Space / ArrowDown open it, arrows / Home / End move, Esc closes
+ * and returns the focus; a click outside closes it. The popover is positioned inside the page (not clipped by the
+ * banner: the banner itself does not clip) and flips to the left edge when it would leave the screen.
+ */
+export default function MoreMenu({ items, className = 'btn-glass' }: { items: MoreItem[]; className?: string }) {
+  useI18n();
+  const [open, setOpen] = useState(false);
+  const [flip, setFlip] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const id = useId();
+
+  const close = (focusBack = true) => {
+    setOpen(false);
+    if (focusBack) btn.current?.focus();
+  };
+  const focusItem = (i: number) => {
+    const els = Array.from(pop.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+    if (!els.length) return;
+    els[(i + els.length) % els.length]?.focus();
+  };
+
+  // the first item gets the focus when the menu opens with the keyboard (and always: it is cheap and harmless for a mouse)
+  useEffect(() => {
+    if (open) focusItem(0);
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !pop.current) { setFlip(false); return; }
+    const r = pop.current.getBoundingClientRect();
+    if (r.left < 8) setFlip(true);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent | TouchEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', down);
+    document.addEventListener('touchstart', down, { passive: true });
+    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('touchstart', down); };
+  }, [open]);
+
+  const onMenuKey = (e: ReactKeyboardEvent) => {
+    const els = Array.from(pop.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+    const i = els.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); focusItem(i + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); focusItem(i < 0 ? -1 : i - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); focusItem(0); }
+    else if (e.key === 'End') { e.preventDefault(); focusItem(-1); }
+    else if (e.key === 'Tab') setOpen(false);
+  };
+
+  if (!items.length) return null;
+  return (
+    <div ref={root} className="srv-more">
+      <button
+        ref={btn}
+        type="button"
+        className={className}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); } }}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
+        {t('srv.more')}
+      </button>
+      {open && (
+        <div ref={pop} id={id} role="menu" aria-label={t('srv.more')} className={`srv-more-pop ${flip ? 'is-flip' : ''}`} onKeyDown={onMenuKey}>
+          {items.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              disabled={it.disabled}
+              className={`srv-more-item ${it.danger ? 'is-danger' : ''} ${it.divider ? 'has-divider' : ''}`}
+              onClick={() => { close(); it.onSelect(); }}
+            >
+              {it.icon && <span className="srv-more-ico" aria-hidden>{it.icon}</span>}
+              <span className="min-w-0 flex-1 text-left">{it.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Passport.tsx" << '__COREGSM_EOF__'
+import { useId, useState, type ReactNode } from 'react';
+import { t, useI18n } from '../../i18n';
 import { ago, fmtDateTime, toast } from '../../ui';
-import MaintenanceChip from '../MaintenanceChip';
 import { pingTone } from './helpers';
 
 export interface PassportData {
@@ -28165,14 +28473,18 @@ export interface PassportData {
   address: string;
   ping: number | null;
   online: boolean;
-  uptimePct: number | null;
-  uptimeLabel: string;
   createdAt: number | null;
   lastSeen: number | null;
   mode: string | null;
   discord: { text: string; href: string | null }[];
-  /** an active maintenance window (the page passes `server.maintenance`) */
-  maintenance?: { name: string; until: number | null } | null;
+}
+
+const FOLD_KEY = 'coregsm_srv_passport';
+function readOpen(): boolean {
+  try { return localStorage.getItem(FOLD_KEY) === '1'; } catch { return false; }
+}
+function writeOpen(v: boolean) {
+  try { localStorage.setItem(FOLD_KEY, v ? '1' : '0'); } catch { /* private mode */ }
 }
 
 const PP_TONE = { ok: 'pp-tone-ok', warn: 'pp-tone-warn', bad: 'pp-tone-bad' } as const;
@@ -28186,8 +28498,12 @@ function Item({ k, wide, children }: { k: string; wide?: boolean; children: Reac
   );
 }
 
-/** «Паспорт сервера»: every static and slow-changing fact in one block of the page header */
+/** «Паспорт сервера»: five key facts; the rest is behind «Подробнее» (remembered) */
 export default function Passport({ d }: { d: PassportData }) {
+  useI18n();
+  const [open, setOpen] = useState(readOpen);
+  const bodyId = useId();
+  const toggle = () => setOpen((v) => { writeOpen(!v); return !v; });
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(d.address);
@@ -28199,41 +28515,48 @@ export default function Passport({ d }: { d: PassportData }) {
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
-      {d.maintenance && <MaintenanceChip m={d.maintenance} glass className="mb-2" />}
-      <dl className="pp">
-        <Item k="Игра"><span>{d.game}{d.mode ? ` · ${d.mode}` : ''}</span></Item>
+      <dl className="pp pp-main">
+        <Item k="Игра"><span>{d.game}</span></Item>
+        <Item k="Карта"><span title={d.map ?? undefined}>{d.map && d.online ? d.map : '–'}</span></Item>
         <Item k="Версия"><span>{d.version ? `v${d.version.replace(/^v/i, '')}` : '–'}</span></Item>
         <Item k="Страна"><span>{d.country ? `${d.flag} ${d.country}`.trim() : '–'}</span></Item>
-        <Item k="Карта"><span title={d.map ?? undefined}>{d.map && d.online ? d.map : '–'}</span></Item>
-        <Item k="Адрес" wide>
-          <code title={d.address}>{d.address}</code>
-          <button type="button" className="pp-copy" onClick={() => void copy()} title="Скопировать адрес" aria-label="Скопировать адрес">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <rect x="9" y="9" width="11" height="11" rx="2.5" />
-              <path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15" />
-            </svg>
-          </button>
-        </Item>
         <Item k="Пинг">
           {pt && d.ping != null ? <span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span> : <span>–</span>}
         </Item>
-        <Item k={`Аптайм · ${d.uptimeLabel}`}><span>{d.uptimePct == null ? '–' : `${d.uptimePct}%`}</span></Item>
-        <Item k="Добавлен">
-          <span title={d.createdAt ? fmtDateTime(d.createdAt) : undefined}>
-            {d.createdAt ? new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : '–'}
-          </span>
-        </Item>
-        <Item k="Последний опрос"><span title={d.lastSeen ? fmtDateTime(d.lastSeen) : undefined}>{d.lastSeen ? ago(d.lastSeen) : '–'}</span></Item>
-        {d.discord.length > 0 && (
-          <Item k="Discord" wide>
-            {d.discord.map((x, i) => (
-              x.href
-                ? <a key={i} href={x.href} target="_blank" rel="noopener noreferrer">{x.text}</a>
-                : <span key={i}>{x.text}</span>
-            ))}
-          </Item>
-        )}
       </dl>
+      <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
+        {open ? t('srv.pp.less') : t('srv.pp.more')}
+        <svg className="pp-more-chev" data-open={open} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      <div id={bodyId} hidden={!open}>
+        <dl className="pp mt-2">
+          <Item k="Адрес" wide>
+            <code title={d.address}>{d.address}</code>
+            <button type="button" className="pp-copy" onClick={() => void copy()} title="Скопировать адрес" aria-label="Скопировать адрес">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="9" y="9" width="11" height="11" rx="2.5" />
+                <path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15" />
+              </svg>
+            </button>
+          </Item>
+          <Item k="Режим"><span>{d.mode ?? '–'}</span></Item>
+          <Item k="Добавлен">
+            <span title={d.createdAt ? fmtDateTime(d.createdAt) : undefined}>
+              {d.createdAt ? new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : '–'}
+            </span>
+          </Item>
+          <Item k="Последний опрос"><span title={d.lastSeen ? fmtDateTime(d.lastSeen) : undefined}>{d.lastSeen ? ago(d.lastSeen) : '–'}</span></Item>
+          {d.discord.length > 0 && (
+            <Item k="Discord" wide>
+              {d.discord.map((x, i) => (
+                x.href
+                  ? <a key={i} href={x.href} target="_blank" rel="noopener noreferrer">{x.text}</a>
+                  : <span key={i}>{x.text}</span>
+              ))}
+            </Item>
+          )}
+        </dl>
+      </div>
     </section>
   );
 }
@@ -28242,8 +28565,11 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/PlayersList.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState } from 'react';
 import type { PlayerNow } from '../../api';
-import { plural } from '../../ui';
-import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow } from './helpers';
+import { StateView } from '../StateView';
+import { t, useI18n } from '../../i18n';
+import { plural, toast } from '../../ui';
+import { sortPlayers, type PlayerSort } from './serverLogic';
+import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow, useStickyTop } from './helpers';
 
 function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   return (
@@ -28257,10 +28583,14 @@ function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   );
 }
 
-type Sort = 'time' | 'alpha';
 interface Row { key: string; name: string; since: number | null }
 
 const clock = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const joinedAt = (ts: number, now: number) => {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return now - ts < 20 * 3600_000 && d.getDate() === new Date(now).getDate() ? time : `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`;
+};
 
 /**
  * Players on the server. `limit`: overview mode (first N, no search, link to the full list via `moreHref`).
@@ -28271,7 +28601,9 @@ export default function PlayersList({
   online, players, names, list, fresh, limit, moreHref,
 }: { online: boolean; players: number; names: string[]; list: PlayerNow[]; fresh: Set<string>; limit?: number; moreHref?: string }) {
   const now = useNow(30_000);
-  const [sort, setSort] = useState<Sort>('time');
+  useI18n();
+  const stickyTop = useStickyTop();
+  const [sort, setSort] = useState<PlayerSort>('longest');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<string | null>(null);
 
@@ -28282,58 +28614,68 @@ export default function PlayersList({
     if (!r.length) r = names.map((n, i) => ({ key: `${n}-${i}`, name: n || 'Без имени', since: null }));
     const q = query.trim().toLowerCase();
     if (q) r = r.filter((p) => p.name.toLowerCase().includes(q));
-    if (sort === 'alpha' || r.every((p) => p.since == null)) r.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    else r.sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
+    r = sortPlayers(r, r.every((p) => p.since == null) ? 'alpha' : sort);
     return r;
   }, [list, names, query, sort]);
   const shown = limit ? rows.slice(0, limit) : rows;
   const showSearch = !limit && total > 5;
   const hasTimes = list.length > 0;
 
-  if (!online) return <p className="py-6 text-center font-semibold text-mute">Сервер недоступен: список игроков появится, когда он вернётся.</p>;
+  if (!online) {
+    return <StateView kind="offline" bare compact title={t('srv.pl.offline')} text={t('srv.pl.offlineText')} />;
+  }
   if (total === 0) {
     return (
-      <p className="py-6 text-center font-semibold text-mute">
-        {players > 0 ? `Сейчас ${players} ${plural(players, ['игрок', 'игрока', 'игроков'])}, но игра не передаёт имена.` : 'Пока никого нет. Будьте первым!'}
-      </p>
+      <StateView
+        kind="empty"
+        bare
+        compact
+        title={players > 0 ? t('srv.pl.noNames', { n: players }) : t('srv.pl.none')}
+        text={players > 0 ? t('srv.pl.noNamesText') : t('srv.pl.noneText')}
+      />
     );
   }
 
+  const sorts: [PlayerSort, string][] = [['longest', t('srv.pl.longest')], ['newest', t('srv.pl.newest')], ['alpha', t('srv.pl.alpha')]];
   return (
     <div>
       {!limit && (
-        <p className="mb-3 text-sm font-bold text-mute" aria-live="polite">
-          {query.trim()
-            ? `Найдено ${rows.length} из ${total}`
-            : `${total} ${plural(total, ['игрок', 'игрока', 'игроков'])} с именами${hiddenCount > 0 ? ` · ещё ${hiddenCount} без имени` : ''}`}
-        </p>
-      )}
-      {(showSearch || (!limit && hasTimes && total > 1)) && (
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          {showSearch && (
-            <input
-              type="search"
-              className="input !h-10 min-w-0 flex-1 basis-40"
-              placeholder="Поиск по нику"
-              aria-label="Поиск игрока по нику"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              autoComplete="off"
-            />
-          )}
-          {total > 1 && (
-            <div className="seg" role="group" aria-label="Сортировка">
-              {([['time', 'По времени в игре'], ['alpha', 'По алфавиту']] as [Sort, string][])
-                .filter(([k]) => k === 'alpha' || hasTimes)
-                .map(([k, label]) => (
-                  <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
-                ))}
+        <div className="pl-sticky" style={{ top: stickyTop }}>
+          <p className="pl-count" aria-live="polite">
+            {query.trim()
+              ? t('srv.pl.found', { n: rows.length, total })
+              : <>
+                  <b>{total}</b> {plural(total, ['игрок', 'игрока', 'игроков'])} {t('srv.pl.withNames')}{hiddenCount > 0 ? ` · ${t('srv.pl.hidden', { n: hiddenCount })}` : ''}
+                </>}
+          </p>
+          {(showSearch || (hasTimes && total > 1)) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {showSearch && (
+                <input
+                  type="search"
+                  className="input !h-10 min-w-0 flex-1 basis-40"
+                  placeholder={t('srv.pl.search')}
+                  aria-label={t('srv.pl.searchLabel')}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoComplete="off"
+                />
+              )}
+              {total > 1 && (
+                <div className="srv-chipset" role="group" aria-label={t('srv.pl.sort')}>
+                  {sorts
+                    .filter(([k]) => k === 'alpha' || hasTimes)
+                    .map(([k, label]) => (
+                      <button key={k} type="button" className={`chip-filter ${sort === k ? 'on' : ''}`} aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
+                    ))}
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
       {shown.length === 0 ? (
-        <p className="py-6 text-center font-semibold text-mute">Никого не нашли по запросу «{query}».</p>
+        <StateView kind="empty" bare compact title={t('srv.pl.noMatch', { q: query })} text={t('srv.pl.noMatchText')} />
       ) : (
         <ul className="divide-y divide-line">
           {shown.map((p) => {
@@ -28346,7 +28688,8 @@ export default function PlayersList({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-bold" title={p.name}>{p.name}</span>
                   {dur != null && (
-                    <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
                       {dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-[11px]">новичок</span>}
                       {dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-[11px]">ветеран</span>}
                     </span>
@@ -28386,7 +28729,7 @@ export default function PlayersList({
                         <button
                           type="button"
                           className="btn btn-soft btn-sm shrink-0"
-                          onClick={() => void navigator.clipboard?.writeText(p.name).catch(() => undefined)}
+                          onClick={() => void navigator.clipboard?.writeText(p.name).then(() => toast(t('srv.pl.copied')), () => undefined)}
                         >
                           Копировать
                         </button>
@@ -28694,7 +29037,7 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
       <div className={`srv-tabbar sticky z-20 -mx-3 px-3 py-2 sm:-mx-6 sm:px-6 ${stuck ? 'is-stuck' : ''}`} style={{ top }}>
         <nav
           ref={seg}
-          className="seg no-scrollbar flex w-fit max-w-full overflow-x-auto"
+          className="srv-tabs seg no-scrollbar flex w-fit max-w-full overflow-x-auto"
           role="tablist"
           aria-label="Разделы сервера"
           onKeyDown={onKey}
@@ -28791,7 +29134,7 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/SubscribeMenu.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { t, type TKey } from '../../i18n';
@@ -28827,21 +29170,43 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
 
 /**
  * «Подписаться» in the server page header: opens a small dialog with the notification kinds.
- * Hidden for guests and when the backend has no subscriptions.
+ * Hidden for guests and when the backend has no subscriptions. The page may own the state (`subs`, `open`) so that other
+ * buttons (the free-slot one, the phone bar) open the same dialog; `preselect` switches one kind on in the draft.
  */
-export default function SubscribeMenu({ serverId, serverName }: { serverId: number; serverName: string }) {
+export default function SubscribeMenu({
+  serverId, serverName, subs: external, open: openProp, onOpenChange, preselect, hideButton = false, className = 'btn-glass',
+}: {
+  serverId: number;
+  serverName: string;
+  subs?: ReturnType<typeof useSubscriptions>;
+  open?: boolean;
+  onOpenChange?: (v: boolean) => void;
+  preselect?: SubKind | null;
+  hideButton?: boolean;
+  className?: string;
+}) {
   const { me } = useAuth();
-  const subs = useSubscriptions(!!me);
-  const [open, setOpen] = useState(false);
+  const own = useSubscriptions(!!me && !external);
+  const subs = external ?? own;
+  const [innerOpen, setInnerOpen] = useState(false);
+  const open = openProp ?? innerOpen;
+  const setOpen = (v: boolean) => { setInnerOpen(v); onOpenChange?.(v); };
   const [draft, setDraft] = useState<SubKind[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  const current = normalizeKinds(subs.list?.find((s) => s.serverId === serverId)?.kinds);
+  const initial = () => normalizeKinds(preselect ? [...current, preselect] : current);
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
+  // every time the dialog opens, the draft starts from the saved kinds (plus the preselected one)
+  useEffect(() => {
+    if (open) { setDraft(initialRef.current()); setError(''); }
+  }, [open]);
+
   if (!me || subs.unavailable || subs.list === null) return null;
-  const current = normalizeKinds(subs.list.find((s) => s.serverId === serverId)?.kinds);
   const on = current.length > 0;
 
-  const show = () => { setDraft(current); setError(''); setOpen(true); };
   const save = async () => {
     setBusy(true);
     setError('');
@@ -28860,10 +29225,12 @@ export default function SubscribeMenu({ serverId, serverName }: { serverId: numb
 
   return (
     <>
-      <button type="button" className="btn-glass col-span-2 sm:col-auto" onClick={show} aria-haspopup="dialog" aria-label={`${on ? t('sub.buttonOn') : t('sub.button')}: ${serverName}`}>
-        <IconBell size={18} />
-        {on ? t('sub.buttonOn') : t('sub.button')}
-      </button>
+      {!hideButton && (
+        <button type="button" className={`${className} col-span-2 sm:col-auto`} onClick={() => setOpen(true)} aria-haspopup="dialog" aria-label={`${on ? t('sub.buttonOn') : t('sub.button')}: ${serverName}`}>
+          <IconBell size={18} />
+          {on ? t('sub.buttonOn') : t('sub.button')}
+        </button>
+      )}
       {open && (
         <Modal title={t('sub.title')} onClose={() => setOpen(false)}>
           <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void save(); }}>
@@ -28882,7 +29249,7 @@ export default function SubscribeMenu({ serverId, serverName }: { serverId: numb
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/helpers.ts" << '__COREGSM_EOF__'
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react';
 import { COUNTRIES } from '../../countries';
 import { getPrefs } from '../../i18n';
 
@@ -29018,6 +29385,118 @@ export function exportFileName(title: string, hours: number, ts: number): string
   }
   return `${slug}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}-${day}.png`;
 }
+
+
+/** px from the top of the viewport where sticky blocks of a tab may start: just under the glass header and the tab bar */
+export function useStickyTop(): number {
+  const [top, setTop] = useState(120);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const bar = document.querySelector<HTMLElement>('.srv-tabbar');
+      if (!bar) return;
+      setTop(Math.round(parseFloat(bar.style.top || '0') + bar.getBoundingClientRect().height));
+    };
+    measure();
+    const bar = document.querySelector<HTMLElement>('.srv-tabbar');
+    const ro = typeof ResizeObserver !== 'undefined' && bar ? new ResizeObserver(measure) : null;
+    if (ro && bar) ro.observe(bar);
+    window.addEventListener('resize', measure);
+    return () => { ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, []);
+  return top;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/serverLogic.ts" << '__COREGSM_EOF__'
+// Pure helpers of the server page (covered by tests): accent, event filters / day groups, player sorting, chart peak.
+import { findGame } from '../../games';
+import { capacityPct, slotsInfo } from '../servers/capacity';
+
+// ---------- accent ----------
+/** V Rising and Icarus bring their own accent; every other game uses the panel's brand colour */
+const OWN_ACCENT = new Set(['vrising', 'icarus']);
+export const BRAND_ACCENT = 'rgb(var(--brand))';
+export function gameAccent(game: string): string {
+  return OWN_ACCENT.has(game) ? findGame(game)?.color ?? BRAND_ACCENT : BRAND_ACCENT;
+}
+
+// ---------- events ----------
+export type EventKind = 'up' | 'down' | 'peak' | 'maintenance';
+export type EventFilter = 'all' | 'down' | 'up' | 'peak' | 'maintenance';
+export const EVENT_FILTERS: EventFilter[] = ['all', 'down', 'up', 'peak', 'maintenance'];
+
+export function eventCounts(events: { type: EventKind }[]): Record<EventFilter, number> {
+  const c: Record<EventFilter, number> = { all: events.length, down: 0, up: 0, peak: 0, maintenance: 0 };
+  for (const e of events) c[e.type] += 1;
+  return c;
+}
+
+export function filterEvents<T extends { type: EventKind }>(events: T[], filter: EventFilter): T[] {
+  return filter === 'all' ? events : events.filter((e) => e.type === filter);
+}
+
+const dayKey = (ts: number) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+
+export interface DayGroup<T> { key: string; kind: 'today' | 'yesterday' | 'date'; ts: number; items: T[] }
+
+/** consecutive items of one calendar day (local time) form a group; the input order is kept */
+export function groupByDay<T extends { ts: number }>(items: T[], now = Date.now()): DayGroup<T>[] {
+  const today = dayKey(now);
+  const n = new Date(now);
+  const yesterday = dayKey(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1).getTime());
+  const out: DayGroup<T>[] = [];
+  for (const it of items) {
+    const k = dayKey(it.ts);
+    const last = out[out.length - 1];
+    if (last && last.key === k) last.items.push(it);
+    else out.push({ key: k, kind: k === today ? 'today' : k === yesterday ? 'yesterday' : 'date', ts: it.ts, items: [it] });
+  }
+  return out;
+}
+
+// ---------- players ----------
+export type PlayerSort = 'longest' | 'newest' | 'alpha';
+
+/** a new array: longest in the game first / latest joined first / A-Z; unknown join times go last */
+export function sortPlayers<T extends { name: string; since: number | null }>(rows: T[], sort: PlayerSort): T[] {
+  const alpha = (a: T, b: T) => a.name.localeCompare(b.name, 'ru');
+  const r = [...rows];
+  if (sort === 'alpha') return r.sort(alpha);
+  return r.sort((a, b) => {
+    if (a.since == null && b.since == null) return alpha(a, b);
+    if (a.since == null) return 1;
+    if (b.since == null) return -1;
+    const d = sort === 'longest' ? a.since - b.since : b.since - a.since;
+    return d || alpha(a, b);
+  });
+}
+
+// ---------- chart ----------
+/** the highest value of the visible series (offline samples are skipped); the latest of equal ones; null when it is 0 */
+export function findPeak(points: { ts: number; players: number; online: number | boolean; ping: number | null }[], series: 'players' | 'ping'): { value: number; ts: number } | null {
+  let best: { value: number; ts: number } | null = null;
+  for (const p of points) {
+    if (!p.online) continue;
+    const v = series === 'ping' ? p.ping : p.players;
+    if (v == null) continue;
+    if (!best || v >= best.value) best = { value: v, ts: p.ts };
+  }
+  return best && best.value > 0 ? best : null;
+}
+
+/** «18:20» inside a day and a half, «13 окт., 18:20» for longer ranges */
+export function peakWhen(ts: number, hours: number, locale = 'ru-RU'): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+  return hours <= 36 ? time : `${d.toLocaleDateString(locale, { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+// ---------- hero / metrics ----------
+/** true when an online server has no free place */
+export const isFullNow = (online: boolean, players: number, max: number) => online && slotsInfo(players, max)?.kind === 'full';
+
+/** width (0..100) of the small static indicator of a metric */
+export const metricFill = (value: number | null | undefined, max: number): number => (value == null || !(max > 0) ? 0 : capacityPct(value, max));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/BulkBar.tsx" << '__COREGSM_EOF__'
@@ -32623,6 +33102,86 @@ const en: Record<keyof typeof ru, string> = {
   'srv.new.ev.down': '{name} went offline',
   'srv.new.ev.peak': '{name}: peak of {n} players',
   'srv.new.ev.maint': 'Maintenance: {name}',
+  'srv.more': 'More',
+  'srv.act.connect': 'Connect',
+  'srv.act.copyAddr': 'Copy address',
+  'srv.act.copyForJoin': 'Copy the address to join',
+  'srv.act.share': 'Share',
+  'srv.act.linkCopied': 'Link copied',
+  'srv.bar.label': 'Quick actions',
+  'srv.hero.label': 'Server state',
+  'srv.hero.players': 'players',
+  'srv.hero.offline': 'server is unavailable',
+  'srv.hero.waiting': 'waiting for the first response',
+  'srv.freeSlot.button': 'Tell me when a slot is free',
+  'srv.freeSlot.login': 'Sign in to be told about a free slot',
+  'srv.freeSlot.subscribed': 'You are subscribed to free slots',
+  'srv.pp.more': 'Details',
+  'srv.pp.less': 'Hide details',
+  'srv.chart.period': 'Period',
+  'srv.chart.series': 'Metric',
+  'srv.chart.titlePlayers': 'Players',
+  'srv.chart.titlePing': 'Ping',
+  'srv.chart.axisPlayers': 'Players on the server',
+  'srv.chart.axisPing': 'Ping, ms',
+  'srv.chart.axisX': 'Horizontal: time (your local time), {period}',
+  'srv.chart.p24': 'last 24 hours',
+  'srv.chart.p7': 'last 7 days',
+  'srv.chart.p30': 'last 30 days',
+  'srv.chart.peak': 'Peak {n} at {time}',
+  'srv.chart.peakDate': 'Peak {n}: {time}',
+  'srv.chart.peakPing': 'Max ping {n} ms at {time}',
+  'srv.chart.peakPingDate': 'Max ping {n} ms: {time}',
+  'srv.chart.now': 'Now {n}',
+  'srv.pl.offline': 'The server is unavailable',
+  'srv.pl.offlineText': 'The player list will appear when the server is back.',
+  'srv.pl.none': 'Nobody is here yet',
+  'srv.pl.noneText': 'Be the first: the server is waiting for players.',
+  'srv.pl.noNames': '{n} player now, but the game does not report names|{n} players now, but the game does not report names',
+  'srv.pl.noNamesText': 'This game does not expose a nickname list, only the count is shown.',
+  'srv.pl.withNames': 'with names',
+  'srv.pl.hidden': '{n} more without a name',
+  'srv.pl.found': 'Found {n} of {total}',
+  'srv.pl.search': 'Search by nickname',
+  'srv.pl.searchLabel': 'Search a player by nickname',
+  'srv.pl.sort': 'Sort',
+  'srv.pl.longest': 'Longest in game',
+  'srv.pl.newest': 'Newest',
+  'srv.pl.alpha': 'A to Z',
+  'srv.pl.joined': 'joined {time}',
+  'srv.pl.copied': 'Nickname copied',
+  'srv.pl.noMatch': 'Nobody found for "{q}"',
+  'srv.pl.noMatchText': 'Check the spelling or clear the search.',
+  'srv.ev.filter': 'Event filter',
+  'srv.ev.all': 'All',
+  'srv.ev.down': 'Outages',
+  'srv.ev.up': 'Returns',
+  'srv.ev.peak': 'Peaks',
+  'srv.ev.maint': 'Maintenance',
+  'srv.ev.today': 'Today',
+  'srv.ev.yesterday': 'Yesterday',
+  'srv.ev.emptyAll': 'No events yet',
+  'srv.ev.emptyAllText': 'Outages, returns and records will show up here.',
+  'srv.ev.emptyDown': 'No outages in this period',
+  'srv.ev.emptyUp': 'No returns in this period',
+  'srv.ev.emptyPeak': 'No peaks in this period yet',
+  'srv.ev.emptyPeakText': 'A record appears when players gather on the server.',
+  'srv.ev.emptyMaint': 'No maintenance in this period',
+  'srv.ev.emptyFilterText': 'Try another filter or period.',
+  'srv.cn.s1': 'Copy',
+  'srv.cn.s2': 'Open the game',
+  'srv.cn.s3': 'Connect',
+  'srv.cn.s3text': 'Paste the copied value, confirm, and enter the server password if there is one.',
+  'srv.cn.copy': 'Copy',
+  'srv.cn.copied': 'Copied',
+  'srv.cn.steamLink': 'Steam link',
+  'srv.cn.parts': 'Needed separately:',
+  'srv.cn.qrTitle': 'QR code for your phone',
+  'srv.cn.qrWhat': 'What to put into the QR code',
+  'srv.cn.qrLink': 'Link',
+  'srv.cn.qrAddr': 'Address',
+  'srv.cn.qrHintLink': 'Point the camera at it: the link opens in Steam.',
+  'srv.cn.qrHintAddr': 'Point the camera at it: the server address lands on your phone, then paste it into the game.',
 };
 
 export default en;
@@ -33097,6 +33656,86 @@ const ru = {
   'srv.new.ev.down': '{name} недоступен',
   'srv.new.ev.peak': '{name}: пик {n} игроков',
   'srv.new.ev.maint': 'Обслуживание: {name}',
+  'srv.more': 'Ещё',
+  'srv.act.connect': 'Подключиться',
+  'srv.act.copyAddr': 'Копировать адрес',
+  'srv.act.copyForJoin': 'Скопировать адрес для входа',
+  'srv.act.share': 'Поделиться',
+  'srv.act.linkCopied': 'Ссылка скопирована',
+  'srv.bar.label': 'Быстрые действия',
+  'srv.hero.label': 'Состояние сервера',
+  'srv.hero.players': 'игроков',
+  'srv.hero.offline': 'сервер недоступен',
+  'srv.hero.waiting': 'ожидаем первый ответ',
+  'srv.freeSlot.button': 'Сообщить, когда будет место',
+  'srv.freeSlot.login': 'Войдите, чтобы узнать о свободном месте',
+  'srv.freeSlot.subscribed': 'Вы подписаны на освобождение места',
+  'srv.pp.more': 'Подробнее',
+  'srv.pp.less': 'Свернуть',
+  'srv.chart.period': 'Период',
+  'srv.chart.series': 'Показатель',
+  'srv.chart.titlePlayers': 'Игроки',
+  'srv.chart.titlePing': 'Пинг',
+  'srv.chart.axisPlayers': 'Игроков на сервере, чел.',
+  'srv.chart.axisPing': 'Пинг, мс',
+  'srv.chart.axisX': 'По горизонтали: время (ваше локальное), {period}',
+  'srv.chart.p24': 'последние 24 часа',
+  'srv.chart.p7': 'последние 7 дней',
+  'srv.chart.p30': 'последние 30 дней',
+  'srv.chart.peak': 'Пик {n} в {time}',
+  'srv.chart.peakDate': 'Пик {n}: {time}',
+  'srv.chart.peakPing': 'Макс. пинг {n} мс в {time}',
+  'srv.chart.peakPingDate': 'Макс. пинг {n} мс: {time}',
+  'srv.chart.now': 'Сейчас {n}',
+  'srv.pl.offline': 'Сервер недоступен',
+  'srv.pl.offlineText': 'Список игроков появится, когда сервер вернётся.',
+  'srv.pl.none': 'Пока никого нет',
+  'srv.pl.noneText': 'Будьте первым: сервер ждёт игроков.',
+  'srv.pl.noNames': 'Сейчас {n} игрок, но игра не передаёт имена|Сейчас {n} игрока, но игра не передаёт имена|Сейчас {n} игроков, но игра не передаёт имена',
+  'srv.pl.noNamesText': 'У этой игры список ников недоступен, показываем только количество.',
+  'srv.pl.withNames': 'с именами',
+  'srv.pl.hidden': 'ещё {n} без имени',
+  'srv.pl.found': 'Найдено {n} из {total}',
+  'srv.pl.search': 'Поиск по нику',
+  'srv.pl.searchLabel': 'Поиск игрока по нику',
+  'srv.pl.sort': 'Сортировка',
+  'srv.pl.longest': 'Дольше всех',
+  'srv.pl.newest': 'Новые',
+  'srv.pl.alpha': 'По алфавиту',
+  'srv.pl.joined': 'зашёл {time}',
+  'srv.pl.copied': 'Ник скопирован',
+  'srv.pl.noMatch': 'Никого не нашли по запросу «{q}»',
+  'srv.pl.noMatchText': 'Проверьте написание или очистите поиск.',
+  'srv.ev.filter': 'Фильтр событий',
+  'srv.ev.all': 'Все',
+  'srv.ev.down': 'Падения',
+  'srv.ev.up': 'Возвраты',
+  'srv.ev.peak': 'Пики',
+  'srv.ev.maint': 'Обслуживание',
+  'srv.ev.today': 'Сегодня',
+  'srv.ev.yesterday': 'Вчера',
+  'srv.ev.emptyAll': 'Событий пока нет',
+  'srv.ev.emptyAllText': 'Сбои, возвраты и рекорды появятся здесь.',
+  'srv.ev.emptyDown': 'Падений за период не было',
+  'srv.ev.emptyUp': 'Возвратов за период не было',
+  'srv.ev.emptyPeak': 'Пиков за период пока не было',
+  'srv.ev.emptyPeakText': 'Рекорд появится, когда на сервере соберутся игроки.',
+  'srv.ev.emptyMaint': 'Обслуживания за период не было',
+  'srv.ev.emptyFilterText': 'Попробуйте другой фильтр или период.',
+  'srv.cn.s1': 'Скопируйте',
+  'srv.cn.s2': 'Откройте игру',
+  'srv.cn.s3': 'Подключитесь',
+  'srv.cn.s3text': 'Вставьте скопированное значение, подтвердите вход и при необходимости введите пароль сервера.',
+  'srv.cn.copy': 'Копировать',
+  'srv.cn.copied': 'Скопировано',
+  'srv.cn.steamLink': 'Ссылка Steam',
+  'srv.cn.parts': 'Нужны по отдельности:',
+  'srv.cn.qrTitle': 'QR-код для телефона',
+  'srv.cn.qrWhat': 'Что зашифровать в QR-коде',
+  'srv.cn.qrLink': 'Ссылка',
+  'srv.cn.qrAddr': 'Адрес',
+  'srv.cn.qrHintLink': 'Наведите камеру: ссылка откроется в Steam.',
+  'srv.cn.qrHintAddr': 'Наведите камеру: адрес сервера окажется в телефоне, останется вставить его в игру.',
 };
 
 export default ru;
@@ -37325,13 +37964,15 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { t, useI18n } from '../i18n';
+import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
-import { gameColor, gameGradient, gameLabel } from '../games';
+import { gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -37341,11 +37982,15 @@ import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
+import Hero, { type FreeSlotState } from '../components/server/Hero';
+import Metrics from '../components/server/Metrics';
+import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
+import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
-  TONE_TEXT, countryName, flagEmoji, guessMode, loadTone, pingTone, stagger, tabHref, useNow, type TabId,
+  countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
 
 export { SERVER_TABS } from '../components/server/helpers';
@@ -37369,7 +38014,7 @@ const HISTORY_SECTIONS: SectionDef[] = [
 ];
 export const CONNECT_SECTIONS: SectionDef[] = [
   { id: 'cn-steps', label: 'Как подключиться' },
-  { id: 'cn-qr', label: 'QR-код', secondary: true },
+  { id: 'cn-qr', label: 'QR-код' },
 ];
 const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
@@ -37410,19 +38055,9 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
   );
 }
 
-function StatTile({ k, hint, i, children }: { k: string; hint?: ReactNode; i: number; children: ReactNode }) {
-  return (
-    <div className="tile tile-in p-4 sm:p-[18px]" style={stagger(i)}>
-      <div className="stat-k">{k}</div>
-      <div className={`stat-v mt-1 ${typeof children === 'string' ? 'truncate' : ''}`}>{children}</div>
-      {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
-    </div>
-  );
-}
-
 function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) => void }) {
   return (
-    <div className="seg" role="group" aria-label="Период">
+    <div className="seg" role="group" aria-label={t('srv.chart.period')}>
       {([[24, '24 ч'], [168, '7 дн'], [720, '30 дн']] as [number, string][]).map(([h, label]) => (
         <button key={h} type="button" onClick={() => onChange(h)} aria-pressed={hours === h} className="seg-item">{label}</button>
       ))}
@@ -37431,6 +38066,7 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
 }
 
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
+  useI18n();
   const { me, isAdmin } = useAuth();
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
@@ -37495,6 +38131,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
   };
 
+  const subs = useSubscriptions(!!me);
+  const [subOpen, setSubOpen] = useState(false);
+  const [subPre, setSubPre] = useState<SubKind | null>(null);
+  const openSub = (kind: SubKind | null = null) => { setSubPre(kind); setSubOpen(true); };
   const profiles = useGameProfiles();
   const depth = useDepth<HTMLElement>();
   const [shared, setShared] = useState(false);
@@ -37533,7 +38173,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   }
 
   const { server: s, stats, events, points } = data;
-  const color = gameColor(s.game);
+  const accent = gameAccent(s.game);
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
@@ -37546,63 +38186,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const flag = flagEmoji(code);
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
   const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
-  const windowShort = data.hours <= 24 ? '24 ч' : data.hours <= 168 ? '7 дн' : '30 дн';
   const chartLoading = data.hours !== hours;
-
-  const pct = s.maxPlayers > 0 ? Math.min(100, Math.round((s.players / s.maxPlayers) * 100)) : 0;
-  const lt = loadTone(pct);
-  const pt = s.ping != null ? pingTone(s.ping) : null;
-  const meterCls = { ok: 'm-ok', warn: 'm-warn', bad: 'm-bad' }[lt];
-
-  const nowTile = (i: number) => (
-    <div key="now" className="tile tile-in p-4 sm:p-[18px]" style={stagger(i)}>
-      <div className="stat-k">Сейчас</div>
-      <div className="stat-v mt-1">
-        {s.online ? <><AnimatedNumber value={s.players} delta />/{s.maxPlayers}</> : '–'}
-      </div>
-      {s.online && s.maxPlayers > 0 ? (
-        <>
-          <div
-            className={`meter mt-2 ${meterCls}`}
-            role="meter"
-            aria-label="Заполненность сервера"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={pct}
-            aria-valuetext={`заполнено ${pct} %`}
-          >
-            <i style={{ width: `${pct}%` }} />
-          </div>
-          <div className="stat-s mt-1.5 flex flex-wrap items-center gap-x-2">
-            <span className={TONE_TEXT[lt]}>заполнено {pct} %</span>
-            {s.ping != null && pt && (
-              <span className={`inline-flex items-center gap-1 ${TONE_TEXT[pt.tone]}`}>
-                <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
-                пинг {s.ping} мс · {pt.label}
-              </span>
-            )}
-          </div>
-        </>
-      ) : (
-        <div className="stat-s mt-1.5">{s.hasStatus ? 'сервер недоступен' : 'ожидаем первый ответ'}</div>
-      )}
-    </div>
-  );
-  const statTiles = (withNow: boolean, base = 0) => [
-    withNow ? nowTile(base) : null,
-    <StatTile key="peak" i={base + (withNow ? 1 : 0)} k="Пик игроков" hint={stats.peakAt ? fmtDateTime(stats.peakAt) : undefined}>
-      {stats.peakPlayers == null ? '–' : String(stats.peakPlayers)}
-    </StatTile>,
-    <StatTile key="up" i={base + (withNow ? 2 : 1)} k="Аптайм" hint={windowLabel}>
-      {stats.uptimePct == null ? '–' : `${stats.uptimePct}%`}
-    </StatTile>,
-    <StatTile key="avg" i={base + (withNow ? 3 : 2)} k="В среднем" hint="пока сервер онлайн">
-      {stats.avgPlayers == null ? '–' : String(stats.avgPlayers)}
-    </StatTile>,
-    withNow ? null : (
-      <StatTile key="n" i={base + 3} k="Измерений" hint={windowLabel}>{String(stats.samples)}</StatTile>
-    ),
-  ];
 
   const discordLinks = (data.discord ?? []).map((b) => {
     const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
@@ -37651,31 +38235,40 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     <SectionCard
       id={withSeries ? 'hi-chart' : 'ov-chart'}
       state={sections}
-      className={withSeries ? 'lg:col-span-12' : 'lg:col-span-8'}
+      className="lg:col-span-12"
       style={stagger(i)}
-      title={withSeries ? (series === 'ping' ? 'Пинг' : 'Игроки') : 'Игроки'}
-      actions={(
-        <>
-          {withSeries && (
-            <div className="seg" role="group" aria-label="Показатель">
-              {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
-                <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{label}</button>
-              ))}
-            </div>
-          )}
-          <PeriodSeg hours={hours} onChange={setHours} />
-        </>
-      )}
+      title={withSeries ? (series === 'ping' ? t('srv.chart.titlePing') : t('srv.chart.titlePlayers')) : t('srv.chart.titlePlayers')}
     >
+      <div className="srv-chart-bar">
+        {withSeries && (
+          <div className="seg" role="group" aria-label={t('srv.chart.series')}>
+            {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
+              <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{label}</button>
+            ))}
+          </div>
+        )}
+        <PeriodSeg hours={hours} onChange={setHours} />
+      </div>
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
     </SectionCard>
+  );
+
+  const metrics = (withSamples: boolean) => (
+    <Metrics
+      withSamples={withSamples}
+      d={{
+        online: s.online, hasStatus: s.hasStatus, players: s.players, maxPlayers: s.maxPlayers,
+        peak: stats.peakPlayers ?? null, peakAt: stats.peakAt ?? null, uptimePct: stats.uptimePct ?? null, avg: stats.avgPlayers ?? null,
+        samples: stats.samples, windowLabel,
+      }}
+    />
   );
 
   const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
@@ -37695,8 +38288,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(0, true)}
         </div>
-        <SectionCard id="hi-stats" state={sections} bare title="Показатели">
-          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(false, 1)}</div>
+        <SectionCard id="hi-stats" state={sections} title="Показатели">
+          {metrics(true)}
         </SectionCard>
       </div>
     );
@@ -37712,15 +38305,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else {
     panel = (
       <div className="space-y-3.5">
-        <SectionCard id="ov-stats" state={sections} bare title="Показатели">
-          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
+        <SectionCard id="ov-stats" state={sections} style={stagger(0)} title="Показатели">
+          {metrics(false)}
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
-          {chartTile(4, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-4" style={stagger(5)} title="Последние события">
+          {chartTile(1, false)}
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-5" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-12" style={stagger(6)} title={<span className="inline-flex items-center">Сейчас в игре{playerCountBadge}</span>}>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center">Сейчас в игре{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
@@ -37728,34 +38321,67 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     );
   }
 
+  // subscriptions: one dialog for the header button, the free-slot button and the phone bar
+  const subscribedKinds = normalizeKinds(subs.list?.find((x) => x.serverId === id)?.kinds);
+  const canSub = !!me && !subs.unavailable && subs.list !== null;
+  const full = isFullNow(s.online, s.players, s.maxPlayers);
+  const freeSlot: FreeSlotState = !full ? 'hidden' : !me ? 'guest' : !canSub ? 'hidden' : subscribedKinds.includes('free_slot') ? 'subscribed' : 'ready';
+  const subLabel = subscribedKinds.length > 0 ? t('sub.buttonOn') : t('sub.button');
+
+  const connectHref = guide.link?.href ?? tabHref(id, 'connect');
+  const copyInstead = tab === 'connect' && !guide.link;
+  const onConnect = copyInstead ? (e: { preventDefault: () => void }) => { e.preventDefault(); void copyAddress(); } : undefined;
+  const connectLabel = copyInstead ? t('srv.act.copyForJoin') : t('srv.act.connect');
+
+  const moreItems: MoreItem[] = [
+    { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
+    ...(isAdmin ? [
+      { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
+      { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
+      { key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true },
+    ] : []),
+  ];
+
   return (
-    <div className="space-y-3.5">
+    <div className="srv-page space-y-3.5" style={{ ['--srv-accent' as string]: accent }}>
       {back}
 
       <article
-        className={`srv-banner srv-glow srv-${kind} depth relative overflow-hidden rounded-[26px] p-4 text-white sm:p-6`}
+        className={`srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
         style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true, game: s.game }) }}
         {...depth}
       >
-        <span aria-hidden className="depth-l1 pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
-        <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
+        {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
+        <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
+          <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+          <span className="depth-l2 absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
+        </span>
         {wentOffline && <span className="flash-ring" aria-hidden />}
 
-        {/* title row */}
+        {/* title row: name, status, game */}
         <div className="relative flex items-start gap-3.5 sm:gap-4">
           <GameAvatar game={s.game} size={64} glass vtId={s.id} />
           <div className="min-w-0 flex-1">
             <h1 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
+              <span className="chip-glass">{gameLabel(s.game)}</span>
+              <LiveBadge at={s.updatedAt} />
+              {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
+            </div>
           </div>
           {me && <FavStar on={isFav} name={s.name} onClick={() => void toggleFav()} />}
         </div>
 
-        {/* status row */}
-        <div className="relative mt-3.5 flex flex-wrap items-center gap-2">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
-          <LiveBadge at={s.updatedAt} />
-          {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
-        </div>
+        <Hero
+          online={s.online}
+          hasStatus={s.hasStatus}
+          players={s.players}
+          max={s.maxPlayers}
+          maintenance={s.maintenance}
+          freeSlot={freeSlot}
+          onNotify={() => openSub('free_slot')}
+        />
 
         <Passport
           d={{
@@ -37767,9 +38393,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             address: s.address,
             ping: s.ping,
             online: s.online,
-            maintenance: s.maintenance,
-            uptimePct: stats.uptimePct,
-            uptimeLabel: windowShort,
             createdAt: data.createdAt ?? null,
             lastSeen: s.updatedAt,
             mode,
@@ -37781,29 +38404,19 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
 
-        {/* buttons: the main one, then the two equal glass ones; admin tools are a quieter group */}
+        {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
+            On phones «Подключиться» and «Подписаться» are in the bottom bar. */}
         <div className="relative mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-          <a
-            className="btn-cta col-span-2 sm:col-auto"
-            href={guide.link?.href ?? tabHref(id, 'connect')}
-            onClick={tab === 'connect' && !guide.link ? (e) => { e.preventDefault(); void copyAddress(); } : undefined}
-          >
-            {tab === 'connect' && !guide.link ? 'Скопировать адрес для входа' : 'Подключиться'}
-          </a>
-          <CopyButton text={s.address} label="Скопировать адрес" tone="glass" />
-          <button type="button" className="btn-glass" onClick={() => void share()}>
-            {shared ? <IconCheckMark /> : <IconShare />}
-            Поделиться
-          </button>
-          {me && <SubscribeMenu serverId={id} serverName={s.name} />}
+          <a className="btn-cta max-sm:hidden" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+          <CopyButton text={s.address} label={t('srv.act.copyAddr')} tone="glass" />
+          {canSub && (
+            <button type="button" className="btn-glass max-sm:hidden" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+              <IconBell size={18} />
+              {subLabel}
+            </button>
+          )}
+          <MoreMenu items={moreItems} />
         </div>
-        {isAdmin && (
-          <div className="relative mt-3 grid grid-cols-3 gap-2 border-t border-white/15 pt-3 sm:flex sm:flex-wrap sm:items-center" role="group" aria-label="Управление сервером">
-            <button className="btn-glass-quiet" onClick={refresh} disabled={busy} aria-busy={busy || undefined}><IconRefresh spinning={busy} />{busy ? 'Опрос…' : 'Опросить'}</button>
-            <button className="btn-glass-quiet" onClick={() => setEditing(true)}>Изменить</button>
-            <button className="btn-glass-quiet btn-glass-danger" onClick={remove}>Удалить</button>
-          </div>
-        )}
       </article>
       <ErrorLine text={error} />
 
@@ -37816,6 +38429,20 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
         {panel}
+      </div>
+
+      {me && (
+        <SubscribeMenu serverId={id} serverName={s.name} subs={subs} open={subOpen} onOpenChange={setSubOpen} preselect={subPre} hideButton />
+      )}
+
+      <div className="srv-mbar" role="region" aria-label={t('srv.bar.label')}>
+        <a className="btn" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+        {canSub && (
+          <button type="button" className="btn btn-soft" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+            <IconBell size={18} />
+            {subLabel}
+          </button>
+        )}
       </div>
 
       {editing && (
@@ -40613,6 +41240,161 @@ __COREGSM_EOF__
   .hc-fade, .pl-more { animation: none !important; }
   .pl-row, .pp-copy { transition: none !important; }
 }
+
+/* ======================================================================
+   server page redesign: hero, compact passport, metrics, chart header,
+   «Ещё» menu, players / events / connect tabs, phone bar, game accent
+   ====================================================================== */
+
+/* ---------- game accent: a thin line under the tabs and under the active tab ---------- */
+.srv-page { --srv-acc: var(--srv-accent, rgb(var(--brand))); }
+.srv-tabbar::after {
+  content: ''; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; border-radius: 2px;
+  background: var(--srv-acc); opacity: .55; pointer-events: none;
+}
+@media (min-width: 640px) { .srv-tabbar::after { left: 24px; right: 24px; } }
+.srv-tabs > .seg-item.on::after {
+  content: ''; position: absolute; left: 16px; right: 16px; bottom: 3px; height: 3px; border-radius: 3px; background: var(--srv-acc);
+}
+
+/* tabs as scrollable chips with snapping on phones */
+@media (max-width: 639px) {
+  .srv-tabs { width: 100%; gap: 8px; padding: 0; background: transparent; scroll-snap-type: x proximity; scroll-padding-inline: 12px; }
+  .srv-tabs.seg[data-ind]::before { display: none; }
+  .srv-tabs > .seg-item { flex: none; scroll-snap-align: center; background: rgb(var(--soft)); }
+  .srv-tabs > .seg-item.on, .srv-tabs.seg[data-ind] > .seg-item.on {
+    background: rgb(var(--seg-on)); box-shadow: 0 0 0 1px rgb(var(--line));
+  }
+  .srv-page { padding-bottom: 4.5rem; }
+}
+
+/* ---------- hero (inside the banner) ---------- */
+.srv-hero {
+  margin-top: 14px; padding: 14px 16px; border-radius: 20px; background: rgba(0, 0, 0, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+.srv-hero-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.srv-hero-count { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.srv-hero-n { font-size: 44px; font-weight: 900; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: #fff; }
+.srv-hero-max { font-size: 22px; font-weight: 800; color: rgba(255, 255, 255, 0.82); font-variant-numeric: tabular-nums; }
+.srv-hero-unit { font-size: 15px; font-weight: 800; color: rgba(255, 255, 255, 0.88); }
+.srv-hero-sub {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 9999px; font-size: 14px; font-weight: 800;
+  background: rgba(255, 255, 255, 0.16); color: #fff;
+}
+@media (min-width: 640px) { .srv-hero-n { font-size: 56px; } .srv-hero-max { font-size: 26px; } }
+
+/* ---------- compact passport ---------- */
+.pp.pp-main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pp-main .pp-i:last-child { grid-column: 1 / -1; }
+@media (min-width: 640px) {
+  .pp.pp-main { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .pp-main .pp-i, .pp-main .pp-i:last-child { grid-column: span 2; }
+  .pp-main .pp-i:nth-child(n + 4) { grid-column: span 3; }
+}
+@media (min-width: 1024px) {
+  .pp.pp-main { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .pp-main .pp-i, .pp-main .pp-i:nth-child(n + 4), .pp-main .pp-i:last-child { grid-column: span 1; }
+}
+.pp-more-btn {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 36px; padding: 0 14px; border-radius: 9999px;
+  font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.95); background: rgba(8, 10, 20, 0.22); transition: background-color .15s ease;
+}
+.pp-more-btn:hover { background: rgba(8, 10, 20, 0.4); }
+.pp-more-btn:focus, .pp-more-btn:focus-visible { outline: 0 !important; }
+.pp-more-btn:focus-visible { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
+.pp-more-chev[data-open='true'] { transform: rotate(180deg); }
+@media (max-width: 639px) { .pp-more-btn { min-height: 44px; } }
+
+/* ---------- metrics row ---------- */
+.srv-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 560px) { .srv-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); } .srv-metrics.has-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.srv-metric { min-width: 0; padding: 10px 12px; border-radius: 16px; background: rgb(var(--soft)); }
+.srv-metric-v { margin-top: 2px; font-size: 22px; font-weight: 900; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.srv-metric-of { font-size: 14px; font-weight: 800; color: rgb(var(--mute)); }
+.srv-metric-bar { height: 4px; margin: 7px 0 5px; border-radius: 9999px; background: rgb(var(--line)); overflow: hidden; }
+.srv-metric-bar > i { display: block; height: 100%; border-radius: 9999px; background: var(--srv-acc); }
+.srv-metric-bar > i.is-warm { background: rgb(var(--warn)); }
+.srv-metric-bar > i.is-hot { background: rgb(var(--bad)); }
+.srv-metric-h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* ---------- chart header ---------- */
+.srv-chart-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 10px; }
+.hc-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 8px; font-size: 13px; }
+.hc-cap { font-weight: 800; color: rgb(var(--mute)); }
+.hc-notes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.hc-note, .hc-now {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 9999px; font-weight: 800;
+  background: rgb(var(--soft)); color: rgb(var(--ink));
+}
+.hc-now { box-shadow: inset 0 0 0 1.5px var(--hc, rgb(var(--brand))); }
+.hc-now > i { width: 8px; height: 8px; border-radius: 9999px; background: var(--hc, rgb(var(--brand))); }
+
+/* ---------- «Ещё» menu ---------- */
+.srv-more { position: relative; display: inline-block; }
+.srv-more > .btn-glass { width: 100%; }
+.srv-more-pop {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; min-width: 230px; max-width: min(320px, calc(100vw - 32px)); padding: 6px;
+  border-radius: 18px; background: rgb(var(--card)); color: rgb(var(--ink)); border: 1px solid var(--tile-border);
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.45); animation: dt-in .15s ease-out backwards;
+}
+.srv-more-pop.is-flip { right: auto; left: 0; }
+.srv-more-item {
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px; border-radius: 12px;
+  font-size: 14.5px; font-weight: 800; text-align: left; background: transparent; color: inherit; transition: background-color .12s ease;
+}
+.srv-more-item:hover, .srv-more-item:focus { background: rgb(var(--soft)); }
+.srv-more-item:focus, .srv-more-item:focus-visible { outline: 0 !important; }
+.srv-more-item:focus { box-shadow: inset 0 0 0 2px rgb(var(--brand) / 0.55); }
+.srv-more-item:disabled { opacity: .55; }
+.srv-more-item.is-danger { color: rgb(var(--bad)); }
+.srv-more-item.has-divider { margin-top: 7px; }
+.srv-more-item.has-divider::before { content: ''; position: absolute; left: 10px; right: 10px; top: -4px; height: 1px; background: rgb(var(--line)); }
+.srv-more-ico { display: inline-grid; place-items: center; width: 20px; flex: none; color: rgb(var(--mute)); }
+
+/* ---------- players ---------- */
+.pl-sticky {
+  position: sticky; z-index: 5; margin: -4px -6px 8px; padding: 8px 6px 10px; background: rgb(var(--card));
+  border-bottom: 1px solid rgb(var(--line));
+}
+.pl-count { margin-bottom: 8px; font-size: 14px; font-weight: 700; color: rgb(var(--mute)); }
+.pl-count b { font-weight: 900; color: rgb(var(--ink)); }
+.srv-chipset { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---------- connect wizard ---------- */
+.cn-wizard { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; }
+.cn-step-big { gap: 14px; }
+.cn-step-big > .cn-num { width: 36px; height: 36px; font-size: 16px; }
+.cn-h { font-size: 17px; font-weight: 900; line-height: 1.3; padding-top: 5px; }
+.cn-sub { margin: 0; padding-left: 18px; display: grid; gap: 6px; list-style: disc; font-weight: 600; line-height: 1.4; }
+.cn-sub li::marker { color: rgb(var(--mute)); }
+.cn-big code { font-size: 16px; }
+.cn-big .btn { min-height: 48px; }
+.cn-go { min-height: 52px; width: 100%; font-size: 16px; }
+@media (min-width: 640px) { .cn-go { width: auto; } }
+.cn-part { display: inline; padding: 2px 4px; margin-right: 6px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; background: transparent; color: rgb(var(--link)); }
+.cn-part code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; }
+.cn-part:focus, .cn-part:focus-visible { outline: 0 !important; }
+.cn-part:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.55); border-radius: 6px; }
+@media (max-width: 639px) { .cn-qr { width: min(100%, 320px); } }
+
+/* ---------- phone action bar (solid, no blur; sits above the bottom navigation of the app) ---------- */
+.srv-mbar { display: none; }
+@media (max-width: 639px) {
+  .srv-mbar {
+    display: flex; gap: 8px; position: fixed; left: 0; right: 0; z-index: 30; padding: 10px 12px;
+    bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
+    background: rgb(var(--card)); border-top: 1px solid rgb(var(--line));
+  }
+  .srv-mbar > * { flex: 1 1 0; min-width: 0; min-height: 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .srv-more-pop { animation: none !important; }
+  .srv-more-item, .pp-more-btn { transition: none !important; }
+}
+html[data-motion='reduce'] .srv-more-pop { animation: none !important; }
+html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none !important; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'

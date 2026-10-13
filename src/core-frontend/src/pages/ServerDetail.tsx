@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { t, useI18n } from '../i18n';
+import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
-import { gameColor, gameGradient, gameLabel } from '../games';
+import { gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -15,11 +17,15 @@ import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
+import Hero, { type FreeSlotState } from '../components/server/Hero';
+import Metrics from '../components/server/Metrics';
+import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
+import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
-  TONE_TEXT, countryName, flagEmoji, guessMode, loadTone, pingTone, stagger, tabHref, useNow, type TabId,
+  countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
 
 export { SERVER_TABS } from '../components/server/helpers';
@@ -43,7 +49,7 @@ const HISTORY_SECTIONS: SectionDef[] = [
 ];
 export const CONNECT_SECTIONS: SectionDef[] = [
   { id: 'cn-steps', label: 'Как подключиться' },
-  { id: 'cn-qr', label: 'QR-код', secondary: true },
+  { id: 'cn-qr', label: 'QR-код' },
 ];
 const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
@@ -84,19 +90,9 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
   );
 }
 
-function StatTile({ k, hint, i, children }: { k: string; hint?: ReactNode; i: number; children: ReactNode }) {
-  return (
-    <div className="tile tile-in p-4 sm:p-[18px]" style={stagger(i)}>
-      <div className="stat-k">{k}</div>
-      <div className={`stat-v mt-1 ${typeof children === 'string' ? 'truncate' : ''}`}>{children}</div>
-      {hint && <div className="stat-s mt-0.5 truncate">{hint}</div>}
-    </div>
-  );
-}
-
 function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) => void }) {
   return (
-    <div className="seg" role="group" aria-label="Период">
+    <div className="seg" role="group" aria-label={t('srv.chart.period')}>
       {([[24, '24 ч'], [168, '7 дн'], [720, '30 дн']] as [number, string][]).map(([h, label]) => (
         <button key={h} type="button" onClick={() => onChange(h)} aria-pressed={hours === h} className="seg-item">{label}</button>
       ))}
@@ -105,6 +101,7 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
 }
 
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
+  useI18n();
   const { me, isAdmin } = useAuth();
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
@@ -169,6 +166,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
   };
 
+  const subs = useSubscriptions(!!me);
+  const [subOpen, setSubOpen] = useState(false);
+  const [subPre, setSubPre] = useState<SubKind | null>(null);
+  const openSub = (kind: SubKind | null = null) => { setSubPre(kind); setSubOpen(true); };
   const profiles = useGameProfiles();
   const depth = useDepth<HTMLElement>();
   const [shared, setShared] = useState(false);
@@ -207,7 +208,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   }
 
   const { server: s, stats, events, points } = data;
-  const color = gameColor(s.game);
+  const accent = gameAccent(s.game);
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
@@ -220,63 +221,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const flag = flagEmoji(code);
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
   const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
-  const windowShort = data.hours <= 24 ? '24 ч' : data.hours <= 168 ? '7 дн' : '30 дн';
   const chartLoading = data.hours !== hours;
-
-  const pct = s.maxPlayers > 0 ? Math.min(100, Math.round((s.players / s.maxPlayers) * 100)) : 0;
-  const lt = loadTone(pct);
-  const pt = s.ping != null ? pingTone(s.ping) : null;
-  const meterCls = { ok: 'm-ok', warn: 'm-warn', bad: 'm-bad' }[lt];
-
-  const nowTile = (i: number) => (
-    <div key="now" className="tile tile-in p-4 sm:p-[18px]" style={stagger(i)}>
-      <div className="stat-k">Сейчас</div>
-      <div className="stat-v mt-1">
-        {s.online ? <><AnimatedNumber value={s.players} delta />/{s.maxPlayers}</> : '–'}
-      </div>
-      {s.online && s.maxPlayers > 0 ? (
-        <>
-          <div
-            className={`meter mt-2 ${meterCls}`}
-            role="meter"
-            aria-label="Заполненность сервера"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={pct}
-            aria-valuetext={`заполнено ${pct} %`}
-          >
-            <i style={{ width: `${pct}%` }} />
-          </div>
-          <div className="stat-s mt-1.5 flex flex-wrap items-center gap-x-2">
-            <span className={TONE_TEXT[lt]}>заполнено {pct} %</span>
-            {s.ping != null && pt && (
-              <span className={`inline-flex items-center gap-1 ${TONE_TEXT[pt.tone]}`}>
-                <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
-                пинг {s.ping} мс · {pt.label}
-              </span>
-            )}
-          </div>
-        </>
-      ) : (
-        <div className="stat-s mt-1.5">{s.hasStatus ? 'сервер недоступен' : 'ожидаем первый ответ'}</div>
-      )}
-    </div>
-  );
-  const statTiles = (withNow: boolean, base = 0) => [
-    withNow ? nowTile(base) : null,
-    <StatTile key="peak" i={base + (withNow ? 1 : 0)} k="Пик игроков" hint={stats.peakAt ? fmtDateTime(stats.peakAt) : undefined}>
-      {stats.peakPlayers == null ? '–' : String(stats.peakPlayers)}
-    </StatTile>,
-    <StatTile key="up" i={base + (withNow ? 2 : 1)} k="Аптайм" hint={windowLabel}>
-      {stats.uptimePct == null ? '–' : `${stats.uptimePct}%`}
-    </StatTile>,
-    <StatTile key="avg" i={base + (withNow ? 3 : 2)} k="В среднем" hint="пока сервер онлайн">
-      {stats.avgPlayers == null ? '–' : String(stats.avgPlayers)}
-    </StatTile>,
-    withNow ? null : (
-      <StatTile key="n" i={base + 3} k="Измерений" hint={windowLabel}>{String(stats.samples)}</StatTile>
-    ),
-  ];
 
   const discordLinks = (data.discord ?? []).map((b) => {
     const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
@@ -325,31 +270,40 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     <SectionCard
       id={withSeries ? 'hi-chart' : 'ov-chart'}
       state={sections}
-      className={withSeries ? 'lg:col-span-12' : 'lg:col-span-8'}
+      className="lg:col-span-12"
       style={stagger(i)}
-      title={withSeries ? (series === 'ping' ? 'Пинг' : 'Игроки') : 'Игроки'}
-      actions={(
-        <>
-          {withSeries && (
-            <div className="seg" role="group" aria-label="Показатель">
-              {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
-                <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{label}</button>
-              ))}
-            </div>
-          )}
-          <PeriodSeg hours={hours} onChange={setHours} />
-        </>
-      )}
+      title={withSeries ? (series === 'ping' ? t('srv.chart.titlePing') : t('srv.chart.titlePlayers')) : t('srv.chart.titlePlayers')}
     >
+      <div className="srv-chart-bar">
+        {withSeries && (
+          <div className="seg" role="group" aria-label={t('srv.chart.series')}>
+            {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
+              <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{label}</button>
+            ))}
+          </div>
+        )}
+        <PeriodSeg hours={hours} onChange={setHours} />
+      </div>
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
     </SectionCard>
+  );
+
+  const metrics = (withSamples: boolean) => (
+    <Metrics
+      withSamples={withSamples}
+      d={{
+        online: s.online, hasStatus: s.hasStatus, players: s.players, maxPlayers: s.maxPlayers,
+        peak: stats.peakPlayers ?? null, peakAt: stats.peakAt ?? null, uptimePct: stats.uptimePct ?? null, avg: stats.avgPlayers ?? null,
+        samples: stats.samples, windowLabel,
+      }}
+    />
   );
 
   const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
@@ -369,8 +323,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(0, true)}
         </div>
-        <SectionCard id="hi-stats" state={sections} bare title="Показатели">
-          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(false, 1)}</div>
+        <SectionCard id="hi-stats" state={sections} title="Показатели">
+          {metrics(true)}
         </SectionCard>
       </div>
     );
@@ -386,15 +340,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else {
     panel = (
       <div className="space-y-3.5">
-        <SectionCard id="ov-stats" state={sections} bare title="Показатели">
-          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
+        <SectionCard id="ov-stats" state={sections} style={stagger(0)} title="Показатели">
+          {metrics(false)}
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
-          {chartTile(4, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-4" style={stagger(5)} title="Последние события">
+          {chartTile(1, false)}
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-5" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-12" style={stagger(6)} title={<span className="inline-flex items-center">Сейчас в игре{playerCountBadge}</span>}>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center">Сейчас в игре{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
@@ -402,34 +356,67 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     );
   }
 
+  // subscriptions: one dialog for the header button, the free-slot button and the phone bar
+  const subscribedKinds = normalizeKinds(subs.list?.find((x) => x.serverId === id)?.kinds);
+  const canSub = !!me && !subs.unavailable && subs.list !== null;
+  const full = isFullNow(s.online, s.players, s.maxPlayers);
+  const freeSlot: FreeSlotState = !full ? 'hidden' : !me ? 'guest' : !canSub ? 'hidden' : subscribedKinds.includes('free_slot') ? 'subscribed' : 'ready';
+  const subLabel = subscribedKinds.length > 0 ? t('sub.buttonOn') : t('sub.button');
+
+  const connectHref = guide.link?.href ?? tabHref(id, 'connect');
+  const copyInstead = tab === 'connect' && !guide.link;
+  const onConnect = copyInstead ? (e: { preventDefault: () => void }) => { e.preventDefault(); void copyAddress(); } : undefined;
+  const connectLabel = copyInstead ? t('srv.act.copyForJoin') : t('srv.act.connect');
+
+  const moreItems: MoreItem[] = [
+    { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
+    ...(isAdmin ? [
+      { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
+      { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
+      { key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true },
+    ] : []),
+  ];
+
   return (
-    <div className="space-y-3.5">
+    <div className="srv-page space-y-3.5" style={{ ['--srv-accent' as string]: accent }}>
       {back}
 
       <article
-        className={`srv-banner srv-glow srv-${kind} depth relative overflow-hidden rounded-[26px] p-4 text-white sm:p-6`}
+        className={`srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
         style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true, game: s.game }) }}
         {...depth}
       >
-        <span aria-hidden className="depth-l1 pointer-events-none absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
-        <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
+        {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
+        <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
+          <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
+          <span className="depth-l2 absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
+        </span>
         {wentOffline && <span className="flash-ring" aria-hidden />}
 
-        {/* title row */}
+        {/* title row: name, status, game */}
         <div className="relative flex items-start gap-3.5 sm:gap-4">
           <GameAvatar game={s.game} size={64} glass vtId={s.id} />
           <div className="min-w-0 flex-1">
             <h1 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
+              <span className="chip-glass">{gameLabel(s.game)}</span>
+              <LiveBadge at={s.updatedAt} />
+              {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
+            </div>
           </div>
           {me && <FavStar on={isFav} name={s.name} onClick={() => void toggleFav()} />}
         </div>
 
-        {/* status row */}
-        <div className="relative mt-3.5 flex flex-wrap items-center gap-2">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
-          <LiveBadge at={s.updatedAt} />
-          {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
-        </div>
+        <Hero
+          online={s.online}
+          hasStatus={s.hasStatus}
+          players={s.players}
+          max={s.maxPlayers}
+          maintenance={s.maintenance}
+          freeSlot={freeSlot}
+          onNotify={() => openSub('free_slot')}
+        />
 
         <Passport
           d={{
@@ -441,9 +428,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             address: s.address,
             ping: s.ping,
             online: s.online,
-            maintenance: s.maintenance,
-            uptimePct: stats.uptimePct,
-            uptimeLabel: windowShort,
             createdAt: data.createdAt ?? null,
             lastSeen: s.updatedAt,
             mode,
@@ -455,29 +439,19 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
 
-        {/* buttons: the main one, then the two equal glass ones; admin tools are a quieter group */}
+        {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
+            On phones «Подключиться» and «Подписаться» are in the bottom bar. */}
         <div className="relative mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-          <a
-            className="btn-cta col-span-2 sm:col-auto"
-            href={guide.link?.href ?? tabHref(id, 'connect')}
-            onClick={tab === 'connect' && !guide.link ? (e) => { e.preventDefault(); void copyAddress(); } : undefined}
-          >
-            {tab === 'connect' && !guide.link ? 'Скопировать адрес для входа' : 'Подключиться'}
-          </a>
-          <CopyButton text={s.address} label="Скопировать адрес" tone="glass" />
-          <button type="button" className="btn-glass" onClick={() => void share()}>
-            {shared ? <IconCheckMark /> : <IconShare />}
-            Поделиться
-          </button>
-          {me && <SubscribeMenu serverId={id} serverName={s.name} />}
+          <a className="btn-cta max-sm:hidden" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+          <CopyButton text={s.address} label={t('srv.act.copyAddr')} tone="glass" />
+          {canSub && (
+            <button type="button" className="btn-glass max-sm:hidden" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+              <IconBell size={18} />
+              {subLabel}
+            </button>
+          )}
+          <MoreMenu items={moreItems} />
         </div>
-        {isAdmin && (
-          <div className="relative mt-3 grid grid-cols-3 gap-2 border-t border-white/15 pt-3 sm:flex sm:flex-wrap sm:items-center" role="group" aria-label="Управление сервером">
-            <button className="btn-glass-quiet" onClick={refresh} disabled={busy} aria-busy={busy || undefined}><IconRefresh spinning={busy} />{busy ? 'Опрос…' : 'Опросить'}</button>
-            <button className="btn-glass-quiet" onClick={() => setEditing(true)}>Изменить</button>
-            <button className="btn-glass-quiet btn-glass-danger" onClick={remove}>Удалить</button>
-          </div>
-        )}
       </article>
       <ErrorLine text={error} />
 
@@ -490,6 +464,20 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
         {panel}
+      </div>
+
+      {me && (
+        <SubscribeMenu serverId={id} serverName={s.name} subs={subs} open={subOpen} onOpenChange={setSubOpen} preselect={subPre} hideButton />
+      )}
+
+      <div className="srv-mbar" role="region" aria-label={t('srv.bar.label')}>
+        <a className="btn" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+        {canSub && (
+          <button type="button" className="btn btn-soft" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+            <IconBell size={18} />
+            {subLabel}
+          </button>
+        )}
       </div>
 
       {editing && (

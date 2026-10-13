@@ -1,20 +1,18 @@
 import { useMemo, useState } from 'react';
 import type { ServerDetails } from '../../api';
+import { StateView } from '../StateView';
+import { t, useI18n } from '../../i18n';
 import { ago, plural } from '../../ui';
 import { fmtDuration } from './helpers';
+import { EVENT_FILTERS, eventCounts, filterEvents, groupByDay, type EventFilter } from './serverLogic';
 
 type Ev = ServerDetails['events'][number];
-type Filter = 'all' | 'fail' | 'peak';
-
-const dayKey = (ts: number) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
-function dayTitle(ts: number): string {
-  const d = new Date(ts);
-  const t = new Date();
-  if (dayKey(ts) === dayKey(t.getTime())) return 'Сегодня';
-  const y = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
-  if (dayKey(ts) === dayKey(y.getTime())) return 'Вчера';
-  return d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
-}
+const dayTitle = (kind: 'today' | 'yesterday' | 'date', ts: number): string =>
+  kind === 'today' ? t('srv.ev.today') : kind === 'yesterday' ? t('srv.ev.yesterday')
+    : new Date(ts).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+const FILTER_KEY: Record<EventFilter, 'srv.ev.all' | 'srv.ev.down' | 'srv.ev.up' | 'srv.ev.peak' | 'srv.ev.maint'> = {
+  all: 'srv.ev.all', down: 'srv.ev.down', up: 'srv.ev.up', peak: 'srv.ev.peak', maintenance: 'srv.ev.maint',
+};
 const absTime = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
@@ -34,7 +32,8 @@ function title(e: Ev, downFor: number | null, stillDown: boolean): string {
 }
 
 export default function EventsFeed({ events, online, limit, moreHref }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string }) {
-  const [filter, setFilter] = useState<Filter>('all');
+  useI18n();
+  const [filter, setFilter] = useState<EventFilter>('all');
 
   // how long every outage lasted: the nearest later 'up'
   const downFor = useMemo(() => {
@@ -48,41 +47,30 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
     return m;
   }, [events]);
   const newestDown = events.find((e) => e.type === 'down' || e.type === 'up');
-  const failCount = events.filter((e) => e.type === 'down').length;
-  const peakCount = events.filter((e) => e.type === 'peak').length;
-
-  const list = events.filter((e) => (filter === 'all' ? true : filter === 'peak' ? e.type === 'peak' : e.type !== 'peak'));
+  const counts = eventCounts(events);
+  const list = filterEvents(events, filter);
   const shown = limit ? list.slice(0, limit) : list;
-
-  const groups: { key: string; title: string; items: Ev[] }[] = [];
-  for (const e of shown) {
-    const k = dayKey(e.ts);
-    const g = groups[groups.length - 1];
-    if (g && g.key === k) g.items.push(e);
-    else groups.push({ key: k, title: dayTitle(e.ts), items: [e] });
-  }
-
-  const chips: [Filter, string, number][] = [['all', 'Все', events.length], ['fail', 'Сбои', failCount], ['peak', 'Пики', peakCount]];
+  const groups = groupByDay(shown).map((g) => ({ ...g, title: dayTitle(g.kind, g.ts) }));
 
   return (
     <div>
       {!limit && (
-        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label="Фильтр событий">
-          {chips.map(([k, label, n]) => (
-            <button key={k} type="button" className={`chip-filter ${filter === k ? 'on' : ''}`} aria-pressed={filter === k} onClick={() => setFilter(k)}>
-              {label}<span className="opacity-70"> {n}</span>
+        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label={t('srv.ev.filter')}>
+          {EVENT_FILTERS.map((k) => (
+            <button key={k} type="button" className={`chip-filter ${filter === k ? 'on' : ''} ${k !== 'all' && counts[k] === 0 && filter !== k ? 'is-zero' : ''}`} aria-pressed={filter === k} onClick={() => setFilter(k)}>
+              {t(FILTER_KEY[k])}<span className="ml-1 opacity-70">{counts[k]}</span>
             </button>
           ))}
         </div>
       )}
       {shown.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
-          <span className="grid h-12 w-12 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-          </span>
-          <p className="font-extrabold">{filter === 'peak' ? 'Пиков за период пока не было' : 'За период сбоев не было'}</p>
-          <p className="max-w-xs text-sm font-semibold text-mute">{filter === 'peak' ? 'Рекорд появится, когда на сервере соберутся игроки.' : 'Сервер отвечал всё время: событий для показа нет.'}</p>
-        </div>
+        <StateView
+          kind="empty"
+          bare
+          compact
+          title={filter === 'all' ? t('srv.ev.emptyAll') : filter === 'peak' ? t('srv.ev.emptyPeak') : filter === 'maintenance' ? t('srv.ev.emptyMaint') : filter === 'up' ? t('srv.ev.emptyUp') : t('srv.ev.emptyDown')}
+          text={filter === 'all' ? t('srv.ev.emptyAllText') : filter === 'peak' ? t('srv.ev.emptyPeakText') : t('srv.ev.emptyFilterText')}
+        />
       ) : (
         <div className="space-y-4">
           {groups.map((g) => (
