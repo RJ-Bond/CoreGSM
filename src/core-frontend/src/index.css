@@ -875,3 +875,12 @@ html[data-flat='cb'] *, html[data-flat='cb'] *::before, html[data-flat='cb'] *::
 html[data-flat='cc'] *, html[data-flat='cc'] *::before, html[data-flat='cc'] *::after { transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path, color !important; }
 html[data-flat='cd'] *, html[data-flat='cd'] *::before, html[data-flat='cd'] *::after { transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path, border-color, outline-color !important; }
 html[data-flat='cf'] *, html[data-flat='cf'] *::before, html[data-flat='cf'] *::after { transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path, fill, stroke, text-decoration-color !important; }
+
+/* ---------- black-square fix, round 5: the focus outline ----------
+   Found by bisecting: the square shows only when border/outline-colour transitions run. A key press (PrintScreen) or a
+   window re-focus re-applies :focus-visible to the last focused element (often a big container or a card link); its
+   outline transitioned from the browser's default (black) focus ring to transparent: a black frame for ~150 ms.
+   The focus ring in this UI is a box-shadow ring, so the outline is removed entirely and the colour properties
+   no longer transition by default. */
+:focus, :focus-visible { outline: 0 !important; }
+.transition { transition-property: color, background-color, fill, stroke, opacity, box-shadow, transform, filter !important; }
