@@ -1,6 +1,10 @@
 import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
-import { db, type ServerRow } from './db.js';
+import { onPollResult } from './subscriptions.js';
+import { maintenanceFor as maintenanceNow } from './maintenance.js';
+import { db, getSetting, type ServerRow } from './db.js';
+import { inMaintenance, pruneMaintenance } from './maintenance.js';
+import { clampConcurrency, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, runPool } from './pollLogic.js';
 
 export interface QueryResult {
   online: boolean;
@@ -77,14 +81,14 @@ export async function queryServer(s: ServerRow): Promise<QueryResult> {
 }
 
 const upsert = db.prepare(`
-INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at)
-VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts)
+INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
+VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts, @failures)
 ON CONFLICT(server_id) DO UPDATE SET
   online=excluded.online, name=COALESCE(excluded.name, status.name), players=excluded.players, max_players=excluded.max_players,
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
-  error=excluded.error, updated_at=excluded.updated_at
+  error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures
 `);
-const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping) VALUES (?, ?, ?, ?, ?)');
+const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?, ?, ?, ?, ?, ?, ?)');
 
 /**
  * Keeps player_now in step with the latest poll: names that left are removed, new ones get since = now.
@@ -134,24 +138,67 @@ export function syncPlayerSessions(serverId: number, names: string[], online: bo
   })();
 }
 
-/** Daily counters for the status page (UTC day). */
-export function recordUptime(serverId: number, online: boolean, players: number, ts: number): void {
+/**
+ * Daily counters for the status page (UTC day). `count` polls are added at once (a confirmed outage adds the polls
+ * that were held back). With `peakOnly` the poll does not count (maintenance), only the peak is kept.
+ */
+export function recordUptime(serverId: number, online: boolean, players: number, ts: number, opts: { count?: number; peakOnly?: boolean } = {}): void {
   const day = new Date(ts).toISOString().slice(0, 10);
+  const n = opts.peakOnly ? 0 : Math.max(1, opts.count ?? 1);
+  const peak = online ? Math.max(0, players) : 0;
   db.prepare(
-    `INSERT INTO uptime_daily (server_id, day, up, total, peak) VALUES (?, ?, ?, 1, ?)
-     ON CONFLICT(server_id, day) DO UPDATE SET up = up + excluded.up, total = total + 1, peak = MAX(peak, excluded.peak)`,
-  ).run(serverId, day, online ? 1 : 0, online ? Math.max(0, players) : 0);
+    `INSERT INTO uptime_daily (server_id, day, up, total, peak) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(server_id, day) DO UPDATE SET up = up + excluded.up, total = total + excluded.total, peak = MAX(peak, excluded.peak)`,
+  ).run(serverId, day, online ? n : 0, n, peak);
 }
 
-export async function refreshServer(s: ServerRow): Promise<void> {
-  const r = await queryServer(s);
-  const ts = Date.now();
-  // the server may have been deleted while the query was running
-  const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
-  if (!still) return;
+// ---------- settings ----------
+/** consecutive failed polls before a server is shown as offline (setting poll_fail_threshold, 1..5, default 2) */
+export const failThreshold = (): number => clampThreshold(getSetting('poll_fail_threshold'));
+/** servers polled at the same time (setting poll_concurrency, else env POLL_CONCURRENCY, 1..32, default 8) */
+export const pollConcurrency = (): number => {
+  const s = getSetting('poll_concurrency');
+  return clampConcurrency(s !== null && s !== '' ? s : process.env.POLL_CONCURRENCY);
+};
+
+export interface PollOutcome {
+  /** the poll itself reached the server */
+  polledOnline: boolean;
+  /** state now stored in `status` */
+  online: boolean;
+  /** false: failure not confirmed yet, last good state kept */
+  confirmed: boolean;
+  failures: number;
+}
+
+/**
+ * Stores one poll result (the synchronous half of refreshServer; exported for tests).
+ * `debounce`: a failed poll only counts after `poll_fail_threshold` consecutive failures (the scheduled poller).
+ * Without it (manual refresh, a server just added or edited) the result stands at once.
+ */
+export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: { debounce?: boolean } = {}): PollOutcome {
+  const prev = db.prepare('SELECT online, players, consecutive_failures AS f FROM status WHERE server_id = ?').get(s.id) as
+    | { online: number; players: number; f: number }
+    | undefined;
+  const d = decideStatus({
+    prevOnline: prev ? !!prev.online : null,
+    prevFailures: prev?.f ?? 0,
+    polledOnline: r.online,
+    threshold: opts.debounce ? failThreshold() : 1,
+  });
+  const maint = inMaintenance(s.id, ts) ? 1 : 0;
+  const outcome: PollOutcome = { polledOnline: r.online, online: d.online, confirmed: d.confirmed, failures: d.failures };
+
+  if (!d.confirmed) {
+    // not believed yet: the last good state stays, the sample is marked so that uptime ignores it
+    db.prepare('UPDATE status SET consecutive_failures = ?, updated_at = ? WHERE server_id = ?').run(d.failures, ts, s.id);
+    addHistory.run(s.id, ts, 1, prev?.players ?? 0, null, 1, maint);
+    return outcome;
+  }
+
   upsert.run({
     id: s.id,
-    online: r.online ? 1 : 0,
+    online: d.online ? 1 : 0,
     name: r.name,
     players: r.players,
     max: r.maxPlayers,
@@ -161,40 +208,99 @@ export async function refreshServer(s: ServerRow): Promise<void> {
     names: JSON.stringify(r.playerNames.slice(0, 50)),
     error: r.error,
     ts,
+    failures: d.failures,
   });
-  addHistory.run(s.id, ts, r.online ? 1 : 0, r.players, r.ping);
+  addHistory.run(s.id, ts, d.online ? 1 : 0, r.players, r.ping, 0, maint);
+  if (d.becameOffline) {
+    // the outage began with the first failed poll: the held-back samples become offline ones
+    db.prepare('UPDATE history SET online = 0, players = 0, unconfirmed = 0 WHERE server_id = ? AND unconfirmed = 1').run(s.id);
+  }
   try {
-    syncPlayersNow(s.id, r.playerNames, r.online, ts);
-    syncPlayerSessions(s.id, r.playerNames, r.online, ts);
-    recordUptime(s.id, r.online, r.players, ts);
+    syncPlayersNow(s.id, r.playerNames, d.online, ts);
+    syncPlayerSessions(s.id, r.playerNames, d.online, ts);
+    if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
+    else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {
     console.error('player/uptime bookkeeping failed', (e as Error).message);
   }
   try {
-    trackAlerts(s.id, r.online, r.error);
+    trackAlerts(s.id, d.online, r.error);
   } catch (e) {
     console.error('alerts failed', (e as Error).message);
   }
+  try {
+    // planned work: nobody is told that the server went down (free-slot notices still make sense, back_online follows the window)
+    if (!(!d.online && maintenanceNow(s.id))) onPollResult(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers });
+  } catch (e) {
+    console.error('subscriptions failed', (e as Error).message);
+  }
+  return outcome;
 }
 
+export async function refreshServer(s: ServerRow, opts: { debounce?: boolean } = {}): Promise<PollOutcome | null> {
+  const r = await queryServer(s);
+  const ts = Date.now();
+  // the server may have been deleted while the query was running
+  const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
+  if (!still) return null;
+  return applyPollResult(s, r, ts, opts);
+}
+
+// ---------- scheduler ----------
+export interface PollStats {
+  at: number | null;
+  durationMs: number | null;
+  servers: number;
+  failures: number;
+  concurrency: number;
+}
+let lastStats: PollStats = { at: null, durationMs: null, servers: 0, failures: 0, concurrency: DEFAULT_CONCURRENCY };
+/** the last finished poll cycle: when, how long, how many servers did not answer */
+export const lastPollStats = (): PollStats => ({ ...lastStats });
+
 let running = false;
+let jitterMaxMs = 1500;
+let pollCount = 0;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function pollAll(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    const t0 = Date.now();
     const servers = db.prepare('SELECT * FROM servers').all() as ServerRow[];
-    await Promise.allSettled(servers.map(refreshServer));
+    const concurrency = pollConcurrency();
+    let failures = 0;
+    await runPool(servers, concurrency, async (s) => {
+      // servers do not all start at the same instant
+      if (jitterMaxMs > 0) await sleep(Math.floor(Math.random() * jitterMaxMs));
+      try {
+        const o = await refreshServer(s, { debounce: true });
+        if (o && !o.polledOnline) failures++;
+      } catch (e) {
+        failures++;
+        console.error(`poll of server ${s.id} failed`, (e as Error).message);
+      }
+    });
+    const durationMs = Date.now() - t0;
+    lastStats = { at: Date.now(), durationMs, servers: servers.length, failures, concurrency };
+    pollCount++;
+    // quiet when all is well: the first poll, slow polls, polls with failures and every 20th
+    if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
+      console.log(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
+    }
     db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 30 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM player_sessions WHERE left_at IS NOT NULL AND left_at < ?').run(Date.now() - 90 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM account_events WHERE ts < ?').run(Date.now() - 180 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
+    pruneMaintenance();
   } finally {
     running = false;
   }
 }
 
 export function startPoller(intervalMs: number): void {
+  jitterMaxMs = Math.min(1500, Math.max(0, Math.floor(intervalMs / 10)));
   void pollAll();
   setInterval(() => void pollAll(), intervalMs).unref?.();
 }

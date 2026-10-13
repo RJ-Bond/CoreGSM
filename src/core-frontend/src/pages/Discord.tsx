@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
+import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -19,13 +20,23 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [error, setError] = useState('');
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
+  const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
+  const [rechecking, setRechecking] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   // bindings removed with «Отменить» pending: hidden here until the request is really sent
   const [hidden, setHidden] = useState<number[]>([]);
 
   const load = () =>
-    Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
-      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); })
+    Promise.all([
+      api<Server[]>('/servers'),
+      api<Binding[]>('/bindings'),
+      api<SettingsInfo>('/settings'),
+      api<BotStatus>('/bot/status'),
+      // the channel list is only for the setup wizard: a failure here is not a page error
+      api<DiscordGuild[]>('/discord/channels').catch(() => [] as DiscordGuild[]),
+    ])
+      .then(([s, b, st, bs, g]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); setGuilds(Array.isArray(g) ? g : []); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
@@ -47,7 +58,6 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
   const server = (id: number) => servers.find((s) => s.id === id);
   const shown = bindings.filter((b) => !hidden.includes(b.id));
-  const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
 
   // a binding is easy to create again and the Discord message stays, so it goes away at once and can be taken back for 6 s
   const removeMany = (ids: number[], text: string) => {
@@ -89,12 +99,13 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
     load();
   };
 
-  const steps = [
-    { done: servers.length > 0, title: 'Добавьте сервер', text: 'На вкладке «Серверы».' },
-    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» откроет Discord: выберите сервер и подтвердите права. Затем выберите канал здесь.' },
-    { done: working, title: 'Бот отправит карточку', text: 'Одно сообщение, которое потом обновляется по таймеру.' },
-  ];
-  const allDone = steps.every((s) => s.done);
+  const wizard = computeWizard({ tokenSet: !!settings?.discordTokenSet, bot, guilds, bindings, serverCount: servers.length });
+  const recheck = async () => {
+    setRechecking(true);
+    await load();
+    setRechecking(false);
+  };
+  const newDraft = () => { if (servers.length > 0) setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' }); };
 
   return (
     <AdminPage
@@ -110,7 +121,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && servers.length === 0 && bindings.length === 0 && !settings ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {loaded && settings && !settings.discordTokenSet && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
           Бот не подключён: без токена он не сможет писать в Discord.
@@ -137,23 +148,23 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </Strip>
 
-      {!allDone && (
-        <ol className="grid gap-3 md:grid-cols-3">
-          {steps.map((s, i) => (
-            <li key={s.title} className="panel flex gap-3 p-5">
-              <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
-              <div>
-                <div className="font-black">{s.title}</div>
-                <div className="text-sm font-semibold text-mute">{s.text}</div>
-              </div>
-            </li>
-          ))}
-        </ol>
+      {loaded && settings && (!wizard.complete || wizardOpen) && (
+        <DiscordWizard
+          input={{ tokenSet: !!settings.discordTokenSet, bot, guilds, bindings, serverCount: servers.length }}
+          busy={rechecking}
+          onRecheck={() => void recheck()}
+          onCreateBinding={newDraft}
+          inviteUrl={bot?.inviteUrl ?? null}
+          onClose={wizard.complete ? () => setWizardOpen(false) : undefined}
+        />
+      )}
+      {loaded && settings && wizard.complete && !wizardOpen && (
+        <p className="text-sm font-bold"><button type="button" className="text-link hover:underline max-sm:min-h-[44px]" onClick={() => setWizardOpen(true)}>Мастер подключения</button></p>
       )}
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
 
-      {loaded && shown.length === 0 && (
+      {loaded && settings && shown.length === 0 && (
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>

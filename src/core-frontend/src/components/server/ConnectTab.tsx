@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { connectGuide } from '../../connectGuides';
 import { CopyButton } from '../../ui';
+import { SectionCard, type SectionState } from './Sections';
 import QrCode from './QrCode';
 import { stagger } from './helpers';
 
 /** «Как подключиться»: what to paste (big copy buttons), numbered steps, QR code for a phone */
-export default function ConnectTab({ game, address }: { game: string; address: string }) {
+export default function ConnectTab({ game, address, sections }: { game: string; address: string; sections: SectionState }) {
   const guide = connectGuide(game, address);
   // values to paste: address first, the console command and the steam link where they exist
   const values = [
@@ -22,8 +23,7 @@ export default function ConnectTab({ game, address }: { game: string; address: s
 
   return (
     <div className="grid gap-3.5 lg:grid-cols-12">
-      <section className="tile tile-in p-4 sm:p-5 lg:col-span-7" style={stagger(0)}>
-        <h2 className="mb-4 text-lg font-extrabold">{guide.title}</h2>
+      <SectionCard id="cn-steps" state={sections} className="lg:col-span-7" style={stagger(0)} title={guide.title}>
 
         <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Что вставить</h3>
         <ul className="mb-5 space-y-2.5">
@@ -50,10 +50,9 @@ export default function ConnectTab({ game, address }: { game: string; address: s
         {guide.link && (
           <a href={guide.link.href} className="btn mt-5 w-full sm:w-auto" data-magnetic>{guide.link.label}</a>
         )}
-      </section>
+      </SectionCard>
 
-      <section className="tile tile-in p-4 sm:p-5 lg:col-span-5" style={stagger(1)}>
-        <h2 className="mb-1 text-base font-extrabold">QR-код для телефона</h2>
+      <SectionCard id="cn-qr" state={sections} className="lg:col-span-5" style={stagger(1)} title="QR-код для телефона">
         <p className="mb-3 text-sm font-semibold text-mute">
           Наведите камеру: {qr.k === 'link' ? 'ссылка откроется в Steam' : 'адрес сервера окажется в телефоне, останется вставить его в игру'}.
         </p>
@@ -66,7 +65,7 @@ export default function ConnectTab({ game, address }: { game: string; address: s
         )}
         <QrCode text={qr.value} label={`QR-код: ${qr.value}`} />
         <p className="mt-3 break-all text-center font-mono text-xs font-semibold text-mute">{qr.value}</p>
-      </section>
+      </SectionCard>
     </div>
   );
 }

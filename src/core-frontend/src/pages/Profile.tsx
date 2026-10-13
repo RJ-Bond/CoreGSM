@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
+import EmailVerifyState from '../components/EmailVerifyState';
 import { useAuth } from '../auth';
 import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
@@ -253,6 +254,7 @@ function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
       {dirty && me.hasPassword && (
         <PasswordField id="pf-email-pass" label={t('pf.email.confirm')} value={current} onChange={setCurrent} autoComplete="current-password" />
       )}
+      {!dirty && <EmailVerifyState />}
       <ErrorLine text={error} />
       <Button loading={busy} disabled={!dirty}>{email.trim() ? t('pf.email.save') : t('pf.email.remove')}</Button>
     </form>

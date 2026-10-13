@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
-import { AdminPage, ErrorLine, GoLink, IconBell, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, IconBell, LoadError, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -57,7 +57,7 @@ export default function AlertsPage() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && !info ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {tokenSet === false && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
           Оповещения не дойдут: у бота нет токена, он не подключён к Discord.

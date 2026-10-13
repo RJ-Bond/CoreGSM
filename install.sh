@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1b10649428a0"
+COREGSM_BUILD="6dafe3dd968f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -557,6 +557,7 @@ __COREGSM_EOF__
     "fetch-socks": "^1.3.3",
     "gamedig": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^6.10.1",
     "skia-canvas": "^1.0.2",
     "tar": "^7.5.22",
     "undici": "^6.29.0",
@@ -568,6 +569,7 @@ __COREGSM_EOF__
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^20.16.0",
+    "@types/nodemailer": "^6.4.24",
     "tsx": "^4.23.15",
     "typescript": "^5.6.3"
   }
@@ -583,6 +585,8 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { gameLabel } from './games.js';
+import { inMaintenance } from './maintenance.js';
+import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS alert_state (
@@ -622,8 +626,26 @@ interface Payload {
 function enqueue(kind: 'down' | 'up' | 'test', serverName: string, payload: Payload) {
   const s = settings();
   const now = Date.now();
-  db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
+  // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
+  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
+  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target: s.channelId, payload });
   db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
+}
+
+// the delivery queue reports its progress back into the history rows
+registerKind('alert', {
+  onState(refId, status, error, now) {
+    // a failed attempt with a retry scheduled stays "queued" (with the last error); only a dead delivery is an error
+    const st = status === 'sent' ? 'sent' : status === 'dead' ? 'error' : status === 'sending' ? 'sending' : 'queued';
+    db.prepare("UPDATE alerts SET status = ?, error = ?, sent_at = CASE WHEN ? = 'sent' THEN ? ELSE sent_at END, updated_at = ? WHERE id = ?").run(st, error, st, now, now, refId);
+  },
+});
+
+// alerts queued by an older version (before the delivery queue existed) are moved into it once
+for (const a of db.prepare("SELECT id, channel_id, payload FROM alerts WHERE status IN ('queued','sending')").all() as { id: number; channel_id: string; payload: string }[]) {
+  if (!db.prepare("SELECT 1 FROM deliveries WHERE kind = 'alert' AND ref_id = ?").get(a.id)) {
+    enqueueDelivery({ kind: 'alert', refId: a.id, target: a.channel_id, payload: JSON.parse(a.payload) as unknown });
+  }
 }
 
 const minutes = (ms: number) => Math.max(1, Math.round(ms / 60_000));
@@ -642,6 +664,13 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     db
       .prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.game, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`)
       .get(serverId) as { n: string; game: string; display_address: string; host: string; port: number } | undefined;
+
+  // maintenance window: nothing is sent. A not yet alerted outage is forgotten, so that a real outage that is still
+  // going on when the window ends starts counting from the end of the window; an already alerted one stays as it is.
+  if (inMaintenance(serverId, now)) {
+    if (st && !st.alerted) db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
+    return;
+  }
 
   if (online) {
     if (st) {
@@ -757,35 +786,15 @@ export function registerAlerts(deps: {
     res.json(payload());
   });
 
-  // ----- the bot -----
+  // ----- the bot (compatibility shim: the bot now uses /internal/deliveries/*; ids here are delivery ids) -----
   app.get('/internal/alerts/pending', internal, (_req, res) => {
-    const now = Date.now();
-    const rows = db.prepare("SELECT id, channel_id, payload FROM alerts WHERE status = 'queued' OR (status = 'sending' AND updated_at < ?)").all(now - 2 * 60_000) as {
-      id: number;
-      channel_id: string;
-      payload: string;
-    }[];
-    const claim = db.prepare("UPDATE alerts SET status = 'sending', updated_at = ? WHERE id = ?");
-    res.json(
-      rows.map((r) => {
-        claim.run(now, r.id);
-        return { id: r.id, channelId: r.channel_id, payload: JSON.parse(r.payload) as Payload };
-      }),
-    );
+    res.json(claimDue(['alert']).map((d) => ({ id: d.id, channelId: d.target, payload: d.payload as Payload })));
   });
 
   app.patch('/internal/alerts/:id', internal, (req, res) => {
     const b = z.object({ status: z.enum(['sent', 'error']), error: z.string().max(300).nullable().optional() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad body' });
-    const now = Date.now();
-    db.prepare('UPDATE alerts SET status = ?, error = ?, sent_at = CASE WHEN ? = \'sent\' THEN ? ELSE sent_at END, updated_at = ? WHERE id = ?').run(
-      b.data.status,
-      b.data.error ?? null,
-      b.data.status,
-      now,
-      now,
-      Number(req.params.id),
-    );
+    reportResult(Number(req.params.id), b.data.status === 'sent' ? { ok: true } : { ok: false, error: b.data.error ?? 'Ошибка отправки' });
     res.json({ ok: true });
   });
 }
@@ -901,6 +910,7 @@ import { once } from 'node:events';
 import * as tar from 'tar';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
+import { canDecrypt, isEncrypted, isSecretKey } from './secrets.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
@@ -1289,6 +1299,27 @@ async function unpack(file: string, stage: string): Promise<void> {
  * Validates an uploaded/stored backup (tar.gz, encrypted tar.gz or a legacy raw SQLite file) and stages it for the
  * swap at the next start. Throws BackupError with a Russian message when the file is not acceptable.
  */
+/** secret settings of the staged copy that this host's key cannot decrypt (reported to the panel after a restore) */
+let stagedUnreadable: string[] = [];
+
+function unreadableSecrets(file: string): string[] {
+  let t: InstanceType<typeof Database> | null = null;
+  try {
+    t = new Database(file, { readonly: true, fileMustExist: true });
+    const rows = t.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+    return rows.filter((r) => isSecretKey(r.key) && isEncrypted(r.value) && !canDecrypt(r.value)).map((r) => r.key);
+  } catch {
+    return [];
+  } finally {
+    try {
+      t?.close();
+    } catch {
+      /* ignore */
+    }
+    for (const ext of ['-wal', '-shm']) rmrf(`${file}${ext}`);
+  }
+}
+
 export async function stageRestore(file: string, passphrase: string | null): Promise<void> {
   const stage = fs.mkdtempSync(path.join(DATA_DIR, '.restore-stage-'));
   const tmp: string[] = [];
@@ -1318,6 +1349,8 @@ export async function stageRestore(file: string, passphrase: string | null): Pro
     }
     const bad = validateDb(path.join(stage, 'coregsm.db'));
     if (bad) throw new BackupError(bad);
+    // secrets are encrypted with SECRETS_KEY / JWT_SECRET of the host that made the copy: say so instead of failing later
+    stagedUnreadable = unreadableSecrets(path.join(stage, 'coregsm.db'));
     rmrf(PENDING_DIR);
     fs.renameSync(stage, PENDING_DIR);
   } catch (e) {
@@ -1424,7 +1457,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
         rmrf(upload);
       }
       // the swap happens at start-up (see db.ts); the container restarts by itself
-      res.json({ ok: true, restarting: true });
+      res.json({ ok: true, restarting: true, unreadableSecrets: stagedUnreadable });
       restartSoon();
     }),
   );
@@ -1509,7 +1542,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       const given = z.object({ passphrase: z.string().max(200).optional() }).safeParse(req.body ?? {});
       const pass = (given.success && given.data.passphrase) || backupSettings().passphrase;
       await stageRestore(f.file, pass || null);
-      res.json({ ok: true, restarting: true });
+      res.json({ ok: true, restarting: true, unreadableSecrets: stagedUnreadable });
       restartSoon();
     }),
   );
@@ -1938,6 +1971,8 @@ __COREGSM_EOF__
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey } from './secrets.js';
+import { runMigrations } from './migrations.js';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 export const DATA_DIR = path.dirname(dbPath);
@@ -1994,6 +2029,8 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 // SQLite lower()/NOCASE only fold ASCII: logins in any alphabet are compared with this
 db.function('ulower', { deterministic: true }, (s) => String(s).toLowerCase());
+// true when the database file already had data before this start (migrations then make a copy first)
+const hadSchema = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -2196,18 +2233,68 @@ try {
   /* column already exists */
 }
 
+// versioned migrations (v1 = everything above); a copy of an existing database is made first, see migrations.ts
+runMigrations(db, { dataDir: DATA_DIR, existing: hadSchema });
+
 /** Title shown for a server: the custom name if set, otherwise the name the game server reports, otherwise host:port. */
 export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)";
 
+const warnedSecrets = new Set<string>();
+
+/** Secret settings (see secrets.ts) are decrypted here; one that cannot be decrypted reads as "not set". */
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-  return row ? row.value : null;
+  if (!row) return null;
+  if (!isSecretKey(key)) return row.value;
+  try {
+    return decryptSecret(row.value);
+  } catch (e) {
+    if (!warnedSecrets.has(key)) {
+      warnedSecrets.add(key);
+      console.error(`setting "${key}" cannot be decrypted (${(e as Error).message}); enter it again in the panel`);
+    }
+    return null;
+  }
 }
 
-/** value === null (or empty string) deletes the setting */
+/** value === null (or empty string) deletes the setting; secret keys are stored encrypted */
 export function setSetting(key: string, value: string | null): void {
   if (value === null || value === '') db.prepare('DELETE FROM settings WHERE key = ?').run(key);
-  else db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+  else {
+    warnedSecrets.delete(key);
+    const stored = isSecretKey(key) ? encryptSecret(value) : value;
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, stored);
+  }
+}
+
+/** Secret settings whose stored value cannot be decrypted with the current key. */
+export function undecryptableSecrets(): string[] {
+  const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+  return rows.filter((r) => isSecretKey(r.key) && isEncrypted(r.value) && !canDecrypt(r.value)).map((r) => r.key);
+}
+
+// secrets stored in plaintext by older versions are encrypted once (idempotent: encrypted rows are skipped)
+try {
+  const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+  const upd = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+  db.transaction(() => {
+    for (const r of rows) if (isSecretKey(r.key) && r.value !== '' && !isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
+  })();
+} catch (e) {
+  // no key at all: index.ts stops with a clear message right after the imports
+  console.error('secrets migration skipped:', (e as Error).message);
+}
+if (restoredNow) {
+  const lost = undecryptableSecrets();
+  if (lost.length) {
+    console.error(`restored backup: these secrets were encrypted with another key and are unreadable: ${lost.join(', ')}`);
+    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(
+      Date.now(),
+      'система',
+      'Копия восстановлена, но часть секретов не расшифрована (другой SECRETS_KEY/JWT_SECRET): введите их заново',
+      lost.join(', '),
+    );
+  }
 }
 
 export interface ServerRow {
@@ -2254,6 +2341,295 @@ export interface BindingRow {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/deliveries.ts" << '__COREGSM_EOF__'
+/**
+ * Delivery ledger and queue for everything the Discord bot has to send.
+ *
+ *   kind 'alert' | 'dm'   -> this table IS the queue (the bot polls /internal/deliveries/pending)
+ *   kind 'news' | 'status' -> the table is a ledger: the queue stays in its own table (news), and every
+ *                             attempt is mirrored here so the administrator sees attempts and errors in one place
+ *
+ * Row life: pending (never tried) -> sending (claimed by the bot) -> sent
+ *                                  -> error (failed, a retry is scheduled at next_try_at) -> ... -> dead
+ * Backoff after the n-th failed attempt: 30 s, 1, 2, 5, 15 min (15 min from then on); after 8 attempts the row is dead.
+ * A dead row can be retried by an administrator (POST /api/deliveries/:id/retry).
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db } from './db.js';
+
+export type DeliveryKind = 'news' | 'alert' | 'dm' | 'status';
+export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'error' | 'dead';
+
+export const BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 900_000] as const;
+export const MAX_ATTEMPTS = 8;
+/** a claimed delivery that was never reported is handed out again after this long */
+const CLAIM_TIMEOUT_MS = 2 * 60_000;
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  ref_id INTEGER,
+  target TEXT NOT NULL DEFAULT '',
+  payload TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_try_at INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at INTEGER NOT NULL,
+  sent_at INTEGER,
+  claimed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_deliveries_due ON deliveries(status, next_try_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_ref ON deliveries(kind, ref_id);
+`);
+
+/** Delay before the next try after `attempts` failed attempts (1-based). */
+export function backoffMs(attempts: number): number {
+  const i = Math.min(Math.max(1, Math.floor(attempts)), BACKOFF_MS.length) - 1;
+  return BACKOFF_MS[i]!;
+}
+
+export interface FailurePlan {
+  status: 'error' | 'dead';
+  attempts: number;
+  /** null when dead */
+  nextTryAt: number | null;
+}
+
+/**
+ * Pure: what happens to a delivery that has just failed.
+ * `final` (e.g. the user closed their DMs) gives up at once; `retryAfterMs` (Discord 429) stretches the delay.
+ */
+export function planFailure(previousAttempts: number, now: number, opts: { final?: boolean; retryAfterMs?: number } = {}): FailurePlan {
+  const attempts = previousAttempts + 1;
+  if (opts.final || attempts >= MAX_ATTEMPTS) return { status: 'dead', attempts, nextTryAt: null };
+  const delay = Math.max(backoffMs(attempts), Math.min(Math.max(0, opts.retryAfterMs ?? 0), 3600_000));
+  return { status: 'error', attempts, nextTryAt: now + delay };
+}
+
+export interface KindHooks {
+  /** a delivery of this kind changed state (pending/sending/sent/error/dead) */
+  onState?: (refId: number, status: DeliveryStatus, error: string | null, now: number) => void;
+  /** the administrator asked for a manual retry; `payload` is what the ledger row stored */
+  retry?: (refId: number, payload: Record<string, unknown>) => void;
+}
+const hooks = new Map<DeliveryKind, KindHooks>();
+export function registerKind(kind: DeliveryKind, h: KindHooks): void {
+  hooks.set(kind, h);
+}
+
+interface Row {
+  id: number;
+  kind: DeliveryKind;
+  ref_id: number | null;
+  target: string;
+  payload: string;
+  status: DeliveryStatus;
+  attempts: number;
+  next_try_at: number;
+  last_error: string | null;
+  created_at: number;
+  sent_at: number | null;
+}
+
+function prune(now: number): void {
+  db.prepare("DELETE FROM deliveries WHERE status = 'sent' AND created_at < ?").run(now - 7 * 86400_000);
+  db.prepare("DELETE FROM deliveries WHERE created_at < ?").run(now - 30 * 86400_000);
+}
+
+/** Adds a delivery to the queue (alert, dm, status). */
+export function enqueueDelivery(d: { kind: DeliveryKind; refId?: number | null; target: string; payload: unknown; delayMs?: number }): number {
+  const now = Date.now();
+  const r = db
+    .prepare('INSERT INTO deliveries (kind, ref_id, target, payload, status, next_try_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(d.kind, d.refId ?? null, d.target, JSON.stringify(d.payload ?? {}), 'pending', now + (d.delayMs ?? 0), now);
+  prune(now);
+  return Number(r.lastInsertRowid);
+}
+
+/** Hands the due deliveries of the given kinds to the bot and marks them as being sent. */
+export function claimDue(kinds: DeliveryKind[], now = Date.now(), limit = 25): { id: number; kind: DeliveryKind; refId: number | null; target: string; payload: unknown }[] {
+  if (!kinds.length) return [];
+  const ph = kinds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT * FROM deliveries WHERE kind IN (${ph})
+         AND ((status IN ('pending','error') AND next_try_at <= ?) OR (status = 'sending' AND claimed_at < ?))
+       ORDER BY id LIMIT ?`,
+    )
+    .all(...kinds, now, now - CLAIM_TIMEOUT_MS, limit) as Row[];
+  const claim = db.prepare("UPDATE deliveries SET status = 'sending', claimed_at = ? WHERE id = ?");
+  return rows.map((r) => {
+    claim.run(now, r.id);
+    if (r.ref_id !== null) hooks.get(r.kind)?.onState?.(r.ref_id, 'sending', r.last_error, now);
+    return { id: r.id, kind: r.kind, refId: r.ref_id, target: r.target, payload: JSON.parse(r.payload) as unknown };
+  });
+}
+
+/** The bot's verdict on a queued delivery. */
+export function reportResult(id: number, res: { ok: true } | { ok: false; error: string; final?: boolean; retryAfterMs?: number }, now = Date.now()): boolean {
+  const r = db.prepare('SELECT * FROM deliveries WHERE id = ?').get(id) as Row | undefined;
+  if (!r) return false;
+  let status: DeliveryStatus;
+  let error: string | null = null;
+  if (res.ok) {
+    status = 'sent';
+    db.prepare("UPDATE deliveries SET status = 'sent', attempts = attempts + 1, sent_at = ?, last_error = NULL, claimed_at = NULL WHERE id = ?").run(now, id);
+  } else {
+    const plan = planFailure(r.attempts, now, res);
+    status = plan.status;
+    error = res.error.slice(0, 300);
+    db.prepare('UPDATE deliveries SET status = ?, attempts = ?, next_try_at = ?, last_error = ?, claimed_at = NULL WHERE id = ?').run(plan.status, plan.attempts, plan.nextTryAt ?? 0, error, id);
+  }
+  if (r.ref_id !== null) hooks.get(r.kind)?.onState?.(r.ref_id, status, error, now);
+  return true;
+}
+
+/**
+ * Ledger entry for a queue that lives elsewhere (news): one row per (kind, ref_id), updated on every attempt.
+ */
+export function ledgerRecord(e: {
+  kind: DeliveryKind;
+  refId: number;
+  target: string;
+  status: DeliveryStatus;
+  attempts: number;
+  error?: string | null;
+  nextTryAt?: number | null;
+  payload?: Record<string, unknown>;
+  now?: number;
+}): void {
+  const now = e.now ?? Date.now();
+  const open = db.prepare('SELECT id FROM deliveries WHERE kind = ? AND ref_id = ? ORDER BY id DESC LIMIT 1').get(e.kind, e.refId) as { id: number } | undefined;
+  const sentAt = e.status === 'sent' ? now : null;
+  if (open) {
+    db.prepare('UPDATE deliveries SET status = ?, attempts = ?, next_try_at = ?, last_error = ?, sent_at = COALESCE(?, sent_at), payload = COALESCE(?, payload), target = ? WHERE id = ?').run(
+      e.status,
+      e.attempts,
+      e.nextTryAt ?? 0,
+      e.error ?? null,
+      sentAt,
+      e.payload ? JSON.stringify(e.payload) : null,
+      e.target,
+      open.id,
+    );
+  } else {
+    db.prepare('INSERT INTO deliveries (kind, ref_id, target, payload, status, attempts, next_try_at, last_error, created_at, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      e.kind,
+      e.refId,
+      e.target,
+      JSON.stringify(e.payload ?? {}),
+      e.status,
+      e.attempts,
+      e.nextTryAt ?? 0,
+      e.error ?? null,
+      now,
+      sentAt,
+    );
+    prune(now);
+  }
+}
+
+function summary(r: Row): string {
+  try {
+    const p = JSON.parse(r.payload) as { summary?: string; content?: string; embed?: { title?: string } };
+    return String(p.summary ?? p.embed?.title ?? p.content ?? '').slice(0, 120);
+  } catch {
+    return '';
+  }
+}
+
+export function registerDeliveries(deps: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
+  const { app, admin, internal } = deps;
+  const KINDS = ['news', 'alert', 'dm', 'status'] as const;
+  const STATUSES = ['pending', 'sending', 'sent', 'error', 'dead'] as const;
+
+  app.get('/api/deliveries', admin, (req, res) => {
+    const q = z
+      .object({
+        status: z.enum(STATUSES).optional(),
+        kind: z.enum(KINDS).optional(),
+        limit: z.coerce.number().int().min(1).max(500).optional(),
+      })
+      .safeParse(req.query);
+    if (!q.success) return res.status(400).json({ error: 'Проверьте параметры фильтра' });
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (q.data.status) (where.push('status = ?'), args.push(q.data.status));
+    if (q.data.kind) (where.push('kind = ?'), args.push(q.data.kind));
+    const rows = db
+      .prepare(`SELECT * FROM deliveries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`)
+      .all(...args, q.data.limit ?? 100) as Row[];
+    const counts: Record<string, number> = { pending: 0, sending: 0, sent: 0, error: 0, dead: 0 };
+    for (const c of db.prepare('SELECT status, COUNT(*) AS n FROM deliveries GROUP BY status').all() as { status: string; n: number }[]) counts[c.status] = c.n;
+    res.json({
+      counts,
+      items: rows.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        refId: r.ref_id,
+        target: r.target,
+        status: r.status,
+        attempts: r.attempts,
+        nextTryAt: r.status === 'error' || r.status === 'pending' ? r.next_try_at || null : null,
+        lastError: r.last_error,
+        createdAt: r.created_at,
+        sentAt: r.sent_at,
+        summary: summary(r),
+      })),
+    });
+  });
+
+  app.post('/api/deliveries/:id/retry', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const r = db.prepare('SELECT * FROM deliveries WHERE id = ?').get(id) as Row | undefined;
+    if (!r) return res.status(404).json({ error: 'Доставка не найдена' });
+    if (r.status !== 'dead' && r.status !== 'error') return res.status(409).json({ error: 'Повторить можно только неудавшуюся доставку' });
+    const now = Date.now();
+    db.prepare("UPDATE deliveries SET status = 'pending', attempts = 0, next_try_at = ?, last_error = NULL, claimed_at = NULL WHERE id = ?").run(now, id);
+    if (r.ref_id !== null) {
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(r.payload) as Record<string, unknown>;
+      } catch {
+        /* ledger payload is informational */
+      }
+      const h = hooks.get(r.kind);
+      h?.retry?.(r.ref_id, payload);
+      h?.onState?.(r.ref_id, 'pending', null, now);
+    }
+    res.json({ ok: true, id, status: 'pending' });
+  });
+
+  // ----- the bot -----
+  app.get('/internal/deliveries/pending', internal, (req, res) => {
+    const wanted = String(req.query.kinds ?? 'alert,dm,status')
+      .split(',')
+      .filter((k): k is 'alert' | 'dm' | 'status' => k === 'alert' || k === 'dm' || k === 'status');
+    res.json(claimDue(wanted));
+  });
+
+  app.patch('/internal/deliveries/:id', internal, (req, res) => {
+    const b = z
+      .object({
+        ok: z.boolean().optional(),
+        status: z.enum(['sent', 'error']).optional(),
+        error: z.string().max(300).nullable().optional(),
+        final: z.boolean().optional(),
+        retryAfterMs: z.number().int().min(0).max(3600_000).optional(),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const ok = b.data.ok ?? b.data.status === 'sent';
+    const done = reportResult(Number(req.params.id), ok ? { ok: true } : { ok: false, error: b.data.error ?? 'Ошибка отправки', final: b.data.final, retryAfterMs: b.data.retryAfterMs });
+    if (!done) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/embed.ts" << '__COREGSM_EOF__'
 /**
  * The Discord embed for a server: one definition used by the bot (what is posted in the channel)
@@ -2261,7 +2637,7 @@ __COREGSM_EOF__
  *
  * Layout (three columns): status · address · country / game · map · players / player list.
  */
-import { gameLabel } from './games.js';
+import { gameLabel, gameProfile, gameShowsMap } from './games.js';
 
 export interface EmbedServer {
   name: string;
@@ -2277,6 +2653,8 @@ export interface EmbedServer {
   playerNames: string[];
   error: string | null;
   updatedAt: number | null;
+  /** planned work in progress (maintenance window) */
+  maintenance?: { name: string; until: number } | null;
 }
 
 export interface DiscordEmbed {
@@ -2314,7 +2692,7 @@ export interface EmbedExtra {
 const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
 
 /** the side stripe of an online server follows the colour of its game (others keep the status green) */
-const GAME_ACCENT: Record<string, number> = { vrising: 0x8b5cf6, icarus: 0xf5b01e };
+const accentOf = (game: string): number | undefined => gameProfile(game)?.accent;
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
@@ -2364,14 +2742,14 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     return {
       title: cut(s.name, 256),
       description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
-      color: GAME_ACCENT[s.game] ?? COLOR.unknown,
+      color: accentOf(s.game) ?? COLOR.unknown,
       thumbnail,
       footer,
     };
   }
 
   const lag = s.online && s.ping != null && s.ping > 100;
-  const status = !s.online ? '🔴 **Офлайн**' : lag ? '🟡 **Лаги**' : '🟢 **Онлайн**';
+  const status = !s.online && s.maintenance ? '🛠️ **Тех. работы**' : !s.online ? '🔴 **Офлайн**' : lag ? '🟡 **Лаги**' : '🟢 **Онлайн**';
   const ping = s.online && s.ping != null ? ` · ${s.ping} мс` : '';
   const pct = s.maxPlayers ? ` (${Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 100)}%)` : '';
 
@@ -2401,7 +2779,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     { name: '⏱️ Аптайм 24 ч', value: uptime, inline: true },
     { name: '📍 Адрес', value: `${addr} ${WIDTH_PAD}`, inline: false },
     { name: '🎮 Игра', value: cut(gameLabel(s.game), 100), inline: true },
-    { name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
+    // games whose profile says "no map" (Minecraft, V Rising, ...) do not get the field at all
+    ...(gameShowsMap(s.game) ? [{ name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true }] : []),
     ...(third ? [third] : []),
   ];
 
@@ -2431,7 +2810,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     title: cut(s.name, 256),
     url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/#/servers/${extra.serverId}` : undefined,
     description: lines.length ? lines.join('\n') : undefined,
-    color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
+    color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
     fields,
     footer,
@@ -2502,37 +2881,169 @@ declare module 'gamedig' {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/games.ts" << '__COREGSM_EOF__'
-// Display names for GameDig ids (kept in sync with core-frontend/src/games.ts)
-export const GAME_LABELS: Record<string, string> = {
-  minecraft: 'Minecraft: Java',
-  mbe: 'Minecraft: Bedrock',
-  counterstrike2: 'Counter-Strike 2',
-  csgo: 'CS:GO',
-  counterstrike16: 'Counter-Strike 1.6',
-  css: 'Counter-Strike: Source',
-  rust: 'Rust',
-  valheim: 'Valheim',
-  garrysmod: "Garry's Mod",
-  teamfortress2: 'Team Fortress 2',
-  l4d2: 'Left 4 Dead 2',
-  terraria: 'Terraria',
-  sdtd: '7 Days to Die',
-  dayz: 'DayZ',
-  ase: 'ARK: Survival Evolved',
-  asa: 'ARK: Survival Ascended',
-  conanexiles: 'Conan Exiles',
-  palworld: 'Palworld',
-  factorio: 'Factorio',
-  unturned: 'Unturned',
-  vrising: 'V Rising',
-  icarus: 'Icarus',
-  projectzomboid: 'Project Zomboid',
-  gta5f: 'FiveM (GTA V)',
-  gtasam: 'SA-MP',
-  teamspeak3: 'TeamSpeak 3',
-};
+/**
+ * Game profiles: what the panel and the Discord embed know about every supported game (GameDig id).
+ *
+ *   GameProfile {
+ *     id            GameDig id ('vrising')
+ *     label         display name ('V Rising')
+ *     defaultPort   the usual game port; 0 when there is no single default
+ *     queryPortHint short Russian text about the query port, only where it is known to differ (optional)
+ *     fields        which values the game server reports meaningfully:
+ *                     map (map / world name), mode (game mode), version, players (player count / names)
+ *                   a field set to false is not shown (the Discord embed hides "Карта" for games without a map)
+ *     connect       how a player connects; templates use {address} ("host:port"), {host} and {port}:
+ *                     steam   a steam:// link that launches the game (optional)
+ *                     command a console command (optional)
+ *                     note    a sentence with the manual steps (optional)
+ *     accent        side stripe colour of the Discord embed of an online server (optional, 0xRRGGBB)
+ *   }
+ *
+ * GET /api/games returns the list (public). Unknown GameDig ids (custom servers) have no profile: callers
+ * fall back to "show everything" and the id as the label.
+ */
+import type { Express } from 'express';
+
+export interface GameProfile {
+  id: string;
+  label: string;
+  defaultPort: number;
+  queryPortHint?: string;
+  fields: { map: boolean; mode: boolean; version: boolean; players: boolean };
+  connect: { steam?: string; command?: string; note?: string };
+  accent?: number;
+}
+
+const F = (map: boolean, mode: boolean, version: boolean, players = true) => ({ map, mode, version, players });
+const STEAM = 'steam://connect/{address}';
+const CONSOLE = 'connect {address}';
+
+export const GAME_PROFILES: GameProfile[] = [
+  { id: 'minecraft', label: 'Minecraft: Java', defaultPort: 25565, fields: F(false, false, true), connect: { note: 'Сетевая игра → Добавить сервер → введите адрес {address}.' } },
+  { id: 'mbe', label: 'Minecraft: Bedrock', defaultPort: 19132, fields: F(false, true, true), connect: { note: 'Играть → Серверы → Добавить сервер: адрес {host}, порт {port}.' } },
+  { id: 'counterstrike2', label: 'Counter-Strike 2', defaultPort: 27015, fields: F(true, true, true), connect: { steam: STEAM, command: CONSOLE } },
+  { id: 'csgo', label: 'CS:GO', defaultPort: 27015, fields: F(true, true, true), connect: { steam: STEAM, command: CONSOLE } },
+  { id: 'counterstrike16', label: 'Counter-Strike 1.6', defaultPort: 27015, fields: F(true, true, true), connect: { steam: STEAM, command: CONSOLE } },
+  { id: 'css', label: 'Counter-Strike: Source', defaultPort: 27015, fields: F(true, true, true), connect: { steam: STEAM, command: CONSOLE } },
+  {
+    id: 'rust',
+    label: 'Rust',
+    defaultPort: 28015,
+    queryPortHint: 'Rust: если сервер не отвечает, проверьте query-порт сервера (параметр server.queryport).',
+    fields: F(true, false, true),
+    connect: { steam: STEAM, command: 'client.connect {address}' },
+  },
+  {
+    id: 'valheim',
+    label: 'Valheim',
+    defaultPort: 2456,
+    queryPortHint: 'Для Valheim порт запроса = игровой порт + 1.',
+    fields: F(false, false, true),
+    connect: { steam: STEAM, note: 'Join Game → Join IP → введите адрес сервера: {address}.' },
+  },
+  { id: 'garrysmod', label: "Garry's Mod", defaultPort: 27015, fields: F(true, true, true), connect: { steam: STEAM, command: CONSOLE } },
+  { id: 'teamfortress2', label: 'Team Fortress 2', defaultPort: 27015, fields: F(true, true, true), connect: { steam: STEAM, command: CONSOLE } },
+  { id: 'l4d2', label: 'Left 4 Dead 2', defaultPort: 27015, fields: F(true, true, true), connect: { steam: STEAM, command: CONSOLE } },
+  {
+    id: 'terraria',
+    label: 'Terraria',
+    defaultPort: 7777,
+    queryPortHint: 'Для Terraria нужен TShock с включённым REST API; порт запроса — порт REST (по умолчанию 7878).',
+    fields: F(true, false, true),
+    connect: { note: 'Multiplayer → Join via IP → {host}, порт {port}.' },
+  },
+  { id: 'sdtd', label: '7 Days to Die', defaultPort: 26900, fields: F(true, true, true), connect: { steam: STEAM, note: 'Join a Game → Server Browser или Direct Connect: {address}.' } },
+  { id: 'dayz', label: 'DayZ', defaultPort: 2302, queryPortHint: 'Для DayZ порт запроса обычно 27016 (steamQueryPort).', fields: F(true, false, true), connect: { steam: STEAM, note: 'DZSALauncher или Играть → Direct Connect: {address}.' } },
+  {
+    id: 'ase',
+    label: 'ARK: Survival Evolved',
+    defaultPort: 7777,
+    queryPortHint: 'Для ARK порт запроса по умолчанию 27015 (QueryPort), игровой — 7777.',
+    fields: F(true, false, true),
+    connect: { steam: STEAM, note: 'Join ARK → Session Filter → найдите сервер по имени или IP.' },
+  },
+  {
+    id: 'asa',
+    label: 'ARK: Survival Ascended',
+    defaultPort: 7777,
+    queryPortHint: 'Для ARK порт запроса по умолчанию 27015 (QueryPort), игровой — 7777.',
+    fields: F(true, false, true),
+    connect: { note: 'Join Game → Unofficial → найдите сервер по имени или по IP.' },
+  },
+  {
+    id: 'conanexiles',
+    label: 'Conan Exiles',
+    defaultPort: 7777,
+    queryPortHint: 'Для Conan Exiles порт запроса по умолчанию 27015, игровой — 7777.',
+    fields: F(true, false, true),
+    connect: { steam: STEAM, note: 'Online → Server Browser или Direct Connect: {host}:{port}.' },
+  },
+  {
+    id: 'palworld',
+    label: 'Palworld',
+    defaultPort: 8211,
+    queryPortHint: 'Для Palworld порт запроса по умолчанию 27015, игровой — 8211.',
+    fields: F(false, false, true),
+    connect: { note: 'Join Multiplayer Game → введите {address} в строке подключения.' },
+  },
+  { id: 'factorio', label: 'Factorio', defaultPort: 34197, fields: F(false, false, true), connect: { note: 'Multiplayer → Connect to address → {address}.' } },
+  {
+    id: 'unturned',
+    label: 'Unturned',
+    defaultPort: 27015,
+    queryPortHint: 'Для Unturned порт запроса = игровой порт + 1.',
+    fields: F(true, true, true),
+    connect: { steam: STEAM, note: 'Play → Connect → введите IP и порт.' },
+  },
+  {
+    id: 'vrising',
+    label: 'V Rising',
+    defaultPort: 9876,
+    queryPortHint: 'Для V Rising порт запроса = игровой порт + 1.',
+    fields: F(false, false, true),
+    connect: { steam: STEAM, note: 'Play Online → Find Server → найдите сервер по имени.' },
+    accent: 0x8b5cf6,
+  },
+  {
+    id: 'icarus',
+    label: 'Icarus',
+    defaultPort: 17777,
+    queryPortHint: 'Для Icarus порт запроса по умолчанию 27015, игровой — 17777.',
+    fields: F(false, false, true),
+    connect: { note: 'Open Missions → Dedicated Servers → найдите сервер по имени.' },
+    accent: 0xf5b01e,
+  },
+  { id: 'projectzomboid', label: 'Project Zomboid', defaultPort: 16261, fields: F(true, false, true), connect: { steam: STEAM, note: 'Join → введите IP {host}, порт {port}.' } },
+  { id: 'gta5f', label: 'FiveM (GTA V)', defaultPort: 30120, fields: F(false, true, true), connect: { command: 'connect {address}', note: 'В клиенте FiveM: F8 → connect {address}.' } },
+  { id: 'gtasam', label: 'SA-MP', defaultPort: 7777, fields: F(true, true, true), connect: { note: 'В клиенте SA-MP: Add Server → {address}.' } },
+  {
+    id: 'teamspeak3',
+    label: 'TeamSpeak 3',
+    defaultPort: 9987,
+    queryPortHint: 'Для TeamSpeak 3 порт запроса — ServerQuery, по умолчанию 10011.',
+    fields: F(false, false, true),
+    connect: { command: 'ts3server://{host}?port={port}', note: 'Connections → Connect → {address}.' },
+  },
+];
+
+const BY_ID = new Map(GAME_PROFILES.map((p) => [p.id, p]));
+
+/** Display names for GameDig ids (kept in sync with core-frontend/src/games.ts) */
+export const GAME_LABELS: Record<string, string> = Object.fromEntries(GAME_PROFILES.map((p) => [p.id, p.label]));
 
 export const gameLabel = (id: string): string => GAME_LABELS[id] ?? id;
+
+export const gameProfile = (id: string): GameProfile | undefined => BY_ID.get(id);
+
+/** Does the game report a map worth showing? Unknown games (custom GameDig ids) are shown in full. */
+export const gameShowsMap = (id: string): boolean => BY_ID.get(id)?.fields.map ?? true;
+
+export function registerGames(app: Express): void {
+  app.get('/api/games', (_req, res) => {
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(GAME_PROFILES);
+  });
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/geo.ts" << '__COREGSM_EOF__'
@@ -2609,7 +3120,11 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gsm.ts" << '__COREGSM_EOF__'
 import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
-import { db, type ServerRow } from './db.js';
+import { onPollResult } from './subscriptions.js';
+import { maintenanceFor as maintenanceNow } from './maintenance.js';
+import { db, getSetting, type ServerRow } from './db.js';
+import { inMaintenance, pruneMaintenance } from './maintenance.js';
+import { clampConcurrency, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, runPool } from './pollLogic.js';
 
 export interface QueryResult {
   online: boolean;
@@ -2686,14 +3201,14 @@ export async function queryServer(s: ServerRow): Promise<QueryResult> {
 }
 
 const upsert = db.prepare(`
-INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at)
-VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts)
+INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
+VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts, @failures)
 ON CONFLICT(server_id) DO UPDATE SET
   online=excluded.online, name=COALESCE(excluded.name, status.name), players=excluded.players, max_players=excluded.max_players,
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
-  error=excluded.error, updated_at=excluded.updated_at
+  error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures
 `);
-const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping) VALUES (?, ?, ?, ?, ?)');
+const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?, ?, ?, ?, ?, ?, ?)');
 
 /**
  * Keeps player_now in step with the latest poll: names that left are removed, new ones get since = now.
@@ -2743,24 +3258,67 @@ export function syncPlayerSessions(serverId: number, names: string[], online: bo
   })();
 }
 
-/** Daily counters for the status page (UTC day). */
-export function recordUptime(serverId: number, online: boolean, players: number, ts: number): void {
+/**
+ * Daily counters for the status page (UTC day). `count` polls are added at once (a confirmed outage adds the polls
+ * that were held back). With `peakOnly` the poll does not count (maintenance), only the peak is kept.
+ */
+export function recordUptime(serverId: number, online: boolean, players: number, ts: number, opts: { count?: number; peakOnly?: boolean } = {}): void {
   const day = new Date(ts).toISOString().slice(0, 10);
+  const n = opts.peakOnly ? 0 : Math.max(1, opts.count ?? 1);
+  const peak = online ? Math.max(0, players) : 0;
   db.prepare(
-    `INSERT INTO uptime_daily (server_id, day, up, total, peak) VALUES (?, ?, ?, 1, ?)
-     ON CONFLICT(server_id, day) DO UPDATE SET up = up + excluded.up, total = total + 1, peak = MAX(peak, excluded.peak)`,
-  ).run(serverId, day, online ? 1 : 0, online ? Math.max(0, players) : 0);
+    `INSERT INTO uptime_daily (server_id, day, up, total, peak) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(server_id, day) DO UPDATE SET up = up + excluded.up, total = total + excluded.total, peak = MAX(peak, excluded.peak)`,
+  ).run(serverId, day, online ? n : 0, n, peak);
 }
 
-export async function refreshServer(s: ServerRow): Promise<void> {
-  const r = await queryServer(s);
-  const ts = Date.now();
-  // the server may have been deleted while the query was running
-  const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
-  if (!still) return;
+// ---------- settings ----------
+/** consecutive failed polls before a server is shown as offline (setting poll_fail_threshold, 1..5, default 2) */
+export const failThreshold = (): number => clampThreshold(getSetting('poll_fail_threshold'));
+/** servers polled at the same time (setting poll_concurrency, else env POLL_CONCURRENCY, 1..32, default 8) */
+export const pollConcurrency = (): number => {
+  const s = getSetting('poll_concurrency');
+  return clampConcurrency(s !== null && s !== '' ? s : process.env.POLL_CONCURRENCY);
+};
+
+export interface PollOutcome {
+  /** the poll itself reached the server */
+  polledOnline: boolean;
+  /** state now stored in `status` */
+  online: boolean;
+  /** false: failure not confirmed yet, last good state kept */
+  confirmed: boolean;
+  failures: number;
+}
+
+/**
+ * Stores one poll result (the synchronous half of refreshServer; exported for tests).
+ * `debounce`: a failed poll only counts after `poll_fail_threshold` consecutive failures (the scheduled poller).
+ * Without it (manual refresh, a server just added or edited) the result stands at once.
+ */
+export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: { debounce?: boolean } = {}): PollOutcome {
+  const prev = db.prepare('SELECT online, players, consecutive_failures AS f FROM status WHERE server_id = ?').get(s.id) as
+    | { online: number; players: number; f: number }
+    | undefined;
+  const d = decideStatus({
+    prevOnline: prev ? !!prev.online : null,
+    prevFailures: prev?.f ?? 0,
+    polledOnline: r.online,
+    threshold: opts.debounce ? failThreshold() : 1,
+  });
+  const maint = inMaintenance(s.id, ts) ? 1 : 0;
+  const outcome: PollOutcome = { polledOnline: r.online, online: d.online, confirmed: d.confirmed, failures: d.failures };
+
+  if (!d.confirmed) {
+    // not believed yet: the last good state stays, the sample is marked so that uptime ignores it
+    db.prepare('UPDATE status SET consecutive_failures = ?, updated_at = ? WHERE server_id = ?').run(d.failures, ts, s.id);
+    addHistory.run(s.id, ts, 1, prev?.players ?? 0, null, 1, maint);
+    return outcome;
+  }
+
   upsert.run({
     id: s.id,
-    online: r.online ? 1 : 0,
+    online: d.online ? 1 : 0,
     name: r.name,
     players: r.players,
     max: r.maxPlayers,
@@ -2770,42 +3328,328 @@ export async function refreshServer(s: ServerRow): Promise<void> {
     names: JSON.stringify(r.playerNames.slice(0, 50)),
     error: r.error,
     ts,
+    failures: d.failures,
   });
-  addHistory.run(s.id, ts, r.online ? 1 : 0, r.players, r.ping);
+  addHistory.run(s.id, ts, d.online ? 1 : 0, r.players, r.ping, 0, maint);
+  if (d.becameOffline) {
+    // the outage began with the first failed poll: the held-back samples become offline ones
+    db.prepare('UPDATE history SET online = 0, players = 0, unconfirmed = 0 WHERE server_id = ? AND unconfirmed = 1').run(s.id);
+  }
   try {
-    syncPlayersNow(s.id, r.playerNames, r.online, ts);
-    syncPlayerSessions(s.id, r.playerNames, r.online, ts);
-    recordUptime(s.id, r.online, r.players, ts);
+    syncPlayersNow(s.id, r.playerNames, d.online, ts);
+    syncPlayerSessions(s.id, r.playerNames, d.online, ts);
+    if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
+    else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {
     console.error('player/uptime bookkeeping failed', (e as Error).message);
   }
   try {
-    trackAlerts(s.id, r.online, r.error);
+    trackAlerts(s.id, d.online, r.error);
   } catch (e) {
     console.error('alerts failed', (e as Error).message);
   }
+  try {
+    // planned work: nobody is told that the server went down (free-slot notices still make sense, back_online follows the window)
+    if (!(!d.online && maintenanceNow(s.id))) onPollResult(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers });
+  } catch (e) {
+    console.error('subscriptions failed', (e as Error).message);
+  }
+  return outcome;
 }
 
+export async function refreshServer(s: ServerRow, opts: { debounce?: boolean } = {}): Promise<PollOutcome | null> {
+  const r = await queryServer(s);
+  const ts = Date.now();
+  // the server may have been deleted while the query was running
+  const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
+  if (!still) return null;
+  return applyPollResult(s, r, ts, opts);
+}
+
+// ---------- scheduler ----------
+export interface PollStats {
+  at: number | null;
+  durationMs: number | null;
+  servers: number;
+  failures: number;
+  concurrency: number;
+}
+let lastStats: PollStats = { at: null, durationMs: null, servers: 0, failures: 0, concurrency: DEFAULT_CONCURRENCY };
+/** the last finished poll cycle: when, how long, how many servers did not answer */
+export const lastPollStats = (): PollStats => ({ ...lastStats });
+
 let running = false;
+let jitterMaxMs = 1500;
+let pollCount = 0;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function pollAll(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    const t0 = Date.now();
     const servers = db.prepare('SELECT * FROM servers').all() as ServerRow[];
-    await Promise.allSettled(servers.map(refreshServer));
+    const concurrency = pollConcurrency();
+    let failures = 0;
+    await runPool(servers, concurrency, async (s) => {
+      // servers do not all start at the same instant
+      if (jitterMaxMs > 0) await sleep(Math.floor(Math.random() * jitterMaxMs));
+      try {
+        const o = await refreshServer(s, { debounce: true });
+        if (o && !o.polledOnline) failures++;
+      } catch (e) {
+        failures++;
+        console.error(`poll of server ${s.id} failed`, (e as Error).message);
+      }
+    });
+    const durationMs = Date.now() - t0;
+    lastStats = { at: Date.now(), durationMs, servers: servers.length, failures, concurrency };
+    pollCount++;
+    // quiet when all is well: the first poll, slow polls, polls with failures and every 20th
+    if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
+      console.log(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
+    }
     db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 30 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM player_sessions WHERE left_at IS NOT NULL AND left_at < ?').run(Date.now() - 90 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM account_events WHERE ts < ?').run(Date.now() - 180 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
+    pruneMaintenance();
   } finally {
     running = false;
   }
 }
 
 export function startPoller(intervalMs: number): void {
+  jitterMaxMs = Math.min(1500, Math.max(0, Math.floor(intervalMs / 10)));
   void pollAll();
   setInterval(() => void pollAll(), intervalMs).unref?.();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/health.ts" << '__COREGSM_EOF__'
+/**
+ * Health history: a sample every 5 minutes (database size, memory, poll duration, bot state, queue length, free disk),
+ * kept 14 days, and the "flags" derived from it (bot offline, slow poll, low disk, fast-growing database).
+ */
+import type { Express, RequestHandler } from 'express';
+import fs from 'node:fs';
+import { z } from 'zod';
+import { DATA_DIR, db, getSetting, setSetting } from './db.js';
+import { failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
+
+const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
+const SAMPLE_EVERY_MS = 5 * 60_000;
+const KEEP_MS = 14 * 24 * 3600_000;
+
+export interface BotInfo {
+  state: string;
+  updatedAt: number;
+}
+let getBot: (() => BotInfo) | null = null;
+
+export interface Sample {
+  ts: number;
+  dbBytes: number;
+  rssMb: number;
+  pollMs: number;
+  pollFailures: number;
+  botState: string;
+  queueLen: number;
+  diskFree: number | null;
+}
+
+export interface Flag {
+  kind: 'bot_offline' | 'poll_slow' | 'disk_low' | 'db_growing';
+  since: number;
+  text: string;
+}
+
+const dbSize = (): number => {
+  try {
+    return fs.statSync(DB_PATH).size;
+  } catch {
+    return 0;
+  }
+};
+const diskFree = (): number | null => {
+  try {
+    const st = fs.statfsSync(DATA_DIR);
+    return Number(st.bavail) * Number(st.bsize);
+  } catch {
+    return null;
+  }
+};
+const queueLen = (): number => {
+  try {
+    return (db.prepare("SELECT COUNT(*) AS c FROM alerts WHERE status IN ('queued', 'sending')").get() as { c: number }).c;
+  } catch {
+    return 0;
+  }
+};
+
+/** 'none' (no token), 'online', 'offline' (not answering), or the bot's own state (connecting, error, ...) */
+export function botStateNow(now = Date.now()): string {
+  const tokenSet = !!getSetting('discord_token');
+  if (!tokenSet) return 'none';
+  if (!getBot) return 'unknown';
+  const b = getBot();
+  if (now - b.updatedAt > 45_000) return 'offline';
+  return b.state || 'unknown';
+}
+const botBad = (s: string) => s === 'offline' || s === 'error';
+
+export function sampleNow(now = Date.now()): Sample {
+  const p = lastPollStats();
+  return {
+    ts: now,
+    dbBytes: dbSize(),
+    rssMb: Math.round(process.memoryUsage().rss / 1048576),
+    pollMs: p.durationMs ?? 0,
+    pollFailures: p.failures,
+    botState: botStateNow(now),
+    queueLen: queueLen(),
+    diskFree: diskFree(),
+  };
+}
+
+export function recordSample(now = Date.now()): Sample {
+  const s = sampleNow(now);
+  db.prepare(
+    'INSERT OR REPLACE INTO health_samples (ts, db_bytes, rss_mb, poll_ms, poll_failures, bot_state, queue_len, disk_free) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(s.ts, s.dbBytes, s.rssMb, s.pollMs, s.pollFailures, s.botState, s.queueLen, s.diskFree);
+  db.prepare('DELETE FROM health_samples WHERE ts < ?').run(now - KEEP_MS);
+  return s;
+}
+
+interface Row {
+  ts: number;
+  db_bytes: number;
+  rss_mb: number;
+  poll_ms: number;
+  poll_failures: number;
+  bot_state: string;
+  queue_len: number;
+  disk_free: number | null;
+}
+const toSample = (r: Row): Sample => ({
+  ts: r.ts,
+  dbBytes: r.db_bytes,
+  rssMb: r.rss_mb,
+  pollMs: r.poll_ms,
+  pollFailures: r.poll_failures,
+  botState: r.bot_state,
+  queueLen: r.queue_len,
+  diskFree: r.disk_free,
+});
+
+export function samplesSince(since: number): Sample[] {
+  return (db.prepare('SELECT * FROM health_samples WHERE ts >= ? ORDER BY ts').all(since) as Row[]).map(toSample);
+}
+
+const MB = 1048576;
+const GB = 1073741824;
+
+/** start of the trailing run of samples for which `bad` holds (oldest first input); the live state counts as the newest */
+function runStart(samples: Sample[], bad: (s: Sample) => boolean, now: number): number {
+  let since = now;
+  for (let i = samples.length - 1; i >= 0; i--) {
+    if (!bad(samples[i])) break;
+    since = samples[i].ts;
+  }
+  return since;
+}
+
+/**
+ * Pure: flags for the given samples (oldest first) and the live state `cur`.
+ * pollMs = poll interval (a poll that takes most of it is "slow").
+ */
+export function computeFlags(samples: Sample[], cur: Sample, pollMs: number, now = Date.now()): Flag[] {
+  const flags: Flag[] = [];
+  const all = [...samples.filter((s) => s.ts < cur.ts), cur];
+
+  if (botBad(cur.botState)) {
+    flags.push({
+      kind: 'bot_offline',
+      since: runStart(all, (s) => botBad(s.botState), now),
+      text: cur.botState === 'offline' ? 'Discord-бот не отвечает' : 'Discord-бот сообщает об ошибке',
+    });
+  }
+
+  const slowLimit = Math.max(5000, pollMs * 0.8);
+  if (cur.pollMs > slowLimit) {
+    flags.push({
+      kind: 'poll_slow',
+      since: runStart(all, (s) => s.pollMs > slowLimit, now),
+      text: `Опрос серверов идёт ${Math.round(cur.pollMs / 1000)} с при интервале ${Math.round(pollMs / 1000)} с`,
+    });
+  }
+
+  if (cur.diskFree != null && cur.diskFree < GB) {
+    flags.push({
+      kind: 'disk_low',
+      since: runStart(all, (s) => s.diskFree != null && s.diskFree < GB, now),
+      text: `На диске осталось ${(cur.diskFree / GB).toFixed(1)} ГБ`,
+    });
+  }
+
+  // the database grew by half and by at least 50 MB over the last 7 days (needs a day of samples)
+  const week = all.filter((s) => s.ts >= now - 7 * 24 * 3600_000 && s.dbBytes > 0);
+  if (week.length >= 2) {
+    const first = week[0];
+    const grown = cur.dbBytes - first.dbBytes;
+    if (cur.ts - first.ts >= 24 * 3600_000 && grown >= 50 * MB && cur.dbBytes >= first.dbBytes * 1.5) {
+      flags.push({
+        kind: 'db_growing',
+        since: first.ts,
+        text: `База данных выросла на ${Math.round(grown / MB)} МБ за ${Math.max(1, Math.round((cur.ts - first.ts) / 86_400_000))} сут.`,
+      });
+    }
+  }
+  return flags;
+}
+
+const pollIntervalMs = () => Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000 || 30_000;
+
+/** flags right now (added to GET /api/system) */
+export function currentFlags(now = Date.now()): Flag[] {
+  try {
+    return computeFlags(samplesSince(now - 7 * 24 * 3600_000), sampleNow(now), pollIntervalMs(), now);
+  } catch (e) {
+    console.error('health flags failed', (e as Error).message);
+    return [];
+  }
+}
+
+export function registerHealth({ app, admin, bot }: { app: Express; admin: RequestHandler; bot: () => BotInfo }): void {
+  getBot = bot;
+
+  const pollPayload = () => ({ failThreshold: failThreshold(), concurrency: pollConcurrency(), last: lastPollStats() });
+  app.get('/api/settings/poll', admin, (_req, res) => res.json(pollPayload()));
+  app.put('/api/settings/poll', admin, (req, res) => {
+    const b = z
+      .object({ failThreshold: z.number().int().min(1).max(5).optional(), concurrency: z.number().int().min(1).max(32).optional() })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32' });
+    if (b.data.failThreshold !== undefined) setSetting('poll_fail_threshold', String(b.data.failThreshold));
+    if (b.data.concurrency !== undefined) setSetting('poll_concurrency', String(b.data.concurrency));
+    res.json(pollPayload());
+  });
+  app.get('/api/system/health-history', admin, (req, res) => {
+    const hours = Math.min(336, Math.max(1, Math.floor(Number(req.query.hours ?? 24)) || 24));
+    const now = Date.now();
+    // first look before the first scheduled sample: take one now so the chart is never empty
+    if (!(db.prepare('SELECT 1 FROM health_samples LIMIT 1').get())) recordSample(now);
+    res.json({ samples: samplesSince(now - hours * 3600_000), flags: currentFlags(now) });
+  });
+  const tick = () => {
+    try {
+      recordSample();
+    } catch (e) {
+      console.error('health sample failed', (e as Error).message);
+    }
+  };
+  setTimeout(tick, 20_000).unref();
+  setInterval(tick, SAMPLE_EVERY_MS).unref();
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -2826,11 +3670,31 @@ import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerAlerts } from './alerts.js';
+import { maintenanceFor, occurrencesBetween, registerMaintenance, type WindowRow } from './maintenance.js';
+import { registerHealth } from './health.js';
+import { registerDeliveries } from './deliveries.js';
+import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
+import { registerGames } from './games.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel } from './profile.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
+import {
+  clearSessionCookie,
+  csrfGuard,
+  emailChanged,
+  ipLockRemaining,
+  ipLoginFailed,
+  noteLogin,
+  readCookie,
+  recentNewDevice,
+  registerSecurity,
+  securityHeaders,
+  SESSION_COOKIE,
+  setSessionCookie,
+  windowLimiter,
+} from './security.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -2907,8 +3771,15 @@ function normalizeProxy(raw: string, type: ProxyType): string {
 }
 
 const app = express();
+// One trusted proxy hop (the nginx container): req.ip / req.secure come from the X-Forwarded-For / X-Forwarded-Proto it
+// writes. The backend port is not published, so clients cannot spoof them; keep it that way (see security.ts).
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+app.use(securityHeaders);
+// a cookie-authenticated state-changing request must carry X-CoreGSM (CSRF guard)
+app.use('/api', csrfGuard);
+// public player pages: a coarse per-address ceiling on top of the route's own limiter
+app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 installAudit(app);
@@ -2948,9 +3819,10 @@ function userFromToken(token: string): { id: number; username: string; role: Rol
 }
 const lastSeen = new Map<string, number>();
 
+/** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
 function loadUser(req: Request) {
   const h = req.headers.authorization ?? '';
-  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '');
+  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readCookie(req, SESSION_COOKIE));
 }
 
 /** Starts a session and returns the signed token for it. */
@@ -3018,7 +3890,11 @@ function rateLimit(max: number) {
     const now = Date.now();
     const h = hits.get(key);
     if (!h || h.reset <= now) hits.set(key, { n: 1, reset: now + 60_000 });
-    else if (++h.n > max) return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.' });
+    else if (++h.n > max) {
+      const retryAfter = Math.max(1, Math.ceil((h.reset - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.', retryAfter });
+    }
     next();
   };
 }
@@ -3029,7 +3905,9 @@ function loginLimiter(req: Request, res: Response, next: NextFunction) {
   const now = Date.now();
   const a = attempts.get(key);
   if (a && a.reset > now && a.n >= 10) {
-    res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.' });
+    const retryAfter = Math.max(1, Math.ceil((a.reset - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.', retryAfter });
     return;
   }
   if (!a || a.reset <= now) attempts.set(key, { n: 1, reset: now + 10 * 60 * 1000 });
@@ -3047,11 +3925,18 @@ app.post(
   wrap(async (req, res) => {
     const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
+    // progressive lockout of the whole address after failures across several logins
+    const ipWait = ipLockRemaining(req.ip);
+    if (ipWait > 0) {
+      res.setHeader('Retry-After', String(ipWait));
+      return res.status(429).json({ error: `Слишком много неудачных попыток входа с этого адреса. Повторите через ${ipWait} с.`, retryAfter: ipWait });
+    }
     // lock out after repeated wrong passwords for the same login from the same address
     const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
     const lock = fails.get(key);
     if (lock && lock.until > Date.now()) {
       const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
+      res.setHeader('Retry-After', String(retryAfter));
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
@@ -3063,6 +3948,7 @@ app.post(
       f.n++;
       if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
       fails.set(key, f);
+      ipLoginFailed(req.ip, body.data.username);
       if (u) logAccount(req, u.id, 'login_failed');
       const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
       return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
@@ -3071,7 +3957,10 @@ app.post(
     if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
     attempts.delete(req.ip ?? 'x');
     logAccount(req, u.id, 'login');
-    res.json({ token: issueToken(u, req), username: u.username, role: u.role });
+    noteLogin(req, u.id, brand().name);
+    const token = issueToken(u, req);
+    setSessionCookie(req, res, token);
+    res.json({ token, username: u.username, role: u.role });
   }),
 );
 
@@ -3122,6 +4011,8 @@ app.post(
     attempts.delete(req.ip ?? 'x');
     console.log(`setup completed, admin "${b.data.username}" created`);
     const token = issueToken({ id: userId, username: b.data.username }, req);
+    setSessionCookie(req, res, token);
+    noteLogin(req, userId, brand().name);
     res.status(201).json({ token, username: b.data.username, role: 'admin' });
   }),
 );
@@ -3508,6 +4399,7 @@ app.get('/api/auth/check', rateLimit(30), (req, res) => {
 
 app.post(
   '/api/auth/register',
+  windowLimiter(20, 3600_000, 'Слишком много регистраций с этого адреса. Попробуйте позже.'),
   loginLimiter,
   wrap(async (req, res) => {
     if (needsSetup()) return res.status(409).json({ error: 'Панель ещё не настроена: сначала создайте администратора' });
@@ -3531,7 +4423,10 @@ app.post(
         db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
       );
       if (pending) return res.status(202).json({ pending: true });
-      res.status(201).json({ token: issueToken({ id, username: b.data.username }, req), username: b.data.username, role: 'player' });
+      const token = issueToken({ id, username: b.data.username }, req);
+      setSessionCookie(req, res, token);
+      noteLogin(req, id, brand().name);
+      res.status(201).json({ token, username: b.data.username, role: 'player' });
     } catch {
       res.status(409).json({ error: 'Этот логин уже занят' });
     }
@@ -3614,7 +4509,7 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
 });
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
-interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null }
+interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
@@ -3630,9 +4525,12 @@ app.get('/api/me', auth, (req: AuthedRequest, res) => {
     discordName: u.discord_name,
     hasPassword: !u.no_password,
     email: u.email ?? null,
+    emailVerified: !!u.email && !!u.email_verified,
+    newDevice: recentNewDevice(u.id),
     prefs: prefsOf(u.id),
     bannerUrl: bannerUrlOf(u.id),
     bannerPreset: bannerPresetOf(u.id),
+    unreadNotifications: unreadNotifications(u.id),
   });
 });
 
@@ -3654,7 +4552,10 @@ app.put(
       if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
     }
     db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
-    if ((u.email ?? '') !== email) logAccount(req, u.id, 'email_changed');
+    if ((u.email ?? '') !== email) {
+      emailChanged(u.id);
+      logAccount(req, u.id, 'email_changed');
+    }
     res.json({ ok: true, email: email || null });
   }),
 );
@@ -3698,6 +4599,7 @@ app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
 // logout: ends the session this very token belongs to
 app.delete('/api/sessions/current', auth, (req: AuthedRequest, res) => {
   db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(req.user!.sid ?? '', req.user!.id);
+  clearSessionCookie(req, res);
   res.json({ ok: true });
 });
 app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
@@ -3728,7 +4630,8 @@ app.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
   const mode = req.query.mode === 'link' ? 'link' : 'login';
   let userId = 0;
   if (mode === 'link') {
-    const u = userFromToken(String(req.query.t ?? ''));
+    // the session cookie travels with this top-level navigation; ?t= stays for older clients
+    const u = userFromToken(String(req.query.t ?? '')) ?? loadUser(req);
     if (!u) return failTo(res, 'Сначала войдите в панель, затем привяжите Discord');
     userId = u.id;
   }
@@ -3782,7 +4685,10 @@ app.get(
       db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
       if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
       logAccount(req, owner.id, 'login', 'Discord');
-      return toHash(res, `auth/${issueToken(owner, req)}`);
+      noteLogin(req, owner.id, brand().name);
+      const tok = issueToken(owner, req);
+      setSessionCookie(req, res, tok);
+      return toHash(res, `auth/${tok}`);
     }
 
     // first sign-in with this Discord account: register it (when registration is open)
@@ -3798,7 +4704,10 @@ app.get(
         .run(name, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), pending ? 'pending' : 'active', me.id, dname, me.avatar ?? null).lastInsertRowid,
     );
     if (pending) return failTo(res, 'Заявка отправлена. Дождитесь одобрения администратора');
-    toHash(res, `auth/${issueToken({ id, username: name }, req)}`);
+    const tok = issueToken({ id, username: name }, req);
+    setSessionCookie(req, res, tok);
+    noteLogin(req, id, brand().name);
+    toHash(res, `auth/${tok}`);
   }),
 );
 
@@ -3854,6 +4763,8 @@ function serialize(r: ServerJoin) {
     playerNames: r.player_names ? (JSON.parse(r.player_names) as string[]) : [],
     error: r.error ?? null,
     updatedAt: r.updated_at ?? null,
+    // running maintenance window for this server (alerts are muted, downtime is not counted) or null
+    maintenance: maintenanceFor(r.id),
   };
 }
 
@@ -3953,7 +4864,7 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
     .all(id, since, bucketMs);
   const agg = db
     .prepare(
-      `SELECT COUNT(*) AS samples, AVG(online) * 100 AS uptime,
+      `SELECT COUNT(*) AS samples, AVG(CASE WHEN unconfirmed = 0 AND maint = 0 THEN online END) * 100 AS uptime,
               AVG(CASE WHEN online = 1 THEN players END) AS avg_players
        FROM history WHERE server_id = ? AND ts > ?`,
     )
@@ -3969,9 +4880,13 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
          ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
       )
       .all(id, since) as { ts: number; online: number }[]
-  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak', players: null as number | null }));
+  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance', players: null as number | null }));
   // the busiest moment of the period is shown in the event feed as well
   if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
+  // planned maintenance (windows of this server and of all servers) starting in the period
+  for (const w of db.prepare('SELECT * FROM maintenance_windows WHERE server_id IS NULL OR server_id = ?').all(id) as WindowRow[]) {
+    for (const o of occurrencesBetween(w, since, Date.now())) events.push({ ts: o.start, type: 'maintenance', players: null });
+  }
   events.sort((a, b) => b.ts - a.ts);
 
   const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
@@ -4026,7 +4941,7 @@ app.get('/api/servers/:id/history', viewer, (req, res) => {
 app.get(
   '/api/card/:id(\\d+).png',
   wrap(async (req, res) => {
-    if (!publicPanel() && !userFromToken(String(req.query.t ?? ''))) return res.status(404).json({ error: 'Сервер не найден' });
+    if (!publicPanel() && !userFromToken(String(req.query.t ?? '')) && !loadUser(req)) return res.status(404).json({ error: 'Сервер не найден' });
     const buf = await renderCard(Number(req.params.id));
     if (!buf) return res.status(404).json({ error: 'Сервер не найден' });
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
@@ -4246,7 +5161,7 @@ function embedFor(serverId: number, intervalSec: number) {
   const server = getServer(serverId);
   if (!server) return null;
   const up = db
-    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ?')
+    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ? AND unconfirmed = 0 AND maint = 0')
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
@@ -4433,6 +5348,19 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
+registerSecurity({
+  app,
+  admin,
+  auth,
+  userId: (req) => (req as AuthedRequest).user!.id,
+  userFromToken,
+  publicBase,
+  baseOf,
+  brandName: () => brand().name,
+});
+registerDeliveries({ app, admin, internal });
+registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => botStatus.state === 'online' });
+registerGames(app);
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
   app,
@@ -4447,6 +5375,8 @@ registerProfile({
 registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
+registerMaintenance({ app, admin, viewer });
+registerHealth({ app, admin, bot: () => botStatus });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
@@ -4470,6 +5400,472 @@ app.listen(PORT, () => {
 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/mail.ts" << '__COREGSM_EOF__'
+/**
+ * Outgoing e-mail (nodemailer). SMTP settings live in the settings table: smtp_host, smtp_port, smtp_secure ('1' = TLS
+ * from the first byte, otherwise STARTTLS is used when the server offers it), smtp_user, smtp_password (stored
+ * encrypted), smtp_from.
+ *
+ * Test hooks: MAIL_DEBUG_FILE=<path> appends every message as one JSON line to that file instead of sending it
+ * (and counts as "SMTP works"); setTransportFactory() replaces the transport in-process.
+ */
+import fs from 'node:fs';
+import nodemailer, { type Transporter } from 'nodemailer';
+import { getSetting } from './db.js';
+
+export interface SmtpConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  password: string;
+  from: string;
+}
+
+export function smtpConfig(): SmtpConfig {
+  const secure = getSetting('smtp_secure');
+  const port = Number(getSetting('smtp_port')) || (secure === '1' ? 465 : 587);
+  return {
+    host: getSetting('smtp_host') ?? '',
+    port,
+    secure: secure === '1',
+    user: getSetting('smtp_user') ?? '',
+    password: getSetting('smtp_password') ?? '',
+    from: getSetting('smtp_from') ?? '',
+  };
+}
+
+const debugFile = () => (process.env.MAIL_DEBUG_FILE ?? '').trim();
+
+/** true when letters can be sent (SMTP host configured, or the debug file is active) */
+export function mailReady(): boolean {
+  return !!debugFile() || !!smtpConfig().host;
+}
+
+type Factory = (cfg: SmtpConfig) => Pick<Transporter, 'sendMail'>;
+let factory: Factory | null = null;
+/** replaces the SMTP transport (tests) */
+export function setTransportFactory(f: Factory | null): void {
+  factory = f;
+}
+
+export interface Mail {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+/** Sends a letter. Rejects with an Error whose message is safe to show to an administrator. */
+export async function sendMail(m: Mail): Promise<void> {
+  const cfg = smtpConfig();
+  const from = cfg.from || (cfg.user.includes('@') ? cfg.user : `coregsm@${cfg.host || 'localhost'}`);
+  if (debugFile()) {
+    fs.appendFileSync(debugFile(), JSON.stringify({ ts: Date.now(), from, ...m }) + '\n');
+    return;
+  }
+  if (!cfg.host) throw new Error('SMTP не настроен: укажите сервер в настройках почты');
+  const transport =
+    factory?.(cfg) ??
+    nodemailer.createTransport({
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.secure,
+      auth: cfg.user ? { user: cfg.user, pass: cfg.password } : undefined,
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+    });
+  try {
+    await transport.sendMail({ from, to: m.to, subject: m.subject, text: m.text, html: m.html });
+  } catch (e) {
+    const err = e as Error & { code?: string; responseCode?: number };
+    const why =
+      err.code === 'EAUTH' ? 'сервер отклонил логин или пароль'
+      : err.code === 'ECONNECTION' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' ? 'не удалось подключиться к серверу'
+      : err.code === 'ETIMEDOUT' || err.code === 'ESOCKET' ? 'сервер не отвечает или неверный порт/шифрование'
+      : err.message.slice(0, 160);
+    throw new Error(`Не удалось отправить письмо: ${why}`);
+  }
+}
+
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** a small, plain HTML letter around a paragraph and one button */
+export function layout(brand: string, lines: string[], action?: { label: string; url: string }): { text: string; html: string } {
+  const text = [...lines, ...(action ? ['', `${action.label}: ${action.url}`] : []), '', `— ${brand}`].join('\n');
+  const html =
+    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#1f2937;max-width:520px">` +
+    lines.map((l) => `<p>${escHtml(l)}</p>`).join('') +
+    (action ? `<p><a href="${escHtml(action.url)}" style="display:inline-block;padding:10px 18px;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none">${escHtml(action.label)}</a></p><p style="font-size:13px;color:#6b7280;word-break:break-all">${escHtml(action.url)}</p>` : '') +
+    `<p style="font-size:13px;color:#6b7280">${escHtml(brand)}</p></div>`;
+  return { text, html };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/maintenance.ts" << '__COREGSM_EOF__'
+/**
+ * Maintenance windows: planned work during which alerts are muted and downtime does not hurt uptime.
+ * A window is [start_ts, end_ts) and may repeat every day or every week (the same length, from start_ts onwards).
+ * server_id NULL = every server.
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db } from './db.js';
+
+export type Repeat = 'none' | 'daily' | 'weekly';
+
+export interface WindowRow {
+  id: number;
+  server_id: number | null;
+  name: string;
+  start_ts: number;
+  end_ts: number;
+  repeat: Repeat;
+  created_by: string;
+  created_at: number;
+}
+
+const DAY = 86_400_000;
+const PERIOD: Record<Repeat, number> = { none: 0, daily: DAY, weekly: 7 * DAY };
+export const MAX_WINDOW_MS = 7 * DAY;
+
+/** the occurrence of the window that contains `ts`, or null */
+export function occurrenceAt(w: Pick<WindowRow, 'start_ts' | 'end_ts' | 'repeat'>, ts: number): { start: number; end: number } | null {
+  const dur = w.end_ts - w.start_ts;
+  if (!(dur > 0) || ts < w.start_ts) return null;
+  const p = PERIOD[w.repeat] || 0;
+  if (!p) return ts < w.end_ts ? { start: w.start_ts, end: w.end_ts } : null;
+  const k = Math.floor((ts - w.start_ts) / p);
+  const start = w.start_ts + k * p;
+  return ts < start + dur ? { start, end: start + dur } : null;
+}
+
+/** the first occurrence that has not ended before `ts` (running or upcoming), or null */
+export function nextOccurrence(w: Pick<WindowRow, 'start_ts' | 'end_ts' | 'repeat'>, ts: number): { start: number; end: number } | null {
+  const dur = w.end_ts - w.start_ts;
+  if (!(dur > 0)) return null;
+  const p = PERIOD[w.repeat] || 0;
+  if (ts < w.start_ts) return { start: w.start_ts, end: w.end_ts };
+  if (!p) return ts < w.end_ts ? { start: w.start_ts, end: w.end_ts } : null;
+  const k = Math.floor((ts - w.start_ts) / p);
+  const cur = w.start_ts + k * p;
+  if (ts < cur + dur) return { start: cur, end: cur + dur };
+  return { start: cur + p, end: cur + p + dur };
+}
+
+/** occurrences that start inside [from, to] (at most 200) */
+export function occurrencesBetween(w: Pick<WindowRow, 'start_ts' | 'end_ts' | 'repeat'>, from: number, to: number): { start: number; end: number }[] {
+  const dur = w.end_ts - w.start_ts;
+  if (!(dur > 0)) return [];
+  const p = PERIOD[w.repeat] || 0;
+  if (!p) return w.start_ts >= from && w.start_ts <= to ? [{ start: w.start_ts, end: w.end_ts }] : [];
+  const out: { start: number; end: number }[] = [];
+  let k = Math.max(0, Math.ceil((from - w.start_ts) / p));
+  for (; out.length < 200; k++) {
+    const s = w.start_ts + k * p;
+    if (s > to) break;
+    out.push({ start: s, end: s + dur });
+  }
+  return out;
+}
+
+// ---------- state ----------
+let cache: { at: number; rows: WindowRow[] } | null = null;
+export const resetMaintenanceCache = () => {
+  cache = null;
+};
+const all = (): WindowRow[] => {
+  const now = Date.now();
+  if (!cache || now - cache.at > 2000) cache = { at: now, rows: db.prepare('SELECT * FROM maintenance_windows ORDER BY id').all() as WindowRow[] };
+  return cache.rows;
+};
+
+export interface ActiveWindow {
+  id: number;
+  serverId: number | null;
+  name: string;
+  since: number;
+  until: number;
+}
+
+/** windows running at `now` (every server's included) */
+export function activeWindows(now = Date.now()): ActiveWindow[] {
+  const out: ActiveWindow[] = [];
+  for (const w of all()) {
+    const o = occurrenceAt(w, now);
+    if (o) out.push({ id: w.id, serverId: w.server_id, name: w.name, since: o.start, until: o.end });
+  }
+  return out;
+}
+
+/** the window that currently covers the server (the one that ends last), or null: { name, until } */
+export function maintenanceFor(serverId: number, now = Date.now()): { name: string; until: number } | null {
+  let best: ActiveWindow | null = null;
+  for (const w of activeWindows(now)) {
+    if (w.serverId !== null && w.serverId !== serverId) continue;
+    if (!best || w.until > best.until) best = w;
+  }
+  return best ? { name: best.name, until: best.until } : null;
+}
+
+export const inMaintenance = (serverId: number, now = Date.now()): boolean => maintenanceFor(serverId, now) !== null;
+
+/** one-off windows that ended more than 30 days ago are dropped */
+export function pruneMaintenance(now = Date.now()): void {
+  const r = db.prepare("DELETE FROM maintenance_windows WHERE repeat = 'none' AND end_ts < ?").run(now - 30 * DAY);
+  if (r.changes) resetMaintenanceCache();
+}
+
+// ---------- API ----------
+const ts = z.union([z.number().int(), z.string().min(1).max(40)]).transform((v, ctx) => {
+  const n = typeof v === 'number' ? v : Date.parse(v);
+  if (!Number.isFinite(n) || n < 0) {
+    ctx.addIssue({ code: 'custom', message: 'Неверная дата' });
+    return z.NEVER;
+  }
+  return Math.floor(n);
+});
+
+const bodySchema = z.object({
+  serverId: z.number().int().nullable().optional(),
+  name: z.string().trim().min(1, 'Укажите название').max(80),
+  startTs: ts,
+  endTs: ts,
+  repeat: z.enum(['none', 'daily', 'weekly']).default('none'),
+});
+
+export function registerMaintenance({ app, admin, viewer }: { app: Express; admin: RequestHandler; viewer: RequestHandler }): void {
+  const serialize = (w: WindowRow, now = Date.now()) => {
+    const cur = occurrenceAt(w, now);
+    const next = nextOccurrence(w, now);
+    const server = w.server_id == null ? null : (db.prepare("SELECT COALESCE(NULLIF(name, ''), host || ':' || port) AS n FROM servers WHERE id = ?").get(w.server_id) as { n: string } | undefined)?.n ?? null;
+    return {
+      id: w.id,
+      serverId: w.server_id,
+      serverName: server,
+      name: w.name,
+      startTs: w.start_ts,
+      endTs: w.end_ts,
+      repeat: w.repeat,
+      createdBy: w.created_by,
+      createdAt: w.created_at,
+      active: !!cur,
+      until: cur ? cur.end : null,
+      nextStart: next && !cur ? next.start : null,
+    };
+  };
+
+  const check = (b: z.infer<typeof bodySchema>): string | null => {
+    if (b.endTs <= b.startTs) return 'Окончание должно быть позже начала';
+    if (b.endTs - b.startTs > MAX_WINDOW_MS) return 'Окно обслуживания не может быть длиннее 7 суток';
+    if (b.repeat === 'daily' && b.endTs - b.startTs > DAY) return 'Ежедневное окно не может быть длиннее суток';
+    if (b.serverId != null && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(b.serverId)) return 'Сервер не найден';
+    return null;
+  };
+  const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
+
+  app.get('/api/maintenance', admin, (_req, res) => {
+    const now = Date.now();
+    res.json(all().map((w) => serialize(w, now)));
+  });
+
+  // running right now: for the banner in the panel
+  app.get('/api/maintenance/active', viewer, (_req, res) => {
+    res.json(activeWindows());
+  });
+
+  app.post('/api/maintenance', admin, (req, res) => {
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const bad = check(b.data);
+    if (bad) return res.status(400).json({ error: bad });
+    const info = db
+      .prepare('INSERT INTO maintenance_windows (server_id, name, start_ts, end_ts, repeat, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.serverId ?? null, b.data.name, b.data.startTs, b.data.endTs, b.data.repeat, actor(req), Date.now());
+    resetMaintenanceCache();
+    const row = db.prepare('SELECT * FROM maintenance_windows WHERE id = ?').get(info.lastInsertRowid) as WindowRow;
+    res.status(201).json(serialize(row));
+  });
+
+  app.put('/api/maintenance/:id', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const bad = check(b.data);
+    if (bad) return res.status(400).json({ error: bad });
+    const r = db
+      .prepare('UPDATE maintenance_windows SET server_id = ?, name = ?, start_ts = ?, end_ts = ?, repeat = ? WHERE id = ?')
+      .run(b.data.serverId ?? null, b.data.name, b.data.startTs, b.data.endTs, b.data.repeat, id);
+    if (!r.changes) return res.status(404).json({ error: 'Окно обслуживания не найдено' });
+    resetMaintenanceCache();
+    res.json(serialize(db.prepare('SELECT * FROM maintenance_windows WHERE id = ?').get(id) as WindowRow));
+  });
+
+  app.delete('/api/maintenance/:id', admin, (req, res) => {
+    const r = db.prepare('DELETE FROM maintenance_windows WHERE id = ?').run(Number(req.params.id));
+    if (!r.changes) return res.status(404).json({ error: 'Окно обслуживания не найдено' });
+    resetMaintenanceCache();
+    res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/migrations.ts" << '__COREGSM_EOF__'
+/**
+ * Versioned schema migrations.
+ *
+ * v1 is the baseline: the schema that db.ts creates with idempotent CREATE ... IF NOT EXISTS / ADD COLUMN code
+ * (every database, new or old, has it after db.ts ran), so it is only recorded. Everything newer is a numbered
+ * migration below. Rules: append only, never edit a released migration, keep each one idempotent.
+ *
+ * Before pending migrations are applied to an existing database a consistent copy of it is written to
+ * <dir>/backups/pre-migrate-v<target>-<timestamp>.db (the newest 5 are kept). Each migration runs in its own
+ * transaction; a failure stops the start-up with a clear message (the copy is the way back).
+ */
+import type Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
+
+type Db = InstanceType<typeof Database>;
+
+export interface Migration {
+  version: number;
+  name: string;
+  up: (db: Db) => void;
+}
+
+const hasTable = (db: Db, t: string): boolean => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+const hasColumn = (db: Db, t: string, c: string): boolean => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
+function addColumn(db: Db, table: string, column: string, ddl: string): void {
+  if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
+export const MIGRATIONS: Migration[] = [
+  { version: 1, name: 'baseline', up: () => undefined },
+  {
+    version: 2,
+    name: 'status.consecutive_failures',
+    up: (db) => addColumn(db, 'status', 'consecutive_failures', 'INTEGER NOT NULL DEFAULT 0'),
+  },
+  {
+    version: 3,
+    name: 'history.unconfirmed+maint',
+    up: (db) => {
+      // unconfirmed = a failed poll that did not (yet) make the server offline; maint = taken during a maintenance window
+      addColumn(db, 'history', 'unconfirmed', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'history', 'maint', 'INTEGER NOT NULL DEFAULT 0');
+    },
+  },
+  {
+    version: 4,
+    name: 'maintenance_windows',
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  start_ts INTEGER NOT NULL,
+  end_ts INTEGER NOT NULL,
+  repeat TEXT NOT NULL DEFAULT 'none',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_maint_server ON maintenance_windows(server_id);`),
+  },
+  {
+    version: 5,
+    name: 'health_samples',
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS health_samples (
+  ts INTEGER PRIMARY KEY,
+  db_bytes INTEGER NOT NULL DEFAULT 0,
+  rss_mb INTEGER NOT NULL DEFAULT 0,
+  poll_ms INTEGER NOT NULL DEFAULT 0,
+  poll_failures INTEGER NOT NULL DEFAULT 0,
+  bot_state TEXT NOT NULL DEFAULT '',
+  queue_len INTEGER NOT NULL DEFAULT 0,
+  disk_free INTEGER
+);`),
+  },
+];
+
+export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
+
+export interface MigrationResult {
+  applied: number[];
+  /** path of the copy made before migrating (null: nothing to protect or nothing pending) */
+  backup: string | null;
+}
+
+/** keeps the newest `keep` pre-migration copies */
+export function prunePreMigrate(dir: string, keep = 5): void {
+  try {
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => /^pre-migrate-v\d+-\d+\.db$/.test(f))
+      .map((f) => ({ f, t: Number(/-(\d+)\.db$/.exec(f)![1]) }))
+      .sort((a, b) => b.t - a.t || (a.f < b.f ? 1 : -1));
+    for (const x of files.slice(keep)) fs.rmSync(path.join(dir, x.f), { force: true });
+  } catch {
+    /* the directory may not exist */
+  }
+}
+
+/**
+ * Applies pending migrations. `existing` = the database had data before this start (a copy is made first).
+ * `list` is injectable for tests.
+ */
+export function runMigrations(db: Db, opts: { dataDir: string; existing: boolean; list?: Migration[]; log?: (m: string) => void }): MigrationResult {
+  const list = opts.list ?? MIGRATIONS;
+  const log = opts.log ?? ((m: string) => console.log(m));
+  db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)');
+  const done = new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map((r) => r.version));
+  const pending = list.filter((m) => !done.has(m.version)).sort((a, b) => a.version - b.version);
+  const result: MigrationResult = { applied: [], backup: null };
+  if (!pending.length) return result;
+
+  // the baseline alone only records what already exists: no copy needed for that
+  const real = pending.filter((m) => m.version > 1);
+  if (opts.existing && real.length && hasTable(db, 'users')) {
+    const target = real[real.length - 1].version;
+    const dir = path.join(opts.dataDir, 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, `pre-migrate-v${target}-${Date.now()}.db`);
+    try {
+      db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+    } catch (e) {
+      throw new Error(`Не удалось сделать копию базы перед миграцией (${dest}): ${(e as Error).message}. Обновление схемы отменено.`);
+    }
+    result.backup = dest;
+    log(`Database copy before migration: ${dest}`);
+    prunePreMigrate(dir, 5);
+  }
+
+  for (const m of pending) {
+    try {
+      db.transaction(() => {
+        m.up(db);
+        db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(m.version, m.name, Date.now());
+      })();
+    } catch (e) {
+      throw new Error(`Миграция базы данных v${m.version} «${m.name}» не выполнена: ${(e as Error).message}${result.backup ? `. Копия базы до миграции: ${result.backup}` : ''}`);
+    }
+    result.applied.push(m.version);
+    if (m.version > 1) log(`Database migration v${m.version} applied: ${m.name}`);
+  }
+  return result;
+}
+
+/** versions recorded in the database (for diagnostics and tests) */
+export function appliedVersions(db: Db): number[] {
+  if (!hasTable(db, 'schema_migrations')) return [];
+  return (db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map((r) => r.version);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/news.ts" << '__COREGSM_EOF__'
 /**
  * News: messages written in the panel and posted to a Discord channel by the bot.
@@ -4484,6 +5880,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from './db.js';
+import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 
 const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
 fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -4508,6 +5905,22 @@ try {
 } catch {
   /* column already exists */
 }
+// delivery retries: failed attempts so far and the earliest time of the next one (see deliveries.ts)
+for (const ddl of ['ALTER TABLE news ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE news ADD COLUMN next_try_at INTEGER']) {
+  try {
+    db.exec(ddl);
+  } catch {
+    /* column already exists */
+  }
+}
+// a manual retry from the deliveries list puts the item back into the queue it came from
+registerKind('news', {
+  retry(refId, payload) {
+    const q = payload.action === 'edit' ? 'edit_queued' : payload.action === 'delete' ? 'delete_queued' : 'queued';
+    db.prepare("UPDATE news SET status = ?, attempts = 0, next_try_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND test = 0").run(q, Date.now(), refId);
+  },
+});
+
 try {
   // 1 = a test send (never shown in lists, cleaned up after an hour)
   db.exec('ALTER TABLE news ADD COLUMN test INTEGER NOT NULL DEFAULT 0');
@@ -5175,11 +6588,11 @@ export function registerNews(deps: {
     db.prepare('DELETE FROM news WHERE test = 1 AND updated_at < ?').run(now - 3600_000);
     const rows = db
       .prepare(
-        `SELECT * FROM news WHERE status IN ('queued','edit_queued','delete_queued')
+        `SELECT * FROM news WHERE (status IN ('queued','edit_queued','delete_queued') AND (next_try_at IS NULL OR next_try_at <= ?))
            OR (status = 'scheduled' AND scheduled_at <= ?)
            OR (status = 'sending' AND updated_at < ?)`,
       )
-      .all(now, now - 5 * 60_000) as NewsRow[];
+      .all(now, now, now - 5 * 60_000) as NewsRow[];
     const claim = db.prepare("UPDATE news SET status = 'sending', updated_at = ? WHERE id = ?");
     const out = rows.map((r) => {
       const action = r.status === 'edit_queued' ? 'edit' : r.status === 'delete_queued' ? 'delete' : 'send';
@@ -5200,12 +6613,30 @@ export function registerNews(deps: {
         status: z.enum(['sent', 'error', 'deleted']),
         messageId: z.string().max(40).nullable().optional(),
         error: z.string().max(300).nullable().optional(),
+        /** Discord 429: do not retry before this many ms */
+        retryAfterMs: z.number().int().min(0).max(3600_000).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad body' });
     const id = Number(req.params.id);
     const now = Date.now();
+    const before = db.prepare('SELECT status, channel_id, payload, attempts, test FROM news WHERE id = ?').get(id) as
+      | { status: string; channel_id: string; payload: string; attempts: number; test: number }
+      | undefined;
+    const action = before?.status === 'edit_queued' ? 'edit' : before?.status === 'delete_queued' ? 'delete' : 'send';
+    const ledger = (status: 'sent' | 'error' | 'dead', attempts: number, error: string | null, nextTryAt: number | null) => {
+      if (!before || before.test) return;
+      let summary = '';
+      try {
+        const p = JSON.parse(before.payload) as NewsPayload;
+        summary = String(p.embed?.title || p.content || '').slice(0, 120);
+      } catch {
+        /* informational only */
+      }
+      ledgerRecord({ kind: 'news', refId: id, target: before.channel_id, status, attempts, error, nextTryAt, payload: { action, summary }, now });
+    };
     if (b.data.status === 'deleted') {
+      ledger('sent', (before?.attempts ?? 0) + 1, null, null);
       db.prepare('DELETE FROM news WHERE id = ?').run(id);
     } else if (db.prepare('SELECT 1 FROM news WHERE id = ? AND test = 1').get(id)) {
       db.prepare('UPDATE news SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(
@@ -5221,7 +6652,8 @@ export function registerNews(deps: {
         const next = nextOccurrence(prev.scheduled_at, prev.repeat, now);
         db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('scheduled', ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now);
       }
-      db.prepare("UPDATE news SET status = 'sent', message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(
+      ledger('sent', (before?.attempts ?? 0) + 1, null, null);
+      db.prepare("UPDATE news SET status = 'sent', attempts = 0, next_try_at = NULL, message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(
         b.data.messageId ?? null,
         now,
         b.data.error ?? null,
@@ -5229,9 +6661,18 @@ export function registerNews(deps: {
         id,
       );
     } else {
-      // a failed edit/delete keeps the posted message ("sent"), a failed post becomes "error"
-      const row = db.prepare('SELECT message_id FROM news WHERE id = ?').get(id) as { message_id: string | null } | undefined;
-      db.prepare('UPDATE news SET status = ?, error = ?, updated_at = ? WHERE id = ?').run(row?.message_id ? 'sent' : 'error', b.data.error ?? 'Ошибка отправки', now, id);
+      const err = b.data.error ?? 'Ошибка отправки';
+      const plan = planFailure(before?.attempts ?? 0, now, { retryAfterMs: b.data.retryAfterMs });
+      if (plan.status === 'error') {
+        // retry later with backoff: a post goes back to the queue, an edit/delete simply waits (its status is untouched)
+        db.prepare("UPDATE news SET status = CASE WHEN status = 'sending' THEN 'queued' ELSE status END, attempts = ?, next_try_at = ?, error = ?, updated_at = ? WHERE id = ?").run(plan.attempts, plan.nextTryAt, err, now, id);
+        ledger('error', plan.attempts, err, plan.nextTryAt);
+      } else {
+        // out of attempts: a failed edit/delete keeps the posted message ("sent"), a failed post becomes "error"
+        const row = db.prepare('SELECT message_id FROM news WHERE id = ?').get(id) as { message_id: string | null } | undefined;
+        db.prepare('UPDATE news SET status = ?, attempts = ?, next_try_at = NULL, error = ?, updated_at = ? WHERE id = ?').run(row?.message_id ? 'sent' : 'error', Math.min(plan.attempts, MAX_ATTEMPTS), err, now, id);
+        ledger('dead', plan.attempts, err, null);
+      }
     }
     res.json({ ok: true });
   });
@@ -5248,6 +6689,7 @@ import fs from 'node:fs';
 import tls from 'node:tls';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
+import { currentFlags } from './health.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const startedAt = Date.now();
@@ -5301,6 +6743,10 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
   { m: 'PUT', re: /^\/api\/backups\/settings$/, label: 'Изменены настройки резервного копирования', detail: (r) => ['schedule', 'keep', 'remoteUrl', 'passphrase'].filter((k) => r.body?.[k] !== undefined).map((k) => (k === 'schedule' ? `расписание: ${s(r.body?.schedule, 10)}` : k === 'keep' ? `хранить: ${Number(r.body?.keep) || ''}` : k === 'remoteUrl' ? 'внешняя копия' : 'шифрование')).join(', ') },
   { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
+  { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
+  { m: 'PUT', re: /^\/api\/maintenance\/(\d+)$/, label: 'Изменено окно обслуживания', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name)}`.trim() },
+  { m: 'DELETE', re: /^\/api\/maintenance\/(\d+)$/, label: 'Удалено окно обслуживания', pre: (id) => `#${id}` },
+  { m: 'PUT', re: /^\/api\/settings\/poll$/, label: 'Изменены настройки опроса серверов', detail: (r) => [r.body?.failThreshold !== undefined ? `подтверждение: ${Number(r.body.failThreshold)}` : '', r.body?.concurrency !== undefined ? `параллельно: ${Number(r.body.concurrency)}` : ''].filter(Boolean).join(', ') },
   { m: 'DELETE', re: /^\/api\/backups\/([^/]+)$/, label: 'Удалена резервная копия', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/backups\/([^/]+)\/restore$/, label: 'Восстановлена копия из архива', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
@@ -5483,6 +6929,8 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
       guilds: guildCount(),
       publicBase: publicBase(),
       cert,
+      // problems found in the health history (bot_offline, poll_slow, disk_low, db_growing)
+      flags: currentFlags(),
     });
   });
 
@@ -5558,6 +7006,75 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/pollLogic.ts" << '__COREGSM_EOF__'
+/** Pure helpers of the poller (no database, no network): unit-tested directly. */
+
+export const DEFAULT_FAIL_THRESHOLD = 2;
+export const DEFAULT_CONCURRENCY = 8;
+
+const toInt = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) ? n : null;
+};
+
+/** consecutive failed polls needed before a server is shown as offline: 1..5, default 2 */
+export function clampThreshold(v: unknown): number {
+  const n = toInt(v);
+  return n === null ? DEFAULT_FAIL_THRESHOLD : Math.min(5, Math.max(1, n));
+}
+
+/** number of servers polled at the same time: 1..32, default 8 */
+export function clampConcurrency(v: unknown): number {
+  const n = toInt(v);
+  return n === null ? DEFAULT_CONCURRENCY : Math.min(32, Math.max(1, n));
+}
+
+export interface Decision {
+  /** the state to store in `status` */
+  online: boolean;
+  /** false: the failed poll is not believed yet, the last good state is kept */
+  confirmed: boolean;
+  /** consecutive failed polls including this one (0 after a successful poll) */
+  failures: number;
+  /** this very poll turned an online server offline */
+  becameOffline: boolean;
+}
+
+/**
+ * Whether a poll result changes what the panel shows.
+ *  - a successful poll always counts and resets the counter;
+ *  - a failed poll counts at once when there is no state to hold (new server) or the server is already offline;
+ *  - otherwise the last good state is kept until `threshold` consecutive polls have failed.
+ */
+export function decideStatus(i: { prevOnline: boolean | null; prevFailures: number; polledOnline: boolean; threshold: number }): Decision {
+  if (i.polledOnline) return { online: true, confirmed: true, failures: 0, becameOffline: false };
+  const failures = Math.min(1_000_000, Math.max(0, Math.floor(i.prevFailures)) + 1);
+  const threshold = clampThreshold(i.threshold);
+  if (i.prevOnline === null || i.prevOnline === false) return { online: false, confirmed: true, failures, becameOffline: false };
+  if (failures >= threshold) return { online: false, confirmed: true, failures, becameOffline: true };
+  return { online: true, confirmed: false, failures, becameOffline: false };
+}
+
+/** runs `worker` over `items`, at most `limit` at a time; a failing worker never stops the others */
+export async function runPool<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+  const n = Math.max(1, Math.floor(limit));
+  let next = 0;
+  const lane = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        await worker(items[i], i);
+      } catch {
+        /* the worker reports its own failures */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, lane));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/profile.ts" << '__COREGSM_EOF__'
 /**
  * Personal profile of the signed-in user: preferences, player profile (game nick, bio), play statistics and
@@ -5597,6 +7114,7 @@ export function uaLabel(ua: string | undefined): string {
 export type AccountEventKind =
   | 'login'
   | 'login_failed'
+  | 'login_new_device'
   | 'password_changed'
   | 'email_changed'
   | 'discord_linked'
@@ -6187,6 +7705,727 @@ export async function discordFetch(url: string, init: { method?: string; headers
   });
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/secrets.ts" << '__COREGSM_EOF__'
+/**
+ * Secrets at rest.
+ *
+ * Sensitive settings (bot token, OAuth client secret, backup passphrase, proxy URL with its password, SMTP password ...)
+ * are stored in the database as "enc:v1:<base64 iv(12) | tag(16) | ciphertext>" (AES-256-GCM).
+ *
+ * The key comes from SECRETS_KEY (>= 32 characters) or, when that is not set, is derived from JWT_SECRET (HKDF-SHA256).
+ * Consequences worth knowing:
+ *  - changing JWT_SECRET (or SECRETS_KEY) makes the stored secrets unreadable: the panel then treats them as "not set"
+ *    and they have to be entered again;
+ *  - a backup restored onto a host with a different key has the same problem: restore with the same SECRETS_KEY
+ *    (or JWT_SECRET) as the host that created the backup. The restore reports such values instead of failing.
+ */
+import crypto from 'node:crypto';
+
+export const ENC_PREFIX = 'enc:v1:';
+
+/** settings that are always stored encrypted (besides every key ending in _secret or _token) */
+export const SECRET_SETTING_KEYS: ReadonlySet<string> = new Set([
+  'discord_token',
+  'discord_client_secret',
+  'backup_passphrase',
+  'proxy_url',
+  'smtp_password',
+  // may carry credentials (https://user:pass@host/...)
+  'backup_remote_url',
+]);
+
+export const isSecretKey = (key: string): boolean => SECRET_SETTING_KEYS.has(key) || /_(secret|token)$/.test(key);
+
+export class SecretError extends Error {}
+
+let cached: { src: string; key: Buffer } | null = null;
+
+function masterKey(): Buffer {
+  const own = (process.env.SECRETS_KEY ?? '').trim();
+  const src = own.length >= 32 ? own : (process.env.JWT_SECRET ?? '');
+  if (src.length < 32) throw new SecretError('нет ключа шифрования: задайте SECRETS_KEY или JWT_SECRET (не короче 32 символов)');
+  if (cached && cached.src === src) return cached.key;
+  const key = Buffer.from(crypto.hkdfSync('sha256', src, 'coregsm-secrets-v1', 'settings-aes-256-gcm', 32));
+  cached = { src, key };
+  return key;
+}
+
+export const isEncrypted = (v: string): boolean => v.startsWith(ENC_PREFIX);
+
+export function encryptSecret(plain: string): string {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', masterKey(), iv);
+  const data = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
+  return ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), data]).toString('base64');
+}
+
+/** A value without the prefix is a legacy plaintext and is returned as is. Throws SecretError when it cannot be decrypted. */
+export function decryptSecret(stored: string): string {
+  if (!isEncrypted(stored)) return stored;
+  try {
+    const raw = Buffer.from(stored.slice(ENC_PREFIX.length), 'base64');
+    if (raw.length < 29) throw new Error('short');
+    const d = crypto.createDecipheriv('aes-256-gcm', masterKey(), raw.subarray(0, 12));
+    d.setAuthTag(raw.subarray(12, 28));
+    return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8');
+  } catch (e) {
+    if (e instanceof SecretError) throw e;
+    throw new SecretError('значение зашифровано другим ключом (SECRETS_KEY / JWT_SECRET) и не может быть прочитано');
+  }
+}
+
+/** true when the stored value can be read with the current key (plaintext always can) */
+export function canDecrypt(stored: string): boolean {
+  try {
+    decryptSecret(stored);
+    return true;
+  } catch {
+    return false;
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/security.ts" << '__COREGSM_EOF__'
+/**
+ * Security: session cookie + CSRF guard, response headers, per-IP limiters and login lockout, e-mail (SMTP settings,
+ * address verification, password reset) and the new-device notice.
+ *
+ * Trust proxy: index.ts sets `trust proxy` to 1 hop (the nginx container in front of the backend). req.ip and req.secure
+ * therefore come from the last X-Forwarded-For / X-Forwarded-Proto value written by that nginx. The backend port is
+ * not published by docker-compose; if it ever is, a client could spoof its address, so keep it internal.
+ */
+import crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { z } from 'zod';
+import type { Express, Request, RequestHandler, Response } from 'express';
+import { db, setSetting } from './db.js';
+import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
+import { logAccount, prefsOf, uaLabel } from './profile.js';
+
+// ---------- schema ----------
+try {
+  db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0');
+} catch {
+  /* column already exists */
+}
+db.exec(`
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+CREATE TABLE IF NOT EXISTS email_verifications (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id);
+CREATE TABLE IF NOT EXISTS login_fingerprints (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  fp TEXT NOT NULL,
+  first_seen INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY (user_id, fp)
+);
+`);
+setInterval(() => {
+  const now = Date.now();
+  db.prepare('DELETE FROM password_resets WHERE expires_at < ?').run(now - 24 * 3600_000);
+  db.prepare('DELETE FROM email_verifications WHERE expires_at < ?').run(now - 24 * 3600_000);
+}, 3600_000).unref();
+
+// ---------- session cookie and CSRF ----------
+export const SESSION_COOKIE = 'coregsm_session';
+/** lifetime of a session token (issueToken signs it for the same period) */
+export const SESSION_TTL_MS = 7 * 24 * 3600_000;
+
+export function readCookie(req: Request, name: string): string {
+  const raw = req.headers.cookie;
+  if (!raw) return '';
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(i + 1).trim());
+      } catch {
+        return '';
+      }
+    }
+  }
+  return '';
+}
+
+export function setSessionCookie(req: Request, res: Response, token: string, maxAgeMs = SESSION_TTL_MS): void {
+  res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure, maxAge: maxAgeMs });
+}
+
+export function clearSessionCookie(req: Request, res: Response): void {
+  res.clearCookie(SESSION_COOKIE, { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure });
+}
+
+/**
+ * A state-changing request that carries the session cookie but no Authorization header must prove it comes from our
+ * own page: a cross-site form or fetch cannot add the custom X-CoreGSM header (it would need a CORS preflight).
+ */
+export const csrfGuard: RequestHandler = (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  if (!req.headers.cookie || !readCookie(req, SESSION_COOKIE)) return next();
+  if (req.headers.authorization || req.headers['x-coregsm']) return next();
+  res.status(403).json({ error: 'Запрос отклонён: не хватает заголовка X-CoreGSM' });
+};
+
+/** helmet-like headers for everything the backend answers; HSTS only over https */
+export const securityHeaders: RequestHandler = (req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()');
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  // API answers are data (JSON, images): nothing may run or load from them
+  if (req.path.startsWith('/api/')) res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  next();
+};
+
+// ---------- limiters ----------
+/** `max` requests per `windowMs` for one address; answers 429 with Retry-After */
+export function windowLimiter(max: number, windowMs: number, message = 'Слишком много запросов. Попробуйте позже.'): RequestHandler {
+  const hits = new Map<string, { n: number; reset: number }>();
+  setInterval(() => {
+    for (const [k, v] of hits) if (v.reset < Date.now()) hits.delete(k);
+  }, 60_000).unref();
+  return (req, res, next) => {
+    const key = req.ip ?? 'x';
+    const now = Date.now();
+    const h = hits.get(key);
+    if (!h || h.reset <= now) hits.set(key, { n: 1, reset: now + windowMs });
+    else if (++h.n > max) {
+      const retryAfter = Math.max(1, Math.ceil((h.reset - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return void res.status(429).json({ error: message, retryAfter });
+    }
+    next();
+  };
+}
+
+// per-address lockout after repeated failed logins across different usernames (the per-account lockout is in index.ts)
+const IP_LOCK_AFTER = 6;
+const IP_LOCK_MIN_NAMES = 3;
+const ipFails = new Map<string, { n: number; names: Set<string>; until: number; last: number; level: number }>();
+setInterval(() => {
+  for (const [k, v] of ipFails) if (v.last < Date.now() - 3600_000 && v.until < Date.now()) ipFails.delete(k);
+}, 600_000).unref();
+
+/** seconds until this address may try again (0 = not locked) */
+export function ipLockRemaining(ip: string | undefined): number {
+  const f = ipFails.get(ip ?? 'x');
+  return f && f.until > Date.now() ? Math.ceil((f.until - Date.now()) / 1000) : 0;
+}
+
+export function ipLoginFailed(ip: string | undefined, username: string): void {
+  const key = ip ?? 'x';
+  const now = Date.now();
+  let f = ipFails.get(key);
+  if (!f || f.last < now - 30 * 60_000) f = { n: 0, names: new Set(), until: 0, last: now, level: f?.level ?? 0 };
+  f.n++;
+  f.last = now;
+  if (f.names.size < 50) f.names.add(username.toLowerCase());
+  if (f.n >= IP_LOCK_AFTER && f.names.size >= IP_LOCK_MIN_NAMES) {
+    // 1, 2, 4 ... up to 30 minutes
+    f.until = now + Math.min(30 * 60_000, 60_000 * 2 ** f.level);
+    f.level++;
+    f.n = 0;
+    f.names.clear();
+  }
+  ipFails.set(key, f);
+}
+
+// ---------- tokens ----------
+const newToken = () => crypto.randomBytes(32).toString('base64url');
+const hashToken = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+// ---------- new-device notice ----------
+/** "203.0.113" for IPv4 (the /24 network), the first 64 bits for IPv6 */
+function ipPrefix(ip: string): string {
+  const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(ip);
+  if (v4) return `${v4[1]}.${v4[2]}.${v4[3]}`;
+  return ip.split(':').filter(Boolean).slice(0, 4).join(':');
+}
+
+const emailOf = (userId: number) =>
+  db.prepare('SELECT username, email, email_verified FROM users WHERE id = ?').get(userId) as { username: string; email: string | null; email_verified: number } | undefined;
+
+/**
+ * Called after a successful sign-in. The first sign-in of an account only records the fingerprint (hash of browser/OS
+ * family and the /24 network); a later one from an unseen fingerprint writes a 'login_new_device' journal entry and,
+ * when the address is verified and SMTP works, sends a letter.
+ */
+export function noteLogin(req: Request, userId: number, brandName: string): void {
+  try {
+    const label = uaLabel(req.headers['user-agent']);
+    const ip = String(req.ip ?? '');
+    const fp = crypto.createHash('sha256').update(`${label}|${ipPrefix(ip)}`).digest('hex').slice(0, 32);
+    const now = Date.now();
+    const known = db.prepare('SELECT 1 FROM login_fingerprints WHERE user_id = ? AND fp = ?').get(userId, fp);
+    if (known) {
+      db.prepare('UPDATE login_fingerprints SET last_seen = ? WHERE user_id = ? AND fp = ?').run(now, userId, fp);
+      return;
+    }
+    const first = !db.prepare('SELECT 1 FROM login_fingerprints WHERE user_id = ? LIMIT 1').get(userId);
+    db.prepare('INSERT OR IGNORE INTO login_fingerprints (user_id, fp, first_seen, last_seen) VALUES (?, ?, ?, ?)').run(userId, fp, now, now);
+    if (first) return;
+    const detail = `${label} · ${ip}`.slice(0, 200);
+    db.prepare('INSERT INTO account_events (user_id, ts, kind, ip, ua, detail) VALUES (?, ?, ?, ?, ?, ?)').run(userId, now, 'login_new_device', ip.slice(0, 64), label, detail);
+    const u = emailOf(userId);
+    if (u?.email && u.email_verified && mailReady()) {
+      const en = prefsOf(userId).lang === 'en';
+      const body = layout(
+        brandName,
+        en
+          ? [`A new sign-in to your account "${u.username}" from a device we have not seen before.`, `Device: ${label}`, `Address: ${ip}`, 'If this was not you, change your password and end other sessions in the profile.']
+          : [`Новый вход в аккаунт «${u.username}» с устройства, которого мы раньше не видели.`, `Устройство: ${label}`, `Адрес: ${ip}`, 'Если это были не вы, смените пароль и завершите чужие сеансы в профиле.'],
+      );
+      void sendMail({ to: u.email, subject: en ? 'New sign-in to your account' : 'Новый вход в аккаунт', ...body }).catch((e) => console.error('new-device mail failed:', (e as Error).message));
+    }
+  } catch (e) {
+    console.error('noteLogin failed', (e as Error).message);
+  }
+}
+
+/** the newest new-device event of the last 24 h (for /api/me) */
+export function recentNewDevice(userId: number): { ts: number; label: string } | null {
+  const r = db
+    .prepare("SELECT ts, detail FROM account_events WHERE user_id = ? AND kind = 'login_new_device' AND ts > ? ORDER BY ts DESC LIMIT 1")
+    .get(userId, Date.now() - 24 * 3600_000) as { ts: number; detail: string } | undefined;
+  return r ? { ts: r.ts, label: r.detail } : null;
+}
+
+/** a changed address is not verified any more; letters for the old one stop working */
+export function emailChanged(userId: number): void {
+  db.prepare('UPDATE users SET email_verified = 0 WHERE id = ?').run(userId);
+  db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(userId);
+}
+
+// ---------- routes ----------
+export interface SecurityDeps {
+  app: Express;
+  admin: RequestHandler;
+  auth: RequestHandler;
+  userId: (req: Request) => number;
+  userFromToken: (token: string) => { id: number } | null;
+  /** trusted public address of the panel (never taken from a guest's Host header) */
+  publicBase: () => string | null;
+  /** address of the current request (used for letters to the signed-in user only) */
+  baseOf: (req: Request) => string;
+  brandName: () => string;
+}
+
+const FORGOT_TEXT = 'Если для этого аккаунта указана подтверждённая почта, мы отправили на неё письмо со ссылкой для сброса пароля.';
+
+export function registerSecurity(d: SecurityDeps): void {
+  const { app } = d;
+  const smtpLimiter = windowLimiter(10, 10 * 60_000);
+  const forgotLimiter = windowLimiter(5, 15 * 60_000, 'Слишком много запросов на сброс пароля. Попробуйте позже.');
+  const resetLimiter = windowLimiter(10, 15 * 60_000);
+  const verifyLimiter = windowLimiter(20, 15 * 60_000);
+  const sessionLimiter = windowLimiter(30, 60_000);
+
+  // ----- SMTP settings (administrator) -----
+  const smtpPayload = () => {
+    const c = smtpConfig();
+    return { host: c.host, port: c.port, secure: c.secure, user: c.user, from: c.from, passwordSet: !!c.password, ready: mailReady(), publicBase: d.publicBase() };
+  };
+  app.get('/api/settings/smtp', d.admin, (_req, res) => {
+    res.json(smtpPayload());
+  });
+  const smtpSchema = z.object({
+    host: z.string().trim().max(255).regex(/^[a-z0-9.:-]*$/i, 'Адрес сервера: только имя хоста или IP').optional(),
+    port: z.number().int().min(1).max(65535).optional(),
+    secure: z.boolean().optional(),
+    user: z.string().trim().max(200).regex(/^[^\r\n]*$/).optional(),
+    // undefined = keep, '' = clear
+    password: z.string().max(300).regex(/^[^\r\n]*$/).optional(),
+    from: z
+      .string()
+      .trim()
+      .max(200)
+      .regex(/^[^\r\n<>]*(<[^\s@<>]+@[^\s@<>]+>)?$/, 'Отправитель: адрес или «Имя <адрес>»')
+      .optional(),
+  });
+  app.put('/api/settings/smtp', d.admin, (req, res) => {
+    const b = smtpSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
+    const v = b.data;
+    if (v.host !== undefined) setSetting('smtp_host', v.host);
+    if (v.port !== undefined) setSetting('smtp_port', String(v.port));
+    if (v.secure !== undefined) setSetting('smtp_secure', v.secure ? '1' : '0');
+    if (v.user !== undefined) setSetting('smtp_user', v.user);
+    if (v.password !== undefined) setSetting('smtp_password', v.password);
+    if (v.from !== undefined) setSetting('smtp_from', v.from);
+    try {
+      db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(Date.now(), (req as Request & { user?: { username: string } }).user?.username ?? '—', 'Изменены настройки почты (SMTP)', '');
+    } catch {
+      /* the journal is best effort */
+    }
+    res.json(smtpPayload());
+  });
+  app.post('/api/settings/smtp/test', d.admin, smtpLimiter, async (req, res) => {
+    const b = z.object({ to: z.string().trim().max(254) }).safeParse(req.body);
+    if (!b.success || !EMAIL_RE.test(b.data.to)) return res.status(400).json({ error: 'Укажите адрес, на который отправить пробное письмо' });
+    if (!mailReady()) return res.status(400).json({ error: 'Сначала укажите SMTP-сервер и сохраните настройки' });
+    const body = layout(d.brandName(), ['Это пробное письмо: почта панели настроена правильно.']);
+    try {
+      await sendMail({ to: b.data.to, subject: `${d.brandName()}: пробное письмо`, ...body });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(502).json({ error: (e as Error).message });
+    }
+  });
+
+  // ----- e-mail verification -----
+  const lastVerifyRequest = new Map<number, number>();
+  app.post('/api/me/email/verify-request', d.auth, async (req, res) => {
+    const id = d.userId(req);
+    const u = emailOf(id);
+    if (!u?.email) return res.status(400).json({ error: 'Сначала укажите адрес электронной почты' });
+    if (u.email_verified) return res.json({ ok: true, alreadyVerified: true });
+    if (!mailReady()) return res.status(503).json({ error: 'Отправка почты не настроена администратором' });
+    const wait = 60_000 - (Date.now() - (lastVerifyRequest.get(id) ?? 0));
+    if (wait > 0) {
+      res.setHeader('Retry-After', String(Math.ceil(wait / 1000)));
+      return res.status(429).json({ error: 'Письмо уже отправлено. Подождите минуту перед повторной отправкой.', retryAfter: Math.ceil(wait / 1000) });
+    }
+    lastVerifyRequest.set(id, Date.now());
+    const token = newToken();
+    db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(id);
+    db.prepare('INSERT INTO email_verifications (token_hash, user_id, email, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), id, u.email.toLowerCase(), Date.now() + 24 * 3600_000);
+    const en = prefsOf(id).lang === 'en';
+    const url = `${d.publicBase() ?? d.baseOf(req)}/#/verify/${token}`;
+    const body = layout(
+      d.brandName(),
+      en ? [`Confirm the e-mail address of your account "${u.username}".`, 'The link works for 24 hours.'] : [`Подтвердите адрес электронной почты аккаунта «${u.username}».`, 'Ссылка действует 24 часа.'],
+      { label: en ? 'Confirm address' : 'Подтвердить адрес', url },
+    );
+    try {
+      await sendMail({ to: u.email, subject: en ? 'Confirm your e-mail' : 'Подтверждение почты', ...body });
+      res.json({ ok: true });
+    } catch (e) {
+      lastVerifyRequest.delete(id);
+      res.status(502).json({ error: (e as Error).message });
+    }
+  });
+
+  app.post('/api/auth/verify-email', verifyLimiter, (req, res) => {
+    const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела' });
+    const b = z.object({ token: z.string().min(10).max(200) }).safeParse(req.body);
+    if (!b.success) return bad();
+    const row = db.prepare('SELECT * FROM email_verifications WHERE token_hash = ?').get(hashToken(b.data.token)) as
+      | { token_hash: string; user_id: number; email: string; expires_at: number; used_at: number | null }
+      | undefined;
+    if (!row || row.used_at || row.expires_at < Date.now()) return bad();
+    const u = emailOf(row.user_id);
+    // the address was changed after the letter was sent
+    if (!u?.email || u.email.toLowerCase() !== row.email) return bad();
+    db.transaction(() => {
+      db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(row.user_id);
+      db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(row.user_id);
+    })();
+    logAccount(req, row.user_id, 'email_changed', 'адрес подтверждён');
+    res.json({ ok: true, email: u.email });
+  });
+
+  // ----- password reset -----
+  const perAccount = new Map<number, number[]>();
+  app.post('/api/auth/forgot', forgotLimiter, (req, res) => {
+    const b = z.object({ login: z.string().trim().min(1).max(254) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Введите логин или адрес почты' });
+    // the answer is the same whatever happens below: no account enumeration
+    res.json({ ok: true, message: FORGOT_TEXT });
+    const login = b.data.login.toLowerCase();
+    setImmediate(() => {
+      void (async () => {
+        try {
+          const u = db
+            .prepare("SELECT id, username, email, email_verified FROM users WHERE status = 'active' AND (ulower(username) = ? OR (email IS NOT NULL AND lower(email) = ?))")
+            .get(login, login) as { id: number; username: string; email: string | null; email_verified: number } | undefined;
+          if (!u || !u.email || !u.email_verified || !mailReady()) return;
+          const base = d.publicBase();
+          if (!base) {
+            console.error('password reset letter not sent: the public address of the panel is unknown (set PUBLIC_URL or DOMAIN)');
+            return;
+          }
+          // at most 3 letters per account per hour
+          const now = Date.now();
+          const recent = (perAccount.get(u.id) ?? []).filter((t) => t > now - 3600_000);
+          if (recent.length >= 3) return;
+          perAccount.set(u.id, [...recent, now]);
+          const token = newToken();
+          db.prepare('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(now, u.id);
+          db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(hashToken(token), u.id, now + 30 * 60_000);
+          const en = prefsOf(u.id).lang === 'en';
+          const body = layout(
+            d.brandName(),
+            en
+              ? [`A password reset was requested for the account "${u.username}".`, 'The link works for 30 minutes and only once. If this was not you, just ignore this letter.']
+              : [`Запрошен сброс пароля для аккаунта «${u.username}».`, 'Ссылка действует 30 минут и только один раз. Если это были не вы, просто проигнорируйте письмо.'],
+            { label: en ? 'Set a new password' : 'Задать новый пароль', url: `${base}/#/reset/${token}` },
+          );
+          await sendMail({ to: u.email, subject: en ? 'Password reset' : 'Сброс пароля', ...body });
+        } catch (e) {
+          console.error('password reset letter failed:', (e as Error).message);
+        }
+      })();
+    });
+  });
+
+  app.post('/api/auth/reset', resetLimiter, async (req, res) => {
+    const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела. Запросите сброс ещё раз.' });
+    const b = z.object({ token: z.string().min(10).max(200), password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
+    const row = db.prepare('SELECT * FROM password_resets WHERE token_hash = ?').get(hashToken(b.data.token)) as
+      | { token_hash: string; user_id: number; expires_at: number; used_at: number | null }
+      | undefined;
+    if (!row || row.used_at || row.expires_at < Date.now()) return bad();
+    const hash = await bcrypt.hash(b.data.password, 12);
+    // claim the token first: two parallel requests cannot both use it
+    const claim = db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?').run(Date.now(), row.token_hash, Date.now());
+    if (!claim.changes) return bad();
+    db.transaction(() => {
+      db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(hash, row.user_id);
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.user_id);
+      db.prepare('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(Date.now(), row.user_id);
+    })();
+    logAccount(req, row.user_id, 'password_changed', 'сброс по ссылке из письма');
+    const u = emailOf(row.user_id);
+    if (u?.email && u.email_verified && mailReady()) {
+      const en = prefsOf(row.user_id).lang === 'en';
+      const body = layout(d.brandName(), en ? [`The password of the account "${u.username}" was changed. All sessions were ended.`] : [`Пароль аккаунта «${u.username}» изменён. Все сеансы завершены.`]);
+      void sendMail({ to: u.email, subject: en ? 'Password changed' : 'Пароль изменён', ...body }).catch(() => undefined);
+    }
+    res.json({ ok: true });
+  });
+
+  // ----- cookie for a client that signed in the old way (Bearer token only) -----
+  app.post('/api/auth/session', sessionLimiter, (req, res) => {
+    const h = req.headers.authorization ?? '';
+    const token = h.startsWith('Bearer ') ? h.slice(7) : '';
+    const u = token ? d.userFromToken(token) : null;
+    if (!u) return res.status(401).json({ error: 'Требуется вход' });
+    const exp = (jwt.decode(token) as { exp?: number } | null)?.exp;
+    const left = exp ? exp * 1000 - Date.now() : SESSION_TTL_MS;
+    setSessionCookie(req, res, token, Math.max(60_000, Math.min(SESSION_TTL_MS, left)));
+    res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/subscriptions.ts" << '__COREGSM_EOF__'
+/**
+ * Server subscriptions: a signed-in user asks to be told when
+ *   free_slot   a full server (players >= maxPlayers) gets a free slot (once; re-armed when it is full again)
+ *   back_online a server that was down is answering again
+ *   went_down   a server is confirmed down (two failed polls in a row)
+ *
+ * The notification lands in the in-panel inbox (user_notifications) and, when the account has a linked Discord
+ * id and the bot is online, as a Discord DM through the delivery queue (deliveries.ts, kind 'dm').
+ * At most one notification per (user, server, kind) per 10 minutes.
+ *
+ * gsm.ts calls onPollResult() after every poll; the transition logic itself is pure (nextTrack).
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, EFFECTIVE_NAME } from './db.js';
+import { enqueueDelivery } from './deliveries.js';
+
+export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
+export type SubKind = (typeof SUB_KINDS)[number];
+
+/** minimum gap between two notifications of the same (user, server, kind) */
+export const NOTIFY_GAP_MS = 10 * 60_000;
+/** failed polls in a row before a server counts as down */
+export const CONFIRM_FAILS = 2;
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS server_subscriptions (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_notified_at INTEGER,
+  PRIMARY KEY (user_id, server_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_subs_server ON server_subscriptions(server_id, kind);
+CREATE TABLE IF NOT EXISTS user_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  server_id INTEGER,
+  text TEXT NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_notif_user ON user_notifications(user_id, read, ts);
+`);
+
+// ---------- transition logic (pure) ----------
+
+/** what the previous polls of a server added up to */
+export interface Track {
+  /** the last poll found the server up */
+  online: boolean;
+  /** the last successful poll found it full */
+  full: boolean;
+  /** failed polls in a row */
+  fails: number;
+  /** down is confirmed (fails >= CONFIRM_FAILS) */
+  down: boolean;
+}
+export interface Observation {
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+}
+
+export function nextTrack(prev: Track | null, obs: Observation, confirmFails = CONFIRM_FAILS): { next: Track; events: SubKind[] } {
+  const events: SubKind[] = [];
+  if (obs.online) {
+    const full = obs.maxPlayers > 0 && obs.players >= obs.maxPlayers;
+    if (prev?.down) events.push('back_online');
+    else if (prev?.full && !full) events.push('free_slot');
+    return { next: { online: true, full, fails: 0, down: false }, events };
+  }
+  const fails = (prev?.fails ?? 0) + 1;
+  const down = fails >= confirmFails;
+  if (down && !prev?.down) events.push('went_down');
+  // "full" is kept through failed polls: a server that crashed full and came back with room is a back_online
+  return { next: { online: false, full: prev?.full ?? false, fails, down }, events };
+}
+
+/** may a notification be sent now, given when the previous one went out? */
+export const mayNotify = (lastNotifiedAt: number | null, now: number): boolean => lastNotifiedAt === null || now - lastNotifiedAt >= NOTIFY_GAP_MS;
+
+export function notificationText(kind: SubKind, name: string, address: string, players: number, maxPlayers: number): string {
+  const where = address ? ` Адрес: ${address}` : '';
+  if (kind === 'free_slot') return `🟢 На сервере «${name}» освободилось место (${players}/${maxPlayers}).${where}`;
+  if (kind === 'back_online') return `✅ Сервер «${name}» снова в сети.${where}`;
+  return `🔴 Сервер «${name}» недоступен.${where}`;
+}
+
+// ---------- delivery ----------
+
+const tracks = new Map<number, Track>();
+let canDm: () => boolean = () => true;
+
+/** Notifies the subscribers of one event; returns how many users were notified. */
+export function notifySubscribers(serverId: number, kind: SubKind, obs: Observation, now = Date.now()): number {
+  const subs = db
+    .prepare(
+      `SELECT ss.user_id, ss.last_notified_at, u.discord_id FROM server_subscriptions ss
+         JOIN users u ON u.id = ss.user_id AND u.status = 'active'
+       WHERE ss.server_id = ? AND ss.kind = ?`,
+    )
+    .all(serverId, kind) as { user_id: number; last_notified_at: number | null; discord_id: string | null }[];
+  if (!subs.length) return 0;
+  const info = db
+    .prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`)
+    .get(serverId) as { n: string; display_address: string; host: string; port: number } | undefined;
+  if (!info) return 0;
+  const address = info.display_address || `${info.host}:${info.port}`;
+  const text = notificationText(kind, info.n, address, obs.players, obs.maxPlayers);
+  const insert = db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, ?, ?)');
+  const touch = db.prepare('UPDATE server_subscriptions SET last_notified_at = ? WHERE user_id = ? AND server_id = ? AND kind = ?');
+  let n = 0;
+  for (const s of subs) {
+    if (!mayNotify(s.last_notified_at, now)) continue;
+    insert.run(s.user_id, now, kind, serverId, text);
+    touch.run(now, s.user_id, serverId, kind);
+    if (s.discord_id && canDm()) enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+    n++;
+  }
+  if (n) db.prepare('DELETE FROM user_notifications WHERE ts < ?').run(now - 60 * 86400_000);
+  return n;
+}
+
+/** Called by the poller after every poll result. Never throws into the poller's bookkeeping. */
+export function onPollResult(serverId: number, obs: Observation): void {
+  const { next, events } = nextTrack(tracks.get(serverId) ?? null, obs);
+  tracks.set(serverId, next);
+  for (const kind of events) notifySubscribers(serverId, kind, obs);
+}
+
+export const unreadNotifications = (userId: number): number =>
+  (db.prepare('SELECT COUNT(*) AS n FROM user_notifications WHERE user_id = ? AND read = 0').get(userId) as { n: number }).n;
+
+// ---------- API ----------
+
+export function registerSubscriptions(deps: { app: Express; auth: RequestHandler; userId: (req: import('express').Request) => number; canDm?: () => boolean }): void {
+  const { app, auth, userId } = deps;
+  if (deps.canDm) canDm = deps.canDm;
+
+  const kindsOf = (uid: number, serverId: number): SubKind[] =>
+    (db.prepare('SELECT kind FROM server_subscriptions WHERE user_id = ? AND server_id = ?').all(uid, serverId) as { kind: SubKind }[])
+      .map((r) => r.kind)
+      .filter((k) => (SUB_KINDS as readonly string[]).includes(k))
+      .sort((a, b) => SUB_KINDS.indexOf(a) - SUB_KINDS.indexOf(b));
+
+  app.get('/api/me/subscriptions', auth, (req, res) => {
+    const rows = db.prepare('SELECT server_id, kind FROM server_subscriptions WHERE user_id = ? ORDER BY server_id').all(userId(req)) as { server_id: number; kind: SubKind }[];
+    const by = new Map<number, SubKind[]>();
+    for (const r of rows) by.set(r.server_id, [...(by.get(r.server_id) ?? []), r.kind]);
+    res.json([...by].map(([serverId, kinds]) => ({ serverId, kinds })));
+  });
+
+  app.put('/api/servers/:id/subscription', auth, (req, res) => {
+    const b = z.object({ kinds: z.array(z.enum(SUB_KINDS)).max(SUB_KINDS.length) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неизвестный тип уведомления' });
+    const sid = Number(req.params.id);
+    if (!Number.isInteger(sid) || !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(sid)) return res.status(404).json({ error: 'Сервер не найден' });
+    const uid = userId(req);
+    const want = new Set(b.data.kinds);
+    const now = Date.now();
+    db.transaction(() => {
+      for (const k of SUB_KINDS) {
+        if (want.has(k)) db.prepare('INSERT OR IGNORE INTO server_subscriptions (user_id, server_id, kind, created_at) VALUES (?, ?, ?, ?)').run(uid, sid, k, now);
+        else db.prepare('DELETE FROM server_subscriptions WHERE user_id = ? AND server_id = ? AND kind = ?').run(uid, sid, k);
+      }
+    })();
+    res.json({ serverId: sid, kinds: kindsOf(uid, sid) });
+  });
+
+  app.get('/api/me/notifications', auth, (req, res) => {
+    const uid = userId(req);
+    const unreadOnly = req.query.unread === '1' || req.query.unread === 'true';
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const rows = db
+      .prepare(`SELECT id, ts, kind, server_id, text, read FROM user_notifications WHERE user_id = ? ${unreadOnly ? 'AND read = 0' : ''} ORDER BY ts DESC, id DESC LIMIT ?`)
+      .all(uid, limit) as { id: number; ts: number; kind: string; server_id: number | null; text: string; read: number }[];
+    res.json({
+      unread: unreadNotifications(uid),
+      items: rows.map((r) => ({ id: r.id, ts: r.ts, kind: r.kind, serverId: r.server_id, text: r.text, read: !!r.read })),
+    });
+  });
+
+  app.post('/api/me/notifications/read', auth, (req, res) => {
+    const b = z
+      .object({ ids: z.array(z.number().int()).max(500).optional(), all: z.boolean().optional() })
+      .safeParse(req.body);
+    if (!b.success || (!b.data.all && !b.data.ids?.length)) return res.status(400).json({ error: 'Укажите ids или all' });
+    const uid = userId(req);
+    if (b.data.all) db.prepare('UPDATE user_notifications SET read = 1 WHERE user_id = ? AND read = 0').run(uid);
+    else {
+      const mark = db.prepare('UPDATE user_notifications SET read = 1 WHERE user_id = ? AND id = ?');
+      db.transaction(() => b.data.ids!.forEach((id) => mark.run(uid, id)))();
+    }
+    res.json({ ok: true, unread: unreadNotifications(uid) });
+  });
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend"
   cat > "$APP_DIR/core-backend/tsconfig.json" << '__COREGSM_EOF__'
 {
@@ -6305,6 +8544,30 @@ function humanDiscordError(e: unknown): string {
     return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
   }
   return m.slice(0, 200);
+}
+
+/** Discord 429: how long to wait (ms), or 0 when the error is not a rate limit. */
+function retryAfterOf(e: unknown): number {
+  const err = e as { status?: number; retryAfter?: number; timeToReset?: number; rawError?: { retry_after?: number }; code?: number | string };
+  if (err?.status !== 429 && err?.code !== 429 && err?.timeToReset === undefined) return 0;
+  const sec = err.rawError?.retry_after;
+  const ms = err.retryAfter ?? err.timeToReset ?? (typeof sec === 'number' ? sec * 1000 : 0);
+  return Math.max(1000, Math.round(ms || 5000));
+}
+
+/** Short reason stored in the delivery log; `final` = retrying cannot help. */
+function deliveryFailure(e: unknown): { text: string; final: boolean; retryAfterMs?: number } {
+  const code = (e as { code?: number | string })?.code;
+  const wait = retryAfterOf(e);
+  if (wait) return { text: 'превышен лимит запросов Discord', final: false, retryAfterMs: wait };
+  switch (code) {
+    case 50007: return { text: 'пользователь закрыл ЛС', final: true };
+    case 10013: return { text: 'пользователь не найден', final: true };
+    case 50001:
+    case 50013: return { text: 'нет прав', final: false };
+    case 10003: return { text: 'канал не найден', final: false };
+  }
+  return { text: humanDiscordError(e).slice(0, 200), final: false };
 }
 
 // Calls to the backend inside the Docker network never use the proxy.
@@ -6631,7 +8894,7 @@ async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[]
   };
 }
 
-async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null }) {
+async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null; retryAfterMs?: number }) {
   try {
     await backend(`/internal/news/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
   } catch (e) {
@@ -6674,38 +8937,57 @@ async function processNews(): Promise<void> {
       }
     } catch (e) {
       log(`news ${it.id} failed:`, (e as Error).message);
-      await reportNews(it.id, { status: 'error', error: humanDiscordError(e) });
+      const wait = retryAfterOf(e);
+      await reportNews(it.id, { status: 'error', error: humanDiscordError(e), ...(wait ? { retryAfterMs: wait } : {}) });
+      if (wait) break; // Discord asked us to slow down: the rest of the batch waits for the next tick
     }
   }
 }
 
-/** alerts about game servers going down / coming back (queued by the panel) */
-async function processAlerts(): Promise<void> {
+/** Alerts (channel messages) and DMs from the panel's delivery queue; every result is reported per delivery. */
+interface DeliveryItem {
+  id: number;
+  kind: 'alert' | 'dm' | 'status';
+  target: string;
+  payload: { content?: string; mention?: 'none' | 'here' | 'everyone'; embed?: ConstructorParameters<typeof EmbedBuilder>[0] };
+}
+async function processDeliveries(): Promise<void> {
   const c = client;
   if (!c || state !== 'online') return;
-  const res = await backend('/internal/alerts/pending');
-  if (!res.ok) throw new Error(`alerts HTTP ${res.status}`);
-  const items = (await res.json()) as { id: number; channelId: string; payload: { content: string; mention: 'none' | 'here' | 'everyone'; embed: ConstructorParameters<typeof EmbedBuilder>[0] } }[];
+  const res = await backend('/internal/deliveries/pending?kinds=alert,dm');
+  if (!res.ok) throw new Error(`deliveries HTTP ${res.status}`);
+  const items = (await res.json()) as DeliveryItem[];
   for (const it of items) {
-    let body: { status: 'sent' | 'error'; error?: string } = { status: 'sent' };
+    let body: { ok: boolean; error?: string; final?: boolean; retryAfterMs?: number } = { ok: true };
+    let limited = false;
     try {
-      const channel = await c.channels.fetch(it.channelId);
-      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
-      await channel.send({
-        content: it.payload.content || undefined,
-        embeds: [new EmbedBuilder(it.payload.embed)],
-        allowedMentions: { parse: (it.payload.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
-      });
-      log(`alert ${it.id}: sent`);
+      if (it.kind === 'dm') {
+        const user = await c.users.fetch(it.target);
+        await user.send({ content: (it.payload.content ?? '').slice(0, 2000), allowedMentions: { parse: [] } });
+      } else {
+        const channel = await c.channels.fetch(it.target);
+        if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
+        await channel.send({
+          content: it.payload.content || undefined,
+          embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
+          allowedMentions: { parse: ((it.payload.mention ?? 'none') === 'none' ? [] : ['everyone']) as 'everyone'[] },
+        });
+      }
+      log(`delivery ${it.id} (${it.kind}): sent`);
     } catch (e) {
-      log(`alert ${it.id} failed:`, (e as Error).message);
-      body = { status: 'error', error: humanDiscordError(e) };
+      const f = deliveryFailure(e);
+      log(`delivery ${it.id} (${it.kind}) failed:`, (e as Error).message);
+      body = { ok: false, error: f.text, final: f.final, ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}) };
+      limited = !!f.retryAfterMs;
     }
     try {
-      await backend(`/internal/alerts/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      await backend(`/internal/deliveries/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
     } catch (e) {
-      log('alert report failed', e);
+      log('delivery report failed', e);
     }
+    // 429: stop for this tick, the remaining deliveries stay queued; a short pause between sends keeps us under the limits
+    if (limited) break;
+    await new Promise((r) => setTimeout(r, 300));
   }
 }
 
@@ -6739,7 +9021,7 @@ async function tick(): Promise<void> {
     await publishGuilds();
     await updateBindings();
     await processNews();
-    await processAlerts();
+    await processDeliveries();
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {
@@ -6907,13 +9189,67 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/nginx.conf" << '__COREGSM_EOF__'
+# Static panel (the edge nginx proxies "/" here and "/api" to the backend).
+#
+# Security headers. nginx does not inherit add_header into a location that has its own add_header, so the set is
+# repeated in every location below. Keep the blocks identical.
+#
+# Content-Security-Policy notes:
+#  - script-src 'self' plus the hash of the one inline script in index.html (applies the saved theme before first paint).
+#    If that script is edited, recompute the hash:  openssl dgst -sha256 -binary | base64  over the text between <script> tags.
+#  - style-src 'unsafe-inline': React sets style attributes.
+#  - img-src: own images, data:/blob: (previews) and Discord avatars.
+#  - connect-src 'self': the panel only talks to its own /api. worker-src 'self': /sw.js. manifest-src 'self': /api/manifest.json.
+#  - frame-ancestors 'none' also forbids embedding the panel in a frame (X-Frame-Options DENY for old browsers).
+# HSTS is sent by the https edge (and by the backend for https requests), never from this plain-http container.
+
+gzip on;
+gzip_vary on;
+gzip_min_length 1024;
+gzip_comp_level 5;
+gzip_types text/plain text/css text/xml application/javascript text/javascript application/json application/manifest+json image/svg+xml;
+
 server {
   listen 80;
   server_name _;
   root /usr/share/nginx/html;
   index index.html;
-  location /assets/ { expires 30d; add_header Cache-Control "public, immutable"; }
-  location / { try_files $uri /index.html; add_header Cache-Control "no-cache"; }
+
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+  add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+
+  location /assets/ {
+    expires 30d;
+    add_header Cache-Control "public, immutable";
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+  }
+
+  # the service worker must be revalidated on every start so that updates reach people
+  location = /sw.js {
+    add_header Cache-Control "no-cache";
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+  }
+
+  location / {
+    try_files $uri /index.html;
+    add_header Cache-Control "no-cache";
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
@@ -18349,6 +20685,9 @@ import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Setup from './pages/Setup';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import ServersPage from './pages/Servers';
 import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
@@ -18595,7 +20934,7 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
   const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
@@ -18658,6 +20997,20 @@ export default function App() {
     return (
       <AuthContext.Provider value={ctx}>
         <Setup onDone={() => void load()} />
+        <Toaster />
+        <ConfirmHost />
+      </AuthContext.Provider>
+    );
+  }
+
+  // e-mail flows (forgot / reset / verify): open to everybody, also while the panel is closed or someone is signed in
+  if (rawPage === 'forgot' || rawPage === 'reset' || rawPage === 'verify') {
+    const token = sub.split('/')[0];
+    return (
+      <AuthContext.Provider value={ctx}>
+        <AuthShell>
+          {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+        </AuthShell>
         <Toaster />
         <ConfirmHost />
       </AuthContext.Provider>
@@ -18951,14 +21304,82 @@ export function useAutoAccent(active: boolean, route: { page: string; sub: strin
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/api.ts" << '__COREGSM_EOF__'
-const KEY = 'coregsm_token';
+/**
+ * Session handling. The session lives in an HttpOnly cookie (coregsm_session) that the server sets on sign-in; the page
+ * never sees the token, so it cannot be stolen by a script. What is kept locally is only a hint (below) so that guests
+ * do not probe /api/me on every start.
+ *
+ * getToken() is still used by older code that builds `Authorization: Bearer ...` itself: it returns the token held in
+ * memory (legacy migration / a fresh sign-in), or a harmless marker while the cookie session is believed to be active.
+ * The server ignores a Bearer value that is not a valid token and falls back to the cookie.
+ */
+const LEGACY_KEY = 'coregsm_token';
+const HINT_KEY = 'coregsm_signed';
+const MARKER = 'cookie-session';
+let memToken = '';
 
-export const getToken = () => {
-  try { return localStorage.getItem(KEY) ?? ''; } catch { return ''; }
+const hintOff = () => {
+  try { return localStorage.getItem(HINT_KEY) === '0'; } catch { return false; }
 };
+const writeHint = (on: boolean) => {
+  try { localStorage.setItem(HINT_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+};
+
+export const getToken = (): string => memToken || (hintOff() ? '' : MARKER);
+
+/** a real token from a sign-in response or the Discord redirect; '' = signed out */
 export const setToken = (t: string) => {
-  try { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); } catch { /* ignore */ }
+  if (!t) {
+    memToken = '';
+    writeHint(false);
+    try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
+    return;
+  }
+  memToken = t;
+  writeHint(true);
+  // the login responses already set the cookie; the Discord redirect and old clients get it here (idempotent)
+  void fetch('/api/auth/session', { method: 'POST', headers: { Authorization: `Bearer ${t}` } })
+    .then((r) => { if (r.ok) memToken = ''; })
+    .catch(() => undefined);
 };
+
+// every request to our API proves it comes from this page (the server's CSRF guard for cookie sessions)
+if (typeof window !== 'undefined' && !(window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch) {
+  (window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch = true;
+  const native = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const u = new URL(url, window.location.href);
+      if (u.origin === window.location.origin && u.pathname.startsWith('/api/')) {
+        const headers = new Headers(init?.headers ?? (typeof input === 'object' && 'headers' in input ? input.headers : undefined));
+        headers.set('X-CoreGSM', '1');
+        return native(input, { ...init, headers, credentials: 'same-origin' });
+      }
+    } catch { /* fall through to the plain call */ }
+    return native(input, init);
+  };
+}
+
+// a token left by an older version: use it once to get the cookie, then forget it
+try {
+  const old = localStorage.getItem(LEGACY_KEY);
+  if (old) {
+    memToken = old;
+    void fetch('/api/auth/session', { method: 'POST', headers: { Authorization: `Bearer ${old}` } })
+      .then((r) => {
+        if (r.ok) {
+          memToken = '';
+          writeHint(true);
+          try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
+        } else if (r.status === 401) {
+          memToken = '';
+          try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
+        }
+      })
+      .catch(() => undefined);
+  }
+} catch { /* storage blocked */ }
 
 export interface Server {
   id: number;
@@ -19037,7 +21458,8 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      // only a real in-memory token (legacy migration); the cookie session needs no header
+      ...(memToken ? { Authorization: `Bearer ${memToken}` } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -19058,6 +21480,20 @@ export interface SettingsInfo {
   discordSecretSet?: boolean;
   discordClientId?: string | null;
   discordRedirect?: string;
+}
+
+/** SMTP settings (administrator); the password is never returned */
+export interface SmtpInfo {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  from: string;
+  passwordSet: boolean;
+  /** letters can be sent */
+  ready: boolean;
+  /** trusted address used in letter links; null = unknown (reset letters are not sent) */
+  publicBase: string | null;
 }
 
 export interface BotStatus {
@@ -19306,6 +21742,10 @@ export interface Me {
   discordName: string | null;
   hasPassword: boolean;
   email?: string | null;
+  /** the address was confirmed by a link from a letter */
+  emailVerified?: boolean;
+  /** a sign-in from an unseen device within the last 24 h */
+  newDevice?: { ts: number; label: string } | null;
   /** language and regional settings (absent on older servers) */
   prefs?: Prefs;
   /** "/api/..." url of the uploaded banner, null when there is none */
@@ -19446,6 +21886,91 @@ export interface PublicNews {
   title: string;
   payload: NewsPayload;
   sentAt: number | null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/appearance.ts" << '__COREGSM_EOF__'
+import { useSyncExternalStore } from 'react';
+
+/**
+ * Accessibility appearance options, kept in this browser only (localStorage) and applied to <html> before the first paint:
+ *   reduceMotion  -> data-motion="reduce"   (CSS switches animations and transitions off; without it the OS setting rules)
+ *   largeText     -> data-text="large"      (root font scale 112.5 %)
+ *   highContrast  -> data-contrast="high"   (stronger ink and borders)
+ */
+export interface Appearance {
+  reduceMotion: boolean;
+  largeText: boolean;
+  highContrast: boolean;
+}
+
+export const APPEARANCE_KEY = 'coregsm_appearance';
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false };
+
+/** anything (a stored string, a broken value) -> a complete Appearance */
+export function normalizeAppearance(raw: unknown): Appearance {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true };
+}
+
+function read(): Appearance {
+  try {
+    const s = localStorage.getItem(APPEARANCE_KEY);
+    return s ? normalizeAppearance(JSON.parse(s)) : DEFAULT_APPEARANCE;
+  } catch {
+    return DEFAULT_APPEARANCE;
+  }
+}
+
+/** writes the three attributes: an option that is off removes its attribute, so the CSS defaults apply */
+export function applyAppearance(a: Appearance, root: HTMLElement = document.documentElement) {
+  const set = (name: string, value: string | null) => {
+    if (value === null) root.removeAttribute(name);
+    else root.setAttribute(name, value);
+  };
+  set('data-motion', a.reduceMotion ? 'reduce' : null);
+  set('data-text', a.largeText ? 'large' : null);
+  set('data-contrast', a.highContrast ? 'high' : null);
+}
+
+let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
+const listeners = new Set<() => void>();
+
+export const getAppearance = () => current;
+
+export function setAppearance(patch: Partial<Appearance>) {
+  const next = normalizeAppearance({ ...current, ...patch });
+  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast) return;
+  current = next;
+  try {
+    localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
+  } catch {
+    /* private mode: applied for this visit only */
+  }
+  applyAppearance(next);
+  listeners.forEach((l) => l());
+}
+
+/** call once before React renders: paints the saved options and follows changes made in another tab */
+export function initAppearance() {
+  current = read();
+  applyAppearance(current);
+  window.addEventListener('storage', (e) => {
+    if (e.key !== APPEARANCE_KEY) return;
+    current = read();
+    applyAppearance(current);
+    listeners.forEach((l) => l());
+  });
+}
+
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => { listeners.delete(l); };
+};
+
+export function useAppearance(): [Appearance, (patch: Partial<Appearance>) => void] {
+  const a = useSyncExternalStore(subscribe, getAppearance, getAppearance);
+  return [a, setAppearance];
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -19721,6 +22246,26 @@ export function AccentPicker() {
         ))}
       </div>
       <p className="mt-2 text-sm font-semibold text-mute">{ACCENT_MODES.find((o) => o.id === mode)?.hint}. Запоминается в этом браузере.</p>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AuthFlow.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+import { t } from '../i18n';
+import { AuthBrand } from '../ui';
+
+/** the card of the e-mail flows (forgot / reset / verify): brand, a title and a way back to sign in */
+export default function AuthFlow({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+  return (
+    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card p-6 sm:p-7">
+      <AuthBrand subtitle={subtitle} />
+      <h1 className="mb-4 text-center text-xl font-black">{title}</h1>
+      <div className="space-y-4">{children}</div>
+      <p className="mt-5 text-center text-sm font-bold">
+        <a href="#/login" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.back')}</a>
+      </p>
     </div>
   );
 }
@@ -20192,6 +22737,202 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DiscordWizard.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+import type { Binding, BotStatus, DiscordGuild } from '../api';
+import { IconCheck, IconRefresh } from '../icons';
+
+export type WizardState = 'done' | 'current' | 'blocked';
+
+export interface WizardInput {
+  tokenSet: boolean;
+  bot: BotStatus | null;
+  guilds: DiscordGuild[];
+  bindings: Binding[];
+  serverCount: number;
+}
+
+export interface WizardStep {
+  id: 'token' | 'bot' | 'guild' | 'channel' | 'message';
+  title: string;
+  state: WizardState;
+  /** what to do now (or what was achieved, for finished steps) */
+  text: string;
+  /** a problem found at this step (permissions, bot error) */
+  problem?: string;
+}
+
+/** The five steps of connecting the bot, computed from /settings, /bot/status, /discord/channels and /bindings. */
+export function computeWizard(i: WizardInput): { steps: WizardStep[]; complete: boolean; current: number } {
+  const botOnline = i.bot?.state === 'online';
+  const guildCount = typeof i.bot?.guildCount === 'number' ? i.bot.guildCount : i.guilds.length;
+  const channels = i.guilds.flatMap((g) => g.channels);
+  const bound = i.bindings.length > 0;
+  const missing = Array.from(new Set(i.bindings.flatMap((b) => channels.find((c) => c.id === b.channelId)?.missing ?? [])));
+  const posted = i.bindings.some((b) => !!b.messageId || !!b.lastUpdate);
+
+  const done = [i.tokenSet, i.tokenSet && botOnline, i.tokenSet && botOnline && guildCount > 0, bound && missing.length === 0, posted && bound];
+  const first = done.findIndex((d) => !d);
+  const stateOf = (n: number): WizardState => (done[n] ? 'done' : n === first ? 'current' : 'blocked');
+
+  const botText = i.bot?.state === 'connecting' ? 'Бот подключается к Discord, это занимает несколько секунд. Нажмите «Проверить», чтобы обновить.'
+    : i.bot?.state === 'error' ? 'Discord не принял токен или недоступен. Проверьте токен и прокси в настройках, затем проверьте снова.'
+      : 'Бот ещё не в сети. Сохраните токен: подключение начнётся само.';
+
+  const steps: WizardStep[] = [
+    {
+      id: 'token',
+      title: 'Токен введён',
+      state: stateOf(0),
+      text: done[0] ? 'Токен бота сохранён в настройках.' : 'Создайте бота в Discord Developer Portal и вставьте его токен в настройках панели.',
+    },
+    {
+      id: 'bot',
+      title: 'Бот подключён',
+      state: stateOf(1),
+      text: done[1] ? `Бот в сети${i.bot?.tag ? `: ${i.bot.tag}` : ''}.` : i.tokenSet ? botText : 'Сначала введите токен.',
+      problem: !done[1] && i.bot?.state === 'error' && i.bot.error ? i.bot.error : undefined,
+    },
+    {
+      id: 'guild',
+      title: 'Бот приглашён на сервер Discord',
+      state: stateOf(2),
+      text: done[2]
+        ? `Бот есть на серверах Discord: ${guildCount}.`
+        : 'Откройте приглашение, выберите свой сервер Discord и подтвердите права бота. Потом нажмите «Проверить».',
+    },
+    {
+      id: 'channel',
+      title: 'Канал выбран, права в порядке',
+      state: stateOf(3),
+      text: done[3]
+        ? 'Канал привязан, у бота есть права на встраивания и файлы.'
+        : bound && missing.length > 0
+          ? `В выбранном канале боту не хватает прав: ${missing.join(', ')}. Выдайте их роли бота в настройках канала и нажмите «Проверить».`
+          : i.serverCount === 0
+            ? 'Сначала добавьте игровой сервер, который бот будет показывать.'
+            : channels.length > 0
+              ? 'Выберите канал и игровой сервер: бот будет публиковать там одно обновляемое сообщение.'
+              : 'Бот пока не видит каналов, куда может писать. Выдайте его роли права «Просмотр канала», «Отправка сообщений», «Встраивание ссылок», «Прикрепление файлов».',
+      problem: bound && missing.length > 0 ? `Нет прав: ${missing.join(', ')}` : undefined,
+    },
+    {
+      id: 'message',
+      title: 'Первое сообщение опубликовано',
+      state: stateOf(4),
+      text: done[4] ? 'Бот отправил сообщение и обновляет его по таймеру.' : 'Бот отправит сообщение в течение минуты после создания привязки. Нажмите «Проверить», чтобы увидеть результат.',
+      problem: !done[4] ? i.bindings.find((b) => b.lastError)?.lastError ?? undefined : undefined,
+    },
+  ];
+  return { steps, complete: first === -1, current: first };
+}
+
+/** Stepper card: shown while the connection is incomplete (or when reopened by hand). */
+export function DiscordWizard({
+  input, busy, onRecheck, onCreateBinding, inviteUrl, settingsHref = '#/admin/settings/bot', onClose,
+}: {
+  input: WizardInput;
+  busy: boolean;
+  onRecheck: () => void;
+  onCreateBinding: () => void;
+  inviteUrl: string | null;
+  settingsHref?: string;
+  /** shown only when the wizard was reopened after completion */
+  onClose?: () => void;
+}) {
+  const { steps, complete, current } = computeWizard(input);
+  const actionFor = (s: WizardStep): ReactNode => {
+    if (s.state !== 'current') return null;
+    if (s.id === 'token') return <a className="btn btn-sm" href={settingsHref}>Указать токен</a>;
+    if (s.id === 'bot') return <a className="btn btn-soft btn-sm" href={settingsHref}>Открыть настройки бота</a>;
+    if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">Открыть приглашение<span aria-hidden>↗</span></a> : null;
+    if (s.id === 'channel') {
+      if (input.serverCount === 0) return <a className="btn btn-sm" href="#/admin/servers/new">Добавить сервер</a>;
+      if (input.bindings.length === 0) return <button type="button" className="btn btn-sm" onClick={onCreateBinding}>Создать первую привязку</button>;
+      return null;
+    }
+    return null;
+  };
+
+  return (
+    <section className="panel space-y-4 p-5 sm:p-6" aria-labelledby="dw-title" data-complete={complete ? 'true' : undefined}>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <h2 id="dw-title" className="text-lg font-black">Мастер подключения</h2>
+          <p className="font-semibold text-mute">{complete ? 'Всё готово: бот публикует сообщения.' : `Шаг ${current + 1} из ${steps.length}`}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-soft btn-sm" onClick={onRecheck} disabled={busy} aria-busy={busy || undefined}>
+            <IconRefresh spinning={busy} />
+            Проверить
+          </button>
+          {onClose && <button type="button" className="btn btn-soft btn-sm" onClick={onClose}>Скрыть</button>}
+        </div>
+      </div>
+      <ol className="dw-steps">
+        {steps.map((s, n) => (
+          <li key={s.id} className="dw-step" data-state={s.state} aria-current={s.state === 'current' ? 'step' : undefined}>
+            <span className="dw-mark" aria-hidden>{s.state === 'done' ? <IconCheck size={16} /> : n + 1}</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2">
+                <span className="font-black">{s.title}</span>
+                <span className="sr-only">{s.state === 'done' ? ': выполнено' : s.state === 'current' ? ': текущий шаг' : ': недоступно, пока не выполнены предыдущие шаги'}</span>
+              </div>
+              {s.state !== 'blocked' && <p className="text-sm font-semibold text-mute">{s.text}</p>}
+              {s.problem && s.state === 'current' && <p className="mt-1 rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad" role="alert">{s.problem}</p>}
+              {s.state === 'current' && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {actionFor(s)}
+                  <button type="button" className="btn btn-soft btn-sm" onClick={onRecheck} disabled={busy}>Проверить снова</button>
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/EmailVerifyState.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { useAuth } from '../auth';
+import { t } from '../i18n';
+import { toast } from '../ui';
+
+/** Under the e-mail field of the profile: whether the saved address is confirmed, and a button to send the letter. */
+export default function EmailVerifyState() {
+  const { me } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!me?.email) return null;
+  if (me.emailVerified) return <p className="text-sm font-bold text-ok" role="status">{t('pf.emailv.verified')}</p>;
+
+  const send = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await api('/me/email/verify-request', 'POST');
+      toast(t('pf.emailv.sent', { email: me.email ?? '' }));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-bold text-warn">{t('pf.emailv.unverified')}</p>
+      <button type="button" className="btn-soft btn-sm" disabled={busy} onClick={() => void send()}>{t('pf.emailv.send')}</button>
+      {error && <p className="text-sm font-bold text-bad" role="alert">{error}</p>}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/GamePicker.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { GAMES } from '../games';
@@ -20646,29 +23387,162 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/NotFound.tsx" << '__COREGSM_EOF__'
 import { IconArrow } from '../ui';
 import { NotFoundArt } from './Illustrations';
+import { StateView } from './StateView';
 
 /** Unknown route or unknown server id. `kind` only changes the wording; both buttons are always there. */
 export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }) {
   return (
-    <div className="panel fade-in mx-auto flex max-w-xl flex-col items-center gap-3 px-6 py-10 text-center sm:py-14" role="region" aria-labelledby="nf-title">
-      <NotFoundArt />
-      <p className="nf-code text-6xl font-black leading-none tracking-[-0.05em] sm:text-7xl" aria-hidden>404</p>
-      <h1 id="nf-title" className="text-2xl font-extrabold tracking-[-0.02em]">
-        {kind === 'server' ? 'Сервер не найден' : 'Такой страницы нет'}
-      </h1>
-      <p className="max-w-sm font-semibold text-mute">
-        {kind === 'server'
-          ? 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.'
-          : 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.'}
-      </p>
-      <div className="mt-3 flex flex-wrap justify-center gap-2.5">
-        <a className="btn" href="#/" data-magnetic>
-          На главную
-          <IconArrow />
-        </a>
-        <a className="btn btn-soft" href="#/servers">К серверам</a>
+    <StateView
+      kind="notfound"
+      heading="h1"
+      className="mx-auto max-w-xl !gap-3 sm:!py-14"
+      art={(
+        <>
+          <NotFoundArt />
+          <p className="nf-code text-6xl font-black leading-none tracking-[-0.05em] sm:text-7xl" aria-hidden>404</p>
+        </>
+      )}
+      title={kind === 'server' ? 'Сервер не найден' : 'Такой страницы нет'}
+      text={kind === 'server'
+        ? 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.'
+        : 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.'}
+    >
+      <a className="btn" href="#/" data-magnetic>
+        На главную
+        <IconArrow />
+      </a>
+      <a className="btn btn-soft" href="#/servers">К серверам</a>
+    </StateView>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/SmtpCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type SmtpInfo } from '../api';
+import { ErrorLine, Section, TextField, toast } from '../ui';
+
+/** Settings → security: outgoing e-mail (password reset, address confirmation, new-device letters). Administrators only. */
+export default function SmtpCard() {
+  const [info, setInfo] = useState<SmtpInfo | null>(null);
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('587');
+  const [secure, setSecure] = useState(false);
+  const [user, setUser] = useState('');
+  const [password, setPassword] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  const apply = (s: SmtpInfo) => {
+    setInfo(s);
+    setHost(s.host);
+    setPort(String(s.port));
+    setSecure(s.secure);
+    setUser(s.user);
+    setFrom(s.from);
+    setPassword('');
+  };
+
+  useEffect(() => {
+    api<SmtpInfo>('/settings/smtp').then(apply).catch((e) => setError((e as Error).message));
+  }, []);
+
+  const portNum = Number(port);
+  const portErr = port && (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) ? 'Порт от 1 до 65535' : '';
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy || portErr) return;
+    setError('');
+    setNote('');
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = { host: host.trim(), port: portNum || 587, secure, user: user.trim(), from: from.trim() };
+      // empty = keep the saved password
+      if (password) body.password = password;
+      apply(await api<SmtpInfo>('/settings/smtp', 'PUT', body));
+      toast('Настройки почты сохранены');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearPassword = async () => {
+    setError('');
+    try {
+      apply(await api<SmtpInfo>('/settings/smtp', 'PUT', { password: '' }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const test = async () => {
+    setError('');
+    setNote('');
+    setTesting(true);
+    try {
+      await api('/settings/smtp/test', 'POST', { to: to.trim() });
+      setNote(`Пробное письмо отправлено на ${to.trim()}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <Section
+      title="Почта (SMTP)"
+      description="Нужна для сброса пароля, подтверждения адреса и писем о входе с нового устройства. Без неё эти функции выключены."
+      actions={info && <span className={`pill ${info.ready ? 'pill-ok' : 'pill-mute'}`}>{info.ready ? 'ПОЧТА РАБОТАЕТ' : 'НЕ НАСТРОЕНА'}</span>}
+    >
+      <form onSubmit={save} className="space-y-3.5">
+        <div className="grid gap-3.5 sm:grid-cols-[minmax(0,1fr)_7rem]">
+          <TextField id="smtp-host" label="Сервер SMTP" value={host} onChange={setHost} placeholder="smtp.example.com" autoComplete="off" />
+          <TextField id="smtp-port" label="Порт" value={port} onChange={setPort} inputMode="numeric" error={portErr} autoComplete="off" />
+        </div>
+        <label className="flex cursor-pointer items-center gap-2.5 font-bold text-mute">
+          <input type="checkbox" className="h-4 w-4 accent-brand" checked={secure} onChange={(e) => { setSecure(e.target.checked); if (e.target.checked && port === '587') setPort('465'); if (!e.target.checked && port === '465') setPort('587'); }} />
+          Шифрование с первого байта (SSL/TLS, обычно порт 465). Иначе используется STARTTLS.
+        </label>
+        <div className="grid gap-3.5 sm:grid-cols-2">
+          <TextField id="smtp-user" label="Логин" value={user} onChange={setUser} autoComplete="off" />
+          <TextField
+            id="smtp-pass"
+            label={info?.passwordSet ? 'Пароль (сохранён, оставьте пустым чтобы не менять)' : 'Пароль'}
+            type="password"
+            value={password}
+            onChange={setPassword}
+            autoComplete="new-password"
+          />
+        </div>
+        <TextField id="smtp-from" label="Адрес отправителя" value={from} onChange={setFrom} placeholder="CoreGSM <no-reply@example.com>" autoComplete="off" />
+        {info && !info.publicBase && (
+          <p className="rounded-2xl bg-warnbg px-4 py-2.5 text-sm font-bold text-warn">
+            Публичный адрес панели неизвестен: письма со ссылками для сброса пароля не будут отправляться. Откройте панель по домену под администратором или задайте PUBLIC_URL в .env.
+          </p>
+        )}
+        <ErrorLine text={error} />
+        {note && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{note}</p>}
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn" disabled={busy || !!portErr}>Сохранить</button>
+          {info?.passwordSet && <button type="button" className="btn-soft" onClick={() => void clearPassword()}>Удалить пароль</button>}
+        </div>
+      </form>
+
+      <div className="space-y-2 border-t pt-4">
+        <TextField id="smtp-to" label="Отправить пробное письмо на" value={to} onChange={setTo} type="email" placeholder="you@example.com" autoComplete="email" />
+        <button type="button" className="btn-soft" disabled={testing || !to.trim() || !info?.ready} onClick={() => void test()}>
+          {testing ? 'Отправляю…' : 'Отправить пробное письмо'}
+        </button>
       </div>
-    </div>
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -20803,6 +23677,104 @@ export function SplitButton({
       {children}
     </div>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/StateView.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+import { ApiError } from '../api';
+import { t } from '../i18n';
+import { Icon, IconError, IconInfo, IconSearch, IconShield } from '../icons';
+
+/**
+ * One family of «nothing here» screens: empty list, load error (with «Повторить»), no access, not found, no connection.
+ * Same card, same icon tile, same title / text / primary action everywhere; only the colour and the default wording differ.
+ * Defaults come from the i18n keys state.<kind>.title / state.<kind>.text; pass `title` / `text` for page-specific words.
+ */
+export type StateKind = 'empty' | 'error' | 'forbidden' | 'notfound' | 'offline';
+
+const IconOffline = ({ size = 28 }: { size?: number }) => (
+  <Icon size={size}><path d="M3 3l18 18M5 12.5a10 10 0 0 1 3.3-2.2M10.6 6.2A14 14 0 0 1 22 10M8.5 16a5 5 0 0 1 5.6-1.2M12 20h.01" /></Icon>
+);
+
+const TILE: Record<StateKind, string> = {
+  empty: 'bg-soft text-link',
+  error: 'bg-badbg text-bad',
+  forbidden: 'bg-warnbg text-warn',
+  notfound: 'bg-soft text-mute',
+  offline: 'bg-warnbg text-warn',
+};
+
+function KindIcon({ kind }: { kind: StateKind }) {
+  if (kind === 'error') return <IconError size={28} />;
+  if (kind === 'forbidden') return <IconShield size={28} />;
+  if (kind === 'notfound') return <IconSearch size={28} />;
+  if (kind === 'offline') return <IconOffline />;
+  return <IconInfo size={28} />;
+}
+
+export function StateView({
+  kind = 'empty', title, text, art, onRetry, retryLabel, action, compact = false, bare = false, className = '', heading = 'h3', children,
+}: {
+  kind?: StateKind;
+  title?: string;
+  text?: string;
+  /** an illustration instead of the icon tile (empty lists keep their pictures) */
+  art?: ReactNode;
+  /** shows «Повторить» (default for error and offline states) */
+  onRetry?: () => void;
+  retryLabel?: string;
+  /** the primary action: a button or a link */
+  action?: ReactNode;
+  compact?: boolean;
+  /** no card around it: for use inside another card */
+  bare?: boolean;
+  className?: string;
+  /** the heading level: h1 when the state fills a whole page */
+  heading?: 'h1' | 'h2' | 'h3';
+  children?: ReactNode;
+}) {
+  const head = title ?? t(`state.${kind}.title`);
+  const body = text ?? t(`state.${kind}.text`);
+  const alert = kind === 'error' || kind === 'forbidden';
+  const H = heading;
+  return (
+    <div
+      className={`${bare ? '' : 'panel'} fade-in flex flex-col items-center gap-2 px-6 text-center ${compact ? 'py-6' : 'py-10'} ${className}`}
+      role={alert ? 'alert' : 'status'}
+      data-state={kind}
+    >
+      {art ?? <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>}
+      <H className={heading === 'h1' ? 'text-2xl font-extrabold tracking-[-0.02em]' : 'text-lg font-black'}>{head}</H>
+      {body && <p className="max-w-sm font-semibold text-mute">{body}</p>}
+      {(onRetry || action || children) && (
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2.5">
+          {action}
+          {onRetry && <button type="button" className={`btn ${action ? 'btn-soft' : ''}`} onClick={onRetry}>{retryLabel ?? t('common.retry')}</button>}
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const NETWORK_RE = /failed to fetch|networkerror|network request failed|load failed|network error|нет связи/i;
+
+/** which state a failed request deserves: no connection, no rights, or a plain error */
+export function errorKind(error: unknown): StateKind {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'offline';
+  if (error instanceof ApiError) return error.status === 403 ? 'forbidden' : 'error';
+  const msg = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (error instanceof TypeError || NETWORK_RE.test(msg)) return 'offline';
+  return 'error';
+}
+
+/** a failed page load as a StateView: the kind follows the error, the server's own message is shown as the text */
+export function LoadError({ error, onRetry, compact, bare, title }: { error: unknown; onRetry?: () => void; compact?: boolean; bare?: boolean; title?: string }) {
+  const kind = errorKind(error);
+  const msg = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const own = kind === 'error' && msg ? msg : undefined;
+  return <StateView kind={kind} title={title} text={own} onRetry={kind === 'forbidden' ? undefined : onRetry} compact={compact} bare={bare} />;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -23022,7 +25994,7 @@ type Filter = 'all' | 'logins' | 'secrets' | 'links';
 
 const FILTERS: { id: Filter; label: TKey; kinds: string[] | null }[] = [
   { id: 'all', label: 'pf.journal.f.all', kinds: null },
-  { id: 'logins', label: 'pf.journal.f.logins', kinds: ['login', 'login_failed', 'sessions_revoked'] },
+  { id: 'logins', label: 'pf.journal.f.logins', kinds: ['login', 'login_new_device', 'login_failed', 'sessions_revoked'] },
   { id: 'secrets', label: 'pf.journal.f.secrets', kinds: ['password_changed', 'email_changed'] },
   { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked'] },
 ];
@@ -23030,6 +26002,7 @@ const FILTERS: { id: Filter; label: TKey; kinds: string[] | null }[] = [
 const KIND_LABEL: Record<string, TKey> = {
   login: 'pf.journal.k.login',
   login_failed: 'pf.journal.k.login_failed',
+  login_new_device: 'pf.journal.k.login_new_device',
   password_changed: 'pf.journal.k.password_changed',
   email_changed: 'pf.journal.k.email_changed',
   discord_linked: 'pf.journal.k.discord_linked',
@@ -23127,9 +26100,10 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/profile/LookRegion.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState, type CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode, type AccentMode } from '../../accent';
+import { useAppearance, type Appearance } from '../../appearance';
 import { gameColor } from '../../games';
 import { type Prefs, type TKey, t, updatePrefs, useI18n } from '../../i18n';
-import { fmtDateTime, Section, toast, useDensity, type Density } from '../../ui';
+import { fmtDateTime, Section, Switch, toast, useDensity, type Density } from '../../ui';
 
 const ACCENT_TEXT: Record<AccentMode, { label: TKey; hint: TKey }> = {
   auto: { label: 'pf.accent.auto', hint: 'pf.accent.autoHint' },
@@ -23144,6 +26118,12 @@ export function AppearanceCard() {
   useI18n();
   const [density, setDensity] = useDensity();
   const [mode, setMode] = useAccentMode();
+  const [look, setLook] = useAppearance();
+  const a11y: [keyof Appearance, TKey, TKey][] = [
+    ['reduceMotion', 'pf.a11y.motion', 'pf.a11y.motionHint'],
+    ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
+    ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
+  ];
   const options: [Density, TKey, TKey][] = [
     ['normal', 'pf.density.normal', 'pf.density.normalHint'],
     ['compact', 'pf.density.compact', 'pf.density.compactHint'],
@@ -23170,6 +26150,23 @@ export function AppearanceCard() {
           ))}
         </div>
         <p className="mt-2 text-sm font-semibold text-mute">{t(ACCENT_TEXT[mode].hint)} {t('pf.thisBrowser')}</p>
+      </div>
+      <div role="group" aria-labelledby="a11y-label">
+        <span id="a11y-label" className="label">{t('pf.a11y.label')}</span>
+        <ul className="space-y-1">
+          {a11y.map(([key, label, hint]) => (
+            <li key={key}>
+              <label className="flex cursor-pointer items-start gap-3 rounded-ui-lg px-1 py-1.5 max-sm:min-h-[44px]">
+                <Switch className="mt-0.5" checked={look[key]} onChange={(on) => setLook({ [key]: on })} />
+                <span className="min-w-0">
+                  <span className="block font-extrabold">{t(label)}</span>
+                  <span className="block text-sm font-semibold text-mute">{t(hint)}</span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1 text-sm font-semibold text-mute">{t('pf.thisBrowser')}</p>
       </div>
     </Section>
   );
@@ -23609,6 +26606,7 @@ export function AchievementIcon({ slug, size = 22 }: { slug: string; size?: numb
 export function JournalIcon({ kind, size = 18 }: { kind: string; size?: number }): ReactNode {
   switch (kind) {
     case 'login': return <Icon size={size}><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" /></Icon>;
+    case 'login_new_device': return <Icon size={size}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></Icon>;
     case 'login_failed': return <Icon size={size}><path d="M12 3l10 18H2z" /><path d="M12 10v5M12 18h.01" /></Icon>;
     case 'password_changed': return <Icon size={size}><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></Icon>;
     case 'email_changed': return <Icon size={size}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" /></Icon>;
@@ -23677,11 +26675,12 @@ __COREGSM_EOF__
 import { useState } from 'react';
 import { connectGuide } from '../../connectGuides';
 import { CopyButton } from '../../ui';
+import { SectionCard, type SectionState } from './Sections';
 import QrCode from './QrCode';
 import { stagger } from './helpers';
 
 /** «Как подключиться»: what to paste (big copy buttons), numbered steps, QR code for a phone */
-export default function ConnectTab({ game, address }: { game: string; address: string }) {
+export default function ConnectTab({ game, address, sections }: { game: string; address: string; sections: SectionState }) {
   const guide = connectGuide(game, address);
   // values to paste: address first, the console command and the steam link where they exist
   const values = [
@@ -23698,8 +26697,7 @@ export default function ConnectTab({ game, address }: { game: string; address: s
 
   return (
     <div className="grid gap-3.5 lg:grid-cols-12">
-      <section className="tile tile-in p-4 sm:p-5 lg:col-span-7" style={stagger(0)}>
-        <h2 className="mb-4 text-lg font-extrabold">{guide.title}</h2>
+      <SectionCard id="cn-steps" state={sections} className="lg:col-span-7" style={stagger(0)} title={guide.title}>
 
         <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Что вставить</h3>
         <ul className="mb-5 space-y-2.5">
@@ -23726,10 +26724,9 @@ export default function ConnectTab({ game, address }: { game: string; address: s
         {guide.link && (
           <a href={guide.link.href} className="btn mt-5 w-full sm:w-auto" data-magnetic>{guide.link.label}</a>
         )}
-      </section>
+      </SectionCard>
 
-      <section className="tile tile-in p-4 sm:p-5 lg:col-span-5" style={stagger(1)}>
-        <h2 className="mb-1 text-base font-extrabold">QR-код для телефона</h2>
+      <SectionCard id="cn-qr" state={sections} className="lg:col-span-5" style={stagger(1)} title="QR-код для телефона">
         <p className="mb-3 text-sm font-semibold text-mute">
           Наведите камеру: {qr.k === 'link' ? 'ссылка откроется в Steam' : 'адрес сервера окажется в телефоне, останется вставить его в игру'}.
         </p>
@@ -23742,7 +26739,7 @@ export default function ConnectTab({ game, address }: { game: string; address: s
         )}
         <QrCode text={qr.value} label={`QR-код: ${qr.value}`} />
         <p className="mt-3 break-all text-center font-mono text-xs font-semibold text-mute">{qr.value}</p>
-      </section>
+      </SectionCard>
     </div>
   );
 }
@@ -23873,7 +26870,7 @@ __COREGSM_EOF__
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
 import { fmtDateTime, plural, smoothPath, toast } from '../../ui';
-import { pingTone, TONE_TEXT } from './helpers';
+import { exportFileName, pingTone, TONE_TEXT } from './helpers';
 
 type Point = ServerDetails['points'][number];
 type Ev = ServerDetails['events'][number];
@@ -23911,8 +26908,8 @@ const fullTime = (ts: number) =>
  * that follows the mouse / finger / pen and the arrow keys, Y axis that fits the data.
  */
 export default function HistoryChart({
-  points, hours, max, color, series = 'players', loading = false, events = [], title = '',
-}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string }) {
+  points, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '',
+}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string }) {
   const L = 38, R = 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
@@ -24024,7 +27021,11 @@ export default function HistoryChart({
   const tx = hp ? Math.min(W - TW / 2 - 2, Math.max(TW / 2 + 2, x(hp.ts))) : 0;
   const seriesName = series === 'ping' ? 'Пинг' : 'Игроки';
 
-  /** the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas */
+  /**
+   * the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas.
+   * The picture carries a caption band (server, game, period, dates, panel host, generation time in the user's zone)
+   * and the legend, so it can be posted anywhere without explanation.
+   */
   const exportPng = async () => {
     const el = svg.current;
     if (!el || saving) return;
@@ -24038,21 +27039,69 @@ export default function HistoryChart({
         const cs = getComputedStyle(n);
         for (const p of props) dst[i].style.setProperty(p, cs.getPropertyValue(p));
       });
+      const CAP = 76;
+      const LEG = 32;
+      const total = CAP + H + LEG;
       clone.removeAttribute('class');
       clone.removeAttribute('aria-hidden');
       clone.setAttribute('x', '0');
-      clone.setAttribute('y', '38');
+      clone.setAttribute('y', String(CAP));
       clone.setAttribute('width', String(W));
       clone.setAttribute('height', String(H));
       const bs = getComputedStyle(document.body);
       const bg = bs.backgroundColor && bs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? bs.backgroundColor : '#ffffff';
+      const root = getComputedStyle(document.documentElement);
+      const rgbVar = (name: string, fallback: string) => {
+        const v = root.getPropertyValue(name).trim();
+        return /^\d+\s+\d+\s+\d+$/.test(v) ? `rgb(${v.split(/\s+/).join(',')})` : fallback;
+      };
+      // the curve colour may be written with a CSS variable: resolve it for the standalone picture
+      const probe = document.createElement('span');
+      probe.style.color = color;
+      document.body.appendChild(probe);
+      const curve = getComputedStyle(probe).color || '#4f46e5';
+      probe.remove();
+      const mute = rgbVar('--mute', '#5c6372');
+      const line = rgbVar('--line', '#e7e9f0');
+      const bad = rgbVar('--bad', '#b92828');
       const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
-      const head = `${title ? `${title} · ` : ''}${seriesName}`;
+      const fit = (t: string, px: number, max: number) => {
+        const n = Math.max(8, Math.floor(max / (px * 0.58)));
+        return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+      };
+      const font = esc(bs.fontFamily);
+      const periodName = hours <= 24 ? '24 часа' : hours <= 168 ? '7 дней' : '30 дней';
+      const stamp = Date.now();
+      const range = `${fmtDateTime(stamp - hours * 3600_000)} - ${fmtDateTime(stamp)}`;
+      const head = title || 'Сервер';
+      const sub1 = `${game ? `${game} · ` : ''}${seriesName} · ${periodName} · ${range}`;
+      const sub2 = `CoreGSM · ${window.location.host} · создано ${fmtDateTime(stamp)}`;
+      // legend: the curve, the outage band and the markers that are on the chart
+      const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
+        { kind: 'curve', label: seriesName },
+        ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: 'сервер не отвечал' }] : []),
+        ...(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик', fill: MARK[t].fill })),
+      ];
+      let lx = 12;
+      const ly = CAP + H + 20;
+      let legend = '';
+      for (const it of items) {
+        if (it.kind === 'curve') legend += `<rect x="${lx}" y="${ly - 4}" width="18" height="4" rx="2" fill="${curve}"/>`;
+        else if (it.kind === 'band') legend += `<rect x="${lx}" y="${ly - 9}" width="18" height="12" rx="3" fill="${bad}" fill-opacity="0.25"/>`;
+        else legend += `<circle cx="${lx + 7}" cy="${ly - 3}" r="6" fill="${it.fill}"/>`;
+        const tx0 = lx + 24;
+        legend += `<text x="${tx0}" y="${ly}" fill="${mute}" font-family="${font}" font-size="12" font-weight="700">${esc(it.label)}</text>`;
+        lx = tx0 + it.label.length * 7 + 18;
+      }
       const out =
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H + 38}" viewBox="0 0 ${W} ${H + 38}">` +
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${total}" viewBox="0 0 ${W} ${total}">` +
         `<rect width="100%" height="100%" fill="${bg}"/>` +
-        `<text x="${L}" y="24" fill="${bs.color}" font-family="${esc(bs.fontFamily)}" font-size="15" font-weight="800">${esc(head)}</text>` +
+        `<text x="12" y="27" fill="${bs.color}" font-family="${font}" font-size="17" font-weight="800">${esc(fit(head, 17, W - 24))}</text>` +
+        `<text x="12" y="47" fill="${mute}" font-family="${font}" font-size="12.5" font-weight="700">${esc(fit(sub1, 12.5, W - 24))}</text>` +
+        `<text x="12" y="65" fill="${mute}" font-family="${font}" font-size="11.5" font-weight="600">${esc(fit(sub2, 11.5, W - 24))}</text>` +
+        `<line x1="12" x2="${W - 12}" y1="${CAP - 2}" y2="${CAP - 2}" stroke="${line}" stroke-width="1"/>` +
         new XMLSerializer().serializeToString(clone) +
+        legend +
         `</svg>`;
       const url = URL.createObjectURL(new Blob([out], { type: 'image/svg+xml;charset=utf-8' }));
       const img = new Image();
@@ -24060,18 +27109,18 @@ export default function HistoryChart({
       const k = 2;
       const cv = document.createElement('canvas');
       cv.width = W * k;
-      cv.height = (H + 38) * k;
+      cv.height = total * k;
       const ctx = cv.getContext('2d');
       if (!ctx) throw new Error('canvas');
       ctx.scale(k, k);
-      ctx.drawImage(img, 0, 0, W, H + 38);
+      ctx.drawImage(img, 0, 0, W, total);
       URL.revokeObjectURL(url);
       const blob = await new Promise<Blob | null>((ok) => cv.toBlob(ok, 'image/png'));
       if (!blob) throw new Error('blob');
       const a = document.createElement('a');
       const dl = URL.createObjectURL(blob);
       a.href = dl;
-      a.download = `coregsm-${series}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}.png`;
+      a.download = exportFileName(title, hours, stamp);
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -24525,8 +27574,174 @@ export default function QrCode({ text, label }: { text: string; label: string })
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Sections.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { IconChevronDown } from '../../icons';
+
+/**
+ * Long server pages: sections that fold, a mini table of contents (chips) that scrolls inside the page, and a memory of
+ * what was folded. The hash route is never touched (no «#section» links): chips are buttons that scroll to an element id.
+ * Secondary blocks start folded on phones; whatever the user changes afterwards is remembered per section.
+ */
+const KEY = 'coregsm_srv_sections';
+
+const PHONE = '(max-width: 639px)';
+const onPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.(PHONE).matches;
+
+function readStore(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(KEY);
+    const v = raw ? (JSON.parse(raw) as unknown) : null;
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const out: Record<string, boolean> = {};
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) if (typeof x === 'boolean') out[k] = x;
+      return out;
+    }
+  } catch {
+    /* no storage: nothing is remembered */
+  }
+  return {};
+}
+
+function writeStore(v: Record<string, boolean>) {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(v));
+  } catch {
+    /* private mode */
+  }
+}
+
+export interface SectionDef {
+  id: string;
+  label: string;
+  /** folded by default on phones */
+  secondary?: boolean;
+}
+
+export const sectionDomId = (id: string) => `srv-s-${id}`;
+
+/** the fold state of a set of sections; `defs` decides the defaults for those the user has not touched */
+export function useSectionState(defs: SectionDef[]) {
+  const [store, setStore] = useState<Record<string, boolean>>(readStore);
+  const defsRef = useRef(defs);
+  defsRef.current = defs;
+
+  const collapsed = useCallback((id: string): boolean => {
+    if (id in store) return store[id];
+    return !!defsRef.current.find((d) => d.id === id)?.secondary && onPhone();
+  }, [store]);
+
+  const set = useCallback((id: string, value: boolean) => {
+    setStore((prev) => {
+      const next = { ...prev, [id]: value };
+      writeStore(next);
+      return next;
+    });
+  }, []);
+
+  const toggle = useCallback((id: string) => set(id, !collapsed(id)), [set, collapsed]);
+  return { collapsed, toggle, set };
+}
+
+export type SectionState = ReturnType<typeof useSectionState>;
+
+/** a card (or a bare block) whose title is a button: aria-expanded, Enter / Space fold it */
+export function SectionCard({
+  id, title, state, actions, bare = false, className = '', style, children, as: Tag = 'section',
+}: {
+  id: string;
+  title: ReactNode;
+  state: SectionState;
+  /** controls that sit next to the title (period switch ...); hidden while the section is folded */
+  actions?: ReactNode;
+  /** no card of its own: the children bring their tiles */
+  bare?: boolean;
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+  as?: 'section' | 'div';
+}) {
+  const closed = state.collapsed(id);
+  const bodyId = `${sectionDomId(id)}-body`;
+  return (
+    <Tag id={sectionDomId(id)} className={`srv-sec ${bare ? 'srv-sec-bare' : 'tile tile-in p-4 sm:p-5'} ${closed ? 'is-closed' : ''} ${className}`} style={style} tabIndex={-1}>
+      <div className="srv-sec-head">
+        <h2 className="min-w-0 text-base font-extrabold">
+          <button type="button" className="srv-sec-btn" aria-expanded={!closed} aria-controls={bodyId} onClick={() => state.toggle(id)}>
+            <span className="min-w-0">{title}</span>
+            <IconChevronDown size={18} className="srv-sec-chev" />
+          </button>
+        </h2>
+        {!closed && actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      </div>
+      <div id={bodyId} hidden={closed} className="srv-sec-body">{children}</div>
+    </Tag>
+  );
+}
+
+/** scrolls to a section (unfolding it first) below the sticky tab bar and moves the focus there */
+export function goToSection(state: SectionState, id: string) {
+  if (state.collapsed(id)) state.set(id, false);
+  window.requestAnimationFrame(() => {
+    const el = document.getElementById(sectionDomId(id));
+    if (!el) return;
+    const bar = document.querySelector<HTMLElement>('.srv-tabbar');
+    const offset = (bar ? bar.getBoundingClientRect().bottom : 72) + 8;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce';
+    window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - offset), behavior: reduce ? 'auto' : 'smooth' });
+    el.focus({ preventScroll: true });
+  });
+}
+
+/** the chips: one per section; the one being read is marked */
+export function SectionChips({ defs, state }: { defs: SectionDef[]; state: SectionState }) {
+  const [current, setCurrent] = useState(defs[0]?.id ?? '');
+  useEffect(() => {
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const bar = document.querySelector<HTMLElement>('.srv-tabbar');
+      const line = (bar ? bar.getBoundingClientRect().bottom : 72) + 24;
+      let cur = defs[0]?.id ?? '';
+      for (const d of defs) {
+        const el = document.getElementById(sectionDomId(d.id));
+        if (el && el.getBoundingClientRect().top <= line) cur = d.id;
+      }
+      setCurrent(cur);
+    };
+    const onScroll = () => { if (!raf) raf = window.requestAnimationFrame(update); };
+    update();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+      if (raf) window.cancelAnimationFrame(raf);
+    };
+  }, [defs]);
+
+  if (defs.length < 2) return null;
+  return (
+    <nav className="srv-chips no-scrollbar" aria-label="Блоки страницы">
+      {defs.map((d) => (
+        <button
+          key={d.id}
+          type="button"
+          className="srv-chip"
+          aria-current={current === d.id ? 'true' : undefined}
+          data-closed={state.collapsed(d.id) ? 'true' : undefined}
+          onClick={() => goToSection(state, d.id)}
+        >
+          {d.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ServerTabs.tsx" << '__COREGSM_EOF__'
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { tabHref, type TabId } from './helpers';
 
 export const TAB_LIST: { id: TabId; label: string }[] = [
@@ -24544,7 +27759,7 @@ export const panelDomId = (id: TabId) => `srv-panel-${id || 'overview'}`;
  * Tab strip of the server page: a sliding `.seg` capsule, sticky under the glass header, scrolls sideways on phones
  * (the active tab is centred). Tabs are links, so the address bar and the back button work.
  */
-export default function ServerTabs({ id, tab, counts }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>> }) {
+export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode }) {
   const seg = useRef<HTMLElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -24577,7 +27792,7 @@ export default function ServerTabs({ id, tab, counts }: { id: number; tab: TabId
     const on = s?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (!s || !on || s.scrollWidth <= s.clientWidth) return;
     const left = on.offsetLeft - (s.clientWidth - on.offsetWidth) / 2;
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce';
     s.scrollTo({ left: Math.max(0, left), behavior: reduce ? 'auto' : 'smooth' });
   }, [tab]);
 
@@ -24626,6 +27841,7 @@ export default function ServerTabs({ id, tab, counts }: { id: number; tab: TabId
             );
           })}
         </nav>
+        {toc}
       </div>
     </>
   );
@@ -24699,6 +27915,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/helpers.ts" << '__COREGSM_EOF__'
 import { useEffect, useState, type CSSProperties } from 'react';
 import { COUNTRIES } from '../../countries';
+import { getPrefs } from '../../i18n';
 
 export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
@@ -24816,6 +28033,22 @@ export function pingTone(ping: number): { tone: Tone; label: string } {
 }
 
 export const TONE_TEXT: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' };
+
+/** «server-name-24h-20261013.png»: the date is the user's own calendar day (their time zone) */
+export function exportFileName(title: string, hours: number, ts: number): string {
+  const slug = (title || 'server').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '') || 'server';
+  let day = '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: getPrefs().timezone || undefined, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(ts);
+    const o: Record<string, string> = {};
+    for (const p of parts) o[p.type] = p.value;
+    day = `${o.year}${o.month}${o.day}`;
+  } catch {
+    const d = new Date(ts);
+    day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  }
+  return `${slug}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}-${day}.png`;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/ServerViews.tsx" << '__COREGSM_EOF__'
@@ -25172,6 +28405,7 @@ __COREGSM_EOF__
 // Pieces of the servers page: reactions to changes, capacity bar, empty states, skeletons.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Server } from '../../api';
+import { StateView } from '../StateView';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -25275,14 +28509,7 @@ export function CapacityBar({ players, max, color, onDark = false, big = false, 
 
 // ---------- empty states (item 8) ----------
 function EmptyState({ art, title, text, children }: { art: ReactNode; title: string; text: string; children?: ReactNode }) {
-  return (
-    <div className="panel fade-in flex flex-col items-center gap-2 px-6 py-10 text-center">
-      {art}
-      <h3 className="mt-1 text-lg font-black">{title}</h3>
-      <p className="max-w-sm font-semibold text-mute">{text}</p>
-      {children && <div className="mt-2 flex flex-wrap items-center justify-center gap-2">{children}</div>}
-    </div>
-  );
+  return <StateView kind="empty" art={art} title={title} text={text}>{children}</StateView>;
 }
 
 export function NoServersState({ isAdmin }: { isAdmin: boolean }) {
@@ -27199,6 +30426,179 @@ html[data-flat='cf'] *, html[data-flat='cf'] *::before, html[data-flat='cf'] *::
    no longer transition by default. */
 :focus, :focus-visible { outline: 0 !important; }
 .transition { transition-property: color, background-color, fill, stroke, opacity, box-shadow, transform, filter !important; }
+
+/* =====================================================================================================
+   Quality pass: state views, foldable server sections, admin shortcuts, setup wizard,
+   appearance options (less motion / large text / high contrast) and one visible keyboard focus ring.
+   ===================================================================================================== */
+
+/* ---------- focus: every interactive element gets a box-shadow ring (outlines are removed above) ----------
+   Utilities and component shadows live in cascade layers, so this unlayered rule wins; the ring replaces the element's
+   own shadow while it is focused. Containers that receive focus from code (main, dialogs) stay quiet. */
+:focus-visible:not(main):not([role='dialog']):not([role='alertdialog']) {
+  outline: 0 !important;
+  box-shadow: 0 0 0 2px rgb(var(--page)), 0 0 0 4px rgb(var(--link)) !important;
+}
+/* inside clipping containers (segmented controls, scrolling strips, lists with overflow hidden) the ring is drawn inward */
+.seg-item:focus-visible,
+.split-item:focus-visible,
+.srv-chip:focus-visible,
+.adm-pin:focus-visible,
+.pl-row:focus-visible,
+.chip-filter:focus-visible {
+  box-shadow: inset 0 0 0 2px rgb(var(--link)) !important;
+}
+/* on covers and gradients the ring is white with a dark inner edge */
+.btn-glass:focus-visible, .btn-glass-quiet:focus-visible, .btn-cta:focus-visible, .btn-on-grad:focus-visible,
+.btn-ghost-on-grad:focus-visible, .pp-copy:focus-visible, .chip-glass a:focus-visible, .pp-v a:focus-visible {
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 0.45), 0 0 0 4px #fff !important;
+}
+a:focus-visible, button.text-link:focus-visible, .hint-more:focus-visible { border-radius: var(--r-sm); }
+.btn:focus-visible, .btn-icon:focus-visible, .row-act:focus-visible { border-radius: 9999px; }
+.row-act:focus-visible { border-radius: var(--r-md); }
+
+/* ---------- state views ---------- */
+[data-state='error'].panel { box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--bad) / 0.25); }
+
+/* ---------- server page: foldable sections and the mini table of contents ---------- */
+.srv-sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+.srv-sec.is-closed > .srv-sec-head { margin-bottom: 0; }
+.srv-sec-bare > .srv-sec-head { margin-bottom: 8px; padding: 0 4px; }
+.srv-sec-bare.is-closed > .srv-sec-head { margin-bottom: 0; }
+.srv-sec-btn {
+  display: flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px; margin: -4px -8px; padding: 4px 8px;
+  border-radius: var(--r-md); text-align: left; font: inherit; color: inherit; transition: background-color .15s ease;
+}
+.srv-sec-btn:hover { background: rgb(var(--soft)); }
+.srv-sec-chev { flex: none; color: rgb(var(--mute)); transition: transform .2s ease; }
+.srv-sec.is-closed .srv-sec-chev { transform: rotate(-90deg); }
+.srv-sec:focus { outline: 0; }
+@media (max-width: 639px) { .srv-sec-btn { min-height: 44px; } }
+
+.srv-chips { display: flex; gap: 6px; overflow-x: auto; margin-top: 6px; padding: 2px 3px 4px; max-width: 100%; }
+.srv-chip {
+  flex: none; display: inline-flex; align-items: center; min-height: 32px; border-radius: 9999px; padding: 4px 12px;
+  font-size: 13px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: color .15s ease, background-color .15s ease;
+}
+.srv-chip:hover { color: rgb(var(--ink)); }
+.srv-chip[aria-current='true'] { color: rgb(var(--ink)); background: rgb(var(--seg-on)); box-shadow: 0 0 0 1px rgb(var(--line)); }
+.srv-chip[data-closed='true']::after { content: '+'; margin-left: 5px; font-weight: 900; opacity: .7; }
+@media (max-width: 639px) { .srv-chip { min-height: 36px; } }
+
+/* ---------- admin sidebar: pins and recent sections ---------- */
+.adm-item { position: relative; display: flex; min-width: 0; flex: none; }
+.adm-pin { display: none; }
+@media (min-width: 768px) {
+  .adm-item { display: block; flex: initial; }
+  .adm-pin {
+    display: grid; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); place-items: center;
+    width: 28px; height: 28px; border-radius: 9999px; font-size: 15px; line-height: 1; color: rgb(var(--mute));
+    opacity: 0; transition: opacity .15s ease, color .15s ease, background-color .15s ease;
+  }
+  .adm-item:hover .adm-pin, .adm-item:focus-within .adm-pin, .adm-item[data-pinned='true'] .adm-pin { opacity: 1; }
+  .adm-item[data-pinned='true'] .adm-pin { color: rgb(var(--warn)); }
+  .adm-item[data-current='true'] .adm-pin, .adm-item[data-current='true'] .adm-pin:hover { color: #fff; }
+  .adm-pin:hover { background: rgb(var(--soft)); }
+}
+@media (min-width: 768px) and (hover: none) { .adm-pin { opacity: .75; } }
+/* phones: the nav is a horizontal strip; only the section you are in shows its star, right after its chip */
+@media (max-width: 767px) {
+  .adm-item[data-current='true'] .adm-pin {
+    display: grid; flex: none; place-items: center; width: 36px; height: 36px; align-self: center; border-radius: 9999px;
+    font-size: 17px; color: rgb(var(--mute)); background: rgb(var(--soft));
+  }
+  .adm-item[data-current='true'][data-pinned='true'] .adm-pin { color: rgb(var(--warn)); }
+}
+
+/* ---------- Discord setup wizard ---------- */
+.dw-steps { display: grid; gap: 10px; }
+.dw-step { display: flex; gap: 12px; border-radius: var(--r-lg); padding: 12px 14px; background: rgb(var(--soft)); }
+.dw-step[data-state='current'] { background: rgb(var(--brand) / 0.08); box-shadow: inset 0 0 0 1.5px rgb(var(--brand) / 0.4); }
+.dw-step[data-state='blocked'] { color: rgb(var(--mute)); }
+.dw-mark {
+  display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 9999px;
+  font-size: 14px; font-weight: 900; color: rgb(var(--mute)); background: rgb(var(--card));
+}
+.dw-step[data-state='done'] .dw-mark { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
+.dw-step[data-state='current'] .dw-mark { color: #fff; background: rgb(var(--brand)); }
+
+/* ---------- appearance: «Меньше движения» (html[data-motion='reduce']); the OS setting is handled by the media queries above ---------- */
+html[data-motion='reduce'] *, html[data-motion='reduce'] *::before, html[data-motion='reduce'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+html[data-motion='reduce'] :is(.auth-glow, .auth-float, .skeleton, .tile-in, .chart-reveal, .meter > i, .update-bob, .art-float, .art-float-2, .art-twinkle, .art-blink, .art-wobble, .art-spin, .toast-in, .toast-out, .pop, .fade-in, .showcase-tile, .auth-card, .auth-swap, .flash-ring, .burst i, .delta-chip) {
+  animation: none !important;
+}
+html[data-motion='reduce'] :is(.pill.live, .live-dot, .update-dot, .pill-glass-ok)::before,
+html[data-motion='reduce'] :is(.live-dot, .update-dot)::after { animation: none !important; }
+html[data-motion='reduce'] main .grid > .tile, html[data-motion='reduce'] main .grid > .panel { animation: none !important; }
+html[data-motion='reduce'] .update-progress > i { animation: none !important; width: 100%; }
+/* a spinner must still say "busy": keep a slow rotation */
+html[data-motion='reduce'] .animate-spin, html[data-motion='reduce'] .ico-refresh.spinning { animation: spin 2s linear infinite !important; }
+html[data-motion='reduce'] [data-magnetic], html[data-motion='reduce'] .depth-l1, html[data-motion='reduce'] .depth-l2 { translate: none !important; }
+html[data-motion='reduce'] .btn:active, html[data-motion='reduce'] .btn-icon:active, html[data-motion='reduce'] .tile-hover:active { transform: none !important; }
+html[data-motion='reduce'] .btn::after, html[data-motion='reduce'] .depth::before, html[data-motion='reduce'] .depth::after { display: none !important; }
+html[data-motion='reduce'] ::view-transition-group(*), html[data-motion='reduce'] ::view-transition-old(*), html[data-motion='reduce'] ::view-transition-new(*) { animation: none !important; }
+
+/* ---------- appearance: «Крупный текст» (html[data-text='large']): root 112.5 %, fixed pixel sizes follow ---------- */
+html[data-text='large'] { font-size: 112.5%; }
+html[data-text='large'] body { font-size: calc(15px * 1.125); }
+html[data-text='large'][data-density='compact'] body { font-size: calc(14px * 1.125); }
+html[data-text='large'] .text-\[10px\] { font-size: calc(10px * 1.125); }
+html[data-text='large'] :is(.text-\[11px\], .adm-group-title, .pp-k) { font-size: calc(11px * 1.125); }
+html[data-text='large'] :is(.text-\[12px\], .tab-count, .hc-legend, .split-item small) { font-size: calc(12px * 1.125); }
+html[data-text='large'] :is(.text-\[13px\], .pill, .stat-k, .stat-s, .chip-glass, .srv-chip, .pp-v code) { font-size: calc(13px * 1.125); }
+html[data-text='large'] :is(.text-\[14px\], .text-\[14\.5px\], .hint-strip, .chip-filter, .btn-glass, .pp-v) { font-size: calc(14px * 1.125); }
+html[data-text='large'] .text-\[15px\] { font-size: calc(15px * 1.125); }
+html[data-text='large'] .stat-v { font-size: calc(34px * 1.125); }
+@media (min-width: 640px) { html[data-text='large'] .stat-v { font-size: calc(40px * 1.125); } }
+
+/* ---------- appearance: «Высокий контраст» (html[data-contrast='high']): black ink, firm borders ---------- */
+:root[data-contrast='high'] {
+  --ink: 0 0 0;
+  --mute: 52 58 72;
+  --line: 140 146 160;
+  --field: 70 76 90;
+  --ok: 8 88 44;
+  --warn: 104 66 0;
+  --bad: 150 18 18;
+  --badsolid: 150 18 18;
+  --tile-border: rgb(110 116 130);
+}
+:root[data-theme='dark'][data-contrast='high'] {
+  --ink: 255 255 255;
+  --mute: 206 211 224;
+  --line: 120 126 144;
+  --field: 160 166 184;
+  --ok: 134 239 172;
+  --warn: 253 224 71;
+  --bad: 252 165 165;
+  --tile-border: rgb(255 255 255 / 0.4);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light'])[data-contrast='high'] {
+    --ink: 255 255 255;
+    --mute: 206 211 224;
+    --line: 120 126 144;
+    --field: 160 166 184;
+    --ok: 134 239 172;
+    --warn: 253 224 71;
+    --bad: 252 165 165;
+    --tile-border: rgb(255 255 255 / 0.4);
+  }
+}
+html[data-contrast='high'] .panel, html[data-contrast='high'] .tile { border-width: 2px; }
+html[data-contrast='high'] .pill { box-shadow: inset 0 0 0 1px currentColor; }
+html[data-contrast='high'] .seg { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
+html[data-contrast='high'] .seg-item[aria-pressed='true'], html[data-contrast='high'] .seg-item[aria-current='page'], html[data-contrast='high'] .seg-item.on { box-shadow: inset 0 0 0 2px rgb(var(--ink)); }
+html[data-contrast='high'] .btn-soft, html[data-contrast='high'] .btn-icon, html[data-contrast='high'] .row-act { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
+html[data-contrast='high'] .hint-strip { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
+html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline; text-underline-offset: 3px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/locales"
   cat > "$APP_DIR/core-frontend/src/locales/en.ts" << '__COREGSM_EOF__'
@@ -27503,6 +30903,7 @@ const en: Record<keyof typeof ru, string> = {
   'pf.journal.noDevice': 'Unknown device',
   'pf.journal.k.login': 'Signed in',
   'pf.journal.k.login_failed': 'Failed sign-in attempt',
+  'pf.journal.k.login_new_device': 'Sign-in from a new device',
   'pf.journal.k.password_changed': 'Password changed',
   'pf.journal.k.email_changed': 'E-mail changed',
   'pf.journal.k.discord_linked': 'Discord linked',
@@ -27522,6 +30923,62 @@ const en: Record<keyof typeof ru, string> = {
   'pub.since': 'Member since {date}',
   'pub.about': 'About',
   'pub.stats': 'Statistics',
+
+  // ---- state views (empty / error / forbidden / not found / offline) ----
+  'state.empty.title': 'Nothing here yet',
+  'state.empty.text': 'Data will show up here once it is added.',
+  'state.error.title': 'Could not load',
+  'state.error.text': 'Something went wrong. Check your connection and try again.',
+  'state.forbidden.title': 'No access',
+  'state.forbidden.text': 'Your account is not allowed to open this section. Ask an administrator.',
+  'state.notfound.title': 'Nothing found',
+  'state.notfound.text': 'It may have been removed, or the link is out of date.',
+  'state.offline.title': 'Cannot reach the panel',
+  'state.offline.text': 'Check your network connection. The data refreshes by itself when it is back.',
+  'state.loading': 'Loading',
+
+  // ---- accessibility options (profile: appearance) ----
+  'pf.a11y.label': 'Accessibility',
+  'pf.a11y.motion': 'Reduce motion',
+  'pf.a11y.motionHint': 'Turns animations and smooth transitions off. When off, the panel follows your system setting.',
+  'pf.a11y.text': 'Large text',
+  'pf.a11y.textHint': 'Makes the text 12.5 % bigger across the whole interface.',
+  'pf.a11y.contrast': 'High contrast',
+  'pf.a11y.contrastHint': 'Black text and firmer borders around elements.',
+
+  // ---- e-mail: password reset, address confirmation ----
+  'forgot.link': 'Forgot your password?',
+  'forgot.title': 'Reset password',
+  'forgot.sub': 'Enter the username or e-mail of your account',
+  'forgot.login': 'Username or e-mail',
+  'forgot.enter': 'Enter a username or e-mail',
+  'forgot.submit': 'Send link',
+  'forgot.sending': 'Sending…',
+  'forgot.sentTitle': 'Check your mail',
+  'forgot.sentText': 'If the account has a confirmed e-mail, we have sent a letter with a password reset link. The link works for 30 minutes.',
+  'forgot.noMail': 'No letter? The address may not be confirmed in the profile: then only an administrator can reset the password.',
+  'forgot.back': 'Back to sign in',
+  'reset.title': 'New password',
+  'reset.sub': 'Choose a new password to sign in',
+  'reset.submit': 'Save password',
+  'reset.saving': 'Saving…',
+  'reset.doneTitle': 'Password changed',
+  'reset.doneText': 'All sessions were ended. Sign in with your new password.',
+  'reset.toLogin': 'Go to sign in',
+  'reset.badTitle': 'The link does not work',
+  'reset.badText': 'The link has expired or was already used. Request a new reset.',
+  'reset.again': 'Request again',
+  'verify.title': 'E-mail confirmation',
+  'verify.checking': 'Checking the link…',
+  'verify.okTitle': 'E-mail confirmed',
+  'verify.okText': 'The address {email} is confirmed.',
+  'verify.badTitle': 'The link does not work',
+  'verify.badText': 'The link has expired, was already used or the address was changed. Send the letter again from the profile.',
+  'verify.toProfile': 'Open profile',
+  'pf.emailv.verified': 'E-mail confirmed',
+  'pf.emailv.unverified': 'E-mail is not confirmed: password reset by e-mail and sign-in alerts are off.',
+  'pf.emailv.send': 'Send confirmation letter',
+  'pf.emailv.sent': 'Letter sent to {email}',
 };
 
 export default en;
@@ -27830,6 +31287,7 @@ const ru = {
   'pf.journal.noDevice': 'Устройство неизвестно',
   'pf.journal.k.login': 'Вход в аккаунт',
   'pf.journal.k.login_failed': 'Неудачная попытка входа',
+  'pf.journal.k.login_new_device': 'Вход с нового устройства',
   'pf.journal.k.password_changed': 'Пароль изменён',
   'pf.journal.k.email_changed': 'Почта изменена',
   'pf.journal.k.discord_linked': 'Discord привязан',
@@ -27849,6 +31307,62 @@ const ru = {
   'pub.since': 'С нами с {date}',
   'pub.about': 'О себе',
   'pub.stats': 'Статистика',
+
+  // ---- state views (empty / error / forbidden / not found / offline) ----
+  'state.empty.title': 'Здесь пока пусто',
+  'state.empty.text': 'Данные появятся здесь, когда их добавят.',
+  'state.error.title': 'Не удалось загрузить',
+  'state.error.text': 'Что-то пошло не так. Проверьте подключение и повторите попытку.',
+  'state.forbidden.title': 'Нет доступа',
+  'state.forbidden.text': 'У вашей учётной записи нет прав на этот раздел. Обратитесь к администратору.',
+  'state.notfound.title': 'Ничего не найдено',
+  'state.notfound.text': 'Возможно, это удалили, или ссылка устарела.',
+  'state.offline.title': 'Нет связи с панелью',
+  'state.offline.text': 'Проверьте подключение к сети. Данные обновятся сами, когда связь вернётся.',
+  'state.loading': 'Загрузка',
+
+  // ---- accessibility options (profile: appearance) ----
+  'pf.a11y.label': 'Доступность',
+  'pf.a11y.motion': 'Меньше движения',
+  'pf.a11y.motionHint': 'Отключает анимации и плавные переходы. Если не включать, панель следует настройке системы.',
+  'pf.a11y.text': 'Крупный текст',
+  'pf.a11y.textHint': 'Увеличивает шрифт во всём интерфейсе на 12,5 %.',
+  'pf.a11y.contrast': 'Высокий контраст',
+  'pf.a11y.contrastHint': 'Чёрный текст и более чёткие границы элементов.',
+
+  // ---- e-mail: password reset, address confirmation ----
+  'forgot.link': 'Забыли пароль?',
+  'forgot.title': 'Сброс пароля',
+  'forgot.sub': 'Укажите логин или почту аккаунта',
+  'forgot.login': 'Логин или e-mail',
+  'forgot.enter': 'Введите логин или почту',
+  'forgot.submit': 'Отправить ссылку',
+  'forgot.sending': 'Отправляю…',
+  'forgot.sentTitle': 'Проверьте почту',
+  'forgot.sentText': 'Если для этого аккаунта указана подтверждённая почта, мы отправили на неё письмо со ссылкой для сброса пароля. Ссылка действует 30 минут.',
+  'forgot.noMail': 'Письма нет? Почта могла не быть подтверждена в профиле: тогда сбросить пароль может только администратор.',
+  'forgot.back': 'Вернуться ко входу',
+  'reset.title': 'Новый пароль',
+  'reset.sub': 'Придумайте новый пароль для входа',
+  'reset.submit': 'Сохранить пароль',
+  'reset.saving': 'Сохраняю…',
+  'reset.doneTitle': 'Пароль изменён',
+  'reset.doneText': 'Все сеансы завершены. Войдите с новым паролем.',
+  'reset.toLogin': 'Перейти ко входу',
+  'reset.badTitle': 'Ссылка не работает',
+  'reset.badText': 'Ссылка устарела или уже использована. Запросите сброс ещё раз.',
+  'reset.again': 'Запросить заново',
+  'verify.title': 'Подтверждение почты',
+  'verify.checking': 'Проверяю ссылку…',
+  'verify.okTitle': 'Почта подтверждена',
+  'verify.okText': 'Адрес {email} подтверждён.',
+  'verify.badTitle': 'Ссылка не работает',
+  'verify.badText': 'Ссылка устарела, уже использована или адрес был изменён. Отправьте письмо ещё раз из профиля.',
+  'verify.toProfile': 'Открыть профиль',
+  'pf.emailv.verified': 'Почта подтверждена',
+  'pf.emailv.unverified': 'Почта не подтверждена: сброс пароля по почте и письма о входах не работают.',
+  'pf.emailv.send': 'Отправить письмо для подтверждения',
+  'pf.emailv.sent': 'Письмо отправлено на {email}',
 };
 
 export default ru;
@@ -27865,9 +31379,11 @@ import './styles/detail.css';
 import './styles/system.css';
 import './styles/profile.css';
 import App from './App';
+import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
-// before the first paint: the saved density, the magnetic call-to-action buttons and the sliding tab pill
+// before the first paint: the accessibility options (less motion, large text, high contrast), the saved density, the magnetic call-to-action buttons and the sliding tab pill
+initAppearance();
 initDensity();
 installMagnetic();
 installSegIndicator();
@@ -27900,13 +31416,14 @@ if (/[?&]flashdebug=1/.test(location.search)) void import('./flashDebug').then((
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type CertInfo, type Server, type ServerInput, type UpdateInfo } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
+import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
 import AlertsPage from './Alerts';
 import CardsPage from './Cards';
@@ -27931,12 +31448,54 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const current = known ? section : sections[0].id;
   // the sub-path belongs to the section that was asked for, not to the fallback
   const tail = current === section ? rest.join('/') : '';
-  const link = (s: AdminSection) => (
+  // «Недавние» (the last visited sections) and «Закреплённые» (stars): this browser only
+  const validIds = useMemo(() => ADMIN_SECTIONS.map((x) => x.id), []);
+  const [pins, setPins] = useState<string[]>(() => readIds(PINS_KEY, validIds, PINS_MAX));
+  const [recent, setRecent] = useState<string[]>(() => readIds(RECENT_KEY, validIds, RECENT_MAX));
+  useEffect(() => {
+    if (!isAdmin || home || current === 'start') return;
+    setRecent((r) => {
+      if (r[0] === current) return r;
+      const n = pushRecent(r, current);
+      writeIds(RECENT_KEY, n);
+      return n;
+    });
+  }, [current, home, isAdmin]);
+  const pin = (s: AdminSection) => {
+    const r = togglePin(pins, s.id);
+    if (r.full) { toast(`Можно закрепить не больше ${PINS_MAX} разделов`, 'info'); return; }
+    setPins(r.pins);
+    writeIds(PINS_KEY, r.pins);
+  };
+  const byId = (id: string) => ADMIN_SECTIONS.find((x) => x.id === id);
+  const pinned = pins.map(byId).filter((x): x is AdminSection => !!x);
+  const recents = recent.filter((id) => id !== current && !pins.includes(id)).map(byId).filter((x): x is AdminSection => !!x);
+
+  /** a link, and (for admins) the star that pins it: a sibling button, never a button inside the link */
+  const item = (s: AdminSection, scope = '') => {
+    const on = pins.includes(s.id);
+    return (
+      <div key={`${scope}${s.id}`} className="adm-item" data-current={current === s.id ? 'true' : undefined} data-pinned={on ? 'true' : undefined}>
+        {link(s, true)}
+        <button
+          type="button"
+          className="adm-pin"
+          aria-pressed={on}
+          aria-label={`${on ? 'Открепить' : 'Закрепить'}: ${s.label}`}
+          title={on ? 'Открепить' : 'Закрепить вверху'}
+          onClick={() => pin(s)}
+        >
+          <span aria-hidden>{on ? '★' : '☆'}</span>
+        </button>
+      </div>
+    );
+  };
+  const link = (s: AdminSection, pinnable = false) => (
     <a
       key={s.id}
       href={`#/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
-      className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+      className={`flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
       {s.icon()}
       {s.label}
@@ -27951,12 +31510,29 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {isAdmin ? (
           <>
             {link(START_SECTION)}
+            {pinned.length > 0 && (
+              <div className="contents md:block">
+                {divider}
+                <div id="adm-g-pins" className="adm-group-title hidden md:block">Закреплённые</div>
+                <div role="group" aria-labelledby="adm-g-pins" aria-label="Закреплённые" className="flex gap-1 md:flex-col">
+                  {pinned.map((s) => item(s, 'p-'))}
+                </div>
+              </div>
+            )}
+            {recents.length > 0 && (
+              <div className="hidden md:block">
+                <div id="adm-g-recent" className="adm-group-title">Недавние</div>
+                <div role="group" aria-labelledby="adm-g-recent" className="flex flex-col gap-1">
+                  {recents.map((s) => item(s, 'r-'))}
+                </div>
+              </div>
+            )}
             {ADMIN_GROUPS.map((g, gi) => (
               <div key={g.title} className="contents md:block">
                 {divider}
                 <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
                 <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
-                  {g.sections.map(link)}
+                  {g.sections.map((s) => item(s))}
                 </div>
               </div>
             ))}
@@ -27964,7 +31540,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         ) : (
           <>
             <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
-            {sections.map(link)}
+            {sections.map((s) => link(s))}
           </>
         )}
       </nav>
@@ -28135,7 +31711,7 @@ function ServersManage({ sub }: { sub: string }) {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!loaded && (
         <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
@@ -28143,7 +31719,7 @@ function ServersManage({ sub }: { sub: string }) {
         </div>
       )}
 
-      {loaded && servers.length === 0 && (
+      {loaded && !error && servers.length === 0 && (
         <Empty title="Серверов пока нет" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.">
           <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
         </Empty>
@@ -28520,7 +32096,7 @@ import { useState } from 'react';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
-import { AdminPage, ErrorLine, GoLink, IconBell, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, IconBell, LoadError, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -28575,7 +32151,7 @@ export default function AlertsPage() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && !info ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {tokenSet === false && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
           Оповещения не дойдут: у бота нет токена, он не подключён к Discord.
@@ -28659,7 +32235,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -28833,7 +32409,7 @@ export default function BackupsCard() {
       title="Резервные копии"
       description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
     >
-      <ErrorLine text={error} />
+      {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
 
       <div className="flex flex-wrap items-center gap-3">
         <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? 'Готовлю…' : 'Скачать полную копию'}</button>
@@ -28923,7 +32499,7 @@ export default function BackupsCard() {
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
-          <p className="font-semibold text-mute">Пока нет сохранённых копий. Нажмите «Создать копию на сервере» или включите расписание.</p>
+          <StateView kind="empty" compact bare title="Копий пока нет" text="Нажмите «Создать копию на сервере» или включите расписание." className="rounded-2xl bg-soft" />
         ) : (
           <ul className="divide-y divide-line rounded-2xl border border-line">
             {info.items.map((b) => (
@@ -28954,7 +32530,7 @@ import { useRef, useState, useEffect } from 'react';
 import { api, type Server } from '../api';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
-import { AdminPage, Burst, Empty, ErrorLine, IconCards, IconCheck, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
+import { AdminPage, Burst, Empty, ErrorLine, IconCards, LoadError, IconCheck, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -29007,13 +32583,13 @@ export default function CardsPage() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!loaded && (
         <div className="grid gap-5 xl:grid-cols-2" aria-busy="true" aria-label="Загрузка">
           {[0, 1].map((i) => <div key={i} className="skeleton panel h-[330px]" />)}
         </div>
       )}
-      {loaded && servers.length === 0 && (
+      {loaded && !error && servers.length === 0 && (
         <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»: для каждого появится своя картинка.">
           <a className="btn mt-3" href="#/admin/servers/new">Добавить сервер</a>
         </Empty>
@@ -29047,9 +32623,10 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Discord.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
+import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -29066,13 +32643,23 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [error, setError] = useState('');
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
+  const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
+  const [rechecking, setRechecking] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   // bindings removed with «Отменить» pending: hidden here until the request is really sent
   const [hidden, setHidden] = useState<number[]>([]);
 
   const load = () =>
-    Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
-      .then(([s, b, st, bs]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); })
+    Promise.all([
+      api<Server[]>('/servers'),
+      api<Binding[]>('/bindings'),
+      api<SettingsInfo>('/settings'),
+      api<BotStatus>('/bot/status'),
+      // the channel list is only for the setup wizard: a failure here is not a page error
+      api<DiscordGuild[]>('/discord/channels').catch(() => [] as DiscordGuild[]),
+    ])
+      .then(([s, b, st, bs, g]) => { setServers(s); setBindings(b); setSettings(st); setBot(bs); setGuilds(Array.isArray(g) ? g : []); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
@@ -29094,7 +32681,6 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
   const server = (id: number) => servers.find((s) => s.id === id);
   const shown = bindings.filter((b) => !hidden.includes(b.id));
-  const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
 
   // a binding is easy to create again and the Discord message stays, so it goes away at once and can be taken back for 6 s
   const removeMany = (ids: number[], text: string) => {
@@ -29136,12 +32722,13 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
     load();
   };
 
-  const steps = [
-    { done: servers.length > 0, title: 'Добавьте сервер', text: 'На вкладке «Серверы».' },
-    { done: bindings.length > 0, title: 'Пригласите бота и привяжите канал', text: 'Кнопка «Пригласить бота на сервер» откроет Discord: выберите сервер и подтвердите права. Затем выберите канал здесь.' },
-    { done: working, title: 'Бот отправит карточку', text: 'Одно сообщение, которое потом обновляется по таймеру.' },
-  ];
-  const allDone = steps.every((s) => s.done);
+  const wizard = computeWizard({ tokenSet: !!settings?.discordTokenSet, bot, guilds, bindings, serverCount: servers.length });
+  const recheck = async () => {
+    setRechecking(true);
+    await load();
+    setRechecking(false);
+  };
+  const newDraft = () => { if (servers.length > 0) setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' }); };
 
   return (
     <AdminPage
@@ -29157,7 +32744,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && servers.length === 0 && bindings.length === 0 && !settings ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {loaded && settings && !settings.discordTokenSet && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
           Бот не подключён: без токена он не сможет писать в Discord.
@@ -29184,23 +32771,23 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </Strip>
 
-      {!allDone && (
-        <ol className="grid gap-3 md:grid-cols-3">
-          {steps.map((s, i) => (
-            <li key={s.title} className="panel flex gap-3 p-5">
-              <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
-              <div>
-                <div className="font-black">{s.title}</div>
-                <div className="text-sm font-semibold text-mute">{s.text}</div>
-              </div>
-            </li>
-          ))}
-        </ol>
+      {loaded && settings && (!wizard.complete || wizardOpen) && (
+        <DiscordWizard
+          input={{ tokenSet: !!settings.discordTokenSet, bot, guilds, bindings, serverCount: servers.length }}
+          busy={rechecking}
+          onRecheck={() => void recheck()}
+          onCreateBinding={newDraft}
+          inviteUrl={bot?.inviteUrl ?? null}
+          onClose={wizard.complete ? () => setWizardOpen(false) : undefined}
+        />
+      )}
+      {loaded && settings && wizard.complete && !wizardOpen && (
+        <p className="text-sm font-bold"><button type="button" className="text-link hover:underline max-sm:min-h-[44px]" onClick={() => setWizardOpen(true)}>Мастер подключения</button></p>
       )}
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
 
-      {loaded && shown.length === 0 && (
+      {loaded && settings && shown.length === 0 && (
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
@@ -29679,10 +33266,81 @@ export default function EmbedPreview({ serverId, intervalSec }: { serverId: numb
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/ForgotPassword.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import AuthFlow from '../components/AuthFlow';
+import { api, ApiError } from '../api';
+import { t } from '../i18n';
+import { Button, ErrorLine, FieldError, useShake } from '../ui';
+
+/** #/forgot: asks for a login or e-mail; the answer is the same whether or not such an account exists */
+export default function ForgotPassword() {
+  const [login, setLogin] = useState('');
+  const [err, setErr] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  const [shakeCls, shake] = useShake();
+  useEffect(() => { ref.current?.focus(); }, []);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setErr(''); setError('');
+    if (!login.trim()) { setErr(t('forgot.enter')); ref.current?.focus(); shake(); return; }
+    setBusy(true);
+    try {
+      await api('/auth/forgot', 'POST', { login: login.trim() });
+      setSent(true);
+    } catch (e2) {
+      setError(e2 instanceof ApiError ? e2.message : t('common.retry'));
+      shake();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (sent) {
+    return (
+      <AuthFlow title={t('forgot.sentTitle')}>
+        <p className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok" role="status">{t('forgot.sentText')}</p>
+        <p className="text-sm font-semibold text-mute">{t('forgot.noMail')}</p>
+      </AuthFlow>
+    );
+  }
+
+  return (
+    <AuthFlow title={t('forgot.title')} subtitle={t('forgot.sub')}>
+      <form onSubmit={submit} noValidate className={`space-y-4 ${shakeCls}`}>
+        <div>
+          <label htmlFor="forgot-login" className="label">{t('forgot.login')}</label>
+          <input
+            id="forgot-login"
+            ref={ref}
+            className="input"
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            aria-invalid={err ? true : undefined}
+            aria-describedby={err ? 'forgot-login-err' : undefined}
+          />
+          <FieldError id="forgot-login-err" text={err} />
+        </div>
+        <ErrorLine text={error} />
+        <Button className="w-full" loading={busy}>{busy ? t('forgot.sending') : t('forgot.submit')}</Button>
+      </form>
+    </AuthFlow>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
-import { AdminPage, Empty, ErrorLine, IconJournal, PageHead, fmtDateTime, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, usePoll } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -29691,7 +33349,8 @@ export default function JournalPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
-  usePoll(() => api<Row[]>('/audit?limit=300').then((r) => { setRows(r); setError(''); }).catch((e: Error) => setError(e.message)), 20_000);
+  const load = () => api<Row[]>('/audit?limit=300').then((r) => { setRows(r); setError(''); }).catch((e: Error) => setError(e.message));
+  usePoll(load, 20_000);
 
   const needle = q.trim().toLowerCase();
   const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
@@ -29708,7 +33367,7 @@ export default function JournalPage() {
         />
       )}
     >
-      <ErrorLine text={error} />
+      {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
       {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
       {shown.length > 0 && (
@@ -29873,6 +33532,10 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         {t('login.remember')}
       </label>
 
+      <p className="-mt-1 text-sm font-bold">
+        <a href="#/forgot" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.link')}</a>
+      </p>
+
       <ErrorLine text={error} />
       <Button className="w-full" magnetic loading={busy} disabled={locked}>
         {busy ? t('login.checking') : t('login.submit')}
@@ -29898,7 +33561,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -30035,7 +33698,7 @@ function NewsList() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && list.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       <Strip className="!justify-start">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
@@ -30083,7 +33746,7 @@ function NewsList() {
 
       {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
-      {loaded && list.length === 0 && (
+      {loaded && !error && list.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
         </Empty>
@@ -30140,13 +33803,14 @@ export function NewsFeed() {
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
-  usePoll(() => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true)), 30_000);
+  const load = () => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true));
+  usePoll(load, 30_000);
 
   return (
     <div className="space-y-5">
       <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
-      <ErrorLine text={error} />
-      {loaded && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
+      {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+      {loaded && !error && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
       {!loaded && (
         <div className="mx-auto max-w-2xl space-y-4" aria-busy="true" aria-label="Загрузка">
           {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}
@@ -30185,7 +33849,7 @@ import {
 import { Preview } from '../components/news/Preview';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
-import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast } from '../ui';
 
 export { TEMPLATES };
 
@@ -30348,7 +34012,11 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const games = useMemo(() => gameColors(servers?.map((s) => s.game)), [servers]);
 
   if (!d) {
-    return error ? <ErrorLine text={error} /> : (
+    return error ? (
+      <StateView kind={errorKind(error)} text={errorKind(error) === 'error' ? error : undefined} onRetry={() => window.location.reload()}>
+        <a className="btn btn-soft" href="#/admin/news">К новостям</a>
+      </StateView>
+    ) : (
       <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
         <div className="skeleton h-9 w-56 rounded-full" />
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
@@ -30731,6 +34399,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Profile.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
+import EmailVerifyState from '../components/EmailVerifyState';
 import { useAuth } from '../auth';
 import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
@@ -30984,6 +34653,7 @@ function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
       {dirty && me.hasPassword && (
         <PasswordField id="pf-email-pass" label={t('pf.email.confirm')} value={current} onChange={setCurrent} autoComplete="current-password" />
       )}
+      {!dirty && <EmailVerifyState />}
       <ErrorLine text={error} />
       <Button loading={busy} disabled={!dirty}>{email.trim() ? t('pf.email.save') : t('pf.email.remove')}</Button>
     </form>
@@ -31431,6 +35101,81 @@ export default function Register({ onDone }: { onDone: () => void }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/ResetPassword.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import AuthFlow from '../components/AuthFlow';
+import { api, ApiError } from '../api';
+import { t } from '../i18n';
+import { Button, ErrorLine, PasswordField, PasswordStrength, useShake } from '../ui';
+
+/** #/reset/<token>: the link from the letter; sets a new password (valid 30 minutes, once) */
+export default function ResetPassword({ token }: { token: string }) {
+  const [pass, setPass] = useState('');
+  const [again, setAgain] = useState('');
+  const [passErr, setPassErr] = useState('');
+  const [againErr, setAgainErr] = useState('');
+  const [error, setError] = useState('');
+  const [bad, setBad] = useState(false);
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const passRef = useRef<HTMLInputElement>(null);
+  const againRef = useRef<HTMLInputElement>(null);
+  const [shakeCls, shake] = useShake();
+  useEffect(() => { passRef.current?.focus(); }, []);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setPassErr(''); setAgainErr(''); setError('');
+    if (pass.length < 8) { setPassErr(t('pf.pass.min')); passRef.current?.focus(); shake(); return; }
+    if (pass !== again) { setAgainErr(t('pf.pass.mismatch')); againRef.current?.focus(); shake(); return; }
+    setBusy(true);
+    try {
+      await api('/auth/reset', 'POST', { token, password: pass });
+      setDone(true);
+    } catch (err) {
+      // 400 with a password message is a form problem; any other 400 means the link is dead
+      if (err instanceof ApiError && err.status === 400 && !/парол/i.test(err.message)) setBad(true);
+      else setError((err as Error).message);
+      shake();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <AuthFlow title={t('reset.doneTitle')}>
+        <p className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok" role="status">{t('reset.doneText')}</p>
+        <a href="#/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>
+      </AuthFlow>
+    );
+  }
+
+  if (bad || !token) {
+    return (
+      <AuthFlow title={t('reset.badTitle')}>
+        <p className="rounded-2xl bg-badbg px-4 py-3 font-bold text-bad" role="alert">{t('reset.badText')}</p>
+        <a href="#/forgot" className="btn w-full justify-center">{t('reset.again')}</a>
+      </AuthFlow>
+    );
+  }
+
+  return (
+    <AuthFlow title={t('reset.title')} subtitle={t('reset.sub')}>
+      <form onSubmit={submit} noValidate className={`space-y-4 ${shakeCls}`}>
+        <PasswordField id="reset-pass" ref={passRef} label={t('pf.pass.new')} value={pass} onChange={setPass} autoComplete="new-password" error={passErr}>
+          <PasswordStrength password={pass} />
+        </PasswordField>
+        <PasswordField id="reset-again" ref={againRef} label={t('pf.pass.again')} value={again} onChange={(v) => { setAgain(v); setAgainErr(''); }} autoComplete="new-password" error={againErr} />
+        <ErrorLine text={error} />
+        <Button className="w-full" loading={busy}>{busy ? t('reset.saving') : t('reset.submit')}</Button>
+      </form>
+    </AuthFlow>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
@@ -31438,7 +35183,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import { connectGuide } from '../connectGuides';
-import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -31448,6 +35193,7 @@ import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import Passport from '../components/server/Passport';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
+import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
   TONE_TEXT, countryName, flagEmoji, guessMode, loadTone, pingTone, stagger, tabHref, useNow, type TabId,
@@ -31460,6 +35206,23 @@ type ServerDetails = BaseDetails & {
   createdAt?: number | null;
   discord?: { channelId: string; channelName: string | null; guildName: string | null; guildId: string | null; messageId: string | null; enabled: boolean }[];
 };
+
+// foldable blocks of the long tabs (ids are shared with the fold memory in localStorage, so keep them stable)
+const OVERVIEW_SECTIONS: SectionDef[] = [
+  { id: 'ov-stats', label: 'Показатели' },
+  { id: 'ov-chart', label: 'График' },
+  { id: 'ov-events', label: 'События', secondary: true },
+  { id: 'ov-players', label: 'Игроки' },
+];
+const HISTORY_SECTIONS: SectionDef[] = [
+  { id: 'hi-chart', label: 'График' },
+  { id: 'hi-stats', label: 'Показатели', secondary: true },
+];
+export const CONNECT_SECTIONS: SectionDef[] = [
+  { id: 'cn-steps', label: 'Как подключиться' },
+  { id: 'cn-qr', label: 'QR-код', secondary: true },
+];
+const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
 /** key={id}: switching between servers starts from a clean state */
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
@@ -31529,6 +35292,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const [busy, setBusy] = useState(false);
   const [favs, setFavs] = useState<number[] | null>(null);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const sections = useSectionState(ALL_SECTIONS);
   const seq = useRef(0);
   const firstHours = useRef(true);
   const prevNames = useRef<Set<string> | null>(null);
@@ -31605,12 +35369,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (!data) {
     return (
-      <div className="space-y-3.5" aria-busy="true" aria-label="Загрузка">
+      <div className="space-y-3.5" aria-busy={error ? undefined : true} aria-label={error ? undefined : 'Загрузка'}>
         {back}
-        <BannerSkeleton />
-        <TabBarSkeleton />
-        <TabSkeleton tab={tab} />
-        <ErrorLine text={error} />
+        {error ? <LoadError error={error} onRetry={() => void load()} /> : (
+          <>
+            <BannerSkeleton />
+            <TabBarSkeleton />
+            <TabSkeleton tab={tab} />
+          </>
+        )}
       </div>
     );
   }
@@ -31730,10 +35497,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   };
 
   const chartTile = (i: number, withSeries: boolean) => (
-    <section className={`tile tile-in p-4 sm:p-5 ${withSeries ? 'lg:col-span-12' : 'lg:col-span-8'}`} style={stagger(i)} aria-label="График">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-extrabold">{withSeries ? (series === 'ping' ? 'Пинг' : 'Игроки') : 'Игроки'}</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <SectionCard
+      id={withSeries ? 'hi-chart' : 'ov-chart'}
+      state={sections}
+      className={withSeries ? 'lg:col-span-12' : 'lg:col-span-8'}
+      style={stagger(i)}
+      title={withSeries ? (series === 'ping' ? 'Пинг' : 'Игроки') : 'Игроки'}
+      actions={(
+        <>
           {withSeries && (
             <div className="seg" role="group" aria-label="Показатель">
               {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
@@ -31742,17 +35513,18 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             </div>
           )}
           <PeriodSeg hours={hours} onChange={setHours} />
-        </div>
-      </div>
+        </>
+      )}
+    >
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
-    </section>
+    </SectionCard>
   );
 
   const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
@@ -31772,7 +35544,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(0, true)}
         </div>
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(false, 1)}</div>
+        <SectionCard id="hi-stats" state={sections} bare title="Показатели">
+          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(false, 1)}</div>
+        </SectionCard>
       </div>
     );
   } else if (tab === 'events') {
@@ -31783,21 +35557,21 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       </section>
     );
   } else if (tab === 'connect') {
-    panel = <ConnectTab game={s.game} address={s.address} />;
+    panel = <ConnectTab game={s.game} address={s.address} sections={sections} />;
   } else {
     panel = (
       <div className="space-y-3.5">
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
+        <SectionCard id="ov-stats" state={sections} bare title="Показатели">
+          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
+        </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(4, false)}
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-4" style={stagger(5)} aria-label="Последние события">
-            <h2 className="mb-3 text-base font-extrabold">Последние события</h2>
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-4" style={stagger(5)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
-          </section>
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-12" style={stagger(6)}>
-            <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+          </SectionCard>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-12" style={stagger(6)} title={<span className="inline-flex items-center">Сейчас в игре{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
-          </section>
+          </SectionCard>
         </div>
       </div>
     );
@@ -31880,7 +35654,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       </article>
       <ErrorLine text={error} />
 
-      <ServerTabs id={id} tab={tab} counts={{ events: events.length, players: s.online ? s.players : 0 }} />
+      <ServerTabs
+        id={id}
+        tab={tab}
+        counts={{ events: events.length, players: s.online ? s.players : 0 }}
+        toc={tab === '' ? <SectionChips defs={OVERVIEW_SECTIONS} state={sections} /> : tab === 'history' ? <SectionChips defs={HISTORY_SECTIONS} state={sections} /> : tab === 'connect' ? <SectionChips defs={CONNECT_SECTIONS} state={sections} /> : undefined}
+      />
 
       <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
         {panel}
@@ -32097,7 +35876,7 @@ import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
 import NotFound from '../components/NotFound';
@@ -32304,11 +36083,11 @@ function ServerList() {
           </div>
         </div>
       )}
-      <ErrorLine text={error} />
+      {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!loaded && (effView === 'list' ? <ListSkeleton /> : <TilesSkeleton />)}
 
-      {loaded && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
+      {loaded && !error && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
 
       {servers.length > 0 && visible.length === 0 && (
         effFilter === 'fav' && favCount === 0
@@ -32497,6 +36276,7 @@ import { useAuth } from '../auth';
 import { Switch as ToggleSwitch } from '../components/Switch';
 import { AdminPage, CopyButton, ErrorLine, Field, FieldError, GoLink, IconArrowUp, IconCheck, IconKey, IconSettings, IconTrash, IconUsers, Logo, InviteButton, PageHead, ProxyField, SaveBadge, Section, Spinner, TextField, ago, plural, toast, useAutosave, usePoll, type ProxyType } from '../ui';
 import BackupsCard from './Backups';
+import SmtpCard from '../components/SmtpCard';
 import { SETTINGS_TABS } from './adminNav';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
@@ -32717,6 +36497,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       {tab === 'security' && (
         <>
           <PasswordCard />
+          <SmtpCard />
           <Section title="Вход и доступ">
             <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
             <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
@@ -33519,7 +37300,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Status.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api, type StatusDay, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, IconServers, PageHead, StatusPill, ago, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, StatusPill, ago, usePoll } from '../ui';
 
 const dayColor = (pct: number | null) =>
   pct == null ? 'bg-line' : pct >= 99.9 ? 'bg-ok' : pct >= 95 ? 'bg-ok/60' : pct >= 80 ? 'bg-warn' : 'bg-bad';
@@ -33600,16 +37381,16 @@ export default function StatusPage() {
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
 
-  usePoll(() => {
+  const load = () =>
     api<StatusInfo>('/status')
       .then((r) => { setData(r); setError(''); })
       .catch((e: Error) => setError(e.message));
-  }, 60_000);
+  usePoll(load, 60_000);
 
   return (
     <div className="space-y-5">
       <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов за последние 30 дней" />
-      <ErrorLine text={error} />
+      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
         <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
@@ -33646,7 +37427,7 @@ __COREGSM_EOF__
 import { useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
-import { AdminPage, ErrorLine, GoLink, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -33685,7 +37466,8 @@ export default function SystemPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
 
-  usePoll(() => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message)), 15_000);
+  const load = () => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message));
+  usePoll(load, 15_000);
 
   const run = async () => {
     setRunning(true);
@@ -33725,7 +37507,7 @@ export default function SystemPage() {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && !h ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {h ? (
         <>
@@ -33809,7 +37591,7 @@ import { Gauge } from '../components/Gauge';
 import { confirmDialog, promptDialog } from '../confirm';
 import {
   AdminPage, Button, Empty, ErrorLine, FieldError, FillBar, GoLink, ICON_SET, IconBell, IconPlus, IconRefresh, IconTrash, IconEdit, Modal,
-  Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
+  Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StateView, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
   type SaveStatus,
 } from '../ui';
 
@@ -34032,10 +37814,16 @@ export default function UiKitPage() {
         </div>
       </Block>
 
-      <Block title="Пустое состояние">
+      <Block title="Пустое состояние" note="Семейство StateView: empty, error (с «Повторить»), forbidden, notfound, offline. Empty — старое имя варианта empty.">
         <Empty title="Здесь пока пусто" text="Объясните, что это за раздел, и дайте один понятный шаг.">
           <button className="btn mt-3"><IconPlus size={16} />Добавить</button>
         </Empty>
+        <div className="grid gap-3 md:grid-cols-2">
+          <StateView kind="error" compact onRetry={() => toast('Повтор запроса')} />
+          <StateView kind="forbidden" compact />
+          <StateView kind="notfound" compact action={<a className="btn btn-soft" href="#/servers">К серверам</a>} />
+          <StateView kind="offline" compact onRetry={() => toast('Повтор запроса')} />
+        </div>
       </Block>
 
       <Block title="Уведомления" note="toast(text), toast(text, 'err') и toast(text, { action: { label, onClick }, duration }). Удаление с отменой: undoable().">
@@ -34101,6 +37889,67 @@ export default function UiKitPage() {
         </div>
       </Block>
     </AdminPage>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/VerifyEmail.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import AuthFlow from '../components/AuthFlow';
+import { api } from '../api';
+import { useAuth } from '../auth';
+import { t } from '../i18n';
+import { Spinner } from '../ui';
+
+// one request per link even when the effect runs twice (React strict mode, re-render of the shell)
+const requested = new Map<string, Promise<{ email: string } | null>>();
+function confirmLink(token: string) {
+  let p = requested.get(token);
+  if (!p) {
+    p = api<{ ok: boolean; email: string }>('/auth/verify-email', 'POST', { token }).then((r) => ({ email: r.email })).catch(() => null);
+    requested.set(token, p);
+  }
+  return p;
+}
+
+/** #/verify/<token>: confirms the e-mail address of the account */
+export default function VerifyEmail({ token }: { token: string }) {
+  const { me, reload } = useAuth();
+  const [state, setState] = useState<'checking' | 'ok' | 'bad'>('checking');
+  const [email, setEmail] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    if (!token) { setState('bad'); return; }
+    void confirmLink(token).then((r) => {
+      if (!live) return;
+      if (r) { setEmail(r.email); setState('ok'); void reload(); } else setState('bad');
+    });
+    return () => { live = false; };
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const next = me ? <a href="#/profile" className="btn w-full justify-center">{t('verify.toProfile')}</a> : <a href="#/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>;
+
+  if (state === 'checking') {
+    return (
+      <AuthFlow title={t('verify.title')}>
+        <p className="flex items-center justify-center gap-2 font-semibold text-mute" role="status"><Spinner /> {t('verify.checking')}</p>
+      </AuthFlow>
+    );
+  }
+  if (state === 'ok') {
+    return (
+      <AuthFlow title={t('verify.okTitle')}>
+        <p className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok" role="status">{t('verify.okText', { email })}</p>
+        {next}
+      </AuthFlow>
+    );
+  }
+  return (
+    <AuthFlow title={t('verify.badTitle')}>
+      <p className="rounded-2xl bg-badbg px-4 py-3 font-bold text-bad" role="alert">{t('verify.badText')}</p>
+      {next}
+    </AuthFlow>
   );
 }
 __COREGSM_EOF__
@@ -34175,6 +38024,55 @@ export const ADMIN_LINKS: AdminLink[] = [
   { label: 'Привязать канал Discord', hint: 'Discord', href: '#/admin/discord/new', keywords: 'привязка канал сообщение бот', icon: IconDiscord },
   { label: 'Добавить сервер', hint: 'Серверы', href: '#/admin/servers/new', keywords: 'новый игровой сервер игра адрес', icon: IconServers },
 ];
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/adminShortcuts.ts" << '__COREGSM_EOF__'
+// «Недавние» and «Закреплённые» of the admin sidebar: plain list helpers (no DOM) plus the localStorage glue.
+
+export const RECENT_KEY = 'coregsm_admin_recent';
+export const PINS_KEY = 'coregsm_admin_pins';
+export const RECENT_MAX = 5;
+export const PINS_MAX = 6;
+
+/** a stored value -> a clean list: strings only, known ids only, no duplicates, at most `max` */
+export function cleanIds(raw: unknown, valid: readonly string[], max: number): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const x of raw) {
+    if (typeof x === 'string' && valid.includes(x) && !out.includes(x)) out.push(x);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** the section just visited goes first; older entries follow, the list stays short */
+export function pushRecent(list: string[], id: string, max = RECENT_MAX): string[] {
+  return [id, ...list.filter((x) => x !== id)].slice(0, max);
+}
+
+/** pin or unpin; `full` is true when the pin was refused because the limit is reached */
+export function togglePin(pins: string[], id: string, max = PINS_MAX): { pins: string[]; full: boolean } {
+  if (pins.includes(id)) return { pins: pins.filter((x) => x !== id), full: false };
+  if (pins.length >= max) return { pins, full: true };
+  return { pins: [...pins, id], full: false };
+}
+
+export function readIds(key: string, valid: readonly string[], max: number): string[] {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? cleanIds(JSON.parse(raw), valid, max) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeIds(key: string, ids: string[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(ids));
+  } catch {
+    /* private mode: not remembered */
+  }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
@@ -34648,11 +38546,14 @@ export { Button } from './components/Button';
 export type { ButtonProps } from './components/Button';
 export { Switch } from './components/Switch';
 export { SplitButton } from './components/SplitButton';
+export { StateView, LoadError, errorKind } from './components/StateView';
+export type { StateKind } from './components/StateView';
+import { StateView } from './components/StateView';
 export type { SplitItem } from './components/SplitButton';
 export { useFlashOnChange, useDepth, useDensity, setDensity, prefersReducedMotion } from './useMotion';
 export type { Density } from './useMotion';
 
-const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+const reducedMotion = () => typeof window !== 'undefined' && (document.documentElement.dataset.motion === 'reduce' || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
 /** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
 export function useTween(value: number, ms = 600): number {
@@ -35218,15 +39119,9 @@ export function ErrorLine({ text }: { text: string }) {
   return text ? <p className="rounded-2xl bg-badbg px-4 py-2.5 font-bold text-bad" role="alert">{text}</p> : null;
 }
 
+/** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
 export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
-  return (
-    <div className="panel fade-in flex flex-col items-center gap-2 px-6 py-10 text-center">
-      {art ?? <div className="mb-1 grid h-14 w-14 place-items-center rounded-3xl bg-soft text-2xl text-link">+</div>}
-      <h3 className="text-lg font-black">{title}</h3>
-      <p className="max-w-sm font-semibold text-mute">{text}</p>
-      {children}
-    </div>
-  );
+  return <StateView kind="empty" title={title} text={text} art={art}>{children}</StateView>;
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
@@ -35885,8 +39780,9 @@ import { flushSync } from 'react-dom';
 // Small motion helpers: no animation library, CSS does the painting. Everything here is a no-op for
 // prefers-reduced-motion and for coarse pointers, and nothing throws where an API is missing.
 
+/** the OS setting, or «Меньше движения» chosen in the profile (data-motion on <html>) */
 export const prefersReducedMotion = () =>
-  typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  typeof window !== 'undefined' && (document.documentElement.dataset.motion === 'reduce' || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
 export const hasFinePointer = () =>
   typeof window !== 'undefined' && !!window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;

@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { COUNTRIES } from '../../countries';
+import { getPrefs } from '../../i18n';
 
 export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
@@ -117,3 +118,19 @@ export function pingTone(ping: number): { tone: Tone; label: string } {
 }
 
 export const TONE_TEXT: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' };
+
+/** «server-name-24h-20261013.png»: the date is the user's own calendar day (their time zone) */
+export function exportFileName(title: string, hours: number, ts: number): string {
+  const slug = (title || 'server').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '') || 'server';
+  let day = '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: getPrefs().timezone || undefined, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(ts);
+    const o: Record<string, string> = {};
+    for (const p of parts) o[p.type] = p.value;
+    day = `${o.year}${o.month}${o.day}`;
+  } catch {
+    const d = new Date(ts);
+    day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  }
+  return `${slug}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}-${day}.png`;
+}

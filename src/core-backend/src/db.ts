@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey } from './secrets.js';
+import { runMigrations } from './migrations.js';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 export const DATA_DIR = path.dirname(dbPath);
@@ -57,6 +59,8 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 // SQLite lower()/NOCASE only fold ASCII: logins in any alphabet are compared with this
 db.function('ulower', { deterministic: true }, (s) => String(s).toLowerCase());
+// true when the database file already had data before this start (migrations then make a copy first)
+const hadSchema = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -259,18 +263,68 @@ try {
   /* column already exists */
 }
 
+// versioned migrations (v1 = everything above); a copy of an existing database is made first, see migrations.ts
+runMigrations(db, { dataDir: DATA_DIR, existing: hadSchema });
+
 /** Title shown for a server: the custom name if set, otherwise the name the game server reports, otherwise host:port. */
 export const EFFECTIVE_NAME = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)";
 
+const warnedSecrets = new Set<string>();
+
+/** Secret settings (see secrets.ts) are decrypted here; one that cannot be decrypted reads as "not set". */
 export function getSetting(key: string): string | null {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-  return row ? row.value : null;
+  if (!row) return null;
+  if (!isSecretKey(key)) return row.value;
+  try {
+    return decryptSecret(row.value);
+  } catch (e) {
+    if (!warnedSecrets.has(key)) {
+      warnedSecrets.add(key);
+      console.error(`setting "${key}" cannot be decrypted (${(e as Error).message}); enter it again in the panel`);
+    }
+    return null;
+  }
 }
 
-/** value === null (or empty string) deletes the setting */
+/** value === null (or empty string) deletes the setting; secret keys are stored encrypted */
 export function setSetting(key: string, value: string | null): void {
   if (value === null || value === '') db.prepare('DELETE FROM settings WHERE key = ?').run(key);
-  else db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+  else {
+    warnedSecrets.delete(key);
+    const stored = isSecretKey(key) ? encryptSecret(value) : value;
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, stored);
+  }
+}
+
+/** Secret settings whose stored value cannot be decrypted with the current key. */
+export function undecryptableSecrets(): string[] {
+  const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+  return rows.filter((r) => isSecretKey(r.key) && isEncrypted(r.value) && !canDecrypt(r.value)).map((r) => r.key);
+}
+
+// secrets stored in plaintext by older versions are encrypted once (idempotent: encrypted rows are skipped)
+try {
+  const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+  const upd = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+  db.transaction(() => {
+    for (const r of rows) if (isSecretKey(r.key) && r.value !== '' && !isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
+  })();
+} catch (e) {
+  // no key at all: index.ts stops with a clear message right after the imports
+  console.error('secrets migration skipped:', (e as Error).message);
+}
+if (restoredNow) {
+  const lost = undecryptableSecrets();
+  if (lost.length) {
+    console.error(`restored backup: these secrets were encrypted with another key and are unreadable: ${lost.join(', ')}`);
+    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(
+      Date.now(),
+      'система',
+      'Копия восстановлена, но часть секретов не расшифрована (другой SECRETS_KEY/JWT_SECRET): введите их заново',
+      lost.join(', '),
+    );
+  }
 }
 
 export interface ServerRow {

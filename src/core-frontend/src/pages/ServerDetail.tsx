@@ -4,7 +4,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import { connectGuide } from '../connectGuides';
-import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -14,6 +14,7 @@ import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import Passport from '../components/server/Passport';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
+import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
   TONE_TEXT, countryName, flagEmoji, guessMode, loadTone, pingTone, stagger, tabHref, useNow, type TabId,
@@ -26,6 +27,23 @@ type ServerDetails = BaseDetails & {
   createdAt?: number | null;
   discord?: { channelId: string; channelName: string | null; guildName: string | null; guildId: string | null; messageId: string | null; enabled: boolean }[];
 };
+
+// foldable blocks of the long tabs (ids are shared with the fold memory in localStorage, so keep them stable)
+const OVERVIEW_SECTIONS: SectionDef[] = [
+  { id: 'ov-stats', label: 'Показатели' },
+  { id: 'ov-chart', label: 'График' },
+  { id: 'ov-events', label: 'События', secondary: true },
+  { id: 'ov-players', label: 'Игроки' },
+];
+const HISTORY_SECTIONS: SectionDef[] = [
+  { id: 'hi-chart', label: 'График' },
+  { id: 'hi-stats', label: 'Показатели', secondary: true },
+];
+export const CONNECT_SECTIONS: SectionDef[] = [
+  { id: 'cn-steps', label: 'Как подключиться' },
+  { id: 'cn-qr', label: 'QR-код', secondary: true },
+];
+const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
 /** key={id}: switching between servers starts from a clean state */
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
@@ -95,6 +113,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const [busy, setBusy] = useState(false);
   const [favs, setFavs] = useState<number[] | null>(null);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const sections = useSectionState(ALL_SECTIONS);
   const seq = useRef(0);
   const firstHours = useRef(true);
   const prevNames = useRef<Set<string> | null>(null);
@@ -171,12 +190,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (!data) {
     return (
-      <div className="space-y-3.5" aria-busy="true" aria-label="Загрузка">
+      <div className="space-y-3.5" aria-busy={error ? undefined : true} aria-label={error ? undefined : 'Загрузка'}>
         {back}
-        <BannerSkeleton />
-        <TabBarSkeleton />
-        <TabSkeleton tab={tab} />
-        <ErrorLine text={error} />
+        {error ? <LoadError error={error} onRetry={() => void load()} /> : (
+          <>
+            <BannerSkeleton />
+            <TabBarSkeleton />
+            <TabSkeleton tab={tab} />
+          </>
+        )}
       </div>
     );
   }
@@ -296,10 +318,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   };
 
   const chartTile = (i: number, withSeries: boolean) => (
-    <section className={`tile tile-in p-4 sm:p-5 ${withSeries ? 'lg:col-span-12' : 'lg:col-span-8'}`} style={stagger(i)} aria-label="График">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-extrabold">{withSeries ? (series === 'ping' ? 'Пинг' : 'Игроки') : 'Игроки'}</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <SectionCard
+      id={withSeries ? 'hi-chart' : 'ov-chart'}
+      state={sections}
+      className={withSeries ? 'lg:col-span-12' : 'lg:col-span-8'}
+      style={stagger(i)}
+      title={withSeries ? (series === 'ping' ? 'Пинг' : 'Игроки') : 'Игроки'}
+      actions={(
+        <>
           {withSeries && (
             <div className="seg" role="group" aria-label="Показатель">
               {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
@@ -308,17 +334,18 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             </div>
           )}
           <PeriodSeg hours={hours} onChange={setHours} />
-        </div>
-      </div>
+        </>
+      )}
+    >
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
-    </section>
+    </SectionCard>
   );
 
   const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
@@ -338,7 +365,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(0, true)}
         </div>
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(false, 1)}</div>
+        <SectionCard id="hi-stats" state={sections} bare title="Показатели">
+          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(false, 1)}</div>
+        </SectionCard>
       </div>
     );
   } else if (tab === 'events') {
@@ -349,21 +378,21 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       </section>
     );
   } else if (tab === 'connect') {
-    panel = <ConnectTab game={s.game} address={s.address} />;
+    panel = <ConnectTab game={s.game} address={s.address} sections={sections} />;
   } else {
     panel = (
       <div className="space-y-3.5">
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
+        <SectionCard id="ov-stats" state={sections} bare title="Показатели">
+          <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
+        </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(4, false)}
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-4" style={stagger(5)} aria-label="Последние события">
-            <h2 className="mb-3 text-base font-extrabold">Последние события</h2>
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-4" style={stagger(5)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
-          </section>
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-12" style={stagger(6)}>
-            <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+          </SectionCard>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-12" style={stagger(6)} title={<span className="inline-flex items-center">Сейчас в игре{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
-          </section>
+          </SectionCard>
         </div>
       </div>
     );
@@ -446,7 +475,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       </article>
       <ErrorLine text={error} />
 
-      <ServerTabs id={id} tab={tab} counts={{ events: events.length, players: s.online ? s.players : 0 }} />
+      <ServerTabs
+        id={id}
+        tab={tab}
+        counts={{ events: events.length, players: s.online ? s.players : 0 }}
+        toc={tab === '' ? <SectionChips defs={OVERVIEW_SECTIONS} state={sections} /> : tab === 'history' ? <SectionChips defs={HISTORY_SECTIONS} state={sections} /> : tab === 'connect' ? <SectionChips defs={CONNECT_SECTIONS} state={sections} /> : undefined}
+      />
 
       <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
         {panel}

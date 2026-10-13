@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
 import { fmtDateTime, plural, smoothPath, toast } from '../../ui';
-import { pingTone, TONE_TEXT } from './helpers';
+import { exportFileName, pingTone, TONE_TEXT } from './helpers';
 
 type Point = ServerDetails['points'][number];
 type Ev = ServerDetails['events'][number];
@@ -39,8 +39,8 @@ const fullTime = (ts: number) =>
  * that follows the mouse / finger / pen and the arrow keys, Y axis that fits the data.
  */
 export default function HistoryChart({
-  points, hours, max, color, series = 'players', loading = false, events = [], title = '',
-}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string }) {
+  points, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '',
+}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string }) {
   const L = 38, R = 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
@@ -152,7 +152,11 @@ export default function HistoryChart({
   const tx = hp ? Math.min(W - TW / 2 - 2, Math.max(TW / 2 + 2, x(hp.ts))) : 0;
   const seriesName = series === 'ping' ? 'Пинг' : 'Игроки';
 
-  /** the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas */
+  /**
+   * the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas.
+   * The picture carries a caption band (server, game, period, dates, panel host, generation time in the user's zone)
+   * and the legend, so it can be posted anywhere without explanation.
+   */
   const exportPng = async () => {
     const el = svg.current;
     if (!el || saving) return;
@@ -166,21 +170,69 @@ export default function HistoryChart({
         const cs = getComputedStyle(n);
         for (const p of props) dst[i].style.setProperty(p, cs.getPropertyValue(p));
       });
+      const CAP = 76;
+      const LEG = 32;
+      const total = CAP + H + LEG;
       clone.removeAttribute('class');
       clone.removeAttribute('aria-hidden');
       clone.setAttribute('x', '0');
-      clone.setAttribute('y', '38');
+      clone.setAttribute('y', String(CAP));
       clone.setAttribute('width', String(W));
       clone.setAttribute('height', String(H));
       const bs = getComputedStyle(document.body);
       const bg = bs.backgroundColor && bs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? bs.backgroundColor : '#ffffff';
+      const root = getComputedStyle(document.documentElement);
+      const rgbVar = (name: string, fallback: string) => {
+        const v = root.getPropertyValue(name).trim();
+        return /^\d+\s+\d+\s+\d+$/.test(v) ? `rgb(${v.split(/\s+/).join(',')})` : fallback;
+      };
+      // the curve colour may be written with a CSS variable: resolve it for the standalone picture
+      const probe = document.createElement('span');
+      probe.style.color = color;
+      document.body.appendChild(probe);
+      const curve = getComputedStyle(probe).color || '#4f46e5';
+      probe.remove();
+      const mute = rgbVar('--mute', '#5c6372');
+      const line = rgbVar('--line', '#e7e9f0');
+      const bad = rgbVar('--bad', '#b92828');
       const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
-      const head = `${title ? `${title} · ` : ''}${seriesName}`;
+      const fit = (t: string, px: number, max: number) => {
+        const n = Math.max(8, Math.floor(max / (px * 0.58)));
+        return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+      };
+      const font = esc(bs.fontFamily);
+      const periodName = hours <= 24 ? '24 часа' : hours <= 168 ? '7 дней' : '30 дней';
+      const stamp = Date.now();
+      const range = `${fmtDateTime(stamp - hours * 3600_000)} - ${fmtDateTime(stamp)}`;
+      const head = title || 'Сервер';
+      const sub1 = `${game ? `${game} · ` : ''}${seriesName} · ${periodName} · ${range}`;
+      const sub2 = `CoreGSM · ${window.location.host} · создано ${fmtDateTime(stamp)}`;
+      // legend: the curve, the outage band and the markers that are on the chart
+      const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
+        { kind: 'curve', label: seriesName },
+        ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: 'сервер не отвечал' }] : []),
+        ...(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик', fill: MARK[t].fill })),
+      ];
+      let lx = 12;
+      const ly = CAP + H + 20;
+      let legend = '';
+      for (const it of items) {
+        if (it.kind === 'curve') legend += `<rect x="${lx}" y="${ly - 4}" width="18" height="4" rx="2" fill="${curve}"/>`;
+        else if (it.kind === 'band') legend += `<rect x="${lx}" y="${ly - 9}" width="18" height="12" rx="3" fill="${bad}" fill-opacity="0.25"/>`;
+        else legend += `<circle cx="${lx + 7}" cy="${ly - 3}" r="6" fill="${it.fill}"/>`;
+        const tx0 = lx + 24;
+        legend += `<text x="${tx0}" y="${ly}" fill="${mute}" font-family="${font}" font-size="12" font-weight="700">${esc(it.label)}</text>`;
+        lx = tx0 + it.label.length * 7 + 18;
+      }
       const out =
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H + 38}" viewBox="0 0 ${W} ${H + 38}">` +
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${total}" viewBox="0 0 ${W} ${total}">` +
         `<rect width="100%" height="100%" fill="${bg}"/>` +
-        `<text x="${L}" y="24" fill="${bs.color}" font-family="${esc(bs.fontFamily)}" font-size="15" font-weight="800">${esc(head)}</text>` +
+        `<text x="12" y="27" fill="${bs.color}" font-family="${font}" font-size="17" font-weight="800">${esc(fit(head, 17, W - 24))}</text>` +
+        `<text x="12" y="47" fill="${mute}" font-family="${font}" font-size="12.5" font-weight="700">${esc(fit(sub1, 12.5, W - 24))}</text>` +
+        `<text x="12" y="65" fill="${mute}" font-family="${font}" font-size="11.5" font-weight="600">${esc(fit(sub2, 11.5, W - 24))}</text>` +
+        `<line x1="12" x2="${W - 12}" y1="${CAP - 2}" y2="${CAP - 2}" stroke="${line}" stroke-width="1"/>` +
         new XMLSerializer().serializeToString(clone) +
+        legend +
         `</svg>`;
       const url = URL.createObjectURL(new Blob([out], { type: 'image/svg+xml;charset=utf-8' }));
       const img = new Image();
@@ -188,18 +240,18 @@ export default function HistoryChart({
       const k = 2;
       const cv = document.createElement('canvas');
       cv.width = W * k;
-      cv.height = (H + 38) * k;
+      cv.height = total * k;
       const ctx = cv.getContext('2d');
       if (!ctx) throw new Error('canvas');
       ctx.scale(k, k);
-      ctx.drawImage(img, 0, 0, W, H + 38);
+      ctx.drawImage(img, 0, 0, W, total);
       URL.revokeObjectURL(url);
       const blob = await new Promise<Blob | null>((ok) => cv.toBlob(ok, 'image/png'));
       if (!blob) throw new Error('blob');
       const a = document.createElement('a');
       const dl = URL.createObjectURL(blob);
       a.href = dl;
-      a.download = `coregsm-${series}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}.png`;
+      a.download = exportFileName(title, hours, stamp);
       document.body.appendChild(a);
       a.click();
       a.remove();

@@ -4,7 +4,7 @@ import { Gauge } from '../components/Gauge';
 import { confirmDialog, promptDialog } from '../confirm';
 import {
   AdminPage, Button, Empty, ErrorLine, FieldError, FillBar, GoLink, ICON_SET, IconBell, IconPlus, IconRefresh, IconTrash, IconEdit, Modal,
-  Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
+  Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StateView, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
   type SaveStatus,
 } from '../ui';
 
@@ -227,10 +227,16 @@ export default function UiKitPage() {
         </div>
       </Block>
 
-      <Block title="Пустое состояние">
+      <Block title="Пустое состояние" note="Семейство StateView: empty, error (с «Повторить»), forbidden, notfound, offline. Empty — старое имя варианта empty.">
         <Empty title="Здесь пока пусто" text="Объясните, что это за раздел, и дайте один понятный шаг.">
           <button className="btn mt-3"><IconPlus size={16} />Добавить</button>
         </Empty>
+        <div className="grid gap-3 md:grid-cols-2">
+          <StateView kind="error" compact onRetry={() => toast('Повтор запроса')} />
+          <StateView kind="forbidden" compact />
+          <StateView kind="notfound" compact action={<a className="btn btn-soft" href="#/servers">К серверам</a>} />
+          <StateView kind="offline" compact onRetry={() => toast('Повтор запроса')} />
+        </div>
       </Block>
 
       <Block title="Уведомления" note="toast(text), toast(text, 'err') и toast(text, { action: { label, onClick }, duration }). Удаление с отменой: undoable().">

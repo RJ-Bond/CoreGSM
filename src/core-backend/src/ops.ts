@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import tls from 'node:tls';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
+import { currentFlags } from './health.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const startedAt = Date.now();
@@ -60,6 +61,10 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
   { m: 'PUT', re: /^\/api\/backups\/settings$/, label: 'Изменены настройки резервного копирования', detail: (r) => ['schedule', 'keep', 'remoteUrl', 'passphrase'].filter((k) => r.body?.[k] !== undefined).map((k) => (k === 'schedule' ? `расписание: ${s(r.body?.schedule, 10)}` : k === 'keep' ? `хранить: ${Number(r.body?.keep) || ''}` : k === 'remoteUrl' ? 'внешняя копия' : 'шифрование')).join(', ') },
   { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
+  { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
+  { m: 'PUT', re: /^\/api\/maintenance\/(\d+)$/, label: 'Изменено окно обслуживания', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name)}`.trim() },
+  { m: 'DELETE', re: /^\/api\/maintenance\/(\d+)$/, label: 'Удалено окно обслуживания', pre: (id) => `#${id}` },
+  { m: 'PUT', re: /^\/api\/settings\/poll$/, label: 'Изменены настройки опроса серверов', detail: (r) => [r.body?.failThreshold !== undefined ? `подтверждение: ${Number(r.body.failThreshold)}` : '', r.body?.concurrency !== undefined ? `параллельно: ${Number(r.body.concurrency)}` : ''].filter(Boolean).join(', ') },
   { m: 'DELETE', re: /^\/api\/backups\/([^/]+)$/, label: 'Удалена резервная копия', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/backups\/([^/]+)\/restore$/, label: 'Восстановлена копия из архива', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
@@ -242,6 +247,8 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
       guilds: guildCount(),
       publicBase: publicBase(),
       cert,
+      // problems found in the health history (bot_offline, poll_slow, disk_low, db_growing)
+      flags: currentFlags(),
     });
   });
 

@@ -8,9 +8,11 @@ import './styles/detail.css';
 import './styles/system.css';
 import './styles/profile.css';
 import App from './App';
+import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
-// before the first paint: the saved density, the magnetic call-to-action buttons and the sliding tab pill
+// before the first paint: the accessibility options (less motion, large text, high contrast), the saved density, the magnetic call-to-action buttons and the sliding tab pill
+initAppearance();
 initDensity();
 installMagnetic();
 installSegIndicator();

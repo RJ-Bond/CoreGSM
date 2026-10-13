@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type CertInfo, type Server, type ServerInput, type UpdateInfo } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
+import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
 import AlertsPage from './Alerts';
 import CardsPage from './Cards';
@@ -29,12 +30,54 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const current = known ? section : sections[0].id;
   // the sub-path belongs to the section that was asked for, not to the fallback
   const tail = current === section ? rest.join('/') : '';
-  const link = (s: AdminSection) => (
+  // «Недавние» (the last visited sections) and «Закреплённые» (stars): this browser only
+  const validIds = useMemo(() => ADMIN_SECTIONS.map((x) => x.id), []);
+  const [pins, setPins] = useState<string[]>(() => readIds(PINS_KEY, validIds, PINS_MAX));
+  const [recent, setRecent] = useState<string[]>(() => readIds(RECENT_KEY, validIds, RECENT_MAX));
+  useEffect(() => {
+    if (!isAdmin || home || current === 'start') return;
+    setRecent((r) => {
+      if (r[0] === current) return r;
+      const n = pushRecent(r, current);
+      writeIds(RECENT_KEY, n);
+      return n;
+    });
+  }, [current, home, isAdmin]);
+  const pin = (s: AdminSection) => {
+    const r = togglePin(pins, s.id);
+    if (r.full) { toast(`Можно закрепить не больше ${PINS_MAX} разделов`, 'info'); return; }
+    setPins(r.pins);
+    writeIds(PINS_KEY, r.pins);
+  };
+  const byId = (id: string) => ADMIN_SECTIONS.find((x) => x.id === id);
+  const pinned = pins.map(byId).filter((x): x is AdminSection => !!x);
+  const recents = recent.filter((id) => id !== current && !pins.includes(id)).map(byId).filter((x): x is AdminSection => !!x);
+
+  /** a link, and (for admins) the star that pins it: a sibling button, never a button inside the link */
+  const item = (s: AdminSection, scope = '') => {
+    const on = pins.includes(s.id);
+    return (
+      <div key={`${scope}${s.id}`} className="adm-item" data-current={current === s.id ? 'true' : undefined} data-pinned={on ? 'true' : undefined}>
+        {link(s, true)}
+        <button
+          type="button"
+          className="adm-pin"
+          aria-pressed={on}
+          aria-label={`${on ? 'Открепить' : 'Закрепить'}: ${s.label}`}
+          title={on ? 'Открепить' : 'Закрепить вверху'}
+          onClick={() => pin(s)}
+        >
+          <span aria-hidden>{on ? '★' : '☆'}</span>
+        </button>
+      </div>
+    );
+  };
+  const link = (s: AdminSection, pinnable = false) => (
     <a
       key={s.id}
       href={`#/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
-      className={`flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+      className={`flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
       {s.icon()}
       {s.label}
@@ -49,12 +92,29 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {isAdmin ? (
           <>
             {link(START_SECTION)}
+            {pinned.length > 0 && (
+              <div className="contents md:block">
+                {divider}
+                <div id="adm-g-pins" className="adm-group-title hidden md:block">Закреплённые</div>
+                <div role="group" aria-labelledby="adm-g-pins" aria-label="Закреплённые" className="flex gap-1 md:flex-col">
+                  {pinned.map((s) => item(s, 'p-'))}
+                </div>
+              </div>
+            )}
+            {recents.length > 0 && (
+              <div className="hidden md:block">
+                <div id="adm-g-recent" className="adm-group-title">Недавние</div>
+                <div role="group" aria-labelledby="adm-g-recent" className="flex flex-col gap-1">
+                  {recents.map((s) => item(s, 'r-'))}
+                </div>
+              </div>
+            )}
             {ADMIN_GROUPS.map((g, gi) => (
               <div key={g.title} className="contents md:block">
                 {divider}
                 <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
                 <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
-                  {g.sections.map(link)}
+                  {g.sections.map((s) => item(s))}
                 </div>
               </div>
             ))}
@@ -62,7 +122,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         ) : (
           <>
             <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
-            {sections.map(link)}
+            {sections.map((s) => link(s))}
           </>
         )}
       </nav>
@@ -233,7 +293,7 @@ function ServersManage({ sub }: { sub: string }) {
         </PageHead>
       )}
     >
-      <ErrorLine text={error} />
+      {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!loaded && (
         <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
@@ -241,7 +301,7 @@ function ServersManage({ sub }: { sub: string }) {
         </div>
       )}
 
-      {loaded && servers.length === 0 && (
+      {loaded && !error && servers.length === 0 && (
         <Empty title="Серверов пока нет" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.">
           <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
         </Empty>

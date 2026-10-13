@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { tabHref, type TabId } from './helpers';
 
 export const TAB_LIST: { id: TabId; label: string }[] = [
@@ -16,7 +16,7 @@ export const panelDomId = (id: TabId) => `srv-panel-${id || 'overview'}`;
  * Tab strip of the server page: a sliding `.seg` capsule, sticky under the glass header, scrolls sideways on phones
  * (the active tab is centred). Tabs are links, so the address bar and the back button work.
  */
-export default function ServerTabs({ id, tab, counts }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>> }) {
+export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode }) {
   const seg = useRef<HTMLElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -49,7 +49,7 @@ export default function ServerTabs({ id, tab, counts }: { id: number; tab: TabId
     const on = s?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (!s || !on || s.scrollWidth <= s.clientWidth) return;
     const left = on.offsetLeft - (s.clientWidth - on.offsetWidth) / 2;
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce';
     s.scrollTo({ left: Math.max(0, left), behavior: reduce ? 'auto' : 'smooth' });
   }, [tab]);
 
@@ -98,6 +98,7 @@ export default function ServerTabs({ id, tab, counts }: { id: number; tab: TabId
             );
           })}
         </nav>
+        {toc}
       </div>
     </>
   );

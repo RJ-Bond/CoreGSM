@@ -1,8 +1,9 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode, type AccentMode } from '../../accent';
+import { useAppearance, type Appearance } from '../../appearance';
 import { gameColor } from '../../games';
 import { type Prefs, type TKey, t, updatePrefs, useI18n } from '../../i18n';
-import { fmtDateTime, Section, toast, useDensity, type Density } from '../../ui';
+import { fmtDateTime, Section, Switch, toast, useDensity, type Density } from '../../ui';
 
 const ACCENT_TEXT: Record<AccentMode, { label: TKey; hint: TKey }> = {
   auto: { label: 'pf.accent.auto', hint: 'pf.accent.autoHint' },
@@ -17,6 +18,12 @@ export function AppearanceCard() {
   useI18n();
   const [density, setDensity] = useDensity();
   const [mode, setMode] = useAccentMode();
+  const [look, setLook] = useAppearance();
+  const a11y: [keyof Appearance, TKey, TKey][] = [
+    ['reduceMotion', 'pf.a11y.motion', 'pf.a11y.motionHint'],
+    ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
+    ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
+  ];
   const options: [Density, TKey, TKey][] = [
     ['normal', 'pf.density.normal', 'pf.density.normalHint'],
     ['compact', 'pf.density.compact', 'pf.density.compactHint'],
@@ -43,6 +50,23 @@ export function AppearanceCard() {
           ))}
         </div>
         <p className="mt-2 text-sm font-semibold text-mute">{t(ACCENT_TEXT[mode].hint)} {t('pf.thisBrowser')}</p>
+      </div>
+      <div role="group" aria-labelledby="a11y-label">
+        <span id="a11y-label" className="label">{t('pf.a11y.label')}</span>
+        <ul className="space-y-1">
+          {a11y.map(([key, label, hint]) => (
+            <li key={key}>
+              <label className="flex cursor-pointer items-start gap-3 rounded-ui-lg px-1 py-1.5 max-sm:min-h-[44px]">
+                <Switch className="mt-0.5" checked={look[key]} onChange={(on) => setLook({ [key]: on })} />
+                <span className="min-w-0">
+                  <span className="block font-extrabold">{t(label)}</span>
+                  <span className="block text-sm font-semibold text-mute">{t(hint)}</span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1 text-sm font-semibold text-mute">{t('pf.thisBrowser')}</p>
       </div>
     </Section>
   );

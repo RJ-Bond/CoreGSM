@@ -3,7 +3,7 @@ import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
 import NotFound from '../components/NotFound';
@@ -210,11 +210,11 @@ function ServerList() {
           </div>
         </div>
       )}
-      <ErrorLine text={error} />
+      {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!loaded && (effView === 'list' ? <ListSkeleton /> : <TilesSkeleton />)}
 
-      {loaded && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
+      {loaded && !error && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
 
       {servers.length > 0 && visible.length === 0 && (
         effFilter === 'fav' && favCount === 0
