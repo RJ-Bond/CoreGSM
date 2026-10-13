@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="859e1cf8cb98"
+COREGSM_BUILD="884c0b238532"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20159,6 +20159,8 @@ __COREGSM_EOF__
   --shadow-1: 0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
   --shadow-2: 0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
   --shadow-3: 0 1px 2px rgba(20, 24, 40, 0.06), 0 18px 38px rgba(40, 50, 110, 0.13);
+  --horizon-a: rgb(var(--brand) / 0.14);
+  --horizon-b: rgb(236 72 153 / 0.22);
   --wash-a: rgb(var(--brand) / 0.15);
   --wash-b: rgb(70 190 235 / 0.14);
   color-scheme: light;
@@ -20202,6 +20204,8 @@ __COREGSM_EOF__
     --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
     --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
     --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
+    --horizon-a: rgb(var(--brand) / 0.2);
+    --horizon-b: rgb(236 72 153 / 0.2);
     --wash-a: rgb(var(--brand) / 0.2);
     --wash-b: rgb(40 170 210 / 0.09);
     color-scheme: dark;
@@ -20235,6 +20239,8 @@ __COREGSM_EOF__
   --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
   --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
+  --horizon-a: rgb(var(--brand) / 0.2);
+  --horizon-b: rgb(236 72 153 / 0.2);
   --wash-a: rgb(var(--brand) / 0.2);
   --wash-b: rgb(40 170 210 / 0.09);
   color-scheme: dark;
@@ -20246,14 +20252,17 @@ __COREGSM_EOF__
     @apply bg-page text-ink font-sans text-[15px] antialiased;
     -webkit-text-size-adjust: 100%;
   }
-  /* two soft colour washes behind everything: brand (top right) and cyan (top left) */
-  /* the washes are part of the body background: a fixed full-screen layer is what Chrome showed as a black tile */
+  /* page background "Горизонт": a glow along the lower edge of the first screen (brand + pink) fading both ways.
+     Painted on the body itself and static: no fixed layer, no animation (a fixed full-screen layer once showed as a black tile) */
   body {
     background-image:
-      radial-gradient(56rem 25rem at 85% -9rem, var(--wash-a), transparent 70%),
-      radial-gradient(44rem 22rem at -4% -4rem, var(--wash-b), transparent 70%);
+      radial-gradient(90% 30% at 50% 77%, var(--horizon-b), transparent 72%),
+      linear-gradient(180deg, transparent 32%, var(--horizon-a) 77%, transparent 100%);
+    background-size: 100% 130vh;
     background-repeat: no-repeat;
+    background-position: top;
   }
+
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }
   /* long words (usernames, addresses) must not stretch the layout */
