@@ -299,7 +299,14 @@ async function buildPayload(b: Binding) {
   if (multi) {
     // one footer for the whole block (on the last embed); the 6000-character limit of a message: when it is
     // exceeded drop the player lists first, from the last server backwards, then the extra fields
-    raws.forEach((r, i) => { if (i < raws.length - 1) delete r.footer; });
+    // the brand line (author) only on the first embed; footer and timestamp only on the last one
+    raws.forEach((r, i) => {
+      if (i > 0) delete (r as { author?: unknown }).author;
+      if (i < raws.length - 1) {
+        delete r.footer;
+        delete (r as { timestamp?: unknown }).timestamp;
+      }
+    });
     const total = () => raws.reduce((n, r) => n + embedChars(r), 0);
     for (let i = raws.length - 1; i >= 0 && total() > 5800; i--) {
       const f = raws[i].fields;

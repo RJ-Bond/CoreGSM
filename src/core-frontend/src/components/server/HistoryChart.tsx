@@ -24,7 +24,10 @@ const MARK: Record<Ev['type'], { fill: string; path: string }> = {
   down: { fill: 'rgb(var(--bad))', path: 'M12 5v12M7 13l5 5 5-5' },
   up: { fill: 'rgb(var(--ok))', path: 'M5 12.5l4.5 4.5L19 7.5' },
   peak: { fill: 'rgb(var(--link))', path: 'M12 19V6M7 11l5-5 5 5' },
+  maintenance: { fill: 'rgb(var(--warn))', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
+const MARK_ORDER = ['down', 'up', 'peak', 'maintenance'] as const;
+const MARK_LABEL: Record<Ev['type'], string> = { down: 'сбой', up: 'возврат', peak: 'пик', maintenance: 'тех. работы' };
 
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
@@ -211,7 +214,7 @@ export default function HistoryChart({
       const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
         { kind: 'curve', label: seriesName },
         ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: 'сервер не отвечал' }] : []),
-        ...(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик', fill: MARK[t].fill })),
+        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: MARK_LABEL[t], fill: MARK[t].fill })),
       ];
       let lx = 12;
       const ly = CAP + H + 20;
@@ -332,7 +335,7 @@ export default function HistoryChart({
           {marks.map((m) => {
             const mx = Math.min(W - R - 9, Math.max(L + 9, x(m.ts)));
             const kind = MARK[m.type];
-            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : 'Сервер упал';
+            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : m.type === 'maintenance' ? 'Начались технические работы' : 'Сервер упал';
             return (
               <g key={`${m.type}-${m.ts}`}>
                 <title>{`${label} · ${fullTime(m.ts)}`}</title>
@@ -392,12 +395,12 @@ export default function HistoryChart({
       </div>
       {marks.length > 0 && (
         <ul className="hc-legend" aria-label="Обозначения на графике">
-          {(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => (
+          {MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => (
             <li key={t}>
               <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
               </span>
-              {t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик'}
+              {MARK_LABEL[t]}
             </li>
           ))}
         </ul>

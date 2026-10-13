@@ -1,13 +1,16 @@
 import { useState } from 'react';
-import { connectGuide } from '../../connectGuides';
-import { CopyButton } from '../../ui';
+import { applyConnectTemplates, connectGuide } from '../../connectGuides';
+import { useGameProfiles } from '../../gameProfiles';
+import { CopyButton, Notice } from '../../ui';
 import { SectionCard, type SectionState } from './Sections';
 import QrCode from './QrCode';
 import { stagger } from './helpers';
 
 /** «Как подключиться»: what to paste (big copy buttons), numbered steps, QR code for a phone */
 export default function ConnectTab({ game, address, sections }: { game: string; address: string; sections: SectionState }) {
-  const guide = connectGuide(game, address);
+  const profile = useGameProfiles()?.[game];
+  const guide = applyConnectTemplates(connectGuide(game, address), profile?.connect, address, profile?.defaultPort);
+  const note = typeof profile?.connect?.note === 'string' ? profile.connect.note.trim() : '';
   // values to paste: address first, the console command and the steam link where they exist
   const values = [
     ...guide.copy.filter((c) => c.label === 'Адрес' || /команд/i.test(c.label)),
@@ -24,6 +27,8 @@ export default function ConnectTab({ game, address, sections }: { game: string; 
   return (
     <div className="grid gap-3.5 lg:grid-cols-12">
       <SectionCard id="cn-steps" state={sections} className="lg:col-span-7" style={stagger(0)} title={guide.title}>
+
+        {note && <div className="mb-4"><Notice tone="info">{note}</Notice></div>}
 
         <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Что вставить</h3>
         <ul className="mb-5 space-y-2.5">

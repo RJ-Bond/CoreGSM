@@ -104,6 +104,8 @@ export interface Server {
   playerNames: string[];
   error: string | null;
   updatedAt: number | null;
+  /** an active maintenance window for this server (null = none) */
+  maintenance?: { name: string; until: number | null } | null;
 }
 
 export interface Binding {
@@ -302,7 +304,7 @@ export interface ServerDetails {
   points: { ts: number; players: number; online: number; ping: number | null }[];
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   /** newest first; `players` is set for 'peak' */
-  events: { ts: number; type: 'up' | 'down' | 'peak'; players: number | null }[];
+  events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance'; players: number | null; name?: string }[];
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }
@@ -440,6 +442,8 @@ export interface Me {
   emailVerified?: boolean;
   /** a sign-in from an unseen device within the last 24 h */
   newDevice?: { ts: number; label: string } | null;
+  /** unread in-panel notifications (the bell badge) */
+  unreadNotifications?: number;
   /** language and regional settings (absent on older servers) */
   prefs?: Prefs;
   /** "/api/..." url of the uploaded banner, null when there is none */

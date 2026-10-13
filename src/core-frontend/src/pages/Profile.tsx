@@ -11,6 +11,7 @@ import { BannerEditor } from '../components/profile/BannerEditor';
 import { bannerStyle } from '../components/profile/banner';
 import { AchievementsGrid, AchievementsPreview } from '../components/profile/Achievements';
 import { JournalCard } from '../components/profile/Journal';
+import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
@@ -71,6 +72,7 @@ function OverviewTab() {
 
   return (
     <div className="space-y-5">
+      <NewDeviceBanner />
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
           <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={() => setEditBanner((v) => !v)}>
@@ -147,6 +149,7 @@ function SecurityTab() {
   if (!me) return null;
   return (
     <div className="space-y-5">
+      <NewDeviceBanner onRevoked={() => setRev((x) => x + 1)} />
       <div className="grid items-start gap-5 md:grid-cols-2">
         <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />

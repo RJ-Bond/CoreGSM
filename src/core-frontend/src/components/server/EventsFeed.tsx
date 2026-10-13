@@ -22,11 +22,13 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   up: { cls: 'bg-okbg text-ok', path: 'M5 12.5l4.5 4.5L19 7.5' },
   down: { cls: 'bg-badbg text-bad', path: 'M12 5v10M7 12l5 5 5-5' },
   peak: { cls: 'bg-soft text-link', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
+  maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   if (e.type === 'up') return 'Сервер вернулся';
   if (e.type === 'peak') return `Пик игроков: ${e.players ?? '–'}`;
+  if (e.type === 'maintenance') return e.name ? `Начались технические работы: ${e.name}` : 'Начались технические работы';
   if (downFor != null) return `Сервер упал · был недоступен ${fmtDuration(downFor)}`;
   return stillDown ? 'Сервер упал · недоступен до сих пор' : 'Сервер упал';
 }

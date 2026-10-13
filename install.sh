@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6dafe3dd968f"
+COREGSM_BUILD="c309fafe6ee7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2662,7 +2662,7 @@ export interface DiscordEmbed {
   url?: string;
   description?: string;
   color?: number;
-  author?: { name: string };
+  author?: { name: string; url?: string; icon_url?: string };
   fields?: { name: string; value: string; inline?: boolean }[];
   footer?: { text: string; icon_url?: string };
   thumbnail?: { url: string };
@@ -2731,10 +2731,16 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   void uptimePct;
   void intervalSec;
   const brand = extra.brandName || 'CoreGSM';
-  const version = extra.version ? ` v${extra.version.slice(0, 7)}` : '';
-  const when = stamp(s.updatedAt ?? Date.now(), extra.timeZone || 'Europe/Moscow');
-  const footer: { text: string; icon_url?: string } = { text: `${brand}${version} | Мониторинг игровых серверов | Обновлено: ${when}` };
-  if (extra.baseUrl) footer.icon_url = extra.logoUrl || `${extra.baseUrl}/logo-128.png`;
+  const version = extra.version ? ` · v${extra.version.slice(0, 7)}` : '';
+  // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
+  // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
+  const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };
+  const logo = extra.baseUrl ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
+  if (logo) footer.icon_url = logo;
+  const author: NonNullable<DiscordEmbed['author']> = { name: `${brand} · Мониторинг игровых серверов` };
+  if (extra.baseUrl) author.url = extra.baseUrl;
+  if (logo) author.icon_url = logo;
+  const timestamp = new Date(s.updatedAt ?? Date.now()).toISOString();
   const thumbnail = extra.thumbUrl ? { url: extra.thumbUrl } : undefined;
   const addr = `\`${s.address}\``;
 
@@ -2744,6 +2750,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
       color: accentOf(s.game) ?? COLOR.unknown,
       thumbnail,
+      author,
+      timestamp,
       footer,
     };
   }
@@ -2813,6 +2821,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
     fields,
+    author,
+    timestamp,
     footer,
   };
 }
@@ -8789,7 +8799,14 @@ async function buildPayload(b: Binding) {
   if (multi) {
     // one footer for the whole block (on the last embed); the 6000-character limit of a message: when it is
     // exceeded drop the player lists first, from the last server backwards, then the extra fields
-    raws.forEach((r, i) => { if (i < raws.length - 1) delete r.footer; });
+    // the brand line (author) only on the first embed; footer and timestamp only on the last one
+    raws.forEach((r, i) => {
+      if (i > 0) delete (r as { author?: unknown }).author;
+      if (i < raws.length - 1) {
+        delete r.footer;
+        delete (r as { timestamp?: unknown }).timestamp;
+      }
+    });
     const total = () => raws.reduce((n, r) => n + embedChars(r), 0);
     for (let i = raws.length - 1; i >= 0 && total() > 5800; i--) {
       const f = raws[i].fields;
@@ -20679,6 +20696,7 @@ import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInf
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import CommandPalette from './components/CommandPalette';
+import NotificationBell from './components/NotificationBell';
 import NotFound from './components/NotFound';
 import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
@@ -21082,6 +21100,7 @@ export default function App() {
               <span className="hidden md:inline">{t('hdr.search')}</span>
               <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute md:inline">Ctrl K</kbd>
             </button>
+            {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
             {me ? (
               <>
@@ -21410,6 +21429,8 @@ export interface Server {
   playerNames: string[];
   error: string | null;
   updatedAt: number | null;
+  /** an active maintenance window for this server (null = none) */
+  maintenance?: { name: string; until: number | null } | null;
 }
 
 export interface Binding {
@@ -21608,7 +21629,7 @@ export interface ServerDetails {
   points: { ts: number; players: number; online: number; ping: number | null }[];
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   /** newest first; `players` is set for 'peak' */
-  events: { ts: number; type: 'up' | 'down' | 'peak'; players: number | null }[];
+  events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance'; players: number | null; name?: string }[];
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }
@@ -21746,6 +21767,8 @@ export interface Me {
   emailVerified?: boolean;
   /** a sign-in from an unseen device within the last 24 h */
   newDevice?: { ts: number; label: string } | null;
+  /** unread in-panel notifications (the bell badge) */
+  unreadNotifications?: number;
   /** language and regional settings (absent on older servers) */
   prefs?: Prefs;
   /** "/api/..." url of the uploaded banner, null when there is none */
@@ -22737,6 +22760,146 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DeliveryList.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api, ApiError } from '../api';
+import {
+  KIND_LABEL, STATUS_LABEL, attemptsText, canRetry, countdownText,
+  type DeliveryKind, type DeliveryResponse, type DeliveryStatus,
+} from '../deliveries';
+import { IconBell, IconDiscord, IconNews, IconRefresh, IconUsers, Section, ago, toast, usePoll } from '../ui';
+
+const KIND_ICON: Record<DeliveryKind, () => JSX.Element> = {
+  news: () => <IconNews size={18} />,
+  alert: () => <IconBell size={18} />,
+  dm: () => <IconUsers size={18} />,
+  status: () => <IconDiscord size={18} />,
+};
+
+const STATUS_PILL: Record<DeliveryStatus, string> = {
+  pending: 'pill pill-mute',
+  sending: 'pill pill-mute',
+  sent: 'pill pill-ok',
+  error: 'pill pill-warn',
+  dead: 'pill pill-bad',
+};
+
+const FILTERS: { id: DeliveryStatus | ''; label: string }[] = [
+  { id: '', label: 'Все' },
+  { id: 'pending', label: 'В очереди' },
+  { id: 'sending', label: 'Отправляются' },
+  { id: 'sent', label: 'Доставлено' },
+  { id: 'error', label: 'С ошибкой' },
+  { id: 'dead', label: 'Не доставлено' },
+];
+
+/** «Доставка»: the queue of messages the bot sends to Discord, with retries. Hidden when the backend has no queue. */
+export default function DeliveryList() {
+  const [data, setData] = useState<DeliveryResponse | null>(null);
+  const [gone, setGone] = useState(false);
+  const [status, setStatus] = useState<DeliveryStatus | ''>('');
+  const [kind, setKind] = useState<DeliveryKind | ''>('');
+  const [busy, setBusy] = useState<number[]>([]);
+  const [now, setNow] = useState(Date.now());
+  const [fetchedAt, setFetchedAt] = useState(0);
+
+  const load = () =>
+    api<DeliveryResponse>(`/deliveries?status=${status}&kind=${kind}&limit=30`)
+      .then((r) => {
+        setData({ counts: r.counts ?? { pending: 0, sending: 0, sent: 0, error: 0, dead: 0 }, items: Array.isArray(r.items) ? r.items : [] });
+        setFetchedAt(Date.now());
+        setGone(false);
+      })
+      .catch((e: Error) => { if (e instanceof ApiError && (e.status === 404 || e.status === 403)) setGone(true); else if (!data) setGone(true); });
+  usePoll(load, 10_000);
+  // a changed filter reloads at once
+  useEffect(() => { if (fetchedAt) void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status, kind]);
+
+  // the countdown ticks once a second while something waits for its next try
+  const waiting = !!data?.items.some((i) => i.nextTryAt != null);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 1000);
+    return () => clearInterval(t);
+  }, [waiting]);
+
+  const retry = async (id: number) => {
+    setBusy((b) => [...b, id]);
+    try {
+      await api(`/deliveries/${id}/retry`, 'POST');
+      toast('Сообщение поставлено в очередь снова');
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError && e.status === 409 ? 'Эту доставку уже нельзя повторить' : (e as Error).message, 'err');
+      void load();
+    } finally {
+      setBusy((b) => b.filter((x) => x !== id));
+    }
+  };
+
+  if (gone) return null;
+  const counts = data?.counts;
+  const total = counts ? Object.values(counts).reduce((s, n) => s + n, 0) : 0;
+
+  return (
+    <Section
+      title="Доставка"
+      description="Очередь сообщений в Discord: новости, оповещения и карточки статуса. Неудачные попытки повторяются сами, до 8 раз."
+      actions={(
+        <select className="input !w-auto" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label="Тип сообщений">
+          <option value="">Все типы</option>
+          {(Object.keys(KIND_LABEL) as DeliveryKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+        </select>
+      )}
+    >
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Фильтр по состоянию">
+        {FILTERS.map((f) => {
+          const n = f.id === '' ? total : counts?.[f.id] ?? 0;
+          return (
+            <button key={f.id || 'all'} type="button" className={`chip-filter ${status === f.id ? 'on' : ''}`} aria-pressed={status === f.id} onClick={() => setStatus(f.id)}>
+              {f.label}<span className="opacity-70">&nbsp;{n}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {!data ? (
+        <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />
+      ) : data.items.length === 0 ? (
+        <p className="rounded-ui-lg bg-soft px-4 py-3 font-semibold text-mute">
+          {status || kind ? 'Под этот фильтр ничего не попало.' : 'Очередь пуста: сообщения уходят сразу.'}
+        </p>
+      ) : (
+        <ul className="divide-y divide-line rounded-ui-lg border border-line">
+          {data.items.map((it) => (
+            <li key={it.id} className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3">
+              <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-soft text-link" title={KIND_LABEL[it.kind]} role="img" aria-label={KIND_LABEL[it.kind]}>
+                {KIND_ICON[it.kind]()}
+              </span>
+              <div className="min-w-0 flex-1 basis-56">
+                <div className="break-words font-extrabold">{it.summary || KIND_LABEL[it.kind]}</div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-mute">
+                  <span className={STATUS_PILL[it.status]}>{STATUS_LABEL[it.status]}</span>
+                  <span>попытки {attemptsText(it.attempts)}</span>
+                  {it.status === 'sent' && it.sentAt ? <span>{ago(it.sentAt)}</span> : <span>создано {ago(it.createdAt)}</span>}
+                  {it.nextTryAt != null && it.status !== 'sent' && it.status !== 'dead' && <span>следующая попытка {countdownText(it.nextTryAt, now)}</span>}
+                </div>
+                {it.lastError && it.status !== 'sent' && <p className="mt-1 break-words rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad">{it.lastError}</p>}
+              </div>
+              {canRetry(it.status) && (
+                <button type="button" className="btn btn-soft btn-sm" disabled={busy.includes(it.id)} onClick={() => void retry(it.id)}>
+                  <IconRefresh size={14} />Повторить
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/DiscordWizard.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import type { Binding, BotStatus, DiscordGuild } from '../api';
@@ -23120,6 +23283,104 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/HealthHistoryCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { buildSparkline, downsample } from '../sparkline';
+import { Section, fmtTime } from '../ui';
+
+export interface HealthSample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null }
+export interface HealthFlag { kind: 'bot_offline' | 'poll_slow' | 'disk_low' | 'db_growing' | string; since: number; text: string }
+interface HistoryResponse { samples: HealthSample[]; flags: HealthFlag[] }
+
+const PERIODS = [
+  { hours: 24, label: '24 ч' },
+  { hours: 168, label: '7 д' },
+  { hours: 336, label: '14 д' },
+] as const;
+
+const mbText = (bytes: number) => `${(bytes / 1048576).toFixed(bytes < 10 * 1048576 ? 1 : 0).replace('.', ',')} МБ`;
+const msText = (ms: number) => (ms >= 10_000 ? `${Math.round(ms / 1000)} с` : ms >= 1000 ? `${(ms / 1000).toFixed(1).replace('.', ',')} с` : `${Math.round(ms)} мс`);
+
+const METRICS: { id: string; title: string; pick: (s: HealthSample) => number | null; fmt: (n: number) => string }[] = [
+  { id: 'poll', title: 'Длительность опроса', pick: (s) => s.pollMs, fmt: msText },
+  { id: 'mem', title: 'Память панели', pick: (s) => s.rssMb, fmt: (n) => `${Math.round(n)} МБ` },
+  { id: 'db', title: 'Размер базы', pick: (s) => s.dbBytes, fmt: mbText },
+  { id: 'queue', title: 'Очередь доставки', pick: (s) => s.queueLen, fmt: (n) => String(Math.round(n)) },
+];
+
+const W = 220;
+const H = 48;
+
+function Sparkline({ title, values, fmt }: { title: string; values: (number | null)[]; fmt: (n: number) => string }) {
+  const sp = buildSparkline(downsample(values, 120), W, H);
+  return (
+    <div className="rounded-ui-lg bg-soft p-3.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-extrabold text-mute">{title}</span>
+        <span className="font-black tabular-nums">{sp.last == null ? '–' : fmt(sp.last)}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="mt-2 block h-12 w-full" role="img" aria-label={sp.empty ? `${title}: данных нет` : `${title}: сейчас ${fmt(sp.last ?? 0)}, от ${fmt(sp.min)} до ${fmt(sp.max)}`} preserveAspectRatio="none">
+        {!sp.empty && <path d={sp.area} className="fill-link" opacity="0.12" />}
+        {!sp.empty && <path d={sp.path} fill="none" className="stroke-link" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+      </svg>
+      <div className="mt-1 flex justify-between text-xs font-bold text-mute">
+        <span>{sp.empty ? 'нет данных' : `мин ${fmt(sp.min)}`}</span>
+        <span>{sp.empty ? '' : `макс ${fmt(sp.max)}`}</span>
+      </div>
+    </div>
+  );
+}
+
+/** «Состояние за период»: four static sparklines of the panel's own health. Hidden when the backend has no history. */
+export default function HealthHistoryCard({ onFlags }: { onFlags?: (f: HealthFlag[]) => void }) {
+  const [hours, setHours] = useState<number>(24);
+  const [data, setData] = useState<HistoryResponse | null>(null);
+  const [gone, setGone] = useState(false);
+
+  // the period changed or a minute passed: ask again (an answer for a previous period is dropped)
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api<HistoryResponse>(`/system/health-history?hours=${hours}`)
+        .then((r) => { if (alive) { setData({ samples: Array.isArray(r.samples) ? r.samples : [], flags: Array.isArray(r.flags) ? r.flags : [] }); setGone(false); } })
+        .catch(() => { if (alive) setGone(true); });
+    void load();
+    const t = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [hours]);
+  useEffect(() => { if (data) onFlags?.(data.flags); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [data]);
+
+  if (gone && !data) return null;
+  const samples = data?.samples ?? [];
+  const first = samples[0]?.ts;
+
+  return (
+    <Section
+      title="Состояние за период"
+      description={first ? `Замеры с ${fmtTime(first)}: ${samples.length}` : 'Как панель чувствовала себя последнее время.'}
+      actions={(
+        <div className="seg" role="group" aria-label="Период">
+          {PERIODS.map((p) => (
+            <button key={p.hours} type="button" className={`seg-item ${hours === p.hours ? 'on' : ''}`} aria-pressed={hours === p.hours} onClick={() => setHours(p.hours)}>{p.label}</button>
+          ))}
+        </div>
+      )}
+    >
+      {!data ? (
+        <div className="skeleton h-40 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />
+      ) : samples.length < 2 ? (
+        <p className="text-sm font-semibold text-mute">Замеров пока мало: график появится через несколько минут работы панели.</p>
+      ) : (
+        <div className="grid gap-3 min-[520px]:grid-cols-2">
+          {METRICS.map((m) => <Sparkline key={m.id} title={m.title} values={samples.map(m.pick)} fmt={m.fmt} />)}
+        </div>
+      )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/Illustrations.tsx" << '__COREGSM_EOF__'
 // Flat SVG illustrations for empty states, 404 and the sign-in screen.
 // They use the theme tokens (Tailwind classes), so they look right in the light and the dark theme.
@@ -23296,6 +23557,22 @@ export function NotFoundArt() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/MaintenanceChip.tsx" << '__COREGSM_EOF__'
+import { IconWrench } from '../icons';
+import { chipText } from '../maintenance';
+import { fmtTime } from '../ui';
+
+/** «Тех. работы до 05:00»: shown on server cards, rows, the TV mode and in the passport while a window is active */
+export default function MaintenanceChip({ m, glass = false, className = '' }: { m: { name?: string; until: number | null }; glass?: boolean; className?: string }) {
+  return (
+    <span className={`maint-chip ${glass ? 'maint-chip-glass' : ''} ${className}`} title={m.name || undefined}>
+      <IconWrench size={13} />
+      <span className="truncate">{chipText(m, Date.now(), (ts) => fmtTime(ts))}</span>
+    </span>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/Markdown.tsx" << '__COREGSM_EOF__'
 import { Fragment, useState, type ReactNode } from 'react';
 import { ago } from '../ui';
@@ -23413,6 +23690,282 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
       </a>
       <a className="btn btn-soft" href="#/servers">К серверам</a>
     </StateView>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/NotificationBell.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { t } from '../i18n';
+import { IconBell, ago } from '../ui';
+import {
+  NOTIFY_POLL_MS, badgeText, fetchNotifications, isUnavailable, markNotificationsRead, notificationHref,
+  type NotificationItem,
+} from '../notifications';
+
+/**
+ * The bell in the header: unread badge and a popover with the latest notifications.
+ * The unread count is refreshed every minute while the tab is visible (no animation on the bell itself).
+ * A backend without the feature (404) hides the bell instead of showing an error.
+ */
+export default function NotificationBell({ initialUnread = 0 }: { initialUnread?: number }) {
+  const [unread, setUnread] = useState(Math.max(0, initialUnread));
+  const [items, setItems] = useState<NotificationItem[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [gone, setGone] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const openRef = useRef(false);
+  const popId = useId();
+  openRef.current = open;
+
+  // /me brings a fresh number on every reload of the session; keep the larger knowledge of the two out of the way
+  useEffect(() => { setUnread(Math.max(0, initialUnread)); }, [initialUnread]);
+
+  const loadList = useCallback(async () => {
+    try {
+      const r = await fetchNotifications(false, 50);
+      setItems(Array.isArray(r.items) ? r.items : []);
+      setUnread(Math.max(0, Number(r.unread) || 0));
+      setFailed(false);
+    } catch (e) {
+      if (isUnavailable(e)) setGone(true);
+      else setFailed(true);
+      setItems((cur) => cur ?? []);
+    }
+  }, []);
+
+  // the poll: only the number while closed, the whole list while the popover is open
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return;
+      if (openRef.current) { void loadList(); return; }
+      fetchNotifications(true, 1)
+        .then((r) => setUnread(Math.max(0, Number(r.unread) || 0)))
+        .catch((e) => { if (isUnavailable(e)) setGone(true); });
+    };
+    const timer = window.setInterval(tick, NOTIFY_POLL_MS);
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVis); };
+  }, [loadList]);
+
+  const close = useCallback((back: boolean) => {
+    setOpen(false);
+    if (back) btn.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+
+  const toggle = () => {
+    if (open) { close(false); return; }
+    setOpen(true);
+    setFailed(false);
+    void loadList();
+  };
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+  };
+
+  const readOne = (n: NotificationItem) => {
+    setOpen(false);
+    if (n.read) return;
+    setItems((cur) => cur?.map((x) => (x.id === n.id ? { ...x, read: true } : x)) ?? cur);
+    setUnread((u) => Math.max(0, u - 1));
+    markNotificationsRead({ ids: [n.id] }).then((r) => setUnread(Math.max(0, Number(r.unread) || 0))).catch(() => undefined);
+  };
+  const readAll = () => {
+    setItems((cur) => cur?.map((x) => ({ ...x, read: true })) ?? cur);
+    setUnread(0);
+    markNotificationsRead({ all: true }).then((r) => setUnread(Math.max(0, Number(r.unread) || 0))).catch(() => void loadList());
+  };
+
+  if (gone) return null;
+  const badge = badgeText(unread);
+  const label = unread > 0 ? t('bell.ariaUnread', { n: unread }) : t('bell.aria');
+
+  return (
+    <div ref={root} onKeyDown={onKey} onBlur={(e) => { if (open && e.relatedTarget && !root.current?.contains(e.relatedTarget as Node)) setOpen(false); }}>
+      <button
+        ref={btn}
+        type="button"
+        onClick={toggle}
+        className="relative grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10"
+        aria-label={label}
+        title={t('bell.title')}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? popId : undefined}
+      >
+        <IconBell size={20} />
+        {badge && (
+          <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-[11px] font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]" aria-hidden>
+            {badge}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          ref={pop}
+          id={popId}
+          role="dialog"
+          aria-label={t('bell.title')}
+          className="panel panel-raised absolute right-0 top-full z-40 mt-2 w-[min(24rem,100%)] overflow-hidden"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+            <h2 className="text-base font-black">{t('bell.title')}</h2>
+            <button type="button" className="rounded-full px-2 py-1.5 text-sm font-extrabold text-link hover:underline disabled:opacity-50 max-sm:min-h-[44px]" onClick={readAll} disabled={unread === 0}>
+              {t('bell.readAll')}
+            </button>
+          </div>
+          <div className="max-h-[min(26rem,70dvh)] overflow-y-auto overscroll-contain">
+            {items === null && <div className="skeleton m-3 h-16 rounded-2xl bg-soft" aria-hidden />}
+            {failed && <p className="px-4 py-3 text-sm font-bold text-bad" role="alert">{t('bell.loadError')}</p>}
+            {items && items.length === 0 && !failed && <p className="px-4 py-8 text-center font-semibold text-mute">{t('bell.empty')}</p>}
+            {items && items.length > 0 && (
+              <ul className="divide-y divide-line">
+                {items.map((n) => {
+                  const href = notificationHref(n);
+                  const body = (
+                    <>
+                      <span aria-hidden className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-transparent' : 'bg-brand'}`} />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block break-words text-sm leading-snug ${n.read ? 'font-semibold text-mute' : 'font-extrabold'}`}>
+                          {!n.read && <span className="sr-only">{t('bell.unreadMark')} </span>}
+                          {n.text}
+                        </span>
+                        <span className="mt-0.5 block text-xs font-semibold text-mute">{ago(n.ts)}</span>
+                      </span>
+                    </>
+                  );
+                  const cls = 'flex items-start gap-3 px-4 py-3 text-left transition hover:bg-soft max-sm:min-h-[44px]';
+                  return (
+                    <li key={n.id}>
+                      {href ? (
+                        <a href={href} className={cls} onClick={() => readOne(n)}>{body}</a>
+                      ) : (
+                        <button type="button" className={`${cls} w-full`} onClick={() => readOne(n)}>{body}</button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/PollSettingsCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { CONC_MAX, CONC_MIN, FAIL_MAX, FAIL_MIN, confirmDelayText, durationText, validatePoll, type PollSettings } from '../pollSettings';
+import { FieldError, SaveBadge, Section, ago, plural, useAutosave } from '../ui';
+
+/** «Опрос серверов»: when a failure is confirmed, how many servers are asked at once, and the numbers of the last poll. */
+export default function PollSettingsCard() {
+  const [srv, setSrv] = useState<PollSettings | null>(null);
+  const [gone, setGone] = useState(false);
+  const [fail, setFail] = useState('3');
+  const [conc, setConc] = useState('8');
+
+  useEffect(() => {
+    let alive = true;
+    api<PollSettings>('/settings/poll')
+      .then((r) => {
+        if (!alive) return;
+        setSrv(r);
+        setFail(String(r.failThreshold));
+        setConc(String(r.concurrency));
+      })
+      .catch(() => { if (alive) setGone(true); });
+    return () => { alive = false; };
+  }, []);
+
+  const value = { failThreshold: Number(fail), concurrency: Number(conc) };
+  const err = validatePoll(value);
+  const auto = useAutosave({
+    value,
+    saved: srv ? { failThreshold: srv.failThreshold, concurrency: srv.concurrency } : value,
+    enabled: !!srv,
+    delay: 700,
+    validate: (v) => validatePoll(v),
+    save: async (v) => {
+      const r = await api<PollSettings>('/settings/poll', 'PUT', { failThreshold: v.failThreshold, concurrency: v.concurrency });
+      setSrv((s) => (s ? { ...s, last: r.last ?? s.last } : s));
+    },
+  });
+
+  // the backend is older than the panel (or the poll settings are not available): the card is simply not shown
+  if (gone) return null;
+  if (!srv) return <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />;
+  const last = srv.last;
+
+  return (
+    <Section
+      title="Опрос серверов"
+      description="Как панель проверяет игровые серверы и когда считает, что сервер действительно недоступен. Изменения сохраняются сами."
+      actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <div className="grid gap-4 min-[520px]:grid-cols-2">
+        <div>
+          <label htmlFor="poll-fail" className="label">Неудачных опросов подряд до сбоя</label>
+          <select id="poll-fail" className="input" value={fail} onChange={(e) => setFail(e.target.value)} onBlur={auto.flush} aria-describedby="poll-fail-hint">
+            {Array.from({ length: FAIL_MAX - FAIL_MIN + 1 }, (_, i) => FAIL_MIN + i).map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+          <p id="poll-fail-hint" className="mt-1.5 text-sm font-semibold text-mute">
+            Сбой подтверждается {confirmDelayText(Number(fail) || 1)}. Так одиночная потеря пакета не вызывает тревогу, но настоящее падение заметно позже.
+          </p>
+        </div>
+        <div>
+          <label htmlFor="poll-conc" className="label">Серверов опрашивается одновременно</label>
+          <input
+            id="poll-conc"
+            className="input"
+            type="number"
+            inputMode="numeric"
+            min={CONC_MIN}
+            max={CONC_MAX}
+            value={conc}
+            onChange={(e) => setConc(e.target.value)}
+            onBlur={auto.flush}
+            aria-invalid={err && value.concurrency !== srv.concurrency ? true : undefined}
+            aria-describedby="poll-conc-hint"
+          />
+          <p id="poll-conc-hint" className="mt-1.5 text-sm font-semibold text-mute">
+            От {CONC_MIN} до {CONC_MAX}. Больше значение, быстрее обход, но выше нагрузка на панель и сеть.
+          </p>
+        </div>
+      </div>
+      <FieldError id="poll-err" text={err && (value.failThreshold !== srv.failThreshold || value.concurrency !== srv.concurrency) ? err : undefined} />
+
+      <div className="rounded-ui-lg bg-soft px-4 py-3">
+        <div className="text-sm font-extrabold text-mute">Последний обход</div>
+        {last ? (
+          <p className="mt-0.5 font-bold">
+            {ago(last.at)}: {last.servers} {plural(last.servers, ['сервер', 'сервера', 'серверов'])} за {durationText(last.durationMs)}
+            {' · '}{last.failures === 0 ? 'без ошибок' : <span className="text-warn">{last.failures} {plural(last.failures, ['ошибка', 'ошибки', 'ошибок'])}</span>}
+            {' · '}по {last.concurrency} одновременно
+          </p>
+        ) : (
+          <p className="mt-0.5 font-semibold text-mute">Обход ещё не выполнялся.</p>
+        )}
+      </div>
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -26247,6 +26800,78 @@ export function RegionCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/NewDeviceBanner.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { confirmDialog } from '../../confirm';
+import { t } from '../../i18n';
+import { dismissNewDevice, isNewDeviceDismissed } from '../../security';
+import { ErrorLine, toast } from '../../ui';
+
+/**
+ * «Вход с нового устройства: … Это были вы?» on the Overview and Security tabs of the profile.
+ * «Это я» hides it for this sign-in (remembered per timestamp in localStorage); «Нет» ends every other session
+ * (the existing revoke-others call) and points at the password form.
+ */
+export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
+  const { me } = useAuth();
+  const nd = me?.newDevice;
+  const [hidden, setHidden] = useState(() => (nd ? isNewDeviceDismissed(nd.ts) : false));
+  const [revoked, setRevoked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!nd || (hidden && !revoked)) return null;
+
+  const itWasMe = () => {
+    dismissNewDevice(nd.ts);
+    setHidden(true);
+  };
+  const notMe = async () => {
+    const ok = await confirmDialog({ title: t('pf.sessions.endAllTitle'), text: t('pf.sessions.endAllText'), confirmLabel: t('pf.sessions.endConfirm'), cancelLabel: t('common.cancel'), danger: true });
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<{ revoked: number }>('/sessions/revoke-others', 'POST');
+      toast(t('pf.sessions.revoked', { n: r.revoked }));
+      dismissNewDevice(nd.ts);
+      setRevoked(true);
+      onRevoked?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (revoked) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl bg-warnbg px-4 py-3 text-sm font-bold text-warn" role="status">
+        <span className="min-w-0 flex-1 basis-60">{t('nd.followup')}</span>
+        <span className="flex shrink-0 gap-2">
+          <a href="#/profile/security" className="btn btn-sm" onClick={() => document.getElementById('pf-current')?.focus()}>{t('nd.changePassword')}</a>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setHidden(true)}>{t('common.close')}</button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2" role="region" aria-label={t('nd.title', { label: nd.label })}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-2xl bg-warnbg px-4 py-3 text-warn">
+        <span className="min-w-0 flex-1 basis-60 break-words text-sm font-bold">{t('nd.title', { label: nd.label })}</span>
+        <span className="flex shrink-0 flex-wrap gap-2">
+          <button type="button" className="btn btn-soft btn-sm" onClick={itWasMe} disabled={busy}>{t('nd.me')}</button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => void notMe()} disabled={busy} aria-busy={busy || undefined}>{t('nd.no')}</button>
+        </span>
+      </div>
+      <ErrorLine text={error} />
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/PlayerCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type PlayerProfile } from '../../api';
@@ -26673,15 +27298,18 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
-import { connectGuide } from '../../connectGuides';
-import { CopyButton } from '../../ui';
+import { applyConnectTemplates, connectGuide } from '../../connectGuides';
+import { useGameProfiles } from '../../gameProfiles';
+import { CopyButton, Notice } from '../../ui';
 import { SectionCard, type SectionState } from './Sections';
 import QrCode from './QrCode';
 import { stagger } from './helpers';
 
 /** «Как подключиться»: what to paste (big copy buttons), numbered steps, QR code for a phone */
 export default function ConnectTab({ game, address, sections }: { game: string; address: string; sections: SectionState }) {
-  const guide = connectGuide(game, address);
+  const profile = useGameProfiles()?.[game];
+  const guide = applyConnectTemplates(connectGuide(game, address), profile?.connect, address, profile?.defaultPort);
+  const note = typeof profile?.connect?.note === 'string' ? profile.connect.note.trim() : '';
   // values to paste: address first, the console command and the steam link where they exist
   const values = [
     ...guide.copy.filter((c) => c.label === 'Адрес' || /команд/i.test(c.label)),
@@ -26698,6 +27326,8 @@ export default function ConnectTab({ game, address, sections }: { game: string; 
   return (
     <div className="grid gap-3.5 lg:grid-cols-12">
       <SectionCard id="cn-steps" state={sections} className="lg:col-span-7" style={stagger(0)} title={guide.title}>
+
+        {note && <div className="mb-4"><Notice tone="info">{note}</Notice></div>}
 
         <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Что вставить</h3>
         <ul className="mb-5 space-y-2.5">
@@ -26770,11 +27400,13 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   up: { cls: 'bg-okbg text-ok', path: 'M5 12.5l4.5 4.5L19 7.5' },
   down: { cls: 'bg-badbg text-bad', path: 'M12 5v10M7 12l5 5 5-5' },
   peak: { cls: 'bg-soft text-link', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
+  maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   if (e.type === 'up') return 'Сервер вернулся';
   if (e.type === 'peak') return `Пик игроков: ${e.players ?? '–'}`;
+  if (e.type === 'maintenance') return e.name ? `Начались технические работы: ${e.name}` : 'Начались технические работы';
   if (downFor != null) return `Сервер упал · был недоступен ${fmtDuration(downFor)}`;
   return stillDown ? 'Сервер упал · недоступен до сих пор' : 'Сервер упал';
 }
@@ -26893,7 +27525,10 @@ const MARK: Record<Ev['type'], { fill: string; path: string }> = {
   down: { fill: 'rgb(var(--bad))', path: 'M12 5v12M7 13l5 5 5-5' },
   up: { fill: 'rgb(var(--ok))', path: 'M5 12.5l4.5 4.5L19 7.5' },
   peak: { fill: 'rgb(var(--link))', path: 'M12 19V6M7 11l5-5 5 5' },
+  maintenance: { fill: 'rgb(var(--warn))', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
+const MARK_ORDER = ['down', 'up', 'peak', 'maintenance'] as const;
+const MARK_LABEL: Record<Ev['type'], string> = { down: 'сбой', up: 'возврат', peak: 'пик', maintenance: 'тех. работы' };
 
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
@@ -27080,7 +27715,7 @@ export default function HistoryChart({
       const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
         { kind: 'curve', label: seriesName },
         ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: 'сервер не отвечал' }] : []),
-        ...(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик', fill: MARK[t].fill })),
+        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: MARK_LABEL[t], fill: MARK[t].fill })),
       ];
       let lx = 12;
       const ly = CAP + H + 20;
@@ -27201,7 +27836,7 @@ export default function HistoryChart({
           {marks.map((m) => {
             const mx = Math.min(W - R - 9, Math.max(L + 9, x(m.ts)));
             const kind = MARK[m.type];
-            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : 'Сервер упал';
+            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : m.type === 'maintenance' ? 'Начались технические работы' : 'Сервер упал';
             return (
               <g key={`${m.type}-${m.ts}`}>
                 <title>{`${label} · ${fullTime(m.ts)}`}</title>
@@ -27261,12 +27896,12 @@ export default function HistoryChart({
       </div>
       {marks.length > 0 && (
         <ul className="hc-legend" aria-label="Обозначения на графике">
-          {(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => (
+          {MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => (
             <li key={t}>
               <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
               </span>
-              {t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик'}
+              {MARK_LABEL[t]}
             </li>
           ))}
         </ul>
@@ -27279,6 +27914,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Passport.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import { ago, fmtDateTime, toast } from '../../ui';
+import MaintenanceChip from '../MaintenanceChip';
 import { pingTone } from './helpers';
 
 export interface PassportData {
@@ -27296,6 +27932,8 @@ export interface PassportData {
   lastSeen: number | null;
   mode: string | null;
   discord: { text: string; href: string | null }[];
+  /** an active maintenance window (the page passes `server.maintenance`) */
+  maintenance?: { name: string; until: number | null } | null;
 }
 
 const PP_TONE = { ok: 'pp-tone-ok', warn: 'pp-tone-warn', bad: 'pp-tone-bad' } as const;
@@ -27322,6 +27960,7 @@ export default function Passport({ d }: { d: PassportData }) {
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
+      {d.maintenance && <MaintenanceChip m={d.maintenance} glass className="mb-2" />}
       <dl className="pp">
         <Item k="Игра"><span>{d.game}{d.mode ? ` · ${d.mode}` : ''}</span></Item>
         <Item k="Версия"><span>{d.version ? `v${d.version.replace(/^v/i, '')}` : '–'}</span></Item>
@@ -27912,6 +28551,97 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/SubscribeMenu.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { t, type TKey } from '../../i18n';
+import { Button, ErrorLine, IconBell, Modal, toast } from '../../ui';
+import { SUB_KINDS, normalizeKinds, toggleKind, useSubscriptions, type SubKind, type Subscription } from '../../notifications';
+
+const KIND_KEY: Record<SubKind, TKey> = { free_slot: 'sub.free_slot', back_online: 'sub.back_online', went_down: 'sub.went_down' };
+
+/** the choice of kinds: checkboxes and, when there is no linked Discord, a note about where the messages go */
+export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub' }: { kinds: SubKind[]; onChange: (k: SubKind[]) => void; discordLinked: boolean; idPrefix?: string }) {
+  return (
+    <div className="space-y-3">
+      <p className="font-semibold text-mute">{t('sub.text')}</p>
+      <ul className="space-y-1.5">
+        {SUB_KINDS.map((k) => (
+          <li key={k}>
+            <label htmlFor={`${idPrefix}-${k}`} className="flex cursor-pointer items-center gap-3 rounded-2xl bg-soft px-4 py-3 font-extrabold max-sm:min-h-[48px]">
+              <input id={`${idPrefix}-${k}`} type="checkbox" checked={kinds.includes(k)} onChange={() => onChange(toggleKind(kinds, k))} />
+              {t(KIND_KEY[k])}
+            </label>
+          </li>
+        ))}
+      </ul>
+      {!discordLinked && (
+        <p className="rounded-2xl bg-soft px-4 py-2.5 text-sm font-semibold text-mute" role="note">
+          {t('sub.discordNote')}.{' '}
+          <a href="#/profile/security" className="font-extrabold text-link hover:underline">{t('sub.linkDiscord')}</a>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * «Подписаться» in the server page header: opens a small dialog with the notification kinds.
+ * Hidden for guests and when the backend has no subscriptions.
+ */
+export default function SubscribeMenu({ serverId, serverName }: { serverId: number; serverName: string }) {
+  const { me } = useAuth();
+  const subs = useSubscriptions(!!me);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<SubKind[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!me || subs.unavailable || subs.list === null) return null;
+  const current = normalizeKinds(subs.list.find((s) => s.serverId === serverId)?.kinds);
+  const on = current.length > 0;
+
+  const show = () => { setDraft(current); setError(''); setOpen(true); };
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<Subscription>(`/servers/${serverId}/subscription`, 'PUT', { kinds: draft });
+      const kinds = normalizeKinds(r?.kinds ?? draft);
+      subs.set({ serverId, kinds });
+      toast(kinds.length ? t('sub.saved') : t('sub.off'));
+      setOpen(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button type="button" className="btn-glass col-span-2 sm:col-auto" onClick={show} aria-haspopup="dialog" aria-label={`${on ? t('sub.buttonOn') : t('sub.button')}: ${serverName}`}>
+        <IconBell size={18} />
+        {on ? t('sub.buttonOn') : t('sub.button')}
+      </button>
+      {open && (
+        <Modal title={t('sub.title')} onClose={() => setOpen(false)}>
+          <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+            <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} />
+            <ErrorLine text={error} />
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn btn-soft" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
+              <Button loading={busy}>{t('sub.save')}</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/helpers.ts" << '__COREGSM_EOF__'
 import { useEffect, useState, type CSSProperties } from 'react';
 import { COUNTRIES } from '../../countries';
@@ -28058,6 +28788,7 @@ import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
 import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../../ui';
+import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
 export type ServersView = 'tiles' | 'list' | 'tv';
@@ -28139,12 +28870,13 @@ function ListRow({ s, uptime, onOpen, rx, favButton }: RowProps) {
       className={`srv-row ${s.online ? '' : 'off'}`}
       onClick={onOpen}
     >
-      <div className="srv-c-status"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash></div>
+      <div className="srv-c-status"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash></div>
       <div className="srv-c-name">
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
           <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
           <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+          {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-0.5" />}
         </div>
       </div>
       <div className="srv-c-players">
@@ -28228,8 +28960,9 @@ function TvCard({ s, uptime, rx }: { s: Server; uptime?: number; rx: Reactions }
           <h2 className="srv-tv-name" title={s.name}>{s.name}</h2>
           <div className="srv-tv-sub">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
         </div>
-        <div className="srv-tv-pill"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash></div>
+        <div className="srv-tv-pill"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash></div>
       </header>
+      {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-3 self-start" />}
 
       {s.online ? (
         <>
@@ -29107,6 +29840,39 @@ export function connectGuide(game: string, address: string): ConnectGuide {
   }
   return { title, steps, copy, link };
 }
+
+/** a game profile's connect block (GET /games): templates use {address}, {host} and {port} */
+export interface ConnectTemplates { steam?: string; command?: string; note?: string }
+
+/** fills {address}, {host} and {port}; `fallbackPort` stands in for a missing port (the game's default) */
+export function fillConnectTemplate(tpl: string, address: string, fallbackPort?: number | string): string {
+  const addr = address.trim();
+  const { host, port } = splitAddress(addr);
+  const p = port || (fallbackPort != null ? String(fallbackPort) : '');
+  return tpl.replace(/\{address\}/g, addr).replace(/\{host\}/g, host).replace(/\{port\}/g, p);
+}
+
+/** only links that hand the user over to a game or launcher; never script or data urls */
+export const isSafeConnectHref = (href: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(href) && !/^(javascript|data|vbscript|file|blob):/i.test(href);
+
+/**
+ * The built-in guide with the server-provided connect templates applied: the command replaces (or adds) the console command,
+ * the steam template becomes the connect link. Without templates the guide is returned unchanged.
+ */
+export function applyConnectTemplates(guide: ConnectGuide, connect: ConnectTemplates | null | undefined, address: string, defaultPort?: number): ConnectGuide {
+  if (!connect) return guide;
+  let { copy, link } = guide;
+  const command = typeof connect.command === 'string' && connect.command.trim() ? fillConnectTemplate(connect.command.trim(), address, defaultPort) : '';
+  if (command) {
+    const at = copy.findIndex((c) => /команд/i.test(c.label));
+    copy = at >= 0 ? copy.map((c, i) => (i === at ? { ...c, value: command } : c)) : [copy[0], { label: 'Команда для консоли', value: command }, ...copy.slice(1)].filter(Boolean);
+  }
+  const steam = typeof connect.steam === 'string' && connect.steam.trim() ? fillConnectTemplate(connect.steam.trim(), address, defaultPort) : '';
+  if (steam && isSafeConnectHref(steam)) {
+    link = { label: steam.startsWith('steam://') ? 'Подключиться через Steam' : 'Подключиться', href: steam };
+  }
+  return { ...guide, copy, link };
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/countries.ts" << '__COREGSM_EOF__'
@@ -29150,6 +29916,67 @@ export function coverBackground(
   const [a, b] = opts.strong ? [0.3, 0.62] : [0.22, 0.5];
   return `linear-gradient(180deg, rgba(8,10,20,${a}) 0%, rgba(8,10,20,${b}) 100%), url("${url}") center / cover no-repeat, ${gradient}`;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/deliveries.ts" << '__COREGSM_EOF__'
+/** Delivery queue (Discord): types and pure helpers for the «Доставка» card. */
+
+export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'error' | 'dead';
+export type DeliveryKind = 'news' | 'alert' | 'dm' | 'status';
+
+export interface DeliveryItem {
+  id: number;
+  kind: DeliveryKind;
+  refId: number | null;
+  target: string;
+  status: DeliveryStatus;
+  attempts: number;
+  nextTryAt: number | null;
+  lastError: string | null;
+  createdAt: number;
+  sentAt: number | null;
+  summary: string;
+}
+
+export interface DeliveryResponse {
+  counts: Record<DeliveryStatus, number>;
+  items: DeliveryItem[];
+}
+
+export const MAX_ATTEMPTS = 8;
+
+export const STATUS_LABEL: Record<DeliveryStatus, string> = {
+  pending: 'В очереди',
+  sending: 'Отправляется',
+  sent: 'Доставлено',
+  error: 'Ошибка, повтор',
+  dead: 'Не доставлено',
+};
+
+export const KIND_LABEL: Record<DeliveryKind, string> = {
+  news: 'Новость',
+  alert: 'Оповещение',
+  dm: 'Личное сообщение',
+  status: 'Карточка статуса',
+};
+
+/** «через 40 с», «через 3 мин», «через 2 ч 5 мин», «сейчас» */
+export function countdownText(nextTryAt: number | null, now = Date.now()): string {
+  if (nextTryAt == null) return '';
+  const s = Math.ceil((nextTryAt - now) / 1000);
+  if (s <= 0) return 'сейчас';
+  if (s < 60) return `через ${s} с`;
+  const m = Math.ceil(s / 60);
+  if (m < 60) return `через ${m} мин`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `через ${h} ч ${rest} мин` : `через ${h} ч`;
+}
+
+/** a retry is possible only for finished-with-trouble rows */
+export const canRetry = (s: DeliveryStatus) => s === 'dead' || s === 'error';
+
+export const attemptsText = (n: number, max = MAX_ATTEMPTS) => `${Math.min(n, max)}/${max}`;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/flashDebug.ts" << '__COREGSM_EOF__'
@@ -29239,6 +30066,77 @@ export const gameIconPath = (game: string): string | null => {
   const key = GAME_ICON[game];
   return key ? ICON_PATHS[key] : null;
 };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from './api';
+import type { ConnectTemplates } from './connectGuides';
+
+/** GET /games (public): what the panel knows about a game besides its name */
+export interface GameProfile {
+  id: string;
+  label: string;
+  defaultPort?: number;
+  queryPortHint?: string;
+  /** which details of the game the panel shows */
+  fields?: { map?: unknown; mode?: unknown; version?: unknown; players?: unknown };
+  connect?: ConnectTemplates;
+  accent?: string;
+}
+
+export type GameProfiles = Record<string, GameProfile>;
+
+let cache: GameProfiles | null = null;
+let inflight: Promise<GameProfiles> | null = null;
+
+/** one request per page load; a failure is not remembered (the next caller tries again) and gives an empty set */
+export function loadGameProfiles(): Promise<GameProfiles> {
+  if (cache) return Promise.resolve(cache);
+  if (!inflight) {
+    inflight = api<GameProfile[]>('/games')
+      .then((list) => {
+        const out: GameProfiles = {};
+        for (const g of Array.isArray(list) ? list : []) if (g && typeof g.id === 'string') out[g.id] = g;
+        cache = out;
+        return out;
+      })
+      .catch(() => ({}) as GameProfiles)
+      .finally(() => { inflight = null; });
+  }
+  return inflight;
+}
+
+/** null until the list is known; {} when the backend has no /games */
+export function useGameProfiles(): GameProfiles | null {
+  const [v, setV] = useState<GameProfiles | null>(cache);
+  useEffect(() => {
+    if (cache) { setV(cache); return; }
+    let dead = false;
+    void loadGameProfiles().then((g) => { if (!dead) setV(g); });
+    return () => { dead = true; };
+  }, []);
+  return v;
+}
+
+/**
+ * The port after another game was picked. A port the user typed is never replaced; an empty port always gets the
+ * default; otherwise the default follows the game as long as the field still holds the previous game's default
+ * (or there is no address yet, i.e. nothing worth keeping).
+ */
+export function nextPort(o: { current: number; touched: boolean; hasHost: boolean; prevDefault?: number; nextDefault?: number }): number {
+  const empty = !Number.isFinite(o.current) || o.current <= 0;
+  if (!o.nextDefault) return o.current;
+  if (empty) return o.nextDefault;
+  if (o.touched) return o.current;
+  return !o.hasHost || o.current === o.prevDefault ? o.nextDefault : o.current;
+}
+
+/** names of the details the panel shows for the game: «карта / режим / версия» */
+export function shownFields(fields: GameProfile['fields']): ('map' | 'mode' | 'version' | 'players')[] {
+  if (!fields) return [];
+  return (['map', 'mode', 'version', 'players'] as const).filter((k) => !!fields[k]);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
@@ -29481,6 +30379,7 @@ export const IconMemory = make(<><rect x="4" y="7" width="16" height="10" rx="2"
 export const IconDatabase = make(<><ellipse cx="12" cy="5.5" rx="8" ry="3" /><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>);
 export const IconShield = make(<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z" />);
 export const IconClock = make(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
+export const IconWrench = make(<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />, 22);
 export const IconBot = make(<><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5" /></>);
 
 // ---- icons with a small motion of their own (classes in index.css; the motion stops for reduced motion) ----
@@ -29518,7 +30417,7 @@ export const ICON_SET: [string, (p: IconProps) => ReactNode][] = [
   ['LinkOut', IconLinkOut], ['Plus', IconPlus], ['Close', IconClose], ['Check', IconCheck], ['Search', IconSearch],
   ['Logout', IconLogout], ['Eye', IconEye], ['EyeOff', IconEyeOff], ['ChevronDown', IconChevronDown], ['ArrowUp', IconArrowUp],
   ['Info', IconInfo], ['Warn', IconWarn], ['Error', IconError], ['Ok', IconOk],
-  ['Disk', IconDisk], ['Memory', IconMemory], ['Database', IconDatabase], ['Shield', IconShield], ['Clock', IconClock], ['Bot', IconBot],
+  ['Disk', IconDisk], ['Memory', IconMemory], ['Database', IconDatabase], ['Shield', IconShield], ['Clock', IconClock], ['Bot', IconBot], ['Wrench', IconWrench],
 ];
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -30979,6 +31878,48 @@ const en: Record<keyof typeof ru, string> = {
   'pf.emailv.unverified': 'E-mail is not confirmed: password reset by e-mail and sign-in alerts are off.',
   'pf.emailv.send': 'Send confirmation letter',
   'pf.emailv.sent': 'Letter sent to {email}',
+  'bell.title': 'Notifications',
+  'bell.aria': 'Notifications',
+  'bell.ariaUnread': 'Notifications, unread: {n}',
+  'bell.readAll': 'Mark all as read',
+  'bell.unreadMark': 'New:',
+  'bell.empty': 'No new notifications',
+  'bell.loadError': 'Could not load notifications',
+  'sub.button': 'Subscribe',
+  'sub.buttonOn': 'Subscribed',
+  'sub.title': 'Server notifications',
+  'sub.text': 'Choose what to be told about. Notifications arrive in the panel.',
+  'sub.free_slot': 'A slot frees up',
+  'sub.back_online': 'Server is back',
+  'sub.went_down': 'Server went down',
+  'sub.discordNote': 'Notifications arrive in the panel; link Discord in your profile to also get them as direct messages',
+  'sub.linkDiscord': 'Open profile',
+  'sub.save': 'Save',
+  'sub.saved': 'Subscription saved',
+  'sub.off': 'Subscription turned off',
+  'sub.loadError': 'Could not load the subscription',
+  'nd.title': 'Sign-in from a new device: {label}. Was it you?',
+  'nd.me': 'It was me',
+  'nd.no': 'No, sign out everywhere',
+  'nd.followup': 'Other sessions were ended. Now change your password to close access completely.',
+  'nd.changePassword': 'Change password',
+  'bk.unreadTitle': 'Some secrets could not be read',
+  'bk.unreadText': 'The copy was made with a different secrets key. Enter these values again in the settings:',
+  'bk.unreadSettings': 'Open settings',
+  'bk.unreadReload': 'Reload the panel',
+  'bk.unreadDismiss': 'Dismiss',
+  'secret.discord_token': 'Bot token',
+  'secret.discord_client_secret': 'Client Secret',
+  'secret.backup_passphrase': 'Backup passphrase',
+  'secret.proxy_url': 'Proxy',
+  'secret.smtp_password': 'SMTP password',
+  'secret.backup_remote_url': 'Remote backup address',
+  'sf.queryHint': 'Query port: {hint}',
+  'sf.fields': 'The panel shows for this game: {list}',
+  'sf.field.map': 'map',
+  'sf.field.mode': 'mode',
+  'sf.field.version': 'version',
+  'sf.field.players': 'players',
 };
 
 export default en;
@@ -31363,6 +32304,48 @@ const ru = {
   'pf.emailv.unverified': 'Почта не подтверждена: сброс пароля по почте и письма о входах не работают.',
   'pf.emailv.send': 'Отправить письмо для подтверждения',
   'pf.emailv.sent': 'Письмо отправлено на {email}',
+  'bell.title': 'Уведомления',
+  'bell.aria': 'Уведомления',
+  'bell.ariaUnread': 'Уведомления, непрочитанных: {n}',
+  'bell.readAll': 'Прочитать все',
+  'bell.unreadMark': 'Новое:',
+  'bell.empty': 'Новых уведомлений нет',
+  'bell.loadError': 'Не удалось загрузить уведомления',
+  'sub.button': 'Подписаться',
+  'sub.buttonOn': 'Вы подписаны',
+  'sub.title': 'Уведомления о сервере',
+  'sub.text': 'Отметьте, о чём сообщать. Уведомление придёт в панель.',
+  'sub.free_slot': 'Освободится место',
+  'sub.back_online': 'Сервер вернулся',
+  'sub.went_down': 'Сервер упал',
+  'sub.discordNote': 'Уведомления придут в панель; привяжите Discord в профиле, чтобы получать их в личные сообщения',
+  'sub.linkDiscord': 'Открыть профиль',
+  'sub.save': 'Сохранить',
+  'sub.saved': 'Подписка сохранена',
+  'sub.off': 'Подписка отключена',
+  'sub.loadError': 'Не удалось загрузить подписку',
+  'nd.title': 'Вход с нового устройства: {label}. Это были вы?',
+  'nd.me': 'Это я',
+  'nd.no': 'Нет, выйти на всех устройствах',
+  'nd.followup': 'Другие сессии завершены. Теперь смените пароль, чтобы закрыть доступ полностью.',
+  'nd.changePassword': 'Сменить пароль',
+  'bk.unreadTitle': 'Часть секретов не удалось прочитать',
+  'bk.unreadText': 'Копия сделана с другим ключом шифрования секретов. Введите эти значения в настройках заново:',
+  'bk.unreadSettings': 'Открыть настройки',
+  'bk.unreadReload': 'Перезагрузить панель',
+  'bk.unreadDismiss': 'Скрыть',
+  'secret.discord_token': 'Токен бота',
+  'secret.discord_client_secret': 'Client Secret',
+  'secret.backup_passphrase': 'Пароль бэкапов',
+  'secret.proxy_url': 'Прокси',
+  'secret.smtp_password': 'Пароль SMTP',
+  'secret.backup_remote_url': 'Адрес удалённого бэкапа',
+  'sf.queryHint': 'Query-порт: {hint}',
+  'sf.fields': 'Панель показывает для этой игры: {list}',
+  'sf.field.map': 'карта',
+  'sf.field.mode': 'режим',
+  'sf.field.version': 'версия',
+  'sf.field.players': 'игроки',
 };
 
 export default ru;
@@ -31414,6 +32397,184 @@ if (/[?&]flashdebug=1/.test(location.search)) void import('./flashDebug').then((
   if (m) document.documentElement.setAttribute('data-flat', m[1]);
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/maintenance.ts" << '__COREGSM_EOF__'
+/** Maintenance windows: types and the pure helpers (validation, quick presets, labels) used by the admin page and the server views. */
+
+export type MaintenanceRepeat = 'none' | 'daily' | 'weekly';
+
+export interface MaintenanceWindow {
+  id: number;
+  serverId: number | null;
+  serverName: string | null;
+  name: string;
+  startTs: number;
+  endTs: number;
+  repeat: MaintenanceRepeat;
+  createdBy?: string | null;
+  createdAt?: number;
+  active: boolean;
+  until: number | null;
+  nextStart: number | null;
+}
+
+export interface MaintenanceInput {
+  serverId: number | null;
+  name: string;
+  startTs: number;
+  endTs: number;
+  repeat: MaintenanceRepeat;
+}
+
+export const MAX_WINDOW_MS = 7 * 24 * 3600_000;
+export const MAX_DAILY_MS = 24 * 3600_000;
+export const NAME_MAX = 80;
+
+/** the first problem with the form, or null when it can be sent */
+export function validateWindow(v: { name: string; startTs: number | null; endTs: number | null; repeat: MaintenanceRepeat }): string | null {
+  const name = v.name.trim();
+  if (!name) return 'Введите название работ';
+  if (name.length > NAME_MAX) return `Название длиннее ${NAME_MAX} символов`;
+  if (v.startTs == null || Number.isNaN(v.startTs)) return 'Укажите начало';
+  if (v.endTs == null || Number.isNaN(v.endTs)) return 'Укажите окончание';
+  if (v.endTs <= v.startTs) return 'Окончание должно быть позже начала';
+  const len = v.endTs - v.startTs;
+  if (len > MAX_WINDOW_MS) return 'Окно не может быть длиннее 7 суток';
+  if (v.repeat === 'daily' && len > MAX_DAILY_MS) return 'При ежедневном повторе окно не может быть длиннее 24 часов';
+  return null;
+}
+
+/** «Сейчас на 30 минут» */
+export function presetNow(now: number, minutes = 30): { startTs: number; endTs: number } {
+  const start = Math.floor(now / 60_000) * 60_000;
+  return { startTs: start, endTs: start + minutes * 60_000 };
+}
+
+/** «Сегодня ночью 04:00–05:00»: the coming 04:00 (today when it has not passed yet, otherwise tomorrow) for one hour */
+export function presetTonight(now: number, startHour = 4, hours = 1): { startTs: number; endTs: number } {
+  const d = new Date(now);
+  d.setHours(startHour, 0, 0, 0);
+  if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+  const startTs = d.getTime();
+  return { startTs, endTs: startTs + hours * 3600_000 };
+}
+
+const p2 = (n: number) => String(n).padStart(2, '0');
+
+/** ts -> value of <input type="datetime-local"> in the browser's zone */
+export function toLocalInput(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
+/** value of <input type="datetime-local"> -> ts, null when empty or invalid */
+export function fromLocalInput(v: string): number | null {
+  if (!v) return null;
+  const t = new Date(v).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+export const REPEAT_LABEL: Record<MaintenanceRepeat, string> = { none: 'Один раз', daily: 'Каждый день', weekly: 'Каждую неделю' };
+
+const clock = (ts: number) => `${p2(new Date(ts).getHours())}:${p2(new Date(ts).getMinutes())}`;
+
+/** «до 05:00», or «до 14.10 05:00» when the end is not today */
+export function untilLabel(until: number, now = Date.now(), clockOf: (ts: number) => string = clock): string {
+  const d = new Date(until);
+  const t = new Date(now);
+  const same = d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
+  return same ? `до ${clockOf(until)}` : `до ${p2(d.getDate())}.${p2(d.getMonth() + 1)} ${clockOf(until)}`;
+}
+
+/** the text of the chip on cards and in the passport */
+export function chipText(m: { until: number | null }, now = Date.now(), clockOf?: (ts: number) => string): string {
+  return m.until ? `Тех. работы ${untilLabel(m.until, now, clockOf)}` : 'Тех. работы';
+}
+
+/** a short «с 04:00 до 05:00» / «14.10 04:00 – 15.10 05:00» range */
+export function rangeLabel(startTs: number, endTs: number): string {
+  const day = (ts: number) => `${p2(new Date(ts).getDate())}.${p2(new Date(ts).getMonth() + 1)}`;
+  const a = new Date(startTs);
+  const b = new Date(endTs);
+  const same = a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  return same ? `${day(startTs)}, ${clock(startTs)} – ${clock(endTs)}` : `${day(startTs)} ${clock(startTs)} – ${day(endTs)} ${clock(endTs)}`;
+}
+
+export type WindowState = 'active' | 'repeat' | 'planned' | 'past';
+
+export function windowState(w: Pick<MaintenanceWindow, 'active' | 'repeat' | 'endTs' | 'nextStart'>, now = Date.now()): WindowState {
+  if (w.active) return 'active';
+  if (w.repeat !== 'none') return 'repeat';
+  return w.endTs > now ? 'planned' : 'past';
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/notifications.ts" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api, ApiError } from './api';
+
+/** what a player can be told about a server */
+export type SubKind = 'free_slot' | 'back_online' | 'went_down';
+export const SUB_KINDS: SubKind[] = ['free_slot', 'back_online', 'went_down'];
+
+/** GET /me/subscriptions */
+export interface Subscription { serverId: number; kinds: SubKind[] }
+
+/** GET /me/notifications */
+export interface NotificationItem { id: number; ts: number; kind: string; serverId: number | null; text: string; read: boolean }
+export interface NotificationList { unread: number; items: NotificationItem[] }
+
+/** the badge on the bell: nothing for 0, the number up to 99, then «99+» */
+export function badgeText(n: number | null | undefined): string {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v) || v <= 0) return '';
+  return v > 99 ? '99+' : String(v);
+}
+
+/** keeps only known kinds, once each, in the canonical order */
+export function normalizeKinds(raw: unknown): SubKind[] {
+  const list = Array.isArray(raw) ? raw : [];
+  return SUB_KINDS.filter((k) => list.includes(k));
+}
+
+/** the selection with one kind switched on or off (canonical order, no duplicates) */
+export function toggleKind(kinds: readonly SubKind[], kind: SubKind): SubKind[] {
+  const has = kinds.includes(kind);
+  return normalizeKinds(has ? kinds.filter((k) => k !== kind) : [...kinds, kind]);
+}
+
+/** the notification links to its server page, or nowhere */
+export function notificationHref(n: Pick<NotificationItem, 'serverId'>): string | null {
+  return n.serverId != null && Number.isFinite(Number(n.serverId)) ? `#/servers/${n.serverId}` : null;
+}
+
+/** an "unavailable" answer (older backend, feature off) hides the panel instead of showing an error */
+export const isUnavailable = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 501);
+
+export const NOTIFY_POLL_MS = 60_000;
+
+export const fetchNotifications = (unreadOnly = false, limit = 50) =>
+  api<NotificationList>(`/me/notifications?${unreadOnly ? 'unread=1&' : ''}limit=${limit}`);
+
+export const markNotificationsRead = (body: { ids: number[] } | { all: true }) =>
+  api<{ ok: boolean; unread: number }>('/me/notifications/read', 'POST', body);
+
+/** all subscriptions of the signed-in user; null while loading, undefined-less: `unavailable` when the backend has no such feature */
+export function useSubscriptions(enabled: boolean): { list: Subscription[] | null; unavailable: boolean; set: (s: Subscription) => void } {
+  const [list, setList] = useState<Subscription[] | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => {
+    if (!enabled) { setList(null); return; }
+    let dead = false;
+    api<Subscription[]>('/me/subscriptions')
+      .then((r) => { if (!dead) setList((Array.isArray(r) ? r : []).map((s) => ({ serverId: Number(s.serverId), kinds: normalizeKinds(s.kinds) }))); })
+      .catch((e) => { if (!dead) { setList([]); setUnavailable(isUnavailable(e) || !(e instanceof ApiError)); } });
+    return () => { dead = true; };
+  }, [enabled]);
+  const set = (s: Subscription) => setList((cur) => [...(cur ?? []).filter((x) => x.serverId !== s.serverId), s]);
+  return { list, unavailable, set };
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -31431,6 +32592,7 @@ import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import JournalPage from './Journal';
+import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
 
 export { ADMIN_SECTIONS };
@@ -31553,6 +32715,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
         {!home && current === 'news' && <NewsPage sub={tail} />}
         {!home && current === 'alerts' && <AlertsPage />}
+        {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}
         {!home && current === 'users' && <UsersTab />}
         {!home && current === 'journal' && <JournalPage />}
@@ -31737,7 +32900,7 @@ function ServersManage({ sub }: { sub: string }) {
               </div>
             </div>
             <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
-            <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} />
+            <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} maintenance={!!s.maintenance} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
               <a className="btn btn-soft btn-sm" href={`#/admin/discord/new/${s.id}`}>Привязать к Discord</a>
@@ -32235,6 +33398,8 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
+import { t } from '../i18n';
+import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
@@ -32281,6 +33446,8 @@ export default function BackupsCard() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  // secrets that the restored copy could not decrypt: the warning stays until it is dismissed (and across the reload)
+  const [unreadable, setUnreadable] = useState<string[]>(() => loadUnreadableSecrets());
 
   const [schedule, setSchedule] = useState<BackupInfo['schedule']>('off');
   const [keep, setKeep] = useState(7);
@@ -32322,6 +33489,18 @@ export default function BackupsCard() {
       await load();
     });
   };
+  /** after a restore: with unreadable secrets the page stays (and warns), otherwise it waits for the restart and reloads */
+  const afterRestore = async (raw: unknown) => {
+    const un = unreadableSecrets(raw).map((x) => x.id);
+    toast('Копия принята, панель перезапускается…');
+    if (un.length) {
+      saveUnreadableSecrets(un);
+      setUnreadable(un);
+      setRestoring(false);
+      return;
+    }
+    await waitAndReload();
+  };
   const restoreStored = async (b: BackupItem) => {
     if (!(await confirmDialog({
       title: 'Восстановить из этой копии?',
@@ -32338,9 +33517,8 @@ export default function BackupsCard() {
     setRestoring(true);
     setError('');
     try {
-      await api('/backups/' + encodeURIComponent(b.name) + '/restore', 'POST', pass ? { passphrase: pass } : {});
-      toast('Копия принята, панель перезапускается…');
-      await waitAndReload();
+      const r = await api<{ unreadableSecrets?: string[] }>('/backups/' + encodeURIComponent(b.name) + '/restore', 'POST', pass ? { passphrase: pass } : {});
+      await afterRestore(r?.unreadableSecrets);
     } catch (e) {
       setError((e as Error).message);
       setRestoring(false);
@@ -32365,10 +33543,9 @@ export default function BackupsCard() {
     setError('');
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
-      const j = (await r.json().catch(() => null)) as { error?: string } | null;
+      const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
       if (!r.ok) throw new Error(j?.error ?? 'Не удалось восстановить копию');
-      toast('Копия принята, панель перезапускается…');
-      await waitAndReload();
+      await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError((e as Error).message);
       setRestoring(false);
@@ -32410,6 +33587,21 @@ export default function BackupsCard() {
       description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
+
+      {unreadable.length > 0 && (
+        <div className="space-y-3 rounded-ui-lg bg-warnbg p-4 text-warn" role="alert">
+          <h3 className="font-black">{t('bk.unreadTitle')}</h3>
+          <p className="font-semibold">{t('bk.unreadText')}</p>
+          <ul className="list-disc space-y-0.5 pl-5 font-bold">
+            {unreadableSecrets(unreadable).map((x) => <li key={x.id}>{x.label}</li>)}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <a className="btn btn-sm" href="#/admin/settings">{t('bk.unreadSettings')}</a>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => void waitAndReload()}>{t('bk.unreadReload')}</button>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => { saveUnreadableSecrets([]); setUnreadable([]); }}>{t('bk.unreadDismiss')}</button>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? 'Готовлю…' : 'Скачать полную копию'}</button>
@@ -32624,6 +33816,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
+import DeliveryList from '../components/DeliveryList';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
@@ -32876,6 +34069,8 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           );
         })}
       </div>
+
+      <DeliveryList />
 
       {draft && (
         <BindingForm
@@ -33548,6 +34743,202 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         </>
       )}
     </form>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Maintenance.tsx" << '__COREGSM_EOF__'
+import { useMemo, useState, type FormEvent } from 'react';
+import { api, type Server } from '../api';
+import { StateView } from '../components/StateView';
+import {
+  REPEAT_LABEL, fromLocalInput, presetNow, presetTonight, rangeLabel, toLocalInput, untilLabel, validateWindow, windowState,
+  type MaintenanceInput, type MaintenanceRepeat, type MaintenanceWindow, type WindowState,
+} from '../maintenance';
+import { AdminPage, ErrorLine, Field, FieldError, IconEdit, IconPlus, IconTrash, IconWrench, LoadError, Modal, PageHead, Spinner, undoable, toast, usePoll } from '../ui';
+
+interface Draft { id: number | null; serverId: string; name: string; start: string; end: string; repeat: MaintenanceRepeat }
+
+const emptyDraft = (): Draft => {
+  const p = presetNow(Date.now());
+  return { id: null, serverId: '', name: 'Технические работы', start: toLocalInput(p.startTs), end: toLocalInput(p.endTs), repeat: 'none' };
+};
+
+const CHIP: Record<WindowState, { text: string; cls: string }> = {
+  active: { text: 'Идёт сейчас', cls: 'pill pill-warn' },
+  planned: { text: 'Запланировано', cls: 'pill pill-mute' },
+  repeat: { text: 'Повторяется', cls: 'pill pill-mute' },
+  past: { text: 'Завершено', cls: 'pill pill-mute' },
+};
+
+/** «Обслуживание»: windows during which a server is shown as «Обслуживание» and does not raise alerts. */
+export default function MaintenancePage() {
+  const [list, setList] = useState<MaintenanceWindow[] | null>(null);
+  const [servers, setServers] = useState<Server[]>([]);
+  const [error, setError] = useState('');
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [hidden, setHidden] = useState<number[]>([]);
+
+  const load = () =>
+    Promise.all([
+      api<MaintenanceWindow[]>('/maintenance'),
+      api<Server[]>('/servers').catch(() => [] as Server[]),
+    ]).then(([m, s]) => { setList(Array.isArray(m) ? m : []); setServers(Array.isArray(s) ? s : []); setError(''); })
+      .catch((e: Error) => setError(e.message));
+  usePoll(load, 30_000);
+
+  const rows = useMemo(() => {
+    const now = Date.now();
+    const order: Record<WindowState, number> = { active: 0, planned: 1, repeat: 2, past: 3 };
+    return (list ?? [])
+      .filter((w) => !hidden.includes(w.id))
+      .map((w) => ({ w, st: windowState(w, now) }))
+      .sort((a, b) => order[a.st] - order[b.st] || (a.w.nextStart ?? a.w.startTs) - (b.w.nextStart ?? b.w.startTs));
+  }, [list, hidden]);
+
+  const open = (preset?: { startTs: number; endTs: number }) => {
+    const d = emptyDraft();
+    if (preset) { d.start = toLocalInput(preset.startTs); d.end = toLocalInput(preset.endTs); }
+    setDraft(d);
+  };
+  const edit = (w: MaintenanceWindow) =>
+    setDraft({ id: w.id, serverId: w.serverId == null ? '' : String(w.serverId), name: w.name, start: toLocalInput(w.startTs), end: toLocalInput(w.endTs), repeat: w.repeat });
+
+  const remove = (w: MaintenanceWindow) => {
+    setHidden((h) => [...h, w.id]);
+    undoable({
+      text: `Окно «${w.name}» удалено`,
+      restore: () => setHidden((h) => h.filter((x) => x !== w.id)),
+      commit: () => api(`/maintenance/${w.id}`, 'DELETE')
+        .catch((e: Error) => toast(e.message, 'err'))
+        .finally(() => { setHidden((h) => h.filter((x) => x !== w.id)); void load(); }),
+    });
+  };
+
+  return (
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconWrench size={22} />}
+          title="Обслуживание"
+          subtitle="Окна технических работ: без ложных тревог"
+          hint="Пока идёт окно, сервер помечается как «Обслуживание», а оповещения о падении не отправляются."
+          help={<p>Укажите сервер (или все сразу) и время работ. Окно может повторяться каждый день или неделю. Во время окна на карточках сервера показывается «Тех. работы до …», а падение не считается сбоем и не попадает в оповещения.</p>}
+        >
+          <button type="button" className="btn" onClick={() => open()}><IconPlus size={16} />Добавить окно</button>
+        </PageHead>
+      )}
+    >
+      {error && !list ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Быстрые окна">
+        <button type="button" className="chip-filter" onClick={() => open(presetNow(Date.now()))}>Сейчас на 30 минут</button>
+        <button type="button" className="chip-filter" onClick={() => open(presetTonight(Date.now()))}>Сегодня ночью 04:00–05:00</button>
+      </div>
+
+      {list && rows.length === 0 && (
+        <StateView
+          title="Окон обслуживания нет"
+          text="Создайте окно перед обновлением или перезагрузкой сервера, и панель не будет считать это сбоем."
+          action={<button type="button" className="btn" onClick={() => open()}>Добавить окно</button>}
+        />
+      )}
+      {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />}
+
+      {rows.length > 0 && (
+        <ul className="panel divide-y divide-line overflow-hidden">
+          {rows.map(({ w, st }) => (
+            <li key={w.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
+              <div className="min-w-0 flex-1 basis-60">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="min-w-0 break-words font-extrabold">{w.name}</span>
+                  <span className={CHIP[st].cls}>{CHIP[st].text}</span>
+                  {w.repeat !== 'none' && st !== 'repeat' && <span className="pill pill-mute">{REPEAT_LABEL[w.repeat]}</span>}
+                </div>
+                <div className="mt-0.5 break-words text-sm font-semibold text-mute">
+                  {w.serverId == null ? 'Все серверы' : w.serverName ?? `Сервер №${w.serverId}`}
+                  {' · '}
+                  {rangeLabel(w.startTs, w.endTs)}
+                  {st === 'active' && w.until ? ` · ${untilLabel(w.until)}` : ''}
+                  {st !== 'active' && w.repeat !== 'none' && w.nextStart ? ` · следующее ${rangeLabel(w.nextStart, w.nextStart + (w.endTs - w.startTs))}` : ''}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={`Изменить окно «${w.name}»`}><IconEdit size={16} />Изменить</button>
+                <button type="button" className="btn btn-danger btn-sm" onClick={() => remove(w)} aria-label={`Удалить окно «${w.name}»`}><IconTrash size={16} /></button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {draft && <WindowModal draft={draft} servers={servers} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); void load(); }} />}
+    </AdminPage>
+  );
+}
+
+function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; servers: Server[]; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState<Draft>(draft);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const startTs = fromLocalInput(f.start);
+  const endTs = fromLocalInput(f.end);
+  const problem = validateWindow({ name: f.name, startTs, endTs, repeat: f.repeat });
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setF((x) => ({ ...x, [k]: v }));
+  const apply = (p: { startTs: number; endTs: number }) => setF((x) => ({ ...x, start: toLocalInput(p.startTs), end: toLocalInput(p.endTs) }));
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (problem || startTs == null || endTs == null || busy) return;
+    const body: MaintenanceInput = { serverId: f.serverId === '' ? null : Number(f.serverId), name: f.name.trim(), startTs, endTs, repeat: f.repeat };
+    setBusy(true);
+    setError('');
+    try {
+      await (f.id == null ? api('/maintenance', 'POST', body) : api(`/maintenance/${f.id}`, 'PUT', body));
+      toast(f.id == null ? 'Окно добавлено' : 'Окно сохранено');
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={f.id == null ? 'Новое окно обслуживания' : 'Изменить окно'} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+        <Field label="Сервер">
+          <select className="input" value={f.serverId} onChange={(e) => set('serverId', e.target.value)}>
+            <option value="">Все серверы</option>
+            {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Название">
+          <input className="input" value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} placeholder="Например, обновление игры" />
+        </Field>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Быстрое время">
+          <button type="button" className="chip-filter" onClick={() => apply(presetNow(Date.now()))}>Сейчас на 30 минут</button>
+          <button type="button" className="chip-filter" onClick={() => apply(presetTonight(Date.now()))}>Сегодня ночью 04:00–05:00</button>
+        </div>
+        <div className="grid gap-4 min-[460px]:grid-cols-2">
+          <Field label="Начало"><input className="input" type="datetime-local" value={f.start} onChange={(e) => set('start', e.target.value)} /></Field>
+          <Field label="Окончание"><input className="input" type="datetime-local" value={f.end} onChange={(e) => set('end', e.target.value)} /></Field>
+        </div>
+        <Field label="Повтор">
+          <select className="input" value={f.repeat} onChange={(e) => set('repeat', e.target.value as MaintenanceRepeat)}>
+            <option value="none">Один раз</option>
+            <option value="daily">Каждый день (до 24 часов)</option>
+            <option value="weekly">Каждую неделю</option>
+          </select>
+        </Field>
+        <p className="text-sm font-semibold text-mute">Время указывается по часам вашего браузера. Окно не длиннее 7 суток.</p>
+        <FieldError id="maint-problem" text={f.name.trim() && f.start && f.end ? problem ?? undefined : undefined} />
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="submit" className="btn" disabled={!!problem || busy}>{busy && <Spinner />}Сохранить</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 __COREGSM_EOF__
@@ -34410,6 +35801,7 @@ import { BannerEditor } from '../components/profile/BannerEditor';
 import { bannerStyle } from '../components/profile/banner';
 import { AchievementsGrid, AchievementsPreview } from '../components/profile/Achievements';
 import { JournalCard } from '../components/profile/Journal';
+import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
@@ -34470,6 +35862,7 @@ function OverviewTab() {
 
   return (
     <div className="space-y-5">
+      <NewDeviceBanner />
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
           <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={() => setEditBanner((v) => !v)}>
@@ -34546,6 +35939,7 @@ function SecurityTab() {
   if (!me) return null;
   return (
     <div className="space-y-5">
+      <NewDeviceBanner onRevoked={() => setRev((x) => x + 1)} />
       <div className="grid items-start gap-5 md:grid-cols-2">
         <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
@@ -35182,7 +36576,8 @@ import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
-import { connectGuide } from '../connectGuides';
+import { applyConnectTemplates, connectGuide } from '../connectGuides';
+import { useGameProfiles } from '../gameProfiles';
 import { AnimatedNumber, Burst, CopyButton, ErrorLine, GameAvatar, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, fmtDateTime, isLag, plural, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
@@ -35191,6 +36586,7 @@ import HistoryChart, { type Series } from '../components/server/HistoryChart';
 import PlayersList from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
+import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
@@ -35346,6 +36742,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
   };
 
+  const profiles = useGameProfiles();
   const depth = useDepth<HTMLElement>();
   const [shared, setShared] = useState(false);
   // red ring once when the server goes online -> offline while this page is open
@@ -35386,7 +36783,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const color = gameColor(s.game);
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
-  const guide = connectGuide(s.game, s.address);
+  const profile = profiles?.[s.game];
+  const guide = applyConnectTemplates(connectGuide(s.game, s.address), profile?.connect, s.address, profile?.defaultPort);
   // placeholder versions such as 0.0.0.1 say nothing
   const realVersion = s.version && !/^0(\.0)*(\.\d+)?$/.test(s.version.trim()) ? s.version.trim() : null;
   const mode = guessMode(s.name);
@@ -35601,7 +36999,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
         {/* status row */}
         <div className="relative mt-3.5 flex flex-wrap items-center gap-2">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
           <LiveBadge at={s.updatedAt} />
           {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
         </div>
@@ -35616,6 +37014,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             address: s.address,
             ping: s.ping,
             online: s.online,
+            maintenance: s.maintenance,
             uptimePct: stats.uptimePct,
             uptimeLabel: windowShort,
             createdAt: data.createdAt ?? null,
@@ -35643,6 +37042,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             {shared ? <IconCheckMark /> : <IconShare />}
             Поделиться
           </button>
+          {me && <SubscribeMenu serverId={id} serverName={s.name} />}
         </div>
         {isAdmin && (
           <div className="relative mt-3 grid grid-cols-3 gap-2 border-t border-white/15 pt-3 sm:flex sm:flex-wrap sm:items-center" role="group" aria-label="Управление сервером">
@@ -35681,12 +37081,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerForm.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import GamePicker from '../components/GamePicker';
 import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
+import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
+import { t } from '../i18n';
 
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
@@ -35734,18 +37136,36 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   // "advanced" is open when it already holds something (editing)
   const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country || coverUrl);
 
+  const profiles = useGameProfiles();
+  // true once the user typed a port themselves: a game change must not overwrite it
+  const portTouched = useRef(false);
+
   const pickGame = (v: string) => {
     setTest(null);
     if (v === '__custom') { setCustom(true); return; }
     setCustom(false);
     const g = GAMES.find((x) => x.id === v);
-    setF((p) => ({ ...p, game: v, port: g && (!p.host || p.port === GAMES.find((x) => x.id === p.game)?.port) ? g.port : p.port }));
+    const nextDefault = profiles?.[v]?.defaultPort ?? g?.port;
+    setF((p) => ({
+      ...p,
+      game: v,
+      port: nextPort({
+        current: p.port,
+        touched: portTouched.current,
+        hasHost: !!p.host,
+        prevDefault: profiles?.[p.game]?.defaultPort ?? GAMES.find((x) => x.id === p.game)?.port,
+        nextDefault,
+      }),
+    }));
   };
 
   const change = (patch: Partial<ServerInput>) => {
     setTest(null);
     setF((p) => ({ ...p, ...patch }));
   };
+
+  const gameProfile = custom ? undefined : profiles?.[f.game];
+  const fieldList = shownFields(gameProfile?.fields);
 
   const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0;
 
@@ -35794,9 +37214,11 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
             </Field>
           </div>
           <Field label="Порт">
-            <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => change({ port: Number(e.target.value) })} required />
+            <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => { portTouched.current = true; change({ port: Number(e.target.value) }); }} required />
           </Field>
         </div>
+        {gameProfile?.queryPortHint && <p className="-mt-2 text-sm font-semibold text-mute">{t('sf.queryHint', { hint: gameProfile.queryPortHint })}</p>}
+        {fieldList.length > 0 && <p className="-mt-2 text-sm font-semibold text-mute">{t('sf.fields', { list: fieldList.map((k) => t(`sf.field.${k}` as const)).join(' / ') })}</p>}
 
         <div className="space-y-2">
           <button type="button" className="btn btn-soft" onClick={runTest} disabled={!canTest || testing}>
@@ -35876,6 +37298,7 @@ import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
+import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
@@ -36177,9 +37600,10 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s
             <span aria-hidden>·</span>
             <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
           </div>
+          {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
         </div>
       </div>
@@ -36223,7 +37647,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Serve
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
-          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
         </div>
       </div>
@@ -36233,6 +37657,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Serve
           <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
+        {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
       {s.online ? (
@@ -36278,6 +37703,7 @@ import { AdminPage, CopyButton, ErrorLine, Field, FieldError, GoLink, IconArrowU
 import BackupsCard from './Backups';
 import SmtpCard from '../components/SmtpCard';
 import { SETTINGS_TABS } from './adminNav';
+import PollSettingsCard from '../components/PollSettingsCard';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -36492,7 +37918,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
           </a>
         ))}
       </nav>
-      {tab === 'bot' && <BotCard />}
+      {tab === 'bot' && <><BotCard /><PollSettingsCard /></>}
       {tab === 'brand' && <BrandCard />}
       {tab === 'security' && (
         <>
@@ -37424,10 +38850,11 @@ export default function StatusPage() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/System.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
-import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
+import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
+import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -37442,6 +38869,7 @@ interface Health {
   guilds: number;
   publicBase: string | null;
   cert?: CertInfo;
+  flags?: HealthFlag[];
 }
 interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }
 
@@ -37465,6 +38893,7 @@ export default function SystemPage() {
   const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const [histFlags, setHistFlags] = useState<HealthFlag[]>([]);
 
   const load = () => api<Health>('/system').then((r) => { setH(r); setError(''); }).catch((e: Error) => setError(e.message));
   usePoll(load, 15_000);
@@ -37474,6 +38903,16 @@ export default function SystemPage() {
     await api<{ at: number; checks: Check[] }>('/system/run', 'POST').then((r) => setChecks({ at: r.at, list: r.checks })).catch((e: Error) => setError(e.message));
     setRunning(false);
   };
+
+  // warnings from /system and from the history, one per kind (the earliest «с» wins)
+  const flags = useMemo(() => {
+    const m = new Map<string, HealthFlag>();
+    for (const f of [...(h?.flags ?? []), ...histFlags]) {
+      const old = m.get(f.kind);
+      if (!old || f.since < old.since) m.set(f.kind, f);
+    }
+    return [...m.values()].sort((a, b) => a.since - b.since);
+  }, [h, histFlags]);
 
   const diskUsed = h && h.diskTotal && h.diskFree != null ? 1 - h.diskFree / h.diskTotal : null;
   const memFrac = h ? h.memoryMb / MEM_REF_MB : null;
@@ -37508,6 +38947,16 @@ export default function SystemPage() {
       )}
     >
       {error && !h ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+
+      {flags.length > 0 && (
+        <div className="space-y-2" role="group" aria-label="Предупреждения">
+          {flags.map((f) => (
+            <Notice key={f.kind} tone="warn">
+              {f.text}<span className="font-semibold opacity-80"> · с {new Date(f.since).toDateString() === new Date().toDateString() ? fmtTime(f.since) : fmtDateTime(f.since)}</span>
+            </Notice>
+          ))}
+        </div>
+      )}
 
       {h ? (
         <>
@@ -37552,6 +39001,8 @@ export default function SystemPage() {
         <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />
       )}
 
+      <HealthHistoryCard onFlags={setHistFlags} />
+
       <Section title="Диагностика" description="Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.">
         {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}
         {checks && (
@@ -37588,7 +39039,12 @@ __COREGSM_EOF__
 import { useState, type ReactNode } from 'react';
 import { AccentPicker } from '../components/AccentPicker';
 import { Gauge } from '../components/Gauge';
+import MaintenanceChip from '../components/MaintenanceChip';
+import { buildSparkline } from '../sparkline';
 import { confirmDialog, promptDialog } from '../confirm';
+import { SubscribeForm } from '../components/server/SubscribeMenu';
+import { badgeText, type SubKind } from '../notifications';
+import { unreadableSecrets } from '../security';
 import {
   AdminPage, Button, Empty, ErrorLine, FieldError, FillBar, GoLink, ICON_SET, IconBell, IconPlus, IconRefresh, IconTrash, IconEdit, Modal,
   Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StateView, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
@@ -37620,6 +39076,33 @@ const Row = ({ label, children }: { label?: string; children: ReactNode }) => (
 );
 
 /** one specimen (buttons, pill, field, switch, card) that is shown in a forced theme next to the other one */
+/** bell badge, subscription kinds, new-device strip and the unreadable-secrets list: the pieces of the notification and security extras */
+function NotifyExtras() {
+  const [kinds, setKinds] = useState<SubKind[]>(['free_slot']);
+  const secrets = unreadableSecrets(['discord_token', 'smtp_password', 'proxy_url']);
+  return (
+    <div className="space-y-4">
+      <Row label="Колокольчик: значок непрочитанных (до 99, дальше 99+)">
+        {[0, 3, 99, 150].map((n) => (
+          <span key={n} className="relative grid h-10 w-10 place-items-center rounded-full bg-soft text-mute">
+            <IconBell size={20} />
+            {badgeText(n) && <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-[11px] font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]">{badgeText(n)}</span>}
+          </span>
+        ))}
+      </Row>
+      <div className="max-w-md"><SubscribeForm kinds={kinds} onChange={setKinds} discordLinked={false} idPrefix="kit-sub" /></div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-2xl bg-warnbg px-4 py-3 text-warn">
+        <span className="min-w-0 flex-1 basis-60 text-sm font-bold">Вход с нового устройства: Chrome на Windows. Это были вы?</span>
+        <span className="flex gap-2"><button className="btn btn-soft btn-sm">Это я</button><button className="btn btn-danger btn-sm">Нет, выйти на всех устройствах</button></span>
+      </div>
+      <div className="space-y-2 rounded-ui-lg bg-warnbg p-4 text-warn">
+        <h3 className="font-black">Часть секретов не удалось прочитать</h3>
+        <ul className="list-disc pl-5 font-bold">{secrets.map((x) => <li key={x.id}>{x.label}</li>)}</ul>
+      </div>
+    </div>
+  );
+}
+
 function Specimen() {
   const [on, setOn] = useState(true);
   const [seg, setSeg] = useState('a');
@@ -37842,6 +39325,10 @@ export default function UiKitPage() {
         </Row>
       </Block>
 
+      <Block title="Уведомления и безопасность" note="Колокольчик в шапке, подписка на сервер, баннер входа с нового устройства и предупреждение о нечитаемых секретах после восстановления копии.">
+        <NotifyExtras />
+      </Block>
+
       <Block title="Диалоги">
         <Row>
           <button className="btn btn-soft" onClick={() => setDialog(true)}>Modal</button>
@@ -37879,6 +39366,28 @@ export default function UiKitPage() {
           <Gauge value={0.94} label="База" display="94 %" caption="критично" />
           <Gauge value={null} label="Нет данных" display="–" caption="неизвестно" />
         </div>
+      </Block>
+
+      <Block title="Обслуживание и графики состояния" note="Метка «Тех. работы до …» и статус «Обслуживание» вместо Офлайн; статичные спарклайны на странице «Система».">
+        <Row label="Статус и метка">
+          <StatusPill online={false} known maintenance />
+          <MaintenanceChip m={{ name: 'Обновление игры', until: Date.now() + 40 * 60_000 }} />
+          <div className="cover-grad flex flex-wrap items-center gap-2.5 rounded-ui-lg p-3" style={{ ['--c1' as string]: '#4338ca', ['--c2' as string]: '#7c3aed' }}>
+            <StatusPill glass online={false} known maintenance />
+            <MaintenanceChip glass m={{ name: '', until: Date.now() + 40 * 60_000 }} />
+          </div>
+        </Row>
+        <Row label="Спарклайн">
+          {[[3, 4, 3, 6, 8, 7, 9, 12, 10, 11], [5, 5, 5, 5, 5, 5]].map((v, i) => {
+            const sp = buildSparkline(v, 160, 40);
+            return (
+              <svg key={i} viewBox="0 0 160 40" width="160" height="40" className="rounded-ui-md bg-soft" role="img" aria-label={`Пример графика ${i + 1}`}>
+                <path d={sp.area} className="fill-link" opacity="0.12" />
+                <path d={sp.path} fill="none" className="stroke-link" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+              </svg>
+            );
+          })}
+        </Row>
       </Block>
 
       <Block title="Иконки" note="Один набор: сетка 24 px, штрих 2 px, цвет currentColor. Импорт из '../ui' (или из '../icons').">
@@ -37956,7 +39465,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
-import { IconBell, IconCards, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
+import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -37982,6 +39491,7 @@ const S = {
   discord: { id: 'discord', label: 'Discord', icon: IconDiscord, desc: 'В какой канал бот публикует карточку сервера.', keywords: 'привязка канал бот сообщение embed' },
   news: { id: 'news', label: 'Новости', icon: IconNews, desc: 'Написать объявление и отправить его в Discord.', keywords: 'новость объявление публикация вайп шаблон запланировать' },
   alerts: { id: 'alerts', label: 'Оповещения', icon: IconBell, desc: 'Сообщение в Discord, если игровой сервер упал или вернулся.', keywords: 'упал недоступен уведомление падение упоминание here everyone' },
+  maintenance: { id: 'maintenance', label: 'Обслуживание', icon: IconWrench, desc: 'Окна технических работ: во время них падение сервера не считается сбоем.', keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
   cards: { id: 'cards', label: 'Карточки', icon: IconCards, desc: 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.', keywords: 'картинка баннер ссылка png' },
   users: { id: 'users', label: 'Пользователи', icon: IconUsers, desc: 'Аккаунты, роли, регистрация и правила сообщества.', keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
   journal: { id: 'journal', label: 'Журнал', icon: IconJournal, desc: 'Кто и что менял в панели, с датой и временем.', keywords: 'аудит история действия изменения кто менял лог' },
@@ -37993,7 +39503,7 @@ export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
   { title: 'Основное', sections: [S.servers, S.discord, S.news] },
-  { title: 'Мониторинг', sections: [S.alerts, S.cards] },
+  { title: 'Мониторинг', sections: [S.alerts, S.maintenance, S.cards] },
   { title: 'Люди', sections: [S.users, S.journal] },
   { title: 'Система', sections: [S.system, S.settings] },
 ];
@@ -38072,6 +39582,148 @@ export function writeIds(key: string, ids: string[]) {
   } catch {
     /* private mode: not remembered */
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/pollSettings.ts" << '__COREGSM_EOF__'
+/** Poll settings («Опрос серверов»): types and pure helpers. */
+
+export interface PollLast { at: number; durationMs: number; servers: number; failures: number; concurrency: number }
+export interface PollSettings { failThreshold: number; concurrency: number; last: PollLast | null }
+
+export const FAIL_MIN = 1;
+export const FAIL_MAX = 5;
+export const CONC_MIN = 1;
+export const CONC_MAX = 32;
+
+/** the first problem with the two numbers, or null */
+export function validatePoll(v: { failThreshold: number; concurrency: number }): string | null {
+  if (!Number.isInteger(v.failThreshold) || v.failThreshold < FAIL_MIN || v.failThreshold > FAIL_MAX) return `Число неудачных опросов: от ${FAIL_MIN} до ${FAIL_MAX}`;
+  if (!Number.isInteger(v.concurrency) || v.concurrency < CONC_MIN || v.concurrency > CONC_MAX) return `Параллельных опросов: от ${CONC_MIN} до ${CONC_MAX}`;
+  return null;
+}
+
+/** 850 -> «0,9 с», 12400 -> «12 с», 95000 -> «1 мин 35 с» */
+export function durationText(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '–';
+  if (ms < 1000) return `${Math.round(ms)} мс`;
+  const s = ms / 1000;
+  if (s < 10) return `${s.toFixed(1).replace('.', ',')} с`;
+  if (s < 60) return `${Math.round(s)} с`;
+  return `${Math.floor(s / 60)} мин ${Math.round(s % 60)} с`;
+}
+
+/** how long a confirmed failure takes to show, given the polling interval in seconds */
+export function confirmDelayText(failThreshold: number): string {
+  return failThreshold <= 1 ? 'сразу после первой неудачи' : `после ${failThreshold} неудачных опросов подряд`;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/security.ts" << '__COREGSM_EOF__'
+import { t, type TKey } from './i18n';
+
+/** Helpers of the account-security extras: the "sign-in from a new device" banner and secrets a restore could not read. */
+
+const NEWDEV_PREFIX = 'coregsm_newdev_';
+
+/** localStorage key that remembers "this sign-in was me" for one sign-in time */
+export const newDeviceKey = (ts: number) => `${NEWDEV_PREFIX}${Math.floor(Number(ts) || 0)}`;
+
+export function isNewDeviceDismissed(ts: number): boolean {
+  try { return localStorage.getItem(newDeviceKey(ts)) === '1'; } catch { return false; }
+}
+
+export function dismissNewDevice(ts: number): void {
+  try { localStorage.setItem(newDeviceKey(ts), '1'); } catch { /* storage blocked: the banner just comes back */ }
+}
+
+/** settings that a restored archive could not decrypt (the secrets key differs); the label is translated */
+export const SECRET_KEYS: Record<string, TKey> = {
+  discord_token: 'secret.discord_token',
+  discord_client_secret: 'secret.discord_client_secret',
+  backup_passphrase: 'secret.backup_passphrase',
+  proxy_url: 'secret.proxy_url',
+  smtp_password: 'secret.smtp_password',
+  backup_remote_url: 'secret.backup_remote_url',
+};
+
+export function unreadableSecrets(raw: unknown): { id: string; label: string }[] {
+  const list = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string' && x.length > 0) : [];
+  return [...new Set(list)].map((id) => ({ id, label: SECRET_KEYS[id] ? t(SECRET_KEYS[id]) : id }));
+}
+
+const UNREADABLE_KEY = 'coregsm_unreadable_secrets';
+
+/** the list is kept for the tab session so the warning survives the reload after a restore */
+export function saveUnreadableSecrets(ids: string[]): void {
+  try {
+    if (ids.length) sessionStorage.setItem(UNREADABLE_KEY, JSON.stringify(ids));
+    else sessionStorage.removeItem(UNREADABLE_KEY);
+  } catch { /* ignore */ }
+}
+
+export function loadUnreadableSecrets(): string[] {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(UNREADABLE_KEY) ?? '[]') as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch { return []; }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/sparkline.ts" << '__COREGSM_EOF__'
+/** A tiny static sparkline: pure geometry, no drawing code. */
+
+export interface Spark { path: string; area: string; min: number; max: number; last: number | null; empty: boolean }
+
+/**
+ * `values` oldest first (null = no sample). The line is scaled to the min..max of the data, with a flat line in the middle
+ * when every value is the same. Gaps (null) break the line into separate segments.
+ */
+export function buildSparkline(values: (number | null)[], width: number, height: number, pad = 2): Spark {
+  const real = values.filter((v): v is number => v != null && Number.isFinite(v));
+  if (real.length === 0) return { path: '', area: '', min: 0, max: 0, last: null, empty: true };
+  const min = Math.min(...real);
+  const max = Math.max(...real);
+  const n = values.length;
+  const x = (i: number) => (n <= 1 ? width / 2 : pad + (i / (n - 1)) * (width - pad * 2));
+  const y = (v: number) => (max === min ? height / 2 : pad + (1 - (v - min) / (max - min)) * (height - pad * 2));
+  const f = (v: number) => Math.round(v * 10) / 10;
+  let path = '';
+  let area = '';
+  let seg: [number, number][] = [];
+  const flush = () => {
+    if (seg.length === 0) return;
+    if (seg.length === 1) {
+      // a lone sample: a short dash, so that it stays visible
+      const [px, py] = seg[0];
+      path += `M${f(px - 1)},${f(py)}L${f(px + 1)},${f(py)}`;
+    } else {
+      path += seg.map(([px, py], i) => `${i === 0 ? 'M' : 'L'}${f(px)},${f(py)}`).join('');
+      area += `${seg.map(([px, py], i) => `${i === 0 ? 'M' : 'L'}${f(px)},${f(py)}`).join('')}L${f(seg[seg.length - 1][0])},${height}L${f(seg[0][0])},${height}Z`;
+    }
+    seg = [];
+  };
+  values.forEach((v, i) => {
+    if (v == null || !Number.isFinite(v)) flush();
+    else seg.push([x(i), y(v)]);
+  });
+  flush();
+  const lastReal = [...values].reverse().find((v) => v != null && Number.isFinite(v)) ?? null;
+  return { path, area, min, max, last: lastReal, empty: false };
+}
+
+/** keeps at most `max` points by averaging neighbours (the chart stays light for 14 days of samples) */
+export function downsample(values: (number | null)[], max: number): (number | null)[] {
+  if (values.length <= max || max < 2) return values;
+  const step = values.length / max;
+  const out: (number | null)[] = [];
+  for (let i = 0; i < max; i++) {
+    const a = Math.floor(i * step);
+    const b = Math.max(a + 1, Math.floor((i + 1) * step));
+    const part = values.slice(a, b).filter((v): v is number => v != null);
+    out.push(part.length ? part.reduce((s, v) => s + v, 0) / part.length : null);
+  }
+  return out;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
@@ -38485,6 +40137,14 @@ __COREGSM_EOF__
 
 /* autosave: a field that has just been saved gets a calm green ring for a moment (box-shadow only) */
 .input[data-saved='true'] { box-shadow: 0 0 0 3px rgb(var(--ok) / .25); }
+
+/* ---------- maintenance windows: the chip on server views, the status pill, the admin page ---------- */
+.maint-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 5px; border-radius: 9999px; padding: 2px 9px; font-size: 12.5px; font-weight: 800; line-height: 1.35; background: rgb(var(--soft)); color: rgb(var(--link)); }
+.maint-chip svg { flex: none; }
+.maint-chip-glass { background: rgb(12 14 26 / 0.6); color: #fff; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.22); }
+.pill-maint { background: rgb(var(--soft)); color: rgb(var(--link)); }
+.pill-glass-maint { --dot: #a5b4fc; }
+.pill-glass-maint::before { animation: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
@@ -38872,7 +40532,9 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 }
 
 /** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
-export function StatusPill({ online, known, lag, glass = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean }) {
+export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
+  if (maintenance) return glass ? <span className="pill-glass pill-glass-maint">Обслуживание</span> : <span className="pill pill-maint">ОБСЛУЖИВАНИЕ</span>;
   if (glass) {
     const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
     const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';

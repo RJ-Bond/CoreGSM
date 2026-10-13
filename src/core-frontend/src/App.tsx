@@ -3,6 +3,7 @@ import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInf
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import CommandPalette from './components/CommandPalette';
+import NotificationBell from './components/NotificationBell';
 import NotFound from './components/NotFound';
 import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
@@ -406,6 +407,7 @@ export default function App() {
               <span className="hidden md:inline">{t('hdr.search')}</span>
               <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute md:inline">Ctrl K</kbd>
             </button>
+            {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
             {me ? (
               <>
