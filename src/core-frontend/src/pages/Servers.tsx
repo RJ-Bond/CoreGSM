@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from 'react';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
-import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
+import { ServersList, ServersTv, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import { PulseStrip } from '../components/servers/PulseStrip';
+import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
+import { BulkBar } from '../components/servers/BulkBar';
+import { pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
@@ -124,27 +129,27 @@ function ServerList() {
     5 * 60_000,
   );
 
+  // total players over the last 24 h (the pulse strip) and planned maintenance (the news block)
+  const [overview, setOverview] = useState<OverviewData | null>(null);
+  const [overviewAt, setOverviewAt] = useState(0);
+  usePoll(
+    () => api<OverviewData>('/overview?hours=24').then((o) => { setOverview(o); setOverviewAt(Date.now()); }).catch(() => undefined),
+    60_000,
+  );
+  const [wnOpen, toggleWn] = useWhatsNewOpen();
+
   const sorted = useMemo(
     () => [...servers].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id)) || Number(b.online) - Number(a.online)),
     [servers, favs],
   );
   const online = servers.filter((s) => s.online);
-  const players = online.reduce((n, s) => n + s.players, 0);
-  const slots = online.reduce((n, s) => n + s.maxPlayers, 0);
-  const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
-  const avg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
   const upVals = servers.map((s) => uptime.get(s.id)).filter((v): v is number => v != null);
   const upAvg = upVals.length ? upVals.reduce((a, b) => a + b, 0) / upVals.length : null;
-  const upLow = upVals.filter((v) => v < 99).length;
 
-  // the hero: the first favourite (online ones first), otherwise the busiest online server
-  const hero = useMemo(() => {
-    if (sorted.length === 0) return null;
-    const fav = sorted.find((s) => favs.includes(s.id));
-    if (fav) return fav;
-    const busiest = [...online].sort((a, b) => b.players - a.players)[0];
-    return busiest ?? sorted[0];
-  }, [sorted, favs, online]);
+  // the hero by meaning: a server that needs attention, else the busiest favourite, else the busiest server
+  const picked = useMemo(() => pickHero(sorted, me ? favs : []), [sorted, favs, me]);
+  const hero = picked?.server ?? null;
+  const heroReason: HeroReason = picked?.reason ?? null;
   const rest = sorted.filter((s) => s.id !== hero?.id);
   const offlineCount = servers.filter((s) => !s.online).length;
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -156,28 +161,37 @@ function ServerList() {
   const visible = effFilter === 'all' ? sorted : filtered;
   const resetFilter = () => setFilter('all');
 
+  // ---- bulk selection (administrators; not in the TV mode) ----
+  const [selecting, setSelecting] = useState(false);
+  const [sel, setSel] = useState<number[]>([]);
+  const canSelect = isAdmin && effView !== 'tv' && servers.length > 0;
+  const selOn = canSelect && selecting;
+  const selectedServers = servers.filter((s) => sel.includes(s.id));
+  const exitSelect = () => { setSelecting(false); setSel([]); };
+  useEffect(() => {
+    if (!selOn) return;
+    const onKey = (e: KeyboardEvent) => {
+      // a dialog on top closes itself first
+      if (e.key === 'Escape' && !document.querySelector('[role="dialog"]')) exitSelect();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selOn]);
+  const select: SelectProps | undefined = selOn
+    ? { on: true, has: (id) => sel.includes(id), toggle: (id) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id])) }
+    : undefined;
+
   const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
-  const stats: { k: string; v: ReactNode; s: string; i: string; r?: number }[] = [
-    { i: 'M3 6h18M3 12h18M3 18h18', k: plural(servers.length, ['Сервер', 'Сервера', 'Серверов']), v: <AnimatedNumber value={servers.length} />, s: `${online.length} онлайн`, r: servers.length ? online.length / servers.length : 0 },
-    { i: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8', k: 'Игроков сейчас', v: <AnimatedNumber value={players} pulse />, s: slots > 0 ? `из ${slots} мест` : 'нет серверов онлайн', r: slots > 0 ? players / slots : 0 },
-    {
-      i: 'M22 12h-4l-3 9L9 3l-3 9H2',
-      k: 'Средний пинг',
-      v: avg == null ? '–' : <><AnimatedNumber value={avg} /><small> мс</small></>,
-      s: avg == null ? 'нет данных' : avg > LAG_PING ? 'высокий' : 'в норме',
-      r: avg == null ? 0 : Math.min(1, avg / 200),
-    },
-  ];
-  if (upAvg != null) {
-    stats.push({
-      i: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
-      k: 'Аптайм 30 дн',
-      v: <>{(Math.round(upAvg * 10) / 10).toLocaleString('ru-RU')}<small>%</small></>,
-      s: upLow === 0 ? 'без сбоев' : `${upLow} ${plural(upLow, ['сервер', 'сервера', 'серверов'])} ниже 99%`,
-      r: upAvg / 100,
-    });
-  }
+  const tileProps = (s: Server, idx: number) => ({
+    rx,
+    s,
+    idx,
+    fav: me ? favs.includes(s.id) : null,
+    onFav: () => void toggleFav(s.id),
+    onOpen: () => open(s),
+    select,
+  });
 
   return (
     <div className="space-y-5">
@@ -189,6 +203,10 @@ function ServerList() {
         <LiveBadge at={updatedAt} />
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
+
+      {loaded && servers.length > 0 && effView !== 'tv' && (
+        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
+      )}
 
       {servers.length > 0 && (
         <div className="srv-bar">
@@ -204,10 +222,17 @@ function ServerList() {
               ))}
             </nav>
           ) : <span />}
-          <div className="seg" role="group" aria-label="Вид списка">
-            {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
-              <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {canSelect && (
+              <button type="button" className={`btn btn-soft ${selOn ? 'srv-sel-on' : ''}`} aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
+                {selOn ? 'Отменить выбор' : 'Выбрать'}
+              </button>
+            )}
+            <div className="seg" role="group" aria-label="Вид списка">
+              {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -217,88 +242,113 @@ function ServerList() {
 
       {loaded && !error && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
 
-      {servers.length > 0 && visible.length === 0 && (
-        effFilter === 'fav' && favCount === 0
-          ? <NoFavsState onReset={resetFilter} />
-          : <NoMatchState what={effFilter === 'offline' ? 'offline' : 'online'} onReset={resetFilter} />
-      )}
-
-      {servers.length > 0 && visible.length > 0 && effView === 'list' && (
-        <ServersList
-          servers={visible}
-          uptime={uptime}
-          rx={rx}
-          favOf={(id) => (me ? favs.includes(id) : null)}
-          onOpen={open}
-          renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
-        />
-      )}
-
-      {servers.length > 0 && visible.length > 0 && effView === 'tv' && (
+      {servers.length > 0 && effView === 'tv' && visible.length > 0 && (
         <ServersTv servers={visible} uptime={uptime} rx={rx} updatedAt={updatedAt} onExit={() => setView('tiles')} />
       )}
 
-      {servers.length > 0 && effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
-        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {filtered.map((s, i) => (
-            <SmallTile key={s.id} rx={rx} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
-          ))}
+      {servers.length > 0 && effView !== 'tv' && (
+        <div className="srv-split" data-open={wnOpen}>
+          <div className="min-w-0 space-y-5">
+            {visible.length === 0 && (
+              effFilter === 'fav' && favCount === 0
+                ? <NoFavsState onReset={resetFilter} />
+                : <NoMatchState what={effFilter === 'offline' ? 'offline' : 'online'} onReset={resetFilter} />
+            )}
+
+            {visible.length > 0 && effView === 'list' && (
+              <ServersList
+                servers={visible}
+                uptime={uptime}
+                rx={rx}
+                favOf={(id) => (me ? favs.includes(id) : null)}
+                onOpen={open}
+                select={select}
+                renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
+              />
+            )}
+
+            {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
+              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+                {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
+              </div>
+            )}
+
+            {effView === 'tiles' && effFilter === 'all' && (
+              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} uptime={uptime.get(hero.id)} />}
+                {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
+              </div>
+            )}
+          </div>
+          <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />
         </div>
       )}
 
-      {servers.length > 0 && effView === 'tiles' && effFilter === 'all' && (
-        <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {hero && <HeroTile key={hero.id} rx={rx} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
-
-          {stats.map((t, i) => (
-            <div
-              key={t.k}
-              style={stagger(i + 1)}
-              className={`tile tile-in flex flex-col gap-1 p-4 sm:p-[18px] ${stats.length === 3 && i === 2 ? 'col-span-2 lg:col-span-6' : 'col-span-1 lg:col-span-3'}`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="stat-k">{t.k}</div>
-                <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-soft text-link">
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={t.i} /></svg>
-                </span>
-              </div>
-              <div className="mt-auto">
-                <div className="stat-v">{t.v}</div>
-                <div className="stat-s mt-0.5">{t.s}</div>
-                {t.r != null && <div className="meter mt-2.5" aria-hidden><i style={{ width: `${Math.round(Math.max(0, Math.min(1, t.r)) * 100)}%` }} /></div>}
-              </div>
-            </div>
-          ))}
-
-          {rest.map((s, i) => (
-            <SmallTile key={s.id} rx={rx} s={s} idx={i + 1 + stats.length} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
-          ))}
-        </div>
+      {selOn && (
+        <BulkBar
+          selected={selectedServers}
+          visible={visible}
+          favs={favs}
+          onSelectAll={() => setSel(visible.map((s) => s.id))}
+          onClear={() => setSel([])}
+          onExit={exitSelect}
+          onReload={() => void load()}
+          onFavs={setFavs}
+        />
       )}
     </div>
   );
 }
 
-function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+/** the checkbox of the selection mode in a corner of a card */
+function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
+  return (
+    <input
+      type="checkbox"
+      className={`srv-check srv-check-card ${className}`}
+      checked={select.has(s.id)}
+      onChange={() => select.toggle(s.id)}
+      onClick={(e) => e.stopPropagation()}
+      aria-label={`Выбрать: ${s.name}`}
+    />
+  );
+}
+
+/** in the selection mode a link toggles the card instead of leaving the page */
+const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElement>) => {
+  e.stopPropagation();
+  if (select?.on) {
+    e.preventDefault();
+    select.toggle(s.id);
+  }
+};
+
+function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
+  useI18n();
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const depth = useDepth<HTMLElement>();
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className="depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
-      style={{ ...stagger(idx), background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }), boxShadow: `0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88` }}
-      onClick={onOpen}
+      className={`depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
+      style={{
+        ...stagger(idx),
+        background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
+        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? '0 0 0 3px rgb(var(--bad) / .85), ' : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
+      }}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
       {...depth}
     >
       <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
       <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
+      {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
 
       <div className="relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
-            <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{s.name}</a>
+            <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
             <span>{gameLabel(s.game)}</span>
@@ -306,6 +356,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s
             <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
           </div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
+          {reason && <span className={`hero-reason ${reason === 'attention' ? 'attn' : ''}`}>{t(`srv.hero.${reason}` as const)}</span>}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -343,12 +394,17 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const r = reactionOf(rx, s.id);
   return (
-    <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
+    <article
+      className={`tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3 ${select?.has(s.id) ? 'srv-selected' : ''}`}
+      style={stagger(idx)}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+    >
+      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
@@ -359,7 +415,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Serve
 
       <div className="px-1.5">
         <h3 className="line-clamp-2 break-words text-[14.5px] font-extrabold leading-tight" title={s.name}>
-          <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="hover:text-link">{s.name}</a>
+          <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}

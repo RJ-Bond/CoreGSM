@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Server } from '../../api';
 import { StateView } from '../StateView';
+import { t, useI18n } from '../../i18n';
+import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -78,27 +80,43 @@ export function CountReact({ r, onDark = false, children }: { r: Reaction; onDar
   );
 }
 
-// ---------- capacity (item 5) ----------
-export const capacityPct = (players: number, max: number) => (max > 0 ? Math.max(0, Math.min(100, Math.round((players / max) * 100))) : 0);
+// ---------- capacity ----------
+export { capacityPct } from './capacity';
 
-export function CapacityBar({ players, max, color, onDark = false, big = false, showPct = true, className = '' }: { players: number; max: number; color: string; onDark?: boolean; big?: boolean; showPct?: boolean; className?: string }) {
-  const pct = capacityPct(players, max);
-  const hot = pct >= 90;
+/** «Свободно 12 мест» / «Почти полон» / «Мест нет» */
+export function SlotsText({ players, max, onDark = false, big = false, className = '' }: { players: number; max: number; onDark?: boolean; big?: boolean; className?: string }) {
+  useI18n();
+  const info = slotsInfo(players, max);
+  if (!info) return null;
+  const text = info.kind === 'full' ? t('srv.slots.full') : info.kind === 'almost' ? t('srv.slots.almost') : t('srv.slots.free', { n: info.free });
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      <div
-        className={`srv-cap ${onDark ? 'on-dark' : ''} ${hot ? 'hot' : ''} ${big ? 'big' : ''}`}
-        style={{ ['--cap' as string]: color }}
-        role="meter"
-        aria-label="Заполненность сервера"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct}
-        title={hot ? `Почти полный: ${pct}%` : `${pct}% мест занято`}
-      >
-        <i style={{ width: `${pct}%` }} />
+    <span className={`srv-slots ${info.kind} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''} ${className}`} title={info.kind === 'almost' ? t('srv.slots.freeOf', { n: info.free }) : undefined}>
+      {text}
+    </span>
+  );
+}
+
+export function CapacityBar({ players, max, color, onDark = false, big = false, showPct = true, slots = true, className = '' }: { players: number; max: number; color: string; onDark?: boolean; big?: boolean; showPct?: boolean; slots?: boolean; className?: string }) {
+  const pct = capacityPct(players, max);
+  const level = capLevel(pct);
+  return (
+    <div className={`flex flex-col gap-1 ${className}`}>
+      <div className="flex items-center gap-2">
+        <div
+          className={`srv-cap ${onDark ? 'on-dark' : ''} ${level} ${big ? 'big' : ''}`}
+          style={{ ['--cap' as string]: color }}
+          role="meter"
+          aria-label={t('srv.cap.label')}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          title={level === 'hot' ? t('srv.cap.nearFull', { pct }) : t('srv.cap.taken', { pct })}
+        >
+          <i style={{ width: `${pct}%` }} />
+        </div>
+        {showPct && <span className={`srv-pct ${level} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''}`}>{pct}%</span>}
       </div>
-      {showPct && <span className={`srv-pct ${hot ? 'hot' : ''} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''}`}>{pct}%</span>}
+      {slots && <SlotsText players={players} max={max} onDark={onDark} big={big} />}
     </div>
   );
 }
@@ -160,11 +178,12 @@ function SkeletonHero() {
   );
 }
 
-function SkeletonStat() {
+function SkeletonPulse() {
   return (
-    <div className="tile flex min-h-[128px] flex-col gap-2 p-4 lg:col-span-3">
-      <div className="flex items-start justify-between"><Bar w="50%" /><div className="skeleton h-8 w-8 rounded-xl" /></div>
-      <div className="mt-auto space-y-2"><Bar w={80} h={28} className="!rounded-xl" /><Bar w="60%" /><Bar w="100%" h={6} /></div>
+    <div className="tile col-span-2 flex min-h-[112px] flex-wrap items-center gap-4 p-4 lg:col-span-12">
+      <div className="skeleton h-11 w-11 shrink-0 rounded-2xl" />
+      <div className="min-w-[160px] flex-1 space-y-2"><Bar w="55%" h={18} /><Bar w="35%" /></div>
+      <div className="skeleton h-14 min-w-[180px] flex-1 rounded-2xl" />
     </div>
   );
 }
@@ -184,9 +203,9 @@ function SkeletonSmall() {
 export function TilesSkeleton() {
   return (
     <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
+      <SkeletonPulse />
       <SkeletonHero />
-      {[0, 1, 2, 3].map((i) => <SkeletonStat key={i} />)}
-      {[0, 1, 2].map((i) => <SkeletonSmall key={i} />)}
+      {[0, 1, 2, 3].map((i) => <SkeletonSmall key={i} />)}
     </div>
   );
 }
