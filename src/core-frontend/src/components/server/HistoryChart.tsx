@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
-import { fmtDateTime, plural, smoothPath, toast } from '../../ui';
+import { t, useI18n } from '../../i18n';
+import { fmtDateTime, smoothPath, toast } from '../../ui';
 import { exportFileName, pingTone, TONE_TEXT } from './helpers';
+import { findPeak, peakWhen } from './serverLogic';
 
 type Point = ServerDetails['points'][number];
 type Ev = ServerDetails['events'][number];
@@ -44,6 +46,7 @@ const fullTime = (ts: number) =>
 export default function HistoryChart({
   points, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '',
 }: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string }) {
+  useI18n();
   const L = 38, R = 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
@@ -62,7 +65,7 @@ export default function HistoryChart({
     measure();
     return () => ro.disconnect();
   }, []);
-  const H = W < 520 ? 210 : 260;
+  const H = W < 520 ? 230 : 320;
 
   const now = Date.now();
   const winStart = now - hours * 3600_000;
@@ -138,6 +141,13 @@ export default function HistoryChart({
   const lastSeg = segments[segments.length - 1];
   const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
   const unit = series === 'ping' ? 'мс' : '';
+  const peak = findPeak(points.filter((p) => p.ts >= t0), series);
+  const longRange = hours > 36;
+  const peakText = peak
+    ? series === 'ping'
+      ? t(longRange ? 'srv.chart.peakPingDate' : 'srv.chart.peakPing', { n: peak.value, time: peakWhen(peak.ts, hours) })
+      : t(longRange ? 'srv.chart.peakDate' : 'srv.chart.peak', { n: peak.value, time: peakWhen(peak.ts, hours) })
+    : '';
   const capLine = series === 'players' && max > 0 && max <= yMax;
 
   const describe = (p: Point) => {
@@ -165,7 +175,7 @@ export default function HistoryChart({
     if (!el || saving) return;
     setSaving(true);
     try {
-      const props = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'stop-color', 'stop-opacity'];
+      const props = ['paint-order', 'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'stop-color', 'stop-opacity'];
       const clone = el.cloneNode(true) as SVGSVGElement;
       const src = [el, ...Array.from(el.querySelectorAll('*'))];
       const dst = [clone, ...Array.from(clone.querySelectorAll('*'))] as SVGElement[];
@@ -274,6 +284,18 @@ export default function HistoryChart({
           {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}
+      <div className="hc-head">
+        <span className="hc-cap">{series === 'ping' ? t('srv.chart.axisPing') : t('srv.chart.axisPlayers')}</span>
+        <span className="hc-notes">
+          {peakText && <span className="hc-note">{peakText}</span>}
+          {endPt && (
+            <span className="hc-now" style={{ ['--hc' as string]: color }}>
+              <i aria-hidden />
+              {t('srv.chart.now', { n: `${endPt.v}${unit ? ` ${unit}` : ''}` })}
+            </span>
+          )}
+        </span>
+      </div>
       <div
         ref={wrap}
         className="hc-wrap relative rounded-2xl"
@@ -326,10 +348,26 @@ export default function HistoryChart({
               </g>
             );
           })}
+          {peak && peak.ts >= t0 && (
+            <circle cx={x(peak.ts)} cy={y(peak.value)} r="7" fill="none" style={{ stroke: color }} strokeWidth="2" opacity="0.9" />
+          )}
           {endPt && !hp && (
             <>
               <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="9" style={{ fill: color }} opacity="0.22" />
-              <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="4.5" style={{ fill: color }} className="stroke-card" strokeWidth="2" />
+              <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="5.5" style={{ fill: color }} className="stroke-card" strokeWidth="2.5" />
+              <text
+                x={Math.min(W - R, Math.max(L + 16, x(endPt.ts) + 4))}
+                y={y(endPt.v) - 14 < T + 10 ? y(endPt.v) + 24 : y(endPt.v) - 14}
+                textAnchor="end"
+                className="fill-ink stroke-card"
+                fontSize="14"
+                fontWeight="800"
+                strokeWidth="4"
+                paintOrder="stroke"
+                strokeLinejoin="round"
+              >
+                {endPt.v}{unit ? ` ${unit}` : ''}
+              </text>
             </>
           )}
           {marks.map((m) => {
@@ -380,12 +418,9 @@ export default function HistoryChart({
       </div>
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <p className="text-xs font-bold text-mute">
-        {seriesName}{unit ? `, ${unit}` : ''}
+        {t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}
         {hp && hv != null && series === 'ping' && (
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
-        )}
-        {series === 'players' && points.length > 0 && (
-          <span className="ml-2 font-semibold">максимум за период: {Math.max(...points.map((p) => p.players))} {plural(Math.max(...points.map((p) => p.players)), ['игрок', 'игрока', 'игроков'])}</span>
         )}
       </p>
       <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title="Сохранить график как картинку PNG">

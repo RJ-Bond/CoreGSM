@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { t, type TKey } from '../../i18n';
@@ -34,21 +34,43 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
 
 /**
  * «Подписаться» in the server page header: opens a small dialog with the notification kinds.
- * Hidden for guests and when the backend has no subscriptions.
+ * Hidden for guests and when the backend has no subscriptions. The page may own the state (`subs`, `open`) so that other
+ * buttons (the free-slot one, the phone bar) open the same dialog; `preselect` switches one kind on in the draft.
  */
-export default function SubscribeMenu({ serverId, serverName }: { serverId: number; serverName: string }) {
+export default function SubscribeMenu({
+  serverId, serverName, subs: external, open: openProp, onOpenChange, preselect, hideButton = false, className = 'btn-glass',
+}: {
+  serverId: number;
+  serverName: string;
+  subs?: ReturnType<typeof useSubscriptions>;
+  open?: boolean;
+  onOpenChange?: (v: boolean) => void;
+  preselect?: SubKind | null;
+  hideButton?: boolean;
+  className?: string;
+}) {
   const { me } = useAuth();
-  const subs = useSubscriptions(!!me);
-  const [open, setOpen] = useState(false);
+  const own = useSubscriptions(!!me && !external);
+  const subs = external ?? own;
+  const [innerOpen, setInnerOpen] = useState(false);
+  const open = openProp ?? innerOpen;
+  const setOpen = (v: boolean) => { setInnerOpen(v); onOpenChange?.(v); };
   const [draft, setDraft] = useState<SubKind[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  const current = normalizeKinds(subs.list?.find((s) => s.serverId === serverId)?.kinds);
+  const initial = () => normalizeKinds(preselect ? [...current, preselect] : current);
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
+  // every time the dialog opens, the draft starts from the saved kinds (plus the preselected one)
+  useEffect(() => {
+    if (open) { setDraft(initialRef.current()); setError(''); }
+  }, [open]);
+
   if (!me || subs.unavailable || subs.list === null) return null;
-  const current = normalizeKinds(subs.list.find((s) => s.serverId === serverId)?.kinds);
   const on = current.length > 0;
 
-  const show = () => { setDraft(current); setError(''); setOpen(true); };
   const save = async () => {
     setBusy(true);
     setError('');
@@ -67,10 +89,12 @@ export default function SubscribeMenu({ serverId, serverName }: { serverId: numb
 
   return (
     <>
-      <button type="button" className="btn-glass col-span-2 sm:col-auto" onClick={show} aria-haspopup="dialog" aria-label={`${on ? t('sub.buttonOn') : t('sub.button')}: ${serverName}`}>
-        <IconBell size={18} />
-        {on ? t('sub.buttonOn') : t('sub.button')}
-      </button>
+      {!hideButton && (
+        <button type="button" className={`${className} col-span-2 sm:col-auto`} onClick={() => setOpen(true)} aria-haspopup="dialog" aria-label={`${on ? t('sub.buttonOn') : t('sub.button')}: ${serverName}`}>
+          <IconBell size={18} />
+          {on ? t('sub.buttonOn') : t('sub.button')}
+        </button>
+      )}
       {open && (
         <Modal title={t('sub.title')} onClose={() => setOpen(false)}>
           <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void save(); }}>

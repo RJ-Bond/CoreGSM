@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react';
 import { COUNTRIES } from '../../countries';
 import { getPrefs } from '../../i18n';
 
@@ -133,4 +133,24 @@ export function exportFileName(title: string, hours: number, ts: number): string
     day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   }
   return `${slug}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}-${day}.png`;
+}
+
+
+/** px from the top of the viewport where sticky blocks of a tab may start: just under the glass header and the tab bar */
+export function useStickyTop(): number {
+  const [top, setTop] = useState(120);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const bar = document.querySelector<HTMLElement>('.srv-tabbar');
+      if (!bar) return;
+      setTop(Math.round(parseFloat(bar.style.top || '0') + bar.getBoundingClientRect().height));
+    };
+    measure();
+    const bar = document.querySelector<HTMLElement>('.srv-tabbar');
+    const ro = typeof ResizeObserver !== 'undefined' && bar ? new ResizeObserver(measure) : null;
+    if (ro && bar) ro.observe(bar);
+    window.addEventListener('resize', measure);
+    return () => { ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, []);
+  return top;
 }

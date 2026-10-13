@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react';
 import type { PlayerNow } from '../../api';
-import { plural } from '../../ui';
-import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow } from './helpers';
+import { StateView } from '../StateView';
+import { t, useI18n } from '../../i18n';
+import { plural, toast } from '../../ui';
+import { sortPlayers, type PlayerSort } from './serverLogic';
+import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow, useStickyTop } from './helpers';
 
 function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   return (
@@ -15,10 +18,14 @@ function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   );
 }
 
-type Sort = 'time' | 'alpha';
 interface Row { key: string; name: string; since: number | null }
 
 const clock = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const joinedAt = (ts: number, now: number) => {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return now - ts < 20 * 3600_000 && d.getDate() === new Date(now).getDate() ? time : `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`;
+};
 
 /**
  * Players on the server. `limit`: overview mode (first N, no search, link to the full list via `moreHref`).
@@ -29,7 +36,9 @@ export default function PlayersList({
   online, players, names, list, fresh, limit, moreHref,
 }: { online: boolean; players: number; names: string[]; list: PlayerNow[]; fresh: Set<string>; limit?: number; moreHref?: string }) {
   const now = useNow(30_000);
-  const [sort, setSort] = useState<Sort>('time');
+  useI18n();
+  const stickyTop = useStickyTop();
+  const [sort, setSort] = useState<PlayerSort>('longest');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<string | null>(null);
 
@@ -40,58 +49,68 @@ export default function PlayersList({
     if (!r.length) r = names.map((n, i) => ({ key: `${n}-${i}`, name: n || 'Без имени', since: null }));
     const q = query.trim().toLowerCase();
     if (q) r = r.filter((p) => p.name.toLowerCase().includes(q));
-    if (sort === 'alpha' || r.every((p) => p.since == null)) r.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    else r.sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
+    r = sortPlayers(r, r.every((p) => p.since == null) ? 'alpha' : sort);
     return r;
   }, [list, names, query, sort]);
   const shown = limit ? rows.slice(0, limit) : rows;
   const showSearch = !limit && total > 5;
   const hasTimes = list.length > 0;
 
-  if (!online) return <p className="py-6 text-center font-semibold text-mute">Сервер недоступен: список игроков появится, когда он вернётся.</p>;
+  if (!online) {
+    return <StateView kind="offline" bare compact title={t('srv.pl.offline')} text={t('srv.pl.offlineText')} />;
+  }
   if (total === 0) {
     return (
-      <p className="py-6 text-center font-semibold text-mute">
-        {players > 0 ? `Сейчас ${players} ${plural(players, ['игрок', 'игрока', 'игроков'])}, но игра не передаёт имена.` : 'Пока никого нет. Будьте первым!'}
-      </p>
+      <StateView
+        kind="empty"
+        bare
+        compact
+        title={players > 0 ? t('srv.pl.noNames', { n: players }) : t('srv.pl.none')}
+        text={players > 0 ? t('srv.pl.noNamesText') : t('srv.pl.noneText')}
+      />
     );
   }
 
+  const sorts: [PlayerSort, string][] = [['longest', t('srv.pl.longest')], ['newest', t('srv.pl.newest')], ['alpha', t('srv.pl.alpha')]];
   return (
     <div>
       {!limit && (
-        <p className="mb-3 text-sm font-bold text-mute" aria-live="polite">
-          {query.trim()
-            ? `Найдено ${rows.length} из ${total}`
-            : `${total} ${plural(total, ['игрок', 'игрока', 'игроков'])} с именами${hiddenCount > 0 ? ` · ещё ${hiddenCount} без имени` : ''}`}
-        </p>
-      )}
-      {(showSearch || (!limit && hasTimes && total > 1)) && (
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          {showSearch && (
-            <input
-              type="search"
-              className="input !h-10 min-w-0 flex-1 basis-40"
-              placeholder="Поиск по нику"
-              aria-label="Поиск игрока по нику"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              autoComplete="off"
-            />
-          )}
-          {total > 1 && (
-            <div className="seg" role="group" aria-label="Сортировка">
-              {([['time', 'По времени в игре'], ['alpha', 'По алфавиту']] as [Sort, string][])
-                .filter(([k]) => k === 'alpha' || hasTimes)
-                .map(([k, label]) => (
-                  <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
-                ))}
+        <div className="pl-sticky" style={{ top: stickyTop }}>
+          <p className="pl-count" aria-live="polite">
+            {query.trim()
+              ? t('srv.pl.found', { n: rows.length, total })
+              : <>
+                  <b>{total}</b> {plural(total, ['игрок', 'игрока', 'игроков'])} {t('srv.pl.withNames')}{hiddenCount > 0 ? ` · ${t('srv.pl.hidden', { n: hiddenCount })}` : ''}
+                </>}
+          </p>
+          {(showSearch || (hasTimes && total > 1)) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {showSearch && (
+                <input
+                  type="search"
+                  className="input !h-10 min-w-0 flex-1 basis-40"
+                  placeholder={t('srv.pl.search')}
+                  aria-label={t('srv.pl.searchLabel')}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoComplete="off"
+                />
+              )}
+              {total > 1 && (
+                <div className="srv-chipset" role="group" aria-label={t('srv.pl.sort')}>
+                  {sorts
+                    .filter(([k]) => k === 'alpha' || hasTimes)
+                    .map(([k, label]) => (
+                      <button key={k} type="button" className={`chip-filter ${sort === k ? 'on' : ''}`} aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
+                    ))}
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
       {shown.length === 0 ? (
-        <p className="py-6 text-center font-semibold text-mute">Никого не нашли по запросу «{query}».</p>
+        <StateView kind="empty" bare compact title={t('srv.pl.noMatch', { q: query })} text={t('srv.pl.noMatchText')} />
       ) : (
         <ul className="divide-y divide-line">
           {shown.map((p) => {
@@ -104,7 +123,8 @@ export default function PlayersList({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-bold" title={p.name}>{p.name}</span>
                   {dur != null && (
-                    <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
                       {dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-[11px]">новичок</span>}
                       {dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-[11px]">ветеран</span>}
                     </span>
@@ -144,7 +164,7 @@ export default function PlayersList({
                         <button
                           type="button"
                           className="btn btn-soft btn-sm shrink-0"
-                          onClick={() => void navigator.clipboard?.writeText(p.name).catch(() => undefined)}
+                          onClick={() => void navigator.clipboard?.writeText(p.name).then(() => toast(t('srv.pl.copied')), () => undefined)}
                         >
                           Копировать
                         </button>
