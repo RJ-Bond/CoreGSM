@@ -161,7 +161,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         />
       )}
       {loaded && settings && wizard.complete && !wizardOpen && (
-        <p className="text-sm font-bold"><button type="button" className="text-link hover:underline max-sm:min-h-[44px]" onClick={() => setWizardOpen(true)}>Мастер подключения</button></p>
+        <p className="text-sm font-bold"><button type="button" className="btn-link" onClick={() => setWizardOpen(true)}>Мастер подключения</button></p>
       )}
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
@@ -380,8 +380,8 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             </Field>
             <MissingNote guild={guild} channelId={f.channelId} />
             <div className="flex flex-wrap gap-x-4 gap-y-1">
-              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
-              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+              <button type="button" className="btn-link" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
+              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
             </div>
           </>
         ) : (
@@ -397,8 +397,8 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
                   : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1">
-              {hasList && <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={() => setManual(false)}>Выбрать из списка</button>}
-              <button type="button" className="text-sm font-extrabold text-link hover:underline" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+              {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>Выбрать из списка</button>}
+              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
             </div>
           </>
         )}
@@ -418,7 +418,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
         </label>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <Button loading={busy}>Сохранить</Button>
         </div>
       </form>

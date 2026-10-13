@@ -345,7 +345,7 @@ function BotCard() {
       <FieldError id="set-token-err" text={tokenWarn} />
       </div>
       {tokenSet && (
-        <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
+        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>Удалить сохранённый токен</button>
       )}
 
       <Field label="Прокси (необязательно)">
@@ -385,7 +385,7 @@ function BotCard() {
           />
         </Field>
         {secretSet && (
-          <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={() => void removeSecret()}>Удалить Client Secret</button>
+          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>Удалить Client Secret</button>
         )}
         {info?.discordRedirect && (
           <div>
@@ -665,20 +665,20 @@ function UpdateCard() {
         <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
           {state === 'available' && (
             <>
-              <button className="btn-on-grad min-h-[46px] px-6 text-base shadow-pop" onClick={apply} disabled={busy || running || !info?.canApply}>
+              <button className="btn-on-grad btn-lg" onClick={apply} disabled={busy || running || !info?.canApply}>
                 {busy ? 'Отправляю…' : 'Обновить сейчас'}
               </button>
-              <a className="btn btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
+              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
             </>
           )}
           {(state === 'latest' || state === 'unknown') && (
             <button className="btn" onClick={check} disabled={busy || running}>{busy ? 'Проверяю…' : 'Проверить обновления'}</button>
           )}
           {state === 'available' && (
-            <button className="btn btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
+            <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
           )}
           {info?.canRollback && state !== 'running' && (
-            <button className={`btn ${state === 'available' ? 'btn-ghost-on-grad' : 'btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
+            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
           )}
         </div>
 
@@ -699,7 +699,7 @@ function UpdateCard() {
         {showOldFailure && info?.job && (
           <div className="relative mt-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
             <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
-            <button type="button" className="underline" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+            <button type="button" className="btn-link btn-link-tone" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
           </div>
         )}
         <div className="relative"><ErrorLine text={error} /></div>

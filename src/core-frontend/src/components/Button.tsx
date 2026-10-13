@@ -3,8 +3,12 @@ import { forwardRef, type ButtonHTMLAttributes } from 'react';
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** busy: a spinner precedes the label, the button is disabled and announces aria-busy */
   loading?: boolean;
-  variant?: 'primary' | 'soft' | 'danger';
-  size?: 'md' | 'sm';
+  /** primary (default) is the one main action of a view; soft / outline are secondary, ghost is tertiary, danger* destroys, link is an inline text action */
+  variant?: 'primary' | 'soft' | 'outline' | 'ghost' | 'danger' | 'danger-solid' | 'success' | 'success-solid' | 'warn' | 'link';
+  /** xs 28px, sm 34px (toolbars), md 42px (forms, default), lg 50px */
+  size?: 'xs' | 'sm' | 'md' | 'lg';
+  /** full width */
+  block?: boolean;
   /** leans toward a mouse pointer (key call-to-action buttons only) */
   magnetic?: boolean;
 }
@@ -18,12 +22,26 @@ export function BtnSpinner() {
   );
 }
 
-/** The panel's button: `.btn` styling plus a loading state. `type` is not forced, so a Button inside a form still submits. */
+/** The panel's button: button-system styling (see styles/buttons.css) plus a loading state. `type` is not forced, so a Button inside a form still submits. */
+const VARIANT_CLASS: Record<NonNullable<ButtonProps['variant']>, string> = {
+  primary: 'btn',
+  soft: 'btn btn-soft',
+  outline: 'btn btn-outline',
+  ghost: 'btn btn-ghost',
+  danger: 'btn btn-danger',
+  'danger-solid': 'btn btn-danger-solid',
+  success: 'btn btn-success',
+  'success-solid': 'btn btn-success-solid',
+  warn: 'btn btn-warn',
+  link: 'btn-link',
+};
+const SIZE_CLASS = { xs: 'btn-xs', sm: 'btn-sm', md: '', lg: 'btn-lg' } as const;
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { loading = false, variant = 'primary', size = 'md', magnetic = false, className = '', disabled, children, ...rest },
+  { loading = false, variant = 'primary', size = 'md', block = false, magnetic = false, className = '', disabled, children, ...rest },
   ref,
 ) {
-  const cls = ['btn', variant === 'soft' ? 'btn-soft' : variant === 'danger' ? 'btn-danger' : '', size === 'sm' ? 'btn-sm' : '', className]
+  const cls = [VARIANT_CLASS[variant], SIZE_CLASS[size], block ? 'btn-block' : '', className]
     .filter(Boolean)
     .join(' ');
   return (

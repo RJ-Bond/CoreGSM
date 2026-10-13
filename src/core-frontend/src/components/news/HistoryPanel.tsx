@@ -100,8 +100,8 @@ export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestore
             <VersionPreview payload={open.payload} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={() => setOpen(null)}>Закрыть</Button>
             <Button className="flex-1" loading={busy} disabled={locked} onClick={() => void restore()}>Восстановить эту версию</Button>
-            <Button variant="soft" onClick={() => setOpen(null)}>Закрыть</Button>
           </div>
           {locked && <p className="mt-2 text-xs font-semibold text-mute">Новость сейчас отправляется, подождите.</p>}
         </Modal>

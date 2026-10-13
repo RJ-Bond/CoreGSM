@@ -112,13 +112,13 @@ export default function SmtpCard() {
         {note && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{note}</p>}
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn" disabled={busy || !!portErr}>Сохранить</button>
-          {info?.passwordSet && <button type="button" className="btn-soft" onClick={() => void clearPassword()}>Удалить пароль</button>}
+          {info?.passwordSet && <button type="button" className="btn btn-soft" onClick={() => void clearPassword()}>Удалить пароль</button>}
         </div>
       </form>
 
       <div className="space-y-2 border-t pt-4">
         <TextField id="smtp-to" label="Отправить пробное письмо на" value={to} onChange={setTo} type="email" placeholder="you@example.com" autoComplete="email" />
-        <button type="button" className="btn-soft" disabled={testing || !to.trim() || !info?.ready} onClick={() => void test()}>
+        <button type="button" className="btn btn-soft" disabled={testing || !to.trim() || !info?.ready} onClick={() => void test()}>
           {testing ? 'Отправляю…' : 'Отправить пробное письмо'}
         </button>
       </div>

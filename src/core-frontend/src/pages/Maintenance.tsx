@@ -115,7 +115,7 @@ export default function MaintenancePage() {
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={`Изменить окно «${w.name}»`}><IconEdit size={16} />Изменить</button>
-                <button type="button" className="btn btn-danger btn-sm" onClick={() => remove(w)} aria-label={`Удалить окно «${w.name}»`}><IconTrash size={16} /></button>
+                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={`Удалить окно «${w.name}»`}><IconTrash size={16} /></button>
               </div>
             </li>
           ))}
@@ -184,7 +184,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
         <FieldError id="maint-problem" text={f.name.trim() && f.start && f.end ? problem ?? undefined : undefined} />
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <button type="submit" className="btn" disabled={!!problem || busy}>{busy && <Spinner />}Сохранить</button>
         </div>
       </form>

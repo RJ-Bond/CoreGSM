@@ -76,7 +76,7 @@ export function ImageDrop({
           className={`rounded-2xl border-2 border-dashed p-3 text-center transition ${hot ? 'border-brand bg-brand/10' : 'border-line'}`}
         >
           {allowUpload && (
-            <button type="button" disabled={busy} onClick={() => input.current?.click()} className="w-full py-2 text-sm font-bold text-mute hover:text-ink">
+            <button type="button" disabled={busy} onClick={() => input.current?.click()} className="btn btn-ghost btn-sm btn-block">
               {busy ? 'Загрузка…' : 'Перетащите картинку сюда или нажмите, чтобы выбрать файл'}
               <span className="block text-xs font-semibold">PNG, JPEG, GIF, WebP до 8 МБ. Можно вставить из буфера (Ctrl+V) в текст.</span>
             </button>

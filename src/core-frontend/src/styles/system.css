@@ -2,11 +2,6 @@
    Rules that apply here: no transform transitions on big blocks, no infinite animations (except spinners and the
    skeleton), entrance animations use fill-mode backwards, no outline styling, no backdrop-filter / will-change. */
 
-/* red confirm button: a solid fill (white text >= 4.5:1 in both themes), no gradient */
-.btn-solid-danger { background-image: none; background-color: rgb(var(--badsolid)); box-shadow: var(--shadow-1); }
-.btn-solid-danger::after { display: none; }
-.btn-solid-danger:hover { filter: brightness(1.1); }
-
 /* ---------- arc gauge (System page): static SVG, the arc is drawn by stroke-dasharray, no animation ---------- */
 .gauge { position: relative; display: grid; place-items: center; }
 .gauge svg { display: block; width: 100%; height: auto; }

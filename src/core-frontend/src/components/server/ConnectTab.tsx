@@ -27,7 +27,7 @@ function BigCopy({ label, value, id }: { label: string; value: string; id: strin
       <div id={id} className="mb-1 text-[13px] font-extrabold text-mute">{label}</div>
       <div className="cn-big">
         <code title={value} aria-labelledby={id}>{value}</code>
-        <button type="button" className="btn" onClick={() => void copy()} aria-describedby={id}>
+        <button type="button" className="btn btn-lg" onClick={() => void copy()} aria-describedby={id}>
           {done ? <IconCheckMark /> : <IconCopy />}
           <span aria-live="polite">{done ? t('srv.cn.copied') : t('srv.cn.copy')}</span>
         </button>
@@ -93,7 +93,7 @@ export default function ConnectTab({ game, address, sections }: { game: string; 
             <div className="min-w-0 flex-1 space-y-3">
               <h3 className="cn-h">{t('srv.cn.s3')}</h3>
               {guide.link ? (
-                <a href={guide.link.href} className="btn cn-go" data-magnetic>{guide.link.label}</a>
+                <a href={guide.link.href} className="btn btn-lg btn-block sm:w-auto" data-magnetic>{guide.link.label}</a>
               ) : (
                 <p className="font-semibold leading-snug text-mute">{t('srv.cn.s3text')}</p>
               )}

@@ -186,7 +186,7 @@ export default function Register({ onDone }: { onDone: () => void }) {
           <FieldError id="reg-accept-err" text={errs.accept} />
           <button
             type="button"
-            className="mt-1.5 text-sm font-extrabold text-link hover:underline"
+            className="btn-link mt-1.5"
             aria-expanded={showRules}
             aria-controls="reg-rules"
             onClick={() => setShowRules((v) => !v)}

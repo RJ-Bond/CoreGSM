@@ -244,12 +244,12 @@ export default function AdminStart() {
                       {st.state === 'done' ? 'Открыть' : st.cta}
                     </a>
                     {st.state !== 'done' && !skipped && (
-                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px]" onClick={() => s.skip(st.id)}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.skip(st.id)}>
                         Пропустить
                       </button>
                     )}
                     {skipped && (
-                      <button type="button" className="rounded-full px-3 py-2 text-sm font-extrabold text-link hover:underline max-sm:min-h-[44px]" onClick={() => s.unskip(st.id)}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.unskip(st.id)}>
                         Вернуть шаг
                       </button>
                     )}

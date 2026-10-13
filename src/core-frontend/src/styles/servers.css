@@ -91,16 +91,6 @@
 .srv-c-players { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .srv-c-ping, .srv-c-up { font-weight: 800; font-size: 14px; font-variant-numeric: tabular-nums; }
 .srv-c-fav { display: flex; justify-content: flex-end; }
-.srv-copy {
-  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 5px 10px; border-radius: 10px;
-  font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); background: rgb(var(--soft));
-  transition: background-color .15s ease, color .15s ease;
-}
-.srv-copy:hover { color: rgb(var(--ink)); background: rgb(var(--line)); }
-.srv-copy.done { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
-.srv-copy:focus, .srv-copy:focus-visible { outline: 0; }
-.srv-copy:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
-
 @media (max-width: 860px) {
   .srv-head { display: none; }
   .srv-row {
@@ -214,7 +204,6 @@
 .srv-check:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
 .srv-check-card { position: absolute; z-index: 5; }
 .tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
-.srv-sel-on { box-shadow: inset 0 0 0 2px rgb(var(--brand) / .55); }
 .srv-c-status { display: flex; align-items: center; gap: 10px; }
 .srv-list.selecting .srv-row { grid-template-columns: 150px minmax(0, 2.2fr) minmax(0, 1.5fr) 72px 88px minmax(0, 1.3fr) 44px; }
 .srv-row.selected { background: rgb(var(--brand) / .09); }
@@ -228,7 +217,6 @@
 }
 .srv-bulk-count { font-weight: 800; font-variant-numeric: tabular-nums; }
 .srv-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.srv-bulk-actions .btn { min-height: 40px; padding-top: 6px; padding-bottom: 6px; }
 @media (max-width: 767px) {
   .srv-bulk { bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px)); }
   .srv-bulk-actions { width: 100%; }
@@ -237,7 +225,8 @@
 
 /* ---------- «Что нового» ---------- */
 .srv-split { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); align-items: start; }
-@media (min-width: 1280px) {
+/* the «Что нового» column appears only when the cards keep a comfortable width next to it */
+@media (min-width: 1600px) {
   .srv-split[data-open='true'] { grid-template-columns: minmax(0, 1fr) 320px; }
 }
 .srv-new { padding: 6px; }
@@ -264,3 +253,11 @@
   .srv-new-chev, .srv-check, .pulse { transition: none; }
 }
 html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check, html[data-motion='reduce'] .pulse { transition: none; }
+
+/* cards grid: as many comfortable columns as fit (min 270px); the hero takes two columns and two rows on wide screens */
+.srv-grid { display: grid; gap: 16px; grid-auto-flow: dense; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); }
+.srv-grid > .srv-hero { grid-column: 1 / -1; }
+@media (min-width: 900px) {
+  .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
+}
+.srv-tile { min-width: 0; }

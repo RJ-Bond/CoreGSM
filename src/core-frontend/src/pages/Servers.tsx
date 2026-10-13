@@ -33,18 +33,19 @@ function greeting(name: string): string {
   return `${hello}, ${name.trim() || name}`;
 }
 
-function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: string; onClick: () => void; className?: string }) {
+/** `className` colours the star; `glass` is the variant for covers (white star on a translucent disc) */
+function FavButton({ on, name, onClick, className = '', glass = false }: { on: boolean; name: string; onClick: () => void; className?: string; glass?: boolean }) {
   // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
   const [pops, setPops] = useState(0);
   return (
     <button
       onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
-      className={`grid h-9 w-9 place-items-center rounded-full text-xl leading-none transition hover:scale-110 max-sm:h-11 max-sm:w-11 ${className}`}
+      className={glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`В избранное: ${name}`}
       aria-pressed={on}
     >
-      <span className="star-wrap">
+      <span className={`star-wrap text-xl leading-none ${className}`}>
         <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
         {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
       </span>
@@ -224,7 +225,7 @@ function ServerList() {
           ) : <span />}
           <div className="flex flex-wrap items-center gap-2.5">
             {canSelect && (
-              <button type="button" className={`btn btn-soft ${selOn ? 'srv-sel-on' : ''}`} aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
+              <button type="button" className="btn btn-soft" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
               </button>
             )}
@@ -264,13 +265,13 @@ function ServerList() {
             )}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
-              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+              <div className="fade-in srv-grid">
                 {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
               </div>
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
-              <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
+              <div className="fade-in srv-grid">
                 {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} uptime={uptime.get(hero.id)} />}
                 {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
               </div>
@@ -327,7 +328,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
+      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
       style={{
         ...stagger(idx),
         background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
@@ -356,7 +357,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
-          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
         </div>
       </div>
 
@@ -396,21 +397,21 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3 ${select?.has(s.id) ? 'srv-selected' : ''}`}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''}`}
       style={stagger(idx)}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
-        <GameAvatar game={s.game} size={40} glass vtId={s.id} />
+      <div className={`flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
+        <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
-          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
         </div>
       </div>
 
       <div className="px-1.5">
-        <h3 className="line-clamp-2 break-words text-[14.5px] font-extrabold leading-tight" title={s.name}>
+        <h3 className="line-clamp-2 break-words text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
@@ -420,8 +421,8 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       {s.online ? (
         <>
           <div className="flex items-baseline gap-1.5 px-1.5">
-            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
-            <span className="font-bold text-mute">/ {s.maxPlayers}</span>
+            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
+            <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />

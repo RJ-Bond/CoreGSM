@@ -7,6 +7,8 @@ import './styles/servers.css';
 import './styles/detail.css';
 import './styles/system.css';
 import './styles/profile.css';
+// the button system last: one source of truth for every .btn* class
+import './styles/buttons.css';
 import App from './App';
 import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';

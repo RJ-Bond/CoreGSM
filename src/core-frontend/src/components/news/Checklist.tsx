@@ -31,10 +31,10 @@ export function ChecklistModal({
       </ul>
       {errors.length > 0 && <p className="mt-3 text-sm font-bold text-bad" role="alert">Исправьте ошибки, чтобы продолжить.</p>}
       <div className="mt-5 flex flex-wrap gap-2">
+        <Button variant="ghost" onClick={onClose}>Назад к редактору</Button>
         <Button className="flex-1" loading={busy} disabled={errors.length > 0} onClick={onConfirm}>
           {warns.length > 0 ? `${verb} всё равно` : verb}
         </Button>
-        <Button variant="soft" onClick={onClose}>Назад к редактору</Button>
       </div>
     </Modal>
   );

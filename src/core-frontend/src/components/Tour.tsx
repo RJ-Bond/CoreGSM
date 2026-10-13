@@ -235,7 +235,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         <h2 id="tour-title" className="text-lg font-black leading-snug">{step.title}</h2>
         <p id="tour-text" className="font-semibold leading-relaxed text-mute">{step.text}</p>
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <button type="button" className="rounded-full px-3 py-2 font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px]" onClick={onClose}>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
             Пропустить
           </button>
           <div className="flex gap-2">

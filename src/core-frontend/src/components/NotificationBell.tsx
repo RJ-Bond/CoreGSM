@@ -101,7 +101,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
         ref={btn}
         type="button"
         onClick={toggle}
-        className="relative grid place-items-center rounded-full bg-soft font-semibold text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11 sm:h-10 sm:w-10"
+        className="btn-icon relative"
         aria-label={label}
         title={t('bell.title')}
         aria-haspopup="dialog"
@@ -126,7 +126,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
         >
           <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
             <h2 className="text-base font-black">{t('bell.title')}</h2>
-            <button type="button" className="rounded-full px-2 py-1.5 text-sm font-extrabold text-link hover:underline disabled:opacity-50 max-sm:min-h-[44px]" onClick={readAll} disabled={unread === 0}>
+            <button type="button" className="btn-link" onClick={readAll} disabled={unread === 0}>
               {t('bell.readAll')}
             </button>
           </div>

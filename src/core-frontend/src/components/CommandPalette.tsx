@@ -185,7 +185,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
           <button
             type="button"
             onClick={onClose}
-            className="hidden rounded-lg bg-soft px-2 py-1 text-xs font-extrabold text-mute hover:text-ink sm:inline"
+            className="btn-soft btn-xs max-sm:hidden"
             aria-label="Закрыть поиск"
           >
             Esc
@@ -193,7 +193,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
           <button
             type="button"
             onClick={onClose}
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute hover:text-ink sm:hidden"
+            className="btn-icon shrink-0 sm:hidden"
             aria-label="Закрыть поиск"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>

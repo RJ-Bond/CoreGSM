@@ -96,8 +96,8 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
           </p>
           {offRatio && <p className="rounded-2xl bg-warnbg px-4 py-2.5 text-sm font-bold text-warn" role="status">{t('pf.banner.ratioWarn')}</p>}
           <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn btn-ghost" onClick={() => setPending(null)} disabled={busy}>{t('common.cancel')}</button>
             <Button loading={busy} onClick={() => void save()}>{t('pf.banner.apply')}</Button>
-            <button type="button" className="btn btn-soft" onClick={() => setPending(null)} disabled={busy}>{t('common.cancel')}</button>
           </div>
         </div>
       ) : (

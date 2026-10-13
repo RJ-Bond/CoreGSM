@@ -373,8 +373,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                 <option value="monthly">Каждый месяц</option>
               </select>
               <div className="flex gap-2">
+                <Button variant="ghost" onClick={() => setScheduling(false)}>Отмена</Button>
                 <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => request('schedule')}>Запланировать</Button>
-                <Button variant="soft" onClick={() => setScheduling(false)}>Отмена</Button>
               </div>
             </div>
           )}
@@ -386,7 +386,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           {settings?.testChannelId
             ? <>Тест уйдёт в {settings.testChannelName ? `# ${settings.testChannelName}` : `канал ${settings.testChannelId}`}{settings.testGuildName ? ` · ${settings.testGuildName}` : ''}. </>
             : 'Тестовый канал не задан: тест уйдёт в канал новости. '}
-          <button type="button" className="font-extrabold text-link hover:underline" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать'}</button>
+          <button type="button" className="btn-link" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать'}</button>
         </span>
         {pickTest && <div className="w-full"><ChannelPicker id="news-test-channel" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} /></div>}
       </div>
@@ -412,8 +412,8 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           tone="info"
           action={
             <span className="flex gap-3">
-              <button type="button" className="font-extrabold underline" onClick={doRestore}>Восстановить</button>
-              <button type="button" className="font-extrabold underline" onClick={dropRestore}>Отбросить</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={doRestore}>Восстановить</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={dropRestore}>Отбросить</button>
             </span>
           }
         >
@@ -485,7 +485,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                 {PRESETS.map((p) => {
                   const on = presetOf(e)?.id === p.id;
                   return (
-                    <button key={p.id} type="button" aria-pressed={on} onClick={() => setE(applyPreset(e, p))} className={`btn btn-sm ${on ? '' : 'btn-soft'}`}>
+                    <button key={p.id} type="button" aria-pressed={on} onClick={() => setE(applyPreset(e, p))} className="btn btn-soft btn-sm">
                       <span aria-hidden className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full" style={{ background: hex(p.color) }} />{p.icon} {p.label}
                     </button>
                   );

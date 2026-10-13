@@ -362,7 +362,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
-          <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label={t('common.close')}>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
             <IconClose />
           </button>
         </div>
@@ -652,7 +652,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
     }
   };
   return (
-    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad' : tone === 'glass' ? 'btn-glass' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
+    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad btn-sm' : tone === 'glass' ? 'btn-glass btn-sm' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
       <span className="copy-ico" data-done={done} aria-hidden>
         <span className="ico-copy inline-grid"><IconCopy /></span>
         <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -861,12 +861,12 @@ export function Toaster() {
     >
       <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
-      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
+      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="btn-ghost btn-tone btn-xs shrink-0">{t.action.label}</a>}
       {t.action?.onClick && (
         <button
           type="button"
           onClick={() => { t.action?.onClick?.(); dismissToast(t.id, 'action'); }}
-          className="shrink-0 rounded-full bg-ink/10 px-3 py-1.5 font-extrabold hover:underline max-sm:min-h-[44px]"
+          className="btn-ghost btn-tone btn-xs shrink-0"
         >
           {t.action.label}
         </button>
@@ -874,7 +874,7 @@ export function Toaster() {
       <button
         type="button"
         onClick={() => dismissToast(t.id, 'dismiss')}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full opacity-80 hover:opacity-100 max-sm:h-11 max-sm:w-11"
+        className="btn-icon-ghost btn-icon-sm btn-tone shrink-0"
         aria-label={tr('toast.close')}
       >
         <IconClose size={14} />
@@ -1063,7 +1063,7 @@ export const PasswordField = forwardRef<
         />
         <button
           type="button"
-          className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-mute transition hover:text-ink max-sm:h-11 max-sm:w-11"
+          className="btn-icon-ghost btn-icon-sm absolute right-1 top-1/2 -translate-y-1/2"
           onClick={() => setShown((v) => !v)}
           aria-label={shown ? t('pw.hide') : t('pw.show')}
           aria-pressed={shown}
@@ -1244,7 +1244,7 @@ export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?
     body = (
       <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
         Не сохранено{error ? `: ${error}` : ''}
-        {retry && <button type="button" className="font-extrabold underline" onClick={retry}>Повторить</button>}
+        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>Повторить</button>}
       </span>
     );
   }

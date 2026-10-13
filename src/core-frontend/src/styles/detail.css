@@ -24,13 +24,6 @@
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
 .pp-v a { text-decoration: underline; text-underline-offset: 3px; }
-.pp-copy {
-  display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 9999px;
-  color: #fff; background: rgba(255, 255, 255, 0.18); transition: background .15s ease;
-}
-.pp-copy:hover { background: rgba(255, 255, 255, 0.3); }
-.pp-copy:focus, .pp-copy:focus-visible { outline: 0; }
-.pp-copy:focus-visible { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
 .pp-tone-ok { color: #86efac; }
 .pp-tone-warn { color: #fde68a; }
 .pp-tone-bad { color: #fecaca; }
@@ -65,7 +58,6 @@
   min-width: 0; flex: 1 1 200px; overflow-x: auto; white-space: nowrap; padding: 10px 12px; border-radius: 12px;
   background: rgb(var(--card)); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700;
 }
-.cn-big .btn { min-height: 44px; padding-left: 18px; padding-right: 18px; font-size: 15px; }
 .cn-step { display: flex; gap: 12px; }
 .cn-num {
   display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 9999px;
@@ -76,7 +68,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .hc-fade, .pl-more { animation: none !important; }
-  .pl-row, .pp-copy { transition: none !important; }
+  .pl-row { transition: none !important; }
 }
 
 /* ======================================================================
@@ -207,9 +199,6 @@
 .cn-sub { margin: 0; padding-left: 18px; display: grid; gap: 6px; list-style: disc; font-weight: 600; line-height: 1.4; }
 .cn-sub li::marker { color: rgb(var(--mute)); }
 .cn-big code { font-size: 16px; }
-.cn-big .btn { min-height: 48px; }
-.cn-go { min-height: 52px; width: 100%; font-size: 16px; }
-@media (min-width: 640px) { .cn-go { width: auto; } }
 .cn-part { display: inline; padding: 2px 4px; margin-right: 6px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; background: transparent; color: rgb(var(--link)); }
 .cn-part code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; }
 .cn-part:focus, .cn-part:focus-visible { outline: 0 !important; }

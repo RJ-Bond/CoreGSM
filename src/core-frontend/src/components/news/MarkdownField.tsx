@@ -18,7 +18,7 @@ const Btn = ({ onClick, title, children, on }: { onClick: () => void; title: str
     aria-pressed={on}
     onMouseDown={(e) => e.preventDefault()}
     onClick={onClick}
-    className="grid h-8 min-w-8 place-items-center rounded-lg px-1.5 text-sm font-bold text-ink transition hover:bg-soft"
+    className="btn-ghost btn-xs min-w-8"
   >
     {children}
   </button>

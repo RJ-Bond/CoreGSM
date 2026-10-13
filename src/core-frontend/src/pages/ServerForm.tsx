@@ -200,7 +200,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <button className="btn" disabled={busy || !canTest}>{busy ? 'Сохраняю…' : 'Сохранить'}</button>
         </div>
       </form>

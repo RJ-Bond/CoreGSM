@@ -65,7 +65,7 @@ function MaintenanceDialog({ servers, onClose, onDone }: { servers: Server[]; on
         {problem && name.trim() !== '' && <p className="text-sm font-bold text-bad">{problem}</p>}
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2.5">
-          <button type="button" className="btn btn-soft" onClick={onClose}>Отмена</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <button type="submit" className="btn" disabled={!!problem || busy}>{busy ? 'Создаём…' : 'Создать окна'}</button>
         </div>
       </form>

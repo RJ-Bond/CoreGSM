@@ -126,7 +126,7 @@ export function DiscordWizard({
             <IconRefresh spinning={busy} />
             Проверить
           </button>
-          {onClose && <button type="button" className="btn btn-soft btn-sm" onClick={onClose}>Скрыть</button>}
+          {onClose && <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Скрыть</button>}
         </div>
       </div>
       <ol className="dw-steps">

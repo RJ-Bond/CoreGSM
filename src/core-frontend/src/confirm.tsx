@@ -233,9 +233,9 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
         )}
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           {!readOnly && (
-            <button type="button" data-cancel className="btn btn-soft min-h-[44px]" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
+            <button type="button" data-cancel className="btn btn-ghost" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
           )}
-          <button data-ok className={`btn min-h-[44px] ${o.danger ? 'btn-solid-danger' : ''}`}>
+          <button data-ok className={`btn ${o.danger ? 'btn-danger-solid' : ''}`}>
             {o.confirmLabel ?? (readOnly ? 'Готово' : o.danger ? 'Удалить' : 'Подтвердить')}
           </button>
         </div>
