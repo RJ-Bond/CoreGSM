@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cdb884dba1bc"
+COREGSM_BUILD="0ead77ff774e"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19658,6 +19658,12 @@ html[data-flat='ts'] *, html[data-flat='ts'] *::before, html[data-flat='ts'] *::
 html[data-flat='tw'] *, html[data-flat='tw'] *::before, html[data-flat='tw'] *::after {
   transition-property: color, background-color, border-color, outline-color, fill, stroke, text-decoration-color, opacity, box-shadow, filter, backdrop-filter, transform, translate, scale, rotate !important;
 }
+
+/* which colour property: /?flat=cb (only background-color transitions on), cc (color), cd (border/outline), cf (fill/stroke); the rest of the colour transitions are off */
+html[data-flat='cb'] *, html[data-flat='cb'] *::before, html[data-flat='cb'] *::after { transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path, background-color !important; }
+html[data-flat='cc'] *, html[data-flat='cc'] *::before, html[data-flat='cc'] *::after { transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path, color !important; }
+html[data-flat='cd'] *, html[data-flat='cd'] *::before, html[data-flat='cd'] *::after { transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path, border-color, outline-color !important; }
+html[data-flat='cf'] *, html[data-flat='cf'] *::before, html[data-flat='cf'] *::after { transition-property: opacity, box-shadow, filter, backdrop-filter, width, height, transform, translate, scale, rotate, left, top, margin, padding, max-height, grid-template-rows, stroke-dashoffset, background-position, clip-path, fill, stroke, text-decoration-color !important; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
