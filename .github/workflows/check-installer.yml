@@ -15,7 +15,7 @@ jobs:
       - name: Rebuild installer
         run: bash tools/build-installer.sh
       - name: install.sh and version.txt must match the committed files
-        run: git diff --exit-code -- install.sh version.txt
+        run: git -c core.fileMode=false diff --exit-code -- install.sh version.txt
       - name: Shell syntax
         run: |
           bash -n install.sh
