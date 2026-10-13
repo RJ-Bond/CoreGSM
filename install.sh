@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="211aa65abea5"
+COREGSM_BUILD="5c2dd8ac9a2b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -21279,7 +21279,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              className="btn-icon md:w-auto md:gap-2.5 md:!pl-3.5 md:!pr-2"
+              className="btn-soft hdr-search"
               aria-label={t('hdr.searchAria')}
               aria-haspopup="dialog"
               title={t('hdr.searchTitle')}
@@ -41505,6 +41505,11 @@ html[data-contrast='high'] :is(.btn-link, .btn-link-danger) { text-decoration-co
   .split > .split-caret svg, .split-item { transition: none !important; }
 }
 html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) { transition: none !important; }
+
+/* header search: a round icon button on phones, a pill with the label and the shortcut from md up */
+.hdr-search { --b-px: .9rem; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link)); height: 2.5rem; min-height: 2.5rem; white-space: nowrap; }
+.hdr-search > svg { flex: none; }
+@media (max-width: 767px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
