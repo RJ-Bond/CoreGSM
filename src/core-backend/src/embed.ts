@@ -64,7 +64,7 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` 
 /** games whose clients have a console with the "connect" command */
 /** Discord sizes an embed to its content, so embeds in one message get different widths; a line of invisible
  *  characters (U+2800) pushes every embed to the same maximum width. Tune with EMBED_WIDTH_PAD. */
-const WIDTH_PAD = '⠀'.repeat(Number(process.env.EMBED_WIDTH_PAD) || 64);
+const WIDTH_PAD = '⠀'.repeat(Number(process.env.EMBED_WIDTH_PAD) || 40);
 
 const SOURCE_GAMES = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
 
@@ -106,7 +106,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   if (!s.hasStatus) {
     return {
       title: cut(s.name, 256),
-      description: `📍 ${addr}\n⏳ Жду первого ответа сервера…\n${WIDTH_PAD}`,
+      description: `📍 ${addr}\n⏳ Жду первого ответа сервера…`,
       color: GAME_ACCENT[s.game] ?? COLOR.unknown,
       thumbnail,
       footer,
@@ -127,11 +127,14 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       ? { name: '🔖 Версия', value: cut(realVersion, 100), inline: true }
       : null;
 
-  // players with a fill bar: ▰▰▰▰▰▰▰▱▱▱
+  // players with a fill bar of 6 coloured squares: the colour of the game, amber from 75 %, red from 90 %
   const bar = (() => {
     if (!s.online || !s.maxPlayers) return '';
-    const n = Math.round((Math.min(s.players, s.maxPlayers) / s.maxPlayers) * 10);
-    return '\n' + '▰'.repeat(n) + '▱'.repeat(10 - n);
+    const ratio = Math.min(s.players, s.maxPlayers) / s.maxPlayers;
+    let n = Math.round(ratio * 6);
+    if (s.players > 0 && n === 0) n = 1;
+    const fill = ratio >= 0.9 ? '🟥' : ratio >= 0.75 ? '🟧' : s.game === 'vrising' ? '🟪' : s.game === 'icarus' ? '🟨' : '🟩';
+    return '\n' + fill.repeat(n) + '⬛'.repeat(6 - n);
   })();
   const uptime = uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`;
 
@@ -139,7 +142,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     { name: '📶 Статус', value: `${status}${ping}`, inline: true },
     { name: '👥 Игроки', value: s.online ? `**${s.players}**/${s.maxPlayers || '?'}${pct}${bar}` : '—', inline: true },
     { name: '⏱️ Аптайм 24 ч', value: uptime, inline: true },
-    { name: '📍 Адрес', value: addr, inline: false },
+    { name: '📍 Адрес', value: `${addr} ${WIDTH_PAD}`, inline: false },
     { name: '🎮 Игра', value: cut(gameLabel(s.game), 100), inline: true },
     { name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true },
     ...(third ? [third] : []),
@@ -170,7 +173,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   return {
     title: cut(s.name, 256),
     url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/#/servers/${extra.serverId}` : undefined,
-    description: [...lines, WIDTH_PAD].join('\n'),
+    description: lines.length ? lines.join('\n') : undefined,
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (GAME_ACCENT[s.game] ?? COLOR.online),
     thumbnail,
     fields,
