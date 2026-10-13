@@ -155,7 +155,7 @@ export async function pollAll(): Promise<void> {
   try {
     const servers = db.prepare('SELECT * FROM servers').all() as ServerRow[];
     await Promise.allSettled(servers.map(refreshServer));
-    db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 7 * 24 * 3600 * 1000);
+    db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 30 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
   } finally {
     running = false;

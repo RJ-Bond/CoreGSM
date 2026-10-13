@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from 'react';
 import { api, type Server } from '../api';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
-import { Burst, Empty, ErrorLine, IconCards, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
+import { AdminPage, Burst, Empty, ErrorLine, IconCards, IconCheck, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -42,16 +42,19 @@ export default function CardsPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconCards />}
-        title="Карточки"
-        subtitle="Картинки состояния серверов"
-        hint="Карточка — это картинка с онлайном сервера, которая обновляется сама. Ссылку на неё можно вставить на сайт или в чат."
-        help={<p>Ссылка открыта: картинку видят все, у кого она есть. Бот использует такие же карточки в сообщениях Discord, если выбран стиль «Картинка» (раздел «Discord»).</p>}
-      >
-        <button className="btn btn-soft" onClick={refresh} aria-busy={spin || undefined}><IconRefresh spinning={spin} />Обновить</button>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconCards />}
+          title="Карточки"
+          subtitle="Картинки состояния серверов"
+          hint="Карточка — это картинка с онлайном сервера, которая обновляется сама. Ссылку на неё можно вставить на сайт или в чат."
+          help={<p>Ссылка открыта: картинку видят все, у кого она есть. Бот использует такие же карточки в сообщениях Discord, если выбран стиль «Картинка» (раздел «Discord»).</p>}
+        >
+          <button className="btn btn-soft" onClick={refresh} aria-busy={spin || undefined}><IconRefresh spinning={spin} />Обновить</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
       {!loaded && (
         <div className="grid gap-5 xl:grid-cols-2" aria-busy="true" aria-label="Загрузка">
@@ -65,15 +68,15 @@ export default function CardsPage() {
       )}
       <div className="fade-in grid gap-5 xl:grid-cols-2">
         {servers.map((s) => (
-          <div key={s.id} className="panel space-y-3 p-4">
-            <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-2xl bg-soft" />
+          <div key={s.id} className="panel space-y-3 p-5">
+            <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="min-w-0 break-words font-black">{s.name}</span>
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(s)}>
                   <span className="copy-ico" data-done={copied === s.id} aria-hidden>
                     <span className="ico-copy inline-grid"><IconCopy /></span>
-                    <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                    <IconCheck size={16} className="ico-check" />
                     {copied === s.id && <Burst />}
                   </span>
                   {copied === s.id ? 'Скопировано' : 'Копировать ссылку'}
@@ -84,6 +87,6 @@ export default function CardsPage() {
           </div>
         ))}
       </div>
-    </div>
+    </AdminPage>
   );
 }

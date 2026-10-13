@@ -1,1 +1,80 @@
-/* detail: styles owned by one workstream (see main.tsx) */
+/* detail: styles owned by the server page workstream (see main.tsx)
+   Rules: no transform transitions on blocks, no infinite animations, entrance = fill-mode backwards,
+   no outline styling (focus = box-shadow ring), no backdrop-filter / will-change. */
+
+/* ---------- chart ---------- */
+.hc-fade { animation: hc-fade .6s ease-out backwards; }
+@keyframes hc-fade { from { opacity: 0; } to { opacity: 1; } }
+.hc-wrap { outline: 0; }
+.hc-wrap:focus, .hc-wrap:focus-visible { outline: 0; }
+.hc-wrap:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.55); }
+.hc-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+.hc-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.hc-dot { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 9999px; }
+
+/* ---------- passport (inside the dark banner) ---------- */
+.pp {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden;
+  border-radius: 18px; background: rgba(255, 255, 255, 0.16); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.pp-i { min-width: 0; padding: 9px 12px; background: rgba(0, 0, 0, 0.26); }
+.pp-i.wide { grid-column: 1 / -1; }
+.pp-k { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.72); }
+.pp-v { margin-top: 1px; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 800; color: #fff; }
+.pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
+.pp-v a { text-decoration: underline; text-underline-offset: 3px; }
+.pp-copy {
+  display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 9999px;
+  color: #fff; background: rgba(255, 255, 255, 0.18); transition: background .15s ease;
+}
+.pp-copy:hover { background: rgba(255, 255, 255, 0.3); }
+.pp-copy:focus, .pp-copy:focus-visible { outline: 0; }
+.pp-copy:focus-visible { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
+.pp-tone-ok { color: #86efac; }
+.pp-tone-warn { color: #fde68a; }
+.pp-tone-bad { color: #fecaca; }
+@media (min-width: 640px) { .pp { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pp-i.wide { grid-column: span 2; } }
+@media (min-width: 1024px) { .pp { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* ---------- players ---------- */
+.pl-row {
+  display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; padding: 8px 6px; border-radius: 14px;
+  text-align: left; background: transparent; transition: background-color .15s ease;
+}
+.pl-row:hover { background: rgb(var(--soft)); }
+.pl-row:focus, .pl-row:focus-visible { outline: 0; }
+.pl-row:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.55); }
+.pl-chev { flex: none; color: rgb(var(--mute)); }
+.pl-chev[data-open='true'] { transform: rotate(180deg); }
+.pl-more {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 2px 6px 10px 54px;
+  padding: 12px 14px; border-radius: 14px; background: rgb(var(--soft)); animation: dt-in .25s ease-out backwards;
+}
+.pl-more dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.pl-more dd { font-size: 14px; font-weight: 800; }
+@keyframes dt-in { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 480px) { .pl-more { margin-left: 6px; } }
+
+/* ---------- connect ---------- */
+.cn-big {
+  display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; border-radius: 18px;
+  background: rgb(var(--soft));
+}
+.cn-big code {
+  min-width: 0; flex: 1 1 200px; overflow-x: auto; white-space: nowrap; padding: 10px 12px; border-radius: 12px;
+  background: rgb(var(--card)); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700;
+}
+.cn-big .btn { min-height: 44px; padding-left: 18px; padding-right: 18px; font-size: 15px; }
+.cn-step { display: flex; gap: 12px; }
+.cn-num {
+  display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 9999px;
+  background: rgb(var(--link)); color: #fff; font-size: 14px; font-weight: 800;
+}
+.cn-qr { display: block; margin: 0 auto; border-radius: 16px; background: #fff; padding: 12px; width: min(100%, 260px); height: auto; }
+.cn-qr svg { display: block; width: 100%; height: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-fade, .pl-more { animation: none !important; }
+  .pl-row, .pp-copy { transition: none !important; }
+}

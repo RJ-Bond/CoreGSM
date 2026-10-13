@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c7feaa4ac95a"
+COREGSM_BUILD="859e1cf8cb98"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2709,7 +2709,7 @@ export async function pollAll(): Promise<void> {
   try {
     const servers = db.prepare('SELECT * FROM servers').all() as ServerRow[];
     await Promise.allSettled(servers.map(refreshServer));
-    db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 7 * 24 * 3600 * 1000);
+    db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 30 * 24 * 3600 * 1000);
     db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
   } finally {
     running = false;
@@ -3820,7 +3820,8 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
   const id = Number(req.params.id);
   const server = getServer(id);
   if (!server) return res.status(404).json({ error: 'Сервер не найден' });
-  const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
+  // up to 30 days may be asked for; samples are kept for 7 days, so the chart simply shows what exists
+  const hours = Math.min(720, Math.max(1, Number(req.query.hours ?? 24)));
   const since = Date.now() - hours * 3600 * 1000;
   const bucketMs = Math.max(30_000, Math.ceil((hours * 3600 * 1000) / 180));
 
@@ -3857,9 +3858,20 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
 
   const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
 
+  // additive: when the server was added and (admins only) where its Discord message lives
+  const createdAt = (db.prepare('SELECT created_at FROM servers WHERE id = ?').get(id) as { created_at: number } | undefined)?.created_at || null;
+  const discord = isAdmin(req)
+    ? (db.prepare('SELECT * FROM bindings WHERE server_id = ? ORDER BY id').all(id) as BindingRow[]).map((b) => {
+        const c = channelInfo(b.channel_id);
+        return { channelId: b.channel_id, channelName: c.channelName, guildName: c.guildName, guildId: c.guildId, messageId: b.message_id, enabled: !!b.enabled };
+      })
+    : [];
+
   res.json({
     server: { ...(isAdmin(req) ? server : publicServer(server)), countryCode: server.country || countryOf(id, server.host) || '' },
     hours,
+    createdAt,
+    discord,
     playersNow,
     points,
     stats: {
@@ -6206,6 +6218,7 @@ __COREGSM_EOF__
   },
   "dependencies": {
     "@fontsource-variable/manrope": "^5.3.0",
+    "qrcode-generator": "^2.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -13386,7 +13399,7 @@ __COREGSM_EOF__
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
-import { WHITE, brandVars, parseTriplet, triplet, type RGB } from './colors';
+import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import CommandPalette from './components/CommandPalette';
 import NotFound from './components/NotFound';
 import Tour from './components/Tour';
@@ -13399,6 +13412,7 @@ import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
 import StatusPage from './pages/Status';
+import UiKitPage from './pages/UiKit';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, parseHash, toast, useHash } from './ui';
 
 const IconStatus = () => (
@@ -13432,9 +13446,6 @@ const ADMIN_TITLES: Record<string, string> = {
 
 const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
 
-const isDarkNow = (root: HTMLElement) =>
-  root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-
 /**
  * Brand colour, name and tab colour; recomputed when the theme flips.
  * Safeguards: white text on filled buttons keeps >= 4.5:1 (the fill is darkened, hue kept); brand-coloured text (--link)
@@ -13443,30 +13454,18 @@ const isDarkNow = (root: HTMLElement) =>
 function useBrand(b: Access['brand']) {
   useEffect(() => {
     const root = document.documentElement;
-    const apply = () => {
-      const dark = isDarkNow(root);
-      const style = getComputedStyle(root);
-      const surface = (name: string, fallback: RGB) => parseTriplet(style.getPropertyValue(`--${name}`)) ?? fallback;
-      const card = surface('card', dark ? [23, 24, 29] : WHITE);
-      const soft = surface('soft', dark ? [33, 34, 41] : [238, 240, 244]);
-
-      // fill: white text on buttons >= 4.5:1; hover darker; end: gradient end (second colour or a darker mix);
-      // link: brand-coloured text and focus rings (see brandVars in colors.ts)
-      const { fill, hover, end, link } = brandVars(b.color, b.color2, dark, card, soft);
-      root.style.setProperty('--brand', triplet(fill));
-      root.style.setProperty('--brand-hover', triplet(hover));
-      root.style.setProperty('--brand-2', triplet(end));
-      root.style.setProperty('--link', triplet(link));
-    };
+    // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
+    const apply = () => paintBrand(b.color, b.color2);
     apply();
     const mo = new MutationObserver(apply);
     mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    const off = onAccentChange(apply);
     // "as in the system" theme: follow the OS switching while the page is open
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     mq.addEventListener?.('change', apply);
-    document.querySelector('meta[name=theme-color]')?.setAttribute('content', b.color);
     return () => {
       mo.disconnect();
+      off();
       mq.removeEventListener?.('change', apply);
     };
   }, [b.color, b.color2]);
@@ -13624,6 +13623,7 @@ export default function App() {
   }, [load]);
 
   useBrand(access.brand);
+  useAutoAccent(boot.ready && !boot.offline && !boot.needsSetup, { page: rawPage, sub });
 
   // Ctrl/Cmd+K: the command palette (not over another dialog, not on the sign-in screens)
   useEffect(() => {
@@ -13646,14 +13646,16 @@ export default function App() {
   const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', '_ui'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   const sectionTitle = boot.needsSetup
     ? 'Первый запуск'
     : showAuth
       ? rawPage === 'register' && access.registration ? 'Регистрация' : 'Вход'
-      : page === '404'
+      : page === '_ui'
+        ? 'UI-кит'
+        : page === '404'
         ? 'Не найдено'
         : page === 'profile'
         ? 'Профиль'
@@ -13810,6 +13812,7 @@ export default function App() {
           {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
+          {page === '_ui' && <UiKitPage />}
           {page === '404' && <NotFound />}
         </main>
 
@@ -13855,6 +13858,139 @@ export default function App() {
       </div>
     </AuthContext.Provider>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/accent.ts" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api, type Server } from './api';
+import { WHITE, brandVars, parseTriplet, triplet, type RGB } from './colors';
+import { gameColor, findGame } from './games';
+
+/**
+ * «Акцент по игре»: the colour family of the whole panel (--brand, --brand-2, --brand-hover, --link) can follow a game.
+ *   brand   - the community colour from the branding settings (default, no change)
+ *   vrising / icarus - always that game's accent
+ *   auto    - the game of the open server page, otherwise the game most of the servers belong to (only games that have
+ *             an accent: V Rising, Icarus); with no such game the community colour stays
+ * Contrast is guaranteed by brandVars (white on fills >= 4.5:1, brand text >= 4.5:1 on card, soft and raised surfaces).
+ * The choice is remembered per browser (localStorage, wrapped in try/catch).
+ */
+export type AccentMode = 'auto' | 'vrising' | 'icarus' | 'brand';
+export const ACCENT_MODES: { id: AccentMode; label: string; hint: string }[] = [
+  { id: 'auto', label: 'Авто', hint: 'Цвет игры открытого сервера или основной игры сообщества' },
+  { id: 'vrising', label: 'V Rising', hint: 'Всегда фиолетовый акцент V Rising' },
+  { id: 'icarus', label: 'Icarus', hint: 'Всегда янтарный акцент Icarus' },
+  { id: 'brand', label: 'По бренду', hint: 'Цвет сообщества из раздела «Оформление»' },
+];
+/** games that have an accent of their own */
+const ACCENT_GAMES: readonly string[] = ['vrising', 'icarus'];
+
+const KEY = 'coregsm_accent';
+const MODES: AccentMode[] = ['auto', 'vrising', 'icarus', 'brand'];
+
+export const readAccentMode = (): AccentMode => {
+  try {
+    const v = localStorage.getItem(KEY) as AccentMode | null;
+    return v && MODES.includes(v) ? v : 'brand';
+  } catch {
+    return 'brand';
+  }
+};
+
+let mode: AccentMode = typeof window === 'undefined' ? 'brand' : readAccentMode();
+/** the accent game resolved from the route / the server list while mode is 'auto' */
+let autoGame: string | null = null;
+const listeners = new Set<() => void>();
+const emit = () => listeners.forEach((l) => l());
+
+export function setAccentMode(m: AccentMode) {
+  mode = m;
+  try {
+    if (m === 'brand') localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, m);
+  } catch {
+    /* private mode: applies for this visit only */
+  }
+  emit();
+}
+
+/** hex colour of the accent that is in force, or null when the community colour applies */
+export function accentColor(): string | null {
+  if (mode === 'brand') return null;
+  const g = mode === 'auto' ? autoGame : mode;
+  return g && findGame(g) ? gameColor(g) : null;
+}
+
+const isDark = (root: HTMLElement) => {
+  const a = root.getAttribute('data-theme');
+  return a === 'dark' || (!a && window.matchMedia('(prefers-color-scheme: dark)').matches);
+};
+
+/**
+ * Writes --brand / --brand-hover / --brand-2 / --link for the community colours, replaced by the accent when one is in force.
+ * Used by useBrand (App.tsx) and by the live preview in Settings so they never fight each other.
+ */
+export function paintBrand(color: string, color2?: string) {
+  const root = document.documentElement;
+  const dark = isDark(root);
+  const st = getComputedStyle(root);
+  const surf = (n: string, f: RGB) => parseTriplet(st.getPropertyValue(`--${n}`)) ?? f;
+  const card = surf('card', dark ? [18, 20, 27] : WHITE);
+  const soft = surf('soft', dark ? [30, 33, 44] : [236, 238, 246]);
+  const raised = surf('raised', card);
+  // brand text must read on the lightest of the surfaces it can sit on
+  const lum = (c: RGB) => c[0] + c[1] + c[2];
+  const lightest = lum(raised) > lum(soft) ? raised : soft;
+  const accent = accentColor();
+  const v = brandVars(accent ?? color, accent ? undefined : color2, dark, card, lightest);
+  root.style.setProperty('--brand', triplet(v.fill));
+  root.style.setProperty('--brand-hover', triplet(v.hover));
+  root.style.setProperty('--brand-2', triplet(v.end));
+  root.style.setProperty('--link', triplet(v.link));
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', accent ?? color);
+}
+
+/** subscribes to accent changes (mode or the auto game); `fn` should repaint the brand */
+export function onAccentChange(fn: () => void) {
+  listeners.add(fn);
+  return () => { listeners.delete(fn); };
+}
+
+export function useAccentMode(): [AccentMode, (m: AccentMode) => void] {
+  const [m, setM] = useState<AccentMode>(mode);
+  useEffect(() => onAccentChange(() => setM(mode)), []);
+  return [m, setAccentMode];
+}
+
+/**
+ * Keeps the 'auto' game up to date: call once from App when the shell is shown. Fetches the server list once (only in
+ * auto mode) and follows the route #/servers/<id>. Does nothing in the other modes.
+ */
+export function useAutoAccent(active: boolean, route: { page: string; sub: string }) {
+  const [m] = useAccentMode();
+  const [servers, setServers] = useState<Pick<Server, 'id' | 'game'>[]>([]);
+  useEffect(() => {
+    if (!active || m !== 'auto') return;
+    let alive = true;
+    api<Server[]>('/servers').then((s) => { if (alive) setServers(s.map((x) => ({ id: x.id, game: x.game }))); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [active, m]);
+  useEffect(() => {
+    let g: string | null = null;
+    if (m === 'auto') {
+      const id = route.page === 'servers' ? Number(route.sub.split('/')[0]) : NaN;
+      const here = Number.isFinite(id) ? servers.find((s) => s.id === id)?.game : undefined;
+      if (here && ACCENT_GAMES.includes(here)) g = here;
+      else {
+        const count = new Map<string, number>();
+        servers.forEach((s) => count.set(s.game, (count.get(s.game) ?? 0) + 1));
+        const top = [...count.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (top && ACCENT_GAMES.includes(top[0])) g = top[0];
+      }
+    }
+    if (g !== autoGame) { autoGame = g; emit(); }
+  }, [m, route.page, route.sub, servers]);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -14296,6 +14432,122 @@ export const AuthContext = createContext<AuthState>({
 export const useAuth = () => useContext(AuthContext);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/autosave.ts" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+export type SaveStatus = 'idle' | 'dirty' | 'invalid' | 'saving' | 'saved' | 'error';
+
+export interface AutosaveOptions<V> {
+  /** the current value of the field(s) in the form */
+  value: V;
+  /** the value the server has right now; while the user has no unsaved edit, the baseline follows it */
+  saved: V;
+  /** returns an error text while the value must not be sent (the message is shown under the field) */
+  validate?: (v: V) => string | null;
+  /** sends the value; throw to report a failure (the text of the error is shown, the edit stays in the form) */
+  save: (v: V) => Promise<unknown>;
+  /** wait after the last keystroke, ms */
+  delay?: number;
+  /** false: nothing is sent (the form is not loaded yet) */
+  enabled?: boolean;
+  equal?: (a: V, b: V) => boolean;
+}
+
+const sameJson = <V,>(a: V, b: V) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Autosave for a form field or a small group of fields.
+ *  - valid and changed: saves after `delay` of silence, or at once on `flush()` (call it from onBlur)
+ *  - invalid: nothing is sent, `error` holds the message to show under the field
+ *  - the request fails: the value stays in the form, `status` is 'error' and `retry()` tries again (no silent loss)
+ *  - edits made while a request is in flight are sent after it, never dropped
+ *  - leaving the page (unmount) with a valid unsaved edit sends it once more
+ */
+export function useAutosave<V>({ value, saved, validate, save, delay = 900, enabled = true, equal = sameJson }: AutosaveOptions<V>) {
+  const [status, setStatus] = useState<SaveStatus>('idle');
+  const [error, setError] = useState('');
+  const baseline = useRef(saved);
+  const latest = useRef(value);
+  const inflight = useRef(false);
+  const timer = useRef(0);
+  const fade = useRef(0);
+  const opts = useRef({ validate, save, equal, enabled });
+  opts.current = { validate, save, equal, enabled };
+  latest.current = value;
+
+  const validation = validate ? validate(value) : null;
+  const dirty = !equal(value, baseline.current);
+
+  const run = useCallback(async () => {
+    window.clearTimeout(timer.current);
+    const o = opts.current;
+    const v = latest.current;
+    if (!o.enabled || inflight.current || o.equal(v, baseline.current) || o.validate?.(v)) return;
+    inflight.current = true;
+    setStatus('saving');
+    setError('');
+    try {
+      await o.save(v);
+      baseline.current = v;
+      setStatus('saved');
+      window.clearTimeout(fade.current);
+      fade.current = window.setTimeout(() => setStatus((s) => (s === 'saved' ? 'idle' : s)), 2500);
+    } catch (e) {
+      setStatus('error');
+      setError((e as Error).message || 'Не удалось сохранить');
+      inflight.current = false;
+      return;
+    }
+    inflight.current = false;
+    // something was typed during the request
+    if (!opts.current.equal(latest.current, baseline.current) && !opts.current.validate?.(latest.current)) {
+      timer.current = window.setTimeout(() => void run(), 250);
+    }
+  }, []);
+
+  // the server value changed (a reload): take it as the new baseline unless the user has an unsaved edit
+  useEffect(() => {
+    if (!equal(saved, baseline.current) && equal(latest.current, baseline.current)) baseline.current = saved;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved]);
+
+  useEffect(() => {
+    window.clearTimeout(timer.current);
+    if (!opts.current.enabled) return;
+    if (equal(value, baseline.current)) {
+      setStatus((s) => (s === 'saved' || s === 'saving' || s === 'error' ? s : 'idle'));
+      return;
+    }
+    if (validate?.(value)) { setStatus('invalid'); return; }
+    if (inflight.current) return;
+    setStatus('dirty');
+    setError('');
+    timer.current = window.setTimeout(() => void run(), delay);
+    return () => window.clearTimeout(timer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, delay, enabled]);
+
+  // leaving with an unsaved, valid edit: send it
+  useEffect(() => () => {
+    window.clearTimeout(timer.current);
+    window.clearTimeout(fade.current);
+    const o = opts.current;
+    if (o.enabled && !inflight.current && !o.equal(latest.current, baseline.current) && !o.validate?.(latest.current)) void o.save(latest.current).catch(() => undefined);
+  }, []);
+
+  return {
+    status: validation && dirty ? ('invalid' as SaveStatus) : status,
+    /** message of the failed request, or of the validation when the value is invalid */
+    error: validation && dirty ? validation : error,
+    /** validation message even when nothing was edited yet is not shown: only a changed value is judged */
+    invalid: !!validation && dirty,
+    /** send now (onBlur) */
+    flush: () => void run(),
+    retry: () => void run(),
+  };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/colors.ts" << '__COREGSM_EOF__'
 // Colour helpers for the brand-colour safeguard (WCAG 2.1 contrast).
 export type RGB = [number, number, number];
@@ -14399,6 +14651,33 @@ export function gradientFor(color: string): [string, string] {
   const warm = fromHsl([(h + 14) % 360, clamp(s, 0, 0.95), l]);
   const c2 = ensureContrast(warm, [WHITE], 3, 'darken');
   return [hex(c1), hex(c2)];
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AccentPicker.tsx" << '__COREGSM_EOF__'
+import type { CSSProperties } from 'react';
+import { ACCENT_MODES, useAccentMode } from '../accent';
+import { gameColor } from '../games';
+
+const swatch: Record<string, string | undefined> = { vrising: gameColor('vrising'), icarus: gameColor('icarus') };
+
+/** «Акцент по игре»: a segmented choice kept in this browser only (see accent.ts) */
+export function AccentPicker() {
+  const [mode, setMode] = useAccentMode();
+  return (
+    <div>
+      <span id="accent-label" className="label">Акцент по игре</span>
+      <div className="seg flex-wrap" role="group" aria-labelledby="accent-label">
+        {ACCENT_MODES.map((o) => (
+          <button key={o.id} type="button" className="seg-item" aria-pressed={mode === o.id} onClick={() => setMode(o.id)}>
+            {swatch[o.id] && <span className="accent-dot" style={{ '--sw': swatch[o.id] } as CSSProperties} aria-hidden />}
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-sm font-semibold text-mute">{ACCENT_MODES.find((o) => o.id === mode)?.hint}. Запоминается в этом браузере.</p>
+    </div>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -15010,6 +15289,46 @@ export default function GamePicker({
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/Gauge.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+
+export type GaugeTone = 'ok' | 'warn' | 'bad' | 'mute';
+
+/** tone by how full a resource is: < 75 % ok, 75..90 % warn, from 90 % bad */
+export const usageTone = (fraction: number | null | undefined): GaugeTone =>
+  fraction == null || !Number.isFinite(fraction) ? 'mute' : fraction >= 0.9 ? 'bad' : fraction >= 0.75 ? 'warn' : 'ok';
+
+const R = 48;
+const C = 2 * Math.PI * R;
+const SWEEP = 0.75; // a 270 degree arc, the gap is at the bottom
+
+/**
+ * Ring gauge drawn as one static SVG arc (no animation). `value` is 0..1 (null: unknown, an empty track).
+ * The colour is the status colour of the tone (never the only carrier of meaning: the number sits in the middle).
+ */
+export function Gauge({ value, tone, label, display, caption, icon }: {
+  value: number | null; tone?: GaugeTone; label: string; display: ReactNode; caption?: ReactNode; icon?: ReactNode;
+}) {
+  const v = value == null ? 0 : Math.max(0, Math.min(1, value));
+  const t = tone ?? usageTone(value);
+  return (
+    <div className={`gauge gauge-${t} mx-auto w-full max-w-[9.5rem]`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
+      <svg viewBox="0 0 120 120" aria-hidden>
+        <g transform="rotate(135 60 60)" fill="none" strokeWidth="11" strokeLinecap="round">
+          <circle className="gauge-track" cx="60" cy="60" r={R} strokeDasharray={`${C * SWEEP} ${C}`} />
+          {v > 0 && <circle className="gauge-arc" cx="60" cy="60" r={R} strokeDasharray={`${C * SWEEP * v} ${C}`} />}
+        </g>
+      </svg>
+      <div className="gauge-value">
+        {icon && <span className="mx-auto mb-0.5 text-mute">{icon}</span>}
+        <span className="text-xl font-black leading-none tabular-nums">{display}</span>
+        {caption && <span className="mt-1 text-xs font-bold text-mute">{caption}</span>}
+      </div>
     </div>
   );
 }
@@ -17293,21 +17612,52 @@ export function runChecks(d: Draft): Check[] {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
 import { connectGuide } from '../../connectGuides';
 import { CopyButton } from '../../ui';
+import QrCode from './QrCode';
+import { stagger } from './helpers';
 
-/** «Подключение»: numbered steps for the game, copyable values and a one-click link where the game has a protocol */
+/** «Как подключиться»: what to paste (big copy buttons), numbered steps, QR code for a phone */
 export default function ConnectTab({ game, address }: { game: string; address: string }) {
   const guide = connectGuide(game, address);
+  // values to paste: address first, the console command and the steam link where they exist
+  const values = [
+    ...guide.copy.filter((c) => c.label === 'Адрес' || /команд/i.test(c.label)),
+    ...(guide.link && guide.link.href.startsWith('steam://') ? [{ label: 'Ссылка Steam', value: guide.link.href }] : []),
+    ...guide.copy.filter((c) => c.label === 'Хост' || c.label === 'Порт'),
+  ];
+  const qrOptions = [
+    ...(guide.link ? [{ k: 'link', label: 'Ссылка', value: guide.link.href }] : []),
+    { k: 'addr', label: 'Адрес', value: address.trim() },
+  ];
+  const [qk, setQk] = useState(qrOptions[0].k);
+  const qr = qrOptions.find((o) => o.k === qk) ?? qrOptions[0];
+
   return (
     <div className="grid gap-3.5 lg:grid-cols-12">
-      <section className="tile tile-in p-5 lg:col-span-7" style={{ ['--i' as string]: 0 }}>
+      <section className="tile tile-in p-4 sm:p-5 lg:col-span-7" style={stagger(0)}>
         <h2 className="mb-4 text-lg font-extrabold">{guide.title}</h2>
-        <ol className="space-y-3">
+
+        <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Что вставить</h3>
+        <ul className="mb-5 space-y-2.5">
+          {values.map((c) => (
+            <li key={c.label} className="min-w-0">
+              <div className="mb-1 text-[13px] font-extrabold text-mute">{c.label}</div>
+              <div className="cn-big">
+                <code title={c.value}>{c.value}</code>
+                <CopyButton text={c.value} label="Копировать" />
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        <h3 className="mb-2 text-[13px] font-extrabold uppercase tracking-wide text-mute">Шаги</h3>
+        <ol className="space-y-3.5">
           {guide.steps.map((s, i) => (
-            <li key={i} className="flex gap-3">
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-soft text-sm font-extrabold text-link" aria-hidden>{i + 1}</span>
-              <p className="min-w-0 break-words pt-0.5 font-semibold leading-snug">{s}</p>
+            <li key={i} className="cn-step">
+              <span className="cn-num" aria-hidden>{i + 1}</span>
+              <p className="min-w-0 break-words pt-1 font-semibold leading-snug"><span className="sr-only">Шаг {i + 1}. </span>{s}</p>
             </li>
           ))}
         </ol>
@@ -17315,19 +17665,21 @@ export default function ConnectTab({ game, address }: { game: string; address: s
           <a href={guide.link.href} className="btn mt-5 w-full sm:w-auto" data-magnetic>{guide.link.label}</a>
         )}
       </section>
-      <section className="tile tile-in p-5 lg:col-span-5" style={{ ['--i' as string]: 1 }}>
-        <h2 className="mb-3 text-base font-extrabold">Что понадобится</h2>
-        <ul className="space-y-2.5">
-          {guide.copy.map((c) => (
-            <li key={c.label} className="min-w-0">
-              <div className="mb-1 text-[13px] font-extrabold text-mute">{c.label}</div>
-              <div className="flex items-center gap-2">
-                <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-xl bg-soft px-3 py-2 font-mono text-sm font-semibold">{c.value}</code>
-                <CopyButton text={c.value} label="Копировать" />
-              </div>
-            </li>
-          ))}
-        </ul>
+
+      <section className="tile tile-in p-4 sm:p-5 lg:col-span-5" style={stagger(1)}>
+        <h2 className="mb-1 text-base font-extrabold">QR-код для телефона</h2>
+        <p className="mb-3 text-sm font-semibold text-mute">
+          Наведите камеру: {qr.k === 'link' ? 'ссылка откроется в Steam' : 'адрес сервера окажется в телефоне, останется вставить его в игру'}.
+        </p>
+        {qrOptions.length > 1 && (
+          <div className="seg mb-3" role="group" aria-label="Что зашифровать в QR-коде">
+            {qrOptions.map((o) => (
+              <button key={o.k} type="button" className="seg-item" aria-pressed={qk === o.k} onClick={() => setQk(o.k)}>{o.label}</button>
+            ))}
+          </div>
+        )}
+        <QrCode text={qr.value} label={`QR-код: ${qr.value}`} />
+        <p className="mt-3 break-all text-center font-mono text-xs font-semibold text-mute">{qr.value}</p>
       </section>
     </div>
   );
@@ -17447,7 +17799,7 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
       )}
       {limit && list.length > 0 && moreHref && (
         <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
-          Вся лента · {events.length} {plural(events.length, ['событие', 'события', 'событий'])} →
+          Все события →<span className="font-semibold text-mute">· {events.length} {plural(events.length, ['событие', 'события', 'событий'])}</span>
         </a>
       )}
     </div>
@@ -17458,10 +17810,11 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/HistoryChart.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
-import { fmtDateTime, plural, smoothPath } from '../../ui';
+import { fmtDateTime, plural, smoothPath, toast } from '../../ui';
 import { pingTone, TONE_TEXT } from './helpers';
 
 type Point = ServerDetails['points'][number];
+type Ev = ServerDetails['events'][number];
 export type Series = 'players' | 'ping';
 
 /** 0..yMax with about four steps of a "nice" size (1, 2, 5 x 10^n); the scale follows the data, not the server slots */
@@ -17477,6 +17830,12 @@ function niceScale(dataMax: number, minTop: number): { max: number; step: number
   return { max, step, ticks };
 }
 
+const MARK: Record<Ev['type'], { fill: string; path: string }> = {
+  down: { fill: 'rgb(var(--bad))', path: 'M12 5v12M7 13l5 5 5-5' },
+  up: { fill: 'rgb(var(--ok))', path: 'M5 12.5l4.5 4.5L19 7.5' },
+  peak: { fill: 'rgb(var(--link))', path: 'M12 19V6M7 11l5-5 5 5' },
+};
+
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
     ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -17490,9 +17849,9 @@ const fullTime = (ts: number) =>
  * that follows the mouse / finger / pen and the arrow keys, Y axis that fits the data.
  */
 export default function HistoryChart({
-  points, hours, max, color, series = 'players', loading = false,
-}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean }) {
-  const L = 38, R = 10, T = 14, B = 28;
+  points, hours, max, color, series = 'players', loading = false, events = [], title = '',
+}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string }) {
+  const L = 38, R = 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -17500,6 +17859,7 @@ export default function HistoryChart({
   const gid = useId();
   // the drawing is 1:1 with the screen, so labels keep a readable size on phones
   const [W, setW] = useState(720);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
@@ -17515,10 +17875,15 @@ export default function HistoryChart({
   const winStart = now - hours * 3600_000;
   const first = points.length ? points[0].ts : now;
   const sparse = points.length < 20;
+  // data may begin later than the window (new server, 30 days asked while 7 are kept)
+  const late = points.length > 0 && first - winStart > hours * 3600_000 * 0.08;
   // with only a few samples the window shrinks to them instead of leaving a lonely tail on the right
   let t0 = winStart;
-  if (sparse) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
+  if (sparse || late) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
   const span = now - t0;
+  // vertical markers for outages, returns and the busiest moment
+  const marks = events.filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
+  const T = marks.length ? 30 : 14;
   const x = (ts: number) => L + ((ts - t0) / span) * (W - L - R);
 
   const valueOf = (p: Point): number | null => {
@@ -17597,17 +17962,76 @@ export default function HistoryChart({
   const tx = hp ? Math.min(W - TW / 2 - 2, Math.max(TW / 2 + 2, x(hp.ts))) : 0;
   const seriesName = series === 'ping' ? 'Пинг' : 'Игроки';
 
+  /** the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas */
+  const exportPng = async () => {
+    const el = svg.current;
+    if (!el || saving) return;
+    setSaving(true);
+    try {
+      const props = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'stop-color', 'stop-opacity'];
+      const clone = el.cloneNode(true) as SVGSVGElement;
+      const src = [el, ...Array.from(el.querySelectorAll('*'))];
+      const dst = [clone, ...Array.from(clone.querySelectorAll('*'))] as SVGElement[];
+      src.forEach((n, i) => {
+        const cs = getComputedStyle(n);
+        for (const p of props) dst[i].style.setProperty(p, cs.getPropertyValue(p));
+      });
+      clone.removeAttribute('class');
+      clone.removeAttribute('aria-hidden');
+      clone.setAttribute('x', '0');
+      clone.setAttribute('y', '38');
+      clone.setAttribute('width', String(W));
+      clone.setAttribute('height', String(H));
+      const bs = getComputedStyle(document.body);
+      const bg = bs.backgroundColor && bs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? bs.backgroundColor : '#ffffff';
+      const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+      const head = `${title ? `${title} · ` : ''}${seriesName}`;
+      const out =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H + 38}" viewBox="0 0 ${W} ${H + 38}">` +
+        `<rect width="100%" height="100%" fill="${bg}"/>` +
+        `<text x="${L}" y="24" fill="${bs.color}" font-family="${esc(bs.fontFamily)}" font-size="15" font-weight="800">${esc(head)}</text>` +
+        new XMLSerializer().serializeToString(clone) +
+        `</svg>`;
+      const url = URL.createObjectURL(new Blob([out], { type: 'image/svg+xml;charset=utf-8' }));
+      const img = new Image();
+      await new Promise<void>((ok, fail) => { img.onload = () => ok(); img.onerror = () => fail(new Error('img')); img.src = url; });
+      const k = 2;
+      const cv = document.createElement('canvas');
+      cv.width = W * k;
+      cv.height = (H + 38) * k;
+      const ctx = cv.getContext('2d');
+      if (!ctx) throw new Error('canvas');
+      ctx.scale(k, k);
+      ctx.drawImage(img, 0, 0, W, H + 38);
+      URL.revokeObjectURL(url);
+      const blob = await new Promise<Blob | null>((ok) => cv.toBlob(ok, 'image/png'));
+      if (!blob) throw new Error('blob');
+      const a = document.createElement('a');
+      const dl = URL.createObjectURL(blob);
+      a.href = dl;
+      a.download = `coregsm-${series}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(dl), 4000);
+    } catch {
+      toast('Не удалось сохранить картинку', 'err');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className={`transition-opacity duration-300 ${loading ? 'opacity-60' : ''}`}>
-      {sparse && points.length > 0 && (
+      {(sparse || late) && points.length > 0 && (
         <p className="mb-2 flex items-center gap-2 rounded-xl bg-soft px-3 py-1.5 text-sm font-bold text-mute">
           <span aria-hidden className="live-dot !bg-warn" />
-          Данные накапливаются с {fmtDateTime(first)}
+          {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}
       <div
         ref={wrap}
-        className="relative rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-brand/60"
+        className="hc-wrap relative rounded-2xl"
         role="group"
         aria-label={summary}
         tabIndex={0}
@@ -17618,7 +18042,7 @@ export default function HistoryChart({
         <svg
           ref={svg}
           viewBox={`0 0 ${W} ${H}`}
-          className="chart-reveal block h-auto w-full touch-pan-y select-none"
+          className="hc-fade block h-auto w-full touch-pan-y select-none"
           aria-hidden
           onPointerDown={onPointer}
           onPointerMove={onPointer}
@@ -17663,6 +18087,19 @@ export default function HistoryChart({
               <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="4.5" style={{ fill: color }} className="stroke-card" strokeWidth="2" />
             </>
           )}
+          {marks.map((m) => {
+            const mx = Math.min(W - R - 9, Math.max(L + 9, x(m.ts)));
+            const kind = MARK[m.type];
+            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : 'Сервер упал';
+            return (
+              <g key={`${m.type}-${m.ts}`}>
+                <title>{`${label} · ${fullTime(m.ts)}`}</title>
+                <line x1={x(m.ts)} x2={x(m.ts)} y1={20} y2={H - B} className="stroke-mute" strokeWidth="1" strokeDasharray="2 4" opacity="0.5" />
+                <circle cx={mx} cy={11} r="9" style={{ fill: kind.fill }} />
+                <svg x={mx - 6} y={5} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d={kind.path} /></svg>
+              </g>
+            );
+          })}
           {hp && <line x1={x(hp.ts)} x2={x(hp.ts)} y1={T} y2={H - B} className="stroke-mute" strokeWidth="1.5" strokeDasharray="3 3" opacity="0.7" />}
           {hp && hv != null && <circle cx={x(hp.ts)} cy={y(hv)} r="5.5" style={{ fill: color }} className="stroke-card" strokeWidth="2.5" />}
           {hp && hv == null && <circle cx={x(hp.ts)} cy={y(0)} r="4.5" className="fill-bad stroke-card" strokeWidth="2" />}
@@ -17696,7 +18133,8 @@ export default function HistoryChart({
         )}
         <span className="sr-only" aria-live="polite">{kbd && hp ? describe(hp) : ''}</span>
       </div>
-      <p className="mt-1 text-xs font-bold text-mute">
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      <p className="text-xs font-bold text-mute">
         {seriesName}{unit ? `, ${unit}` : ''}
         {hp && hv != null && series === 'ping' && (
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
@@ -17705,7 +18143,109 @@ export default function HistoryChart({
           <span className="ml-2 font-semibold">максимум за период: {Math.max(...points.map((p) => p.players))} {plural(Math.max(...points.map((p) => p.players)), ['игрок', 'игрока', 'игроков'])}</span>
         )}
       </p>
+      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title="Сохранить график как картинку PNG">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
+        {saving ? 'Готовим…' : 'Скачать PNG'}
+      </button>
+      </div>
+      {marks.length > 0 && (
+        <ul className="hc-legend" aria-label="Обозначения на графике">
+          {(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => (
+            <li key={t}>
+              <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
+              </span>
+              {t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик'}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Passport.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+import { ago, fmtDateTime, toast } from '../../ui';
+import { pingTone } from './helpers';
+
+export interface PassportData {
+  game: string;
+  version: string | null;
+  flag: string;
+  country: string;
+  map: string | null;
+  address: string;
+  ping: number | null;
+  online: boolean;
+  uptimePct: number | null;
+  uptimeLabel: string;
+  createdAt: number | null;
+  lastSeen: number | null;
+  mode: string | null;
+  discord: { text: string; href: string | null }[];
+}
+
+const PP_TONE = { ok: 'pp-tone-ok', warn: 'pp-tone-warn', bad: 'pp-tone-bad' } as const;
+
+function Item({ k, wide, children }: { k: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <div className={`pp-i ${wide ? 'wide' : ''}`}>
+      <dt className="pp-k">{k}</dt>
+      <dd className="pp-v">{children}</dd>
+    </div>
+  );
+}
+
+/** «Паспорт сервера»: every static and slow-changing fact in one block of the page header */
+export default function Passport({ d }: { d: PassportData }) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(d.address);
+      toast('Адрес скопирован');
+    } catch {
+      toast(`Адрес: ${d.address}`, 'info', 8000);
+    }
+  };
+  const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
+  return (
+    <section className="relative mt-3.5" aria-label="Паспорт сервера">
+      <dl className="pp">
+        <Item k="Игра"><span>{d.game}{d.mode ? ` · ${d.mode}` : ''}</span></Item>
+        <Item k="Версия"><span>{d.version ? `v${d.version.replace(/^v/i, '')}` : '–'}</span></Item>
+        <Item k="Страна"><span>{d.country ? `${d.flag} ${d.country}`.trim() : '–'}</span></Item>
+        <Item k="Карта"><span title={d.map ?? undefined}>{d.map && d.online ? d.map : '–'}</span></Item>
+        <Item k="Адрес" wide>
+          <code title={d.address}>{d.address}</code>
+          <button type="button" className="pp-copy" onClick={() => void copy()} title="Скопировать адрес" aria-label="Скопировать адрес">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <rect x="9" y="9" width="11" height="11" rx="2.5" />
+              <path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15" />
+            </svg>
+          </button>
+        </Item>
+        <Item k="Пинг">
+          {pt && d.ping != null ? <span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span> : <span>–</span>}
+        </Item>
+        <Item k={`Аптайм · ${d.uptimeLabel}`}><span>{d.uptimePct == null ? '–' : `${d.uptimePct}%`}</span></Item>
+        <Item k="Добавлен">
+          <span title={d.createdAt ? fmtDateTime(d.createdAt) : undefined}>
+            {d.createdAt ? new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : '–'}
+          </span>
+        </Item>
+        <Item k="Последний опрос"><span title={d.lastSeen ? fmtDateTime(d.lastSeen) : undefined}>{d.lastSeen ? ago(d.lastSeen) : '–'}</span></Item>
+        {d.discord.length > 0 && (
+          <Item k="Discord" wide>
+            {d.discord.map((x, i) => (
+              x.href
+                ? <a key={i} href={x.href} target="_blank" rel="noopener noreferrer">{x.text}</a>
+                : <span key={i}>{x.text}</span>
+            ))}
+          </Item>
+        )}
+      </dl>
+    </section>
   );
 }
 __COREGSM_EOF__
@@ -17729,10 +18269,14 @@ function Avatar({ name, size = 36 }: { name: string; size?: number }) {
 }
 
 type Sort = 'time' | 'alpha';
+interface Row { key: string; name: string; since: number | null }
+
+const clock = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /**
  * Players on the server. `limit`: overview mode (first N, no search, link to the full list via `moreHref`).
  * `fresh`: names that appeared since the previous poll (a short highlight).
+ * Full mode: a count header, search, sort, and every row expands into a small card.
  */
 export default function PlayersList({
   online, players, names, list, fresh, limit, moreHref,
@@ -17740,12 +18284,13 @@ export default function PlayersList({
   const now = useNow(30_000);
   const [sort, setSort] = useState<Sort>('time');
   const [query, setQuery] = useState('');
+  const [open, setOpen] = useState<string | null>(null);
 
   const total = list.length || names.length;
   const hiddenCount = Math.max(0, players - total);
   const rows = useMemo(() => {
-    let r = list.map((p) => ({ name: p.name || 'Без имени', since: p.since as number | null }));
-    if (!r.length) r = names.map((n) => ({ name: n || 'Без имени', since: null }));
+    let r: Row[] = list.map((p, i) => ({ key: `${p.name}-${p.since}-${i}`, name: p.name || 'Без имени', since: p.since as number | null }));
+    if (!r.length) r = names.map((n, i) => ({ key: `${n}-${i}`, name: n || 'Без имени', since: null }));
     const q = query.trim().toLowerCase();
     if (q) r = r.filter((p) => p.name.toLowerCase().includes(q));
     if (sort === 'alpha' || r.every((p) => p.since == null)) r.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -17753,7 +18298,7 @@ export default function PlayersList({
     return r;
   }, [list, names, query, sort]);
   const shown = limit ? rows.slice(0, limit) : rows;
-  const showSearch = !limit && total > 8;
+  const showSearch = !limit && total > 5;
   const hasTimes = list.length > 0;
 
   if (!online) return <p className="py-6 text-center font-semibold text-mute">Сервер недоступен: список игроков появится, когда он вернётся.</p>;
@@ -17767,6 +18312,13 @@ export default function PlayersList({
 
   return (
     <div>
+      {!limit && (
+        <p className="mb-3 text-sm font-bold text-mute" aria-live="polite">
+          {query.trim()
+            ? `Найдено ${rows.length} из ${total}`
+            : `${total} ${plural(total, ['игрок', 'игрока', 'игроков'])} с именами${hiddenCount > 0 ? ` · ещё ${hiddenCount} без имени` : ''}`}
+        </p>
+      )}
       {(showSearch || (!limit && hasTimes && total > 1)) && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {showSearch && (
@@ -17780,11 +18332,13 @@ export default function PlayersList({
               autoComplete="off"
             />
           )}
-          {hasTimes && total > 1 && (
+          {total > 1 && (
             <div className="seg" role="group" aria-label="Сортировка">
-              {([['time', 'По времени в игре'], ['alpha', 'По алфавиту']] as [Sort, string][]).map(([k, label]) => (
-                <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
-              ))}
+              {([['time', 'По времени в игре'], ['alpha', 'По алфавиту']] as [Sort, string][])
+                .filter(([k]) => k === 'alpha' || hasTimes)
+                .map(([k, label]) => (
+                  <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
+                ))}
             </div>
           )}
         </div>
@@ -17793,10 +18347,12 @@ export default function PlayersList({
         <p className="py-6 text-center font-semibold text-mute">Никого не нашли по запросу «{query}».</p>
       ) : (
         <ul className="divide-y divide-line">
-          {shown.map((p, i) => {
+          {shown.map((p) => {
             const dur = p.since != null ? now - p.since : null;
-            return (
-              <li key={`${p.name}-${p.since ?? ''}-${i}`} className={`flex min-w-0 items-center gap-3 rounded-xl py-2 ${fresh.has(p.name) ? 'player-new' : ''}`}>
+            const expandable = !limit;
+            const isOpen = expandable && open === p.key;
+            const inner = (
+              <>
                 <Avatar name={p.name} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-bold" title={p.name}>{p.name}</span>
@@ -17807,18 +18363,101 @@ export default function PlayersList({
                     </span>
                   )}
                 </span>
-                {p.since != null && <span className="shrink-0 text-right text-sm font-semibold text-mute">{playedFor(p.since, now)}</span>}
+                <span className="shrink-0 text-right text-sm font-semibold text-mute">
+                  {p.since != null ? playedFor(p.since, now) : expandable ? 'в сети сейчас' : ''}
+                </span>
+                {expandable && (
+                  <svg className="pl-chev" data-open={isOpen} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                )}
+              </>
+            );
+            return (
+              <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
+                {expandable ? (
+                  <button type="button" className="pl-row" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</button>
+                ) : (
+                  <div className="flex min-w-0 items-center gap-3 rounded-xl py-2">{inner}</div>
+                )}
+                {isOpen && (
+                  <dl className="pl-more">
+                    <div>
+                      <dt>В игре</dt>
+                      <dd>{p.since != null ? playedFor(p.since, now) : 'в сети сейчас'}</dd>
+                    </div>
+                    <div>
+                      <dt>Зашёл</dt>
+                      <dd>{p.since != null ? clock(p.since) : 'нет данных'}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt>Ник</dt>
+                      <dd className="flex items-center gap-2">
+                        <span className="min-w-0 break-all">{p.name}</span>
+                        <button
+                          type="button"
+                          className="btn btn-soft btn-sm shrink-0"
+                          onClick={() => void navigator.clipboard?.writeText(p.name).catch(() => undefined)}
+                        >
+                          Копировать
+                        </button>
+                      </dd>
+                    </div>
+                  </dl>
+                )}
               </li>
             );
           })}
         </ul>
       )}
-      {hiddenCount > 0 && !limit && <p className="mt-2 text-sm font-bold text-mute">и ещё {hiddenCount} без имени</p>}
-      {limit && (total > limit || hiddenCount > 0) && moreHref && (
+      {hiddenCount > 0 && limit && (total > limit || hiddenCount > 0) && moreHref && (
         <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
           Показать всех {players > total ? players : total} →
         </a>
       )}
+      {!hiddenCount && limit && total > limit && moreHref && (
+        <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
+          Показать всех {total} →
+        </a>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/QrCode.tsx" << '__COREGSM_EOF__'
+import { useMemo } from 'react';
+import qrcode from 'qrcode-generator';
+
+/** a QR code as inline SVG (dark modules on white, always scannable regardless of the theme) */
+export default function QrCode({ text, label }: { text: string; label: string }) {
+  const svg = useMemo(() => {
+    try {
+      const qr = qrcode(0, 'M');
+      qr.addData(text);
+      qr.make();
+      const n = qr.getModuleCount();
+      let d = '';
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          if (!qr.isDark(r, c)) continue;
+          let len = 1;
+          while (c + len < n && qr.isDark(r, c + len)) len++;
+          d += `M${c} ${r}h${len}v1h-${len}z`;
+          c += len - 1;
+        }
+      }
+      return { n, d };
+    } catch {
+      return null;
+    }
+  }, [text]);
+  if (!svg) return <p className="text-sm font-semibold text-mute">Слишком длинное значение для QR-кода.</p>;
+  return (
+    <div className="cn-qr">
+      <svg viewBox={`0 0 ${svg.n} ${svg.n}`} role="img" aria-label={label} shapeRendering="crispEdges">
+        <path d={svg.d} fill="#111" />
+      </svg>
     </div>
   );
 }
@@ -18116,9 +18755,576 @@ export function pingTone(ping: number): { tone: Tone; label: string } {
 
 export const TONE_TEXT: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' };
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/ServerViews.tsx" << '__COREGSM_EOF__'
+// The «Список» and «ТВ» views of the servers page.
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import type { Server } from '../../api';
+import { gameColor, gameLabel } from '../../games';
+import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../../ui';
+import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
+
+export type ServersView = 'tiles' | 'list' | 'tv';
+export const VIEW_KEY = 'coregsm_servers_view';
+
+export function readView(): ServersView {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === 'list' || v === 'tv' ? v : 'tiles';
+  } catch {
+    return 'tiles';
+  }
+}
+export function saveView(v: ServersView) {
+  try {
+    localStorage.setItem(VIEW_KEY, v);
+  } catch {
+    /* not remembered */
+  }
+}
+
+const fmtUp = (v: number) => `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`;
+
+/** copies the address; the button shows a check mark for a moment */
+function CopyAddress({ text, className = '' }: { text: string; className?: string }) {
+  const [done, setDone] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        ta.remove();
+      } catch {
+        ok = false;
+      }
+    }
+    if (!ok) return;
+    setDone(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setDone(false), 1500);
+  };
+  return (
+    <button type="button" onClick={(e) => void copy(e)} className={`srv-copy ${done ? 'done' : ''} ${className}`} title="Скопировать адрес" aria-label={`Скопировать адрес ${text}`}>
+      <span className="truncate font-mono">{text}</span>
+      <span aria-hidden className="shrink-0">{done ? '✓' : '⧉'}</span>
+    </button>
+  );
+}
+
+// ---------- list ----------
+interface RowProps {
+  s: Server;
+  uptime?: number;
+  fav: boolean | null;
+  onFav: () => void;
+  onOpen: () => void;
+  rx: Reactions;
+  favButton: React.ReactNode;
+}
+
+function ListRow({ s, uptime, onOpen, rx, favButton }: RowProps) {
+  const r = reactionOf(rx, s.id);
+  const lag = isLag(s);
+  return (
+    <div
+     
+      className={`srv-row ${s.online ? '' : 'off'}`}
+      onClick={onOpen}
+    >
+      <div className="srv-c-status"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash></div>
+      <div className="srv-c-name">
+        <GameAvatar game={s.game} size={36} />
+        <div className="min-w-0">
+          <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
+          <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+        </div>
+      </div>
+      <div className="srv-c-players">
+        {s.online ? (
+          <>
+            <div className="flex items-baseline gap-1 font-extrabold tabular-nums">
+              <CountReact r={r}><AnimatedNumber value={s.players} /></CountReact>
+              <span className="text-mute">/ {s.maxPlayers}</span>
+            </div>
+            <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
+          </>
+        ) : (
+          <span className="truncate text-[13px] font-bold text-mute" title={s.error ?? undefined}>{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем ответ'}</span>
+        )}
+      </div>
+      <div className="srv-c-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping} мс</span> : '–'}</div>
+      <div className="srv-c-up" data-label="Аптайм">{uptime != null ? fmtUp(uptime) : '–'}</div>
+      <div className="srv-c-addr"><CopyAddress text={s.address} /></div>
+      <div className="srv-c-fav">{favButton}</div>
+    </div>
+  );
+}
+
+export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav }: {
+  servers: Server[];
+  uptime: Map<number, number>;
+  rx: Reactions;
+  favOf: (id: number) => boolean | null;
+  onOpen: (s: Server) => void;
+  renderFav: (s: Server, on: boolean) => React.ReactNode;
+}) {
+  return (
+    <div className="panel srv-list fade-in" aria-label="Серверы">
+      <div className="srv-row srv-head">
+        <div className="srv-c-status">Статус</div>
+        <div className="srv-c-name">Сервер</div>
+        <div className="srv-c-players">Игроки</div>
+        <div className="srv-c-ping">Пинг</div>
+        <div className="srv-c-up">Аптайм 30 дн</div>
+        <div className="srv-c-addr">Адрес</div>
+        <div className="srv-c-fav" />
+      </div>
+      {servers.map((s) => {
+        const fav = favOf(s.id);
+        return (
+          <ListRow
+            key={s.id}
+            s={s}
+            uptime={uptime.get(s.id)}
+            fav={fav}
+            onFav={() => undefined}
+            onOpen={() => onOpen(s)}
+            rx={rx}
+            favButton={fav != null ? renderFav(s, fav) : null}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------- TV ----------
+function useNow(ms: number): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), ms);
+    return () => window.clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+function TvCard({ s, uptime, rx }: { s: Server; uptime?: number; rx: Reactions }) {
+  const r = reactionOf(rx, s.id);
+  const lag = isLag(s);
+  const color = gameColor(s.game);
+  return (
+    <article className={`srv-tv-card ${s.online ? '' : 'off'}`} style={{ ['--accent' as string]: color }}>
+      <header className="flex items-center gap-4">
+        <GameAvatar game={s.game} size={64} />
+        <div className="min-w-0 flex-1">
+          <h2 className="srv-tv-name" title={s.name}>{s.name}</h2>
+          <div className="srv-tv-sub">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+        </div>
+        <div className="srv-tv-pill"><StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash></div>
+      </header>
+
+      {s.online ? (
+        <>
+          <div className="srv-tv-count">
+            <CountReact r={r}><AnimatedNumber value={s.players} className="srv-tv-big" /></CountReact>
+            <span className="srv-tv-max">/ {s.maxPlayers}<small>{plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</small></span>
+          </div>
+          <CapacityBar players={s.players} max={s.maxPlayers} color={color} big />
+        </>
+      ) : (
+        <div className="srv-tv-down">
+          <div className="text-[clamp(22px,2.4vw,40px)] font-black leading-tight">{s.hasStatus ? 'Сервер не отвечает' : 'Ожидаем первый ответ'}</div>
+          {s.hasStatus && <div className="mt-1 text-[clamp(14px,1.3vw,22px)] font-bold opacity-80">Последний ответ: {ago(s.updatedAt)}</div>}
+        </div>
+      )}
+
+      <footer className="srv-tv-foot">
+        <span>{s.online && s.ping != null ? <>пинг <b className={lag ? 'text-warn' : ''}>{s.ping} мс</b></> : 'пинг –'}</span>
+        {uptime != null && <span>аптайм <b>{fmtUp(uptime)}</b></span>}
+        <span className="truncate font-mono">{s.address}</span>
+      </footer>
+    </article>
+  );
+}
+
+/** a full-screen wall display: big cards, clock, no admin chrome. Esc or the button leaves it. */
+export function ServersTv({ servers, uptime, rx, updatedAt, onExit }: {
+  servers: Server[];
+  uptime: Map<number, number>;
+  rx: Reactions;
+  updatedAt: number;
+  onExit: () => void;
+}) {
+  const now = useNow(1000);
+  const root = useRef<HTMLDivElement>(null);
+  const exitRef = useRef(onExit);
+  exitRef.current = onExit;
+
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const el = root.current;
+    // full screen where the browser allows it (needs the click that opened the mode); the overlay works without it
+    try {
+      void el?.requestFullscreen?.().catch(() => undefined);
+    } catch {
+      /* not available */
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') exitRef.current(); };
+    const onFs = () => { if (!document.fullscreenElement) exitRef.current(); };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('fullscreenchange', onFs);
+      try {
+        if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, []);
+
+  const online = servers.filter((s) => s.online);
+  const players = online.reduce((n, s) => n + s.players, 0);
+  const slots = online.reduce((n, s) => n + s.maxPlayers, 0);
+  const n = servers.length;
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+
+  return createPortal(
+    <div ref={root} className="srv-tv" role="dialog" aria-label="ТВ-режим">
+      <div className="srv-tv-top">
+        <div className="srv-tv-clock">
+          <div className="srv-tv-time">{now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div className="srv-tv-date">{now.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
+        </div>
+        <div className="srv-tv-total">
+          <div className="srv-tv-total-n"><AnimatedNumber value={players} /><small>{slots > 0 ? ` / ${slots}` : ''}</small></div>
+          <div className="srv-tv-total-k">игроков онлайн · серверов {online.length} из {n}</div>
+        </div>
+        <div className="srv-tv-actions">
+          <span className="srv-tv-live"><span className="live-dot" aria-hidden />{updatedAt ? `обновлено ${ago(updatedAt)}` : 'загрузка'}</span>
+          <button type="button" className="btn btn-soft" onClick={onExit} autoFocus>Выйти (Esc)</button>
+        </div>
+      </div>
+      <div className="srv-tv-grid" style={{ ['--cols' as string]: cols }}>
+        {servers.map((s) => <TvCard key={s.id} s={s} uptime={uptime.get(s.id)} rx={rx} />)}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/ServersArt.tsx" << '__COREGSM_EOF__'
+// Small static (no looping motion) SVG illustrations for the empty states of the servers page.
+// They use the theme tokens through Tailwind classes, so they work in the light and the dark theme.
+import type { ReactNode } from 'react';
+
+function Frame({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <svg viewBox="0 0 220 150" width={220} height={150} role="img" aria-label={label} className="max-w-full overflow-visible">
+      {children}
+    </svg>
+  );
+}
+
+/** an empty rack: dashed slots and a plus */
+export function EmptyRackArt() {
+  return (
+    <Frame label="Серверов пока нет">
+      <ellipse cx="110" cy="134" rx="78" ry="8" className="fill-soft" />
+      <circle cx="110" cy="72" r="62" className="fill-soft" />
+      {[32, 64, 96].map((y) => (
+        <g key={y}>
+          <rect x="54" y={y} width="112" height="26" rx="9" className="fill-card stroke-line" strokeWidth="2" strokeDasharray="5 5" />
+          <rect x="64" y={y + 10} width="40" height="6" rx="3" className="fill-line" />
+          <circle cx="148" cy={y + 13} r="4" className="fill-line" />
+        </g>
+      ))}
+      <circle cx="170" cy="38" r="16" className="fill-brand" />
+      <path d="M170 30v16M162 38h16" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
+    </Frame>
+  );
+}
+
+/** a card with an empty star */
+export function NoFavsArt() {
+  return (
+    <Frame label="Избранных серверов нет">
+      <ellipse cx="110" cy="134" rx="70" ry="8" className="fill-soft" />
+      <circle cx="110" cy="72" r="60" className="fill-soft" />
+      <rect x="58" y="38" width="104" height="70" rx="14" className="fill-card stroke-line" strokeWidth="2" />
+      <rect x="70" y="50" width="44" height="7" rx="3.5" className="fill-line" />
+      <rect x="70" y="64" width="64" height="5" rx="2.5" className="fill-line" />
+      <rect x="70" y="86" width="80" height="8" rx="4" className="fill-soft" />
+      <path
+        d="M146 36l5.1 10.4 11.4 1.7-8.25 8 1.95 11.4L146 62.2l-10.2 5.3 1.95-11.4-8.25-8 11.4-1.7z"
+        className="fill-card stroke-brand"
+        strokeWidth="3"
+        strokeLinejoin="round"
+        strokeDasharray="4 4"
+        transform="translate(0 -8)"
+      />
+    </Frame>
+  );
+}
+
+/** a magnifier over a few cards: nothing matched the filter */
+export function NoMatchArt() {
+  return (
+    <Frame label="Ничего не найдено">
+      <ellipse cx="110" cy="134" rx="74" ry="8" className="fill-soft" />
+      <circle cx="110" cy="72" r="60" className="fill-soft" />
+      {[0, 1].map((i) => (
+        <g key={i}>
+          <rect x={52 + i * 58} y="44" width="52" height="58" rx="12" className="fill-card stroke-line" strokeWidth="2" />
+          <rect x={60 + i * 58} y="52" width="36" height="16" rx="6" className="fill-line" />
+          <rect x={60 + i * 58} y="76" width="26" height="5" rx="2.5" className="fill-line" />
+          <rect x={60 + i * 58} y="88" width="18" height="5" rx="2.5" className="fill-soft" />
+        </g>
+      ))}
+      <circle cx="132" cy="84" r="21" className="fill-card stroke-brand" strokeWidth="5" fillOpacity="0.85" />
+      <path d="M147 99l16 16" className="stroke-brand" strokeWidth="7" strokeLinecap="round" />
+      <path d="M124 78l16 12M140 78l-16 12" className="stroke-mute" strokeWidth="3" strokeLinecap="round" />
+    </Frame>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/serverUi.tsx" << '__COREGSM_EOF__'
+// Pieces of the servers page: reactions to changes, capacity bar, empty states, skeletons.
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import type { Server } from '../../api';
+import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
+
+// ---------- reactions to changes (item 29) ----------
+export interface Reaction {
+  /** last change of the player count (0 = nothing to show) and a counter that restarts the animation */
+  d: number;
+  dk: number;
+  /** the server went offline ('down') or came back ('up') */
+  st: 'up' | 'down' | null;
+  sk: number;
+}
+export type Reactions = Record<number, Reaction>;
+const NONE: Reaction = { d: 0, dk: 0, st: null, sk: 0 };
+export const reactionOf = (rx: Reactions, id: number): Reaction => rx[id] ?? NONE;
+
+/**
+ * Compares every poll with the previous one (kept in a ref) and reports what changed.
+ * Nothing is reported for the first load. The reaction disappears by itself after a couple of seconds.
+ */
+export function useServerReactions(servers: Server[], loaded: boolean): Reactions {
+  const prev = useRef<Map<number, { players: number; online: boolean; known: boolean }> | null>(null);
+  const [rx, setRx] = useState<Reactions>({});
+  const timers = useRef<number[]>([]);
+  useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
+  useEffect(() => {
+    if (!loaded) return;
+    const before = prev.current;
+    prev.current = new Map(servers.map((s) => [s.id, { players: s.players, online: s.online, known: s.hasStatus }]));
+    if (!before) return;
+    const patches: [number, Partial<Reaction>][] = [];
+    for (const s of servers) {
+      const p = before.get(s.id);
+      if (!p) continue;
+      if (p.known && s.hasStatus && p.online !== s.online) patches.push([s.id, { st: s.online ? 'up' : 'down', d: 0 }]);
+      else if (s.online && p.online && p.players !== s.players) patches.push([s.id, { d: s.players - p.players }]);
+    }
+    if (patches.length === 0) return;
+    setRx((cur) => {
+      const next = { ...cur };
+      for (const [id, patch] of patches) {
+        const c = next[id] ?? NONE;
+        next[id] = { ...c, ...patch, dk: patch.d ? c.dk + 1 : c.dk, sk: patch.st ? c.sk + 1 : c.sk };
+        const { dk, sk } = next[id];
+        timers.current.push(window.setTimeout(() => {
+          setRx((r) => {
+            const x = r[id];
+            if (!x) return r;
+            const n = { ...x };
+            if (patch.d && x.dk === dk) n.d = 0;
+            if (patch.st && x.sk === sk) n.st = null;
+            return { ...r, [id]: n };
+          });
+        }, 2400));
+      }
+      return next;
+    });
+  }, [servers, loaded]);
+  return rx;
+}
+
+/** wraps a status pill: flashes red / green once (box-shadow only) */
+export function StatusFlash({ r, children }: { r: Reaction; children: ReactNode }) {
+  return <span key={r.st ? r.sk : 'idle'} className={`srv-status ${r.st === 'down' ? 'srv-flash-bad' : r.st === 'up' ? 'srv-flash-ok' : ''}`}>{children}</span>;
+}
+
+/** wraps a player count: the number is highlighted and a «+1» / «−2» chip fades out */
+export function CountReact({ r, onDark = false, children }: { r: Reaction; onDark?: boolean; children: ReactNode }) {
+  const dir = r.d > 0 ? 'up' : r.d < 0 ? 'down' : '';
+  return (
+    <span key={dir ? r.dk : 'idle'} className={`srv-num ${dir ? `srv-num-${dir}` : ''} ${onDark ? 'on-dark' : ''}`}>
+      {children}
+      {dir && <span className={`srv-chip ${dir}`} aria-hidden>{r.d > 0 ? `+${r.d}` : `−${-r.d}`}</span>}
+    </span>
+  );
+}
+
+// ---------- capacity (item 5) ----------
+export const capacityPct = (players: number, max: number) => (max > 0 ? Math.max(0, Math.min(100, Math.round((players / max) * 100))) : 0);
+
+export function CapacityBar({ players, max, color, onDark = false, big = false, showPct = true, className = '' }: { players: number; max: number; color: string; onDark?: boolean; big?: boolean; showPct?: boolean; className?: string }) {
+  const pct = capacityPct(players, max);
+  const hot = pct >= 90;
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      <div
+        className={`srv-cap ${onDark ? 'on-dark' : ''} ${hot ? 'hot' : ''} ${big ? 'big' : ''}`}
+        style={{ ['--cap' as string]: color }}
+        role="meter"
+        aria-label="Заполненность сервера"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+        title={hot ? `Почти полный: ${pct}%` : `${pct}% мест занято`}
+      >
+        <i style={{ width: `${pct}%` }} />
+      </div>
+      {showPct && <span className={`srv-pct ${hot ? 'hot' : ''} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''}`}>{pct}%</span>}
+    </div>
+  );
+}
+
+// ---------- empty states (item 8) ----------
+function EmptyState({ art, title, text, children }: { art: ReactNode; title: string; text: string; children?: ReactNode }) {
+  return (
+    <div className="panel fade-in flex flex-col items-center gap-2 px-6 py-10 text-center">
+      {art}
+      <h3 className="mt-1 text-lg font-black">{title}</h3>
+      <p className="max-w-sm font-semibold text-mute">{text}</p>
+      {children && <div className="mt-2 flex flex-wrap items-center justify-center gap-2">{children}</div>}
+    </div>
+  );
+}
+
+export function NoServersState({ isAdmin }: { isAdmin: boolean }) {
+  return (
+    <EmptyState
+      art={<EmptyRackArt />}
+      title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'}
+      text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже: список появится здесь.'}
+    >
+      {isAdmin && <a className="btn" href="#/admin/servers" data-magnetic>Добавить сервер</a>}
+    </EmptyState>
+  );
+}
+
+export function NoFavsState({ onReset }: { onReset: () => void }) {
+  return (
+    <EmptyState art={<NoFavsArt />} title="В избранном пока пусто" text="Нажмите ☆ на карточке сервера, и он появится здесь и будет закреплён первым в общем списке.">
+      <button type="button" className="btn btn-soft" onClick={onReset}>Показать все серверы</button>
+    </EmptyState>
+  );
+}
+
+export function NoMatchState({ what, onReset }: { what: 'online' | 'offline'; onReset: () => void }) {
+  return (
+    <EmptyState
+      art={<NoMatchArt />}
+      title={what === 'online' ? 'Сейчас нет серверов онлайн' : 'Недоступных серверов нет'}
+      text={what === 'online' ? 'Ни один сервер не отвечает на запросы. Сбросьте фильтр, чтобы увидеть все.' : 'Все серверы отвечают. Сбросьте фильтр, чтобы увидеть полный список.'}
+    >
+      <button type="button" className="btn btn-soft" onClick={onReset}>Сбросить фильтр</button>
+    </EmptyState>
+  );
+}
+
+// ---------- skeletons that look like the cards ----------
+const Bar = ({ w, h = 12, className = '' }: { w: number | string; h?: number; className?: string }) => (
+  <div className={`skeleton rounded-full ${className}`} style={{ width: w, height: h, maxWidth: '100%' }} />
+);
+
+function SkeletonHero() {
+  return (
+    <div className="tile col-span-2 flex min-h-[280px] flex-col gap-3 p-5 lg:col-span-6 lg:row-span-2 lg:p-6">
+      <div className="flex items-start gap-3">
+        <div className="skeleton h-12 w-12 shrink-0 rounded-2xl" />
+        <div className="flex-1 space-y-2 pt-1"><Bar w="62%" h={18} /><Bar w="38%" /></div>
+        <Bar w={84} h={26} />
+      </div>
+      <div className="flex items-end gap-3 pt-4"><Bar w={130} h={64} className="!rounded-2xl" /><Bar w={90} h={18} className="mb-2" /></div>
+      <div className="skeleton mt-auto h-20 w-full rounded-2xl" />
+      <div className="flex justify-between"><Bar w={70} /><Bar w={90} /><Bar w={80} /></div>
+    </div>
+  );
+}
+
+function SkeletonStat() {
+  return (
+    <div className="tile flex min-h-[128px] flex-col gap-2 p-4 lg:col-span-3">
+      <div className="flex items-start justify-between"><Bar w="50%" /><div className="skeleton h-8 w-8 rounded-xl" /></div>
+      <div className="mt-auto space-y-2"><Bar w={80} h={28} className="!rounded-xl" /><Bar w="60%" /><Bar w="100%" h={6} /></div>
+    </div>
+  );
+}
+
+function SkeletonSmall() {
+  return (
+    <div className="tile col-span-2 flex min-h-[236px] flex-col gap-2 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3">
+      <div className="skeleton h-[88px] rounded-[18px]" />
+      <div className="space-y-2 px-1.5 pt-1"><Bar w="75%" h={15} /><Bar w="40%" /></div>
+      <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="!rounded-lg" /><Bar w={34} /></div>
+      <div className="px-1.5"><Bar w="100%" h={6} /></div>
+      <div className="mt-auto flex justify-between px-1.5"><Bar w="45%" /><Bar w="20%" /></div>
+    </div>
+  );
+}
+
+export function TilesSkeleton() {
+  return (
+    <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
+      <SkeletonHero />
+      {[0, 1, 2, 3].map((i) => <SkeletonStat key={i} />)}
+      {[0, 1, 2].map((i) => <SkeletonSmall key={i} />)}
+    </div>
+  );
+}
+
+export function ListSkeleton() {
+  return (
+    <div className="panel space-y-0 overflow-hidden p-0" aria-busy="true" aria-label="Загрузка">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div key={i} className="flex items-center gap-3 border-b border-line px-4 py-3.5 last:border-0">
+          <Bar w={84} h={24} />
+          <div className="skeleton h-9 w-9 shrink-0 rounded-xl" />
+          <div className="flex-1 space-y-2"><Bar w="50%" h={14} /><Bar w="25%" h={10} /></div>
+          <Bar w={120} h={8} className="max-sm:hidden" />
+        </div>
+      ))}
+    </div>
+  );
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/confirm.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
+import { IconInfo, IconWarn } from './icons';
 
 /**
  * Styled replacements for window.confirm / window.prompt.
@@ -18319,10 +19525,17 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
         aria-labelledby="cd-title"
         aria-describedby={o.text ? 'cd-text' : undefined}
         onSubmit={submit}
-        className="pop panel max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-3xl sm:pb-6"
+        className="pop panel panel-raised max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
       >
-        <h2 id="cd-title" className="text-xl font-black">{o.title}</h2>
-        {o.text && <p id="cd-text" className="whitespace-pre-line font-semibold text-mute">{o.text}</p>}
+        <div className="flex items-start gap-3.5">
+          <span aria-hidden className={`grid h-11 w-11 shrink-0 place-items-center rounded-ui-md ${o.danger ? 'bg-badbg text-bad' : 'bg-soft text-link'}`}>
+            {o.danger ? <IconWarn size={22} /> : <IconInfo size={22} />}
+          </span>
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <h2 id="cd-title" className="text-xl font-black leading-tight">{o.title}</h2>
+            {o.text && <p id="cd-text" className="whitespace-pre-line font-semibold text-mute">{o.text}</p>}
+          </div>
+        </div>
         {req.kind === 'prompt' && (
           <div>
             <label htmlFor="cd-input" className="label">{req.opts.label}</label>
@@ -18347,7 +19560,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
           {!readOnly && (
             <button type="button" data-cancel className="btn btn-soft min-h-[44px]" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
           )}
-          <button data-ok className={`btn min-h-[44px] ${o.danger ? '!bg-badsolid hover:!brightness-110' : ''}`}>
+          <button data-ok className={`btn min-h-[44px] ${o.danger ? 'btn-solid-danger' : ''}`}>
             {o.confirmLabel ?? (readOnly ? 'Готово' : o.danger ? 'Удалить' : 'Подтвердить')}
           </button>
         </div>
@@ -18786,6 +19999,125 @@ export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png
 export const gameGradient = (id: string): [string, string] => gradientFor(gameColor(id));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/icons.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+
+/**
+ * The panel's single icon set: 24 px grid, 2 px stroke, round caps and joins, `currentColor`.
+ * Every icon takes `size` (CSS px, each icon has a sensible default) and `className`; none carries its own colour.
+ * ui.tsx re-exports all of them, so pages keep importing from './ui'. Brand marks and game pictograms live elsewhere
+ * (gameIcons.ts, the Discord logo in ui.tsx) because they are filled shapes, not strokes.
+ */
+export interface IconProps { size?: number; className?: string }
+
+/** the 24 x 24 stroke frame; use it for one-off icons so they match the set */
+export function Icon({ children, size = 20, className }: { children: ReactNode; size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      {children}
+    </svg>
+  );
+}
+
+const make = (draw: ReactNode, def = 20) =>
+  function Glyph({ size = def, className }: IconProps = {}) {
+    return <Icon size={size} className={className}>{draw}</Icon>;
+  };
+
+// ---- navigation ----
+export const IconServers = make(<><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01" /></>);
+export const IconCards = make(<><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.5" /><path d="M21 16l-5-5-8 8" /></>);
+export const IconDiscord = make(<path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" />);
+export const IconSettings = make(<><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></>);
+export const IconNews = make(<><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8 8 0 0 1 0 12" /></>);
+export const IconUsers = make(<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>, 22);
+export const IconJournal = make(<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />, 22);
+/** heartbeat line: the System and Status pages */
+export const IconSystem = make(<path d="M22 12h-4l-3 9L9 3l-3 9H2" />, 22);
+export const IconStart = make(<path d="M5 21V4M5 4h11l-2 4 2 4H5" />, 22);
+export const IconBell = make(<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />, 22);
+
+// ---- theme ----
+export const IconSun = make(<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>);
+export const IconMoon = make(<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />);
+export const IconAuto = make(<><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></>);
+export const IconPalette = make(<><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.1 0-.9.7-1.6 1.6-1.6H17a4 4 0 0 0 4-4C21 6.5 17 3 12 3z" /><path d="M7.5 11h.01M10 7.5h.01M14.5 7.5h.01" /></>);
+
+// ---- actions (18 px: rows and toolbars) ----
+export const IconEdit = make(<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>, 18);
+export const IconTrash = make(<><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></>, 18);
+export const IconPause = make(<path d="M8 5v14M16 5v14" />, 18);
+export const IconPlay = make(<path d="M7 4.5v15l12-7.5z" />, 18);
+export const IconKey = make(<><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M16 7l3 3" /></>, 18);
+export const IconDownload = make(<path d="M12 4v11M7 11l5 5 5-5M5 20h14" />, 18);
+export const IconUpload = make(<path d="M12 20V9M7 13l5-5 5 5M5 4h14" />, 18);
+export const IconRestore = make(<><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" /><path d="M12 8v4l3 2" /></>, 18);
+export const IconUndo = make(<path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3" />, 18);
+export const IconCopyPlus = make(<><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></>, 18);
+export const IconLinkOut = make(<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />, 18);
+export const IconPlus = make(<path d="M12 5v14M5 12h14" />, 18);
+export const IconClose = make(<path d="M6 6l12 12M18 6L6 18" />, 18);
+export const IconCheck = make(<path d="M5 12.5l4.5 4.5L19 7.5" />, 18);
+export const IconSearch = make(<><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></>, 18);
+export const IconLogout = make(<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />);
+export const IconEye = make(<><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
+export const IconEyeOff = make(<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.4 4.5-1M9.9 9.9a3 3 0 0 0 4.2 4.2" />);
+export const IconChevronDown = make(<path d="M6 9l6 6 6-6" />, 18);
+export const IconArrowUp = make(<path d="M12 19V5M5 12l7-7 7 7" />, 22);
+
+// ---- status and feedback ----
+export const IconInfo = make(<><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>);
+export const IconWarn = make(<><path d="M12 3l10 18H2z" /><path d="M12 10v5M12 18h.01" /></>);
+export const IconError = make(<><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 16.5h.01" /></>);
+export const IconOk = make(<><circle cx="12" cy="12" r="9" /><path d="M8 12.5l3 3 5-6" /></>);
+
+// ---- system ----
+export const IconDisk = make(<><path d="M3 14l2.2-8.2A2 2 0 0 1 7.1 4h9.8a2 2 0 0 1 1.9 1.8L21 14" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 17h.01M11 17h.01" /></>);
+export const IconMemory = make(<><rect x="4" y="7" width="16" height="10" rx="2" /><path d="M8 7v-2M12 7v-2M16 7v-2M8 19v-2M12 19v-2M16 19v-2" /></>);
+export const IconDatabase = make(<><ellipse cx="12" cy="5.5" rx="8" ry="3" /><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>);
+export const IconShield = make(<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z" />);
+export const IconClock = make(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
+export const IconBot = make(<><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5" /></>);
+
+// ---- icons with a small motion of their own (classes in index.css; the motion stops for reduced motion) ----
+/** circular arrows; turns on click and spins while `spinning` (busy) */
+export const IconRefresh = ({ spinning = false, size = 16 }: { spinning?: boolean; size?: number }) => (
+  <span className={`ico-refresh inline-grid ${spinning ? 'spinning' : ''}`} aria-hidden>
+    <Icon size={size}><path d="M20 11a8 8 0 0 0-14.5-4.1M4 4v4h4M4 13a8 8 0 0 0 14.5 4.1M20 20v-4h-4" /></Icon>
+  </span>
+);
+/** arrow that nudges forward when its button is hovered */
+export const IconArrow = () => (
+  <span className="ico-nudge inline-grid" aria-hidden>
+    <Icon size={16}><path d="M5 12h14M13 6l6 6-6 6" /></Icon>
+  </span>
+);
+export const IconCheckMark = () => (
+  <span className="star-pop inline-grid" aria-hidden>
+    <Icon size={16}><path d="M5 12.5l4.5 4.5L19 7.5" /></Icon>
+  </span>
+);
+export const IconShare = () => (
+  <span className="ico-share inline-grid" aria-hidden>
+    <Icon size={16}><path d="M7 17L17 7M9 7h8v8" /></Icon>
+  </span>
+);
+export const IconCopy = make(<><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></>, 16);
+
+/** the catalogue the UI kit page shows (name, component); keep new icons in this list */
+export const ICON_SET: [string, (p: IconProps) => ReactNode][] = [
+  ['Servers', IconServers], ['Cards', IconCards], ['Discord', IconDiscord], ['Settings', IconSettings], ['News', IconNews],
+  ['Users', IconUsers], ['Journal', IconJournal], ['System', IconSystem], ['Start', IconStart], ['Bell', IconBell],
+  ['Sun', IconSun], ['Moon', IconMoon], ['Auto', IconAuto], ['Palette', IconPalette],
+  ['Edit', IconEdit], ['Trash', IconTrash], ['Pause', IconPause], ['Play', IconPlay], ['Key', IconKey],
+  ['Download', IconDownload], ['Upload', IconUpload], ['Restore', IconRestore], ['Undo', IconUndo], ['Copy', IconCopy],
+  ['LinkOut', IconLinkOut], ['Plus', IconPlus], ['Close', IconClose], ['Check', IconCheck], ['Search', IconSearch],
+  ['Logout', IconLogout], ['Eye', IconEye], ['EyeOff', IconEyeOff], ['ChevronDown', IconChevronDown], ['ArrowUp', IconArrowUp],
+  ['Info', IconInfo], ['Warn', IconWarn], ['Error', IconError], ['Ok', IconOk],
+  ['Disk', IconDisk], ['Memory', IconMemory], ['Database', IconDatabase], ['Shield', IconShield], ['Clock', IconClock], ['Bot', IconBot],
+];
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/index.css" << '__COREGSM_EOF__'
 @tailwind base;
 @tailwind components;
@@ -18801,6 +20133,7 @@ __COREGSM_EOF__
 :root {
   --page: 243 244 248;
   --card: 255 255 255;
+  --raised: 255 255 255;
   --ink: 18 20 26;
   --mute: 92 99 114;
   --line: 231 233 240;
@@ -18822,72 +20155,88 @@ __COREGSM_EOF__
   --glass: rgb(255 255 255 / 0.74);
   --glass-border: rgb(255 255 255 / 0.9);
   --glass-shadow: 0 8px 30px rgba(40, 50, 110, 0.08);
-  --shadow-soft: 0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
-  --shadow-pop: 0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
+  /* shadow scale: 1 = small controls and chips, 2 = cards and tiles at rest, 3 = floating (menus, dialogs, hovered cards) */
+  --shadow-1: 0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
+  --shadow-2: 0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
+  --shadow-3: 0 1px 2px rgba(20, 24, 40, 0.06), 0 18px 38px rgba(40, 50, 110, 0.13);
   --wash-a: rgb(var(--brand) / 0.15);
   --wash-b: rgb(70 190 235 / 0.14);
   color-scheme: light;
 }
+/* radius scale (sm / md / lg / xl / pill) and the old shadow names as aliases of the shadow scale */
+:root {
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 26px;
+  --r-pill: 9999px;
+  --shadow-pop: var(--shadow-1);
+  --shadow-soft: var(--shadow-2);
+}
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --page: 11 12 17;
-    --card: 21 23 30;
-    --ink: 236 237 242;
-    --mute: 152 158 172;
-    --line: 42 45 57;
-    --field: 110 116 132;
-    --soft: 33 36 47;
+    --page: 9 10 14;
+    --card: 18 20 27;
+    --raised: 27 30 40;
+    --ink: 226 228 236;
+    --mute: 148 154 170;
+    --line: 38 41 53;
+    --field: 112 118 136;
+    --soft: 30 33 44;
     --brand: 88 91 235;
     --brand-hover: 76 79 214;
     --brand-2: 66 58 196;
     --link: 165 170 255;
     --ok: 74 222 128;
-    --okbg: 20 56 38;
+    --okbg: 18 52 36;
     --warn: 251 191 36;
-    --warnbg: 58 46 16;
+    --warnbg: 54 43 14;
     --bad: 248 113 113;
-    --badbg: 62 26 31;
+    --badbg: 58 25 30;
     --badsolid: 214 48 48;
-    --seg-on: 58 62 80;
-    --tile-border: rgb(255 255 255 / 0.075);
-    --glass: rgb(24 26 34 / 0.72);
-    --glass-border: rgb(255 255 255 / 0.09);
-    --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
-    --shadow-soft: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.75);
-    --shadow-pop: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 2px 8px rgba(0, 0, 0, 0.45);
-    --wash-a: rgb(var(--brand) / 0.22);
-    --wash-b: rgb(40 170 210 / 0.10);
+    --seg-on: 44 48 64;
+    --tile-border: rgb(255 255 255 / 0.07);
+    --glass: rgb(20 22 30 / 0.72);
+    --glass-border: rgb(255 255 255 / 0.08);
+    --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+    --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
+    --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
+    --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
+    --wash-a: rgb(var(--brand) / 0.2);
+    --wash-b: rgb(40 170 210 / 0.09);
     color-scheme: dark;
   }
 }
 :root[data-theme='dark'] {
-  --page: 11 12 17;
-  --card: 21 23 30;
-  --ink: 236 237 242;
-  --mute: 152 158 172;
-  --line: 42 45 57;
-  --field: 110 116 132;
-  --soft: 33 36 47;
+  --page: 9 10 14;
+  --card: 18 20 27;
+  --raised: 27 30 40;
+  --ink: 226 228 236;
+  --mute: 148 154 170;
+  --line: 38 41 53;
+  --field: 112 118 136;
+  --soft: 30 33 44;
   --brand: 88 91 235;
   --brand-hover: 76 79 214;
   --brand-2: 66 58 196;
   --link: 165 170 255;
   --ok: 74 222 128;
-  --okbg: 20 56 38;
+  --okbg: 18 52 36;
   --warn: 251 191 36;
-  --warnbg: 58 46 16;
+  --warnbg: 54 43 14;
   --bad: 248 113 113;
-  --badbg: 62 26 31;
+  --badbg: 58 25 30;
   --badsolid: 214 48 48;
-  --seg-on: 58 62 80;
-  --tile-border: rgb(255 255 255 / 0.075);
-  --glass: rgb(24 26 34 / 0.72);
-  --glass-border: rgb(255 255 255 / 0.09);
-  --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
-  --shadow-soft: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.75);
-  --shadow-pop: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 2px 8px rgba(0, 0, 0, 0.45);
-  --wash-a: rgb(var(--brand) / 0.22);
-  --wash-b: rgb(40 170 210 / 0.10);
+  --seg-on: 44 48 64;
+  --tile-border: rgb(255 255 255 / 0.07);
+  --glass: rgb(20 22 30 / 0.72);
+  --glass-border: rgb(255 255 255 / 0.08);
+  --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+  --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
+  --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
+  --wash-a: rgb(var(--brand) / 0.2);
+  --wash-b: rgb(40 170 210 / 0.09);
   color-scheme: dark;
 }
 
@@ -18940,11 +20289,13 @@ __COREGSM_EOF__
   .btn-sm { @apply px-3 py-1 text-sm max-sm:min-h-[44px] max-sm:px-4; }
   /* square icon button; 44px on phones */
   .btn-icon { @apply inline-grid h-10 w-10 place-items-center rounded-full bg-soft text-mute transition hover:text-link max-sm:h-11 max-sm:w-11; }
-  .input { @apply w-full rounded-2xl border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-none disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px]; }
+  .input { @apply w-full rounded-ui-lg border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-none disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px]; }
   .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
   /* the tile: white card, 26px radius, layered soft shadow */
-  .panel { @apply rounded-[26px] bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-soft); }
-  .tile { @apply rounded-[26px] bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-soft); }
+  .panel { @apply rounded-ui-xl bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
+  .tile { @apply rounded-ui-xl bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
+  /* floating surfaces (dialogs, menus, popovers): one step above the card in the dark theme, identical in the light one */
+  .panel-raised { background-color: rgb(var(--raised)); box-shadow: var(--shadow-3); }
   .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
   .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
   .pill-ok { @apply bg-okbg text-ok; }
@@ -18960,10 +20311,7 @@ __COREGSM_EOF__
   .seg-item[aria-pressed='true'], .seg-item[aria-current='page'], .seg-item.on {
     color: rgb(var(--ink));
     background: rgb(var(--seg-on));
-    box-shadow: 0 1px 2px rgba(20, 24, 40, 0.1), 0 2px 8px rgba(40, 50, 110, 0.1);
-  }
-  :root[data-theme='dark'] .seg-item[aria-pressed='true'], :root[data-theme='dark'] .seg-item[aria-current='page'], :root[data-theme='dark'] .seg-item.on {
-    box-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 2px 8px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-1);
   }
 
   /* the sticky glass header and the floating bottom bar */
@@ -18986,11 +20334,7 @@ __COREGSM_EOF__
   .btn-on-grad { @apply inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-extrabold text-[#12141a] transition hover:bg-white/90 active:scale-[.98] max-sm:min-h-[44px]; }
   .btn-ghost-on-grad { @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-extrabold text-white transition hover:brightness-90 active:scale-[.98] max-sm:min-h-[44px]; background: rgba(0, 0, 0, 0.22); }
   .tile-hover { transition: transform .18s ease, box-shadow .18s ease; }
-  .tile-hover:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.05), 0 18px 38px rgba(40, 50, 110, 0.13); }
-  :root[data-theme='dark'] .tile-hover:hover { box-shadow: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 20px 40px -16px rgba(0, 0, 0, 0.85); }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme='light']) .tile-hover:hover { box-shadow: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 20px 40px -16px rgba(0, 0, 0, 0.85); }
-  }
+  .tile-hover:hover { transform: translateY(-2px); box-shadow: var(--shadow-3); }
   @media (prefers-reduced-motion: reduce) { .tile-hover:hover { transform: none; } }
 }
 
@@ -19184,15 +20528,15 @@ html { background-color: rgb(var(--page)); }
 .split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
 .split-menu {
   position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
-  padding: .35rem; border-radius: 20px; background: rgb(var(--card)); border: 1px solid var(--tile-border);
-  box-shadow: 0 18px 40px -12px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.08);
+  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--raised)); border: 1px solid var(--tile-border);
+  box-shadow: var(--shadow-3);
   transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) both;
 }
 .split-menu[data-up='true'] { bottom: calc(100% + 6px); transform-origin: bottom right; }
 .split-menu[data-up='false'] { top: calc(100% + 6px); }
 .split-item {
   display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
-  border-radius: 14px; padding: .55rem .8rem; font-weight: 800; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
+  border-radius: var(--r-md); padding: .55rem .8rem; font-weight: 800; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
 }
 .split-item small { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
 .split-item:hover, .split-item:focus-visible { background: rgb(var(--soft)); outline: none; }
@@ -19285,11 +20629,7 @@ html { background-color: rgb(var(--page)); }
   content: ''; position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none;
   width: var(--ind-w); height: var(--ind-h); transform: translate(var(--ind-x), var(--ind-y));
   border-radius: 9999px; background: rgb(var(--seg-on));
-  box-shadow: 0 1px 2px rgba(20, 24, 40, 0.1), 0 2px 8px rgba(40, 50, 110, 0.1);
-}
-:root[data-theme='dark'] .seg[data-ind]::before { box-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 2px 8px rgba(0, 0, 0, 0.4); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .seg[data-ind]::before { box-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 2px 8px rgba(0, 0, 0, 0.4); }
+  box-shadow: var(--shadow-1);
 }
 .seg[data-ind-anim]::before { transition: transform .38s cubic-bezier(.34, 1.3, .5, 1), width .3s cubic-bezier(.2, .8, .2, 1), height .2s ease; }
 .seg[data-ind] > .seg-item[aria-pressed='true'], .seg[data-ind] > .seg-item[aria-current='page'], .seg[data-ind] > .seg-item.on { background: transparent; box-shadow: none; }
@@ -19498,7 +20838,7 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 .update-hero .btn-ghost-on-grad:hover { filter: none; background: rgb(255 255 255 / .3); }
 
 /* compact icon actions in admin rows */
-.row-act { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: rgb(var(--soft)); color: rgb(var(--mute)); transition: background-color .15s ease, color .15s ease, transform .15s ease; }
+.row-act { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--mute)); transition: background-color .15s ease, color .15s ease, transform .15s ease; }
 .row-act:hover { background: rgb(var(--brand) / .12); color: rgb(var(--link)); }
 .row-act:active { transform: scale(.94); }
 .row-act:disabled { opacity: .55; pointer-events: none; }
@@ -19563,9 +20903,9 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 @media (prefers-reduced-motion: reduce) { .update-progress.det > i { transition: none; } }
 
 /* hint strip under page titles */
-.hint-strip { display: flex; align-items: flex-start; gap: 10px; border-radius: 16px; padding: 10px 14px; font-size: 14px; font-weight: 600; line-height: 1.5; color: rgb(var(--ink)); background: rgb(var(--brand) / .07); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .15); }
+.hint-strip { display: flex; align-items: flex-start; gap: 10px; border-radius: var(--r-lg); padding: 10px 14px; font-size: 14px; font-weight: 600; line-height: 1.5; color: rgb(var(--ink)); background: rgb(var(--brand) / .07); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .15); }
 .hint-ico { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 9999px; font-size: 12px; font-weight: 900; font-style: italic; font-family: Georgia, serif; color: rgb(var(--link)); background: rgb(var(--brand) / .16); }
-.hint-more { display: inline; font-weight: 800; color: rgb(var(--link)); border-radius: 6px; text-decoration: underline; text-underline-offset: 3px; padding: 0 2px; }
+.hint-more { display: inline; font-weight: 800; color: rgb(var(--link)); border-radius: var(--r-sm); text-decoration: underline; text-underline-offset: 3px; padding: 0 2px; }
 .hint-more:hover { text-decoration-thickness: 2px; }
 .hint-help { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgb(var(--brand) / .18); color: rgb(var(--mute)); }
 .hint-help p + p { margin-top: 6px; }
@@ -19681,6 +21021,9 @@ import ReactDOM from 'react-dom/client';
 // variable Manrope: has Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800)
 import '@fontsource-variable/manrope/wght.css';
 import './index.css';
+import './styles/servers.css';
+import './styles/detail.css';
+import './styles/system.css';
 import App from './App';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -19722,7 +21065,7 @@ import { api, type CertInfo, type Server, type ServerInput } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
 import AdminStart, { AdminHome } from './AdminStart';
 import AlertsPage from './Alerts';
@@ -19814,7 +21157,7 @@ function UpdateBanner() {
     <div className="update-hero relative flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden rounded-[22px] px-5 py-3.5 text-white" role="status">
       <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/15" />
       <span aria-hidden className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20">
-        <svg className="update-bob" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+        <IconArrowUp className="update-bob" />
       </span>
       <div className="relative min-w-0 flex-1">
         <div className="font-extrabold leading-tight">Доступно обновление панели</div>
@@ -19855,7 +21198,7 @@ function CertWarning() {
         aria-label="Скрыть предупреждение до конца сессии"
         onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
       >
-        ✕
+        <IconClose size={14} />
       </button>
     </div>
   );
@@ -19903,16 +21246,19 @@ function ServersManage({ sub }: { sub: string }) {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        title="Серверы"
-        subtitle="Добавление и настройка игровых серверов"
-        icon={<IconServers />}
-        hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
-        help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
-      >
-        <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
-      </PageHead>
+    <PageStack
+      head={(
+        <PageHead
+          title="Серверы"
+          subtitle="Добавление и настройка игровых серверов"
+          icon={<IconServers />}
+          hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
+          help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
+        >
+          <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
 
       {!loaded && (
@@ -19967,7 +21313,7 @@ function ServersManage({ sub }: { sub: string }) {
           onSaved={() => { closeForm(); toast('Сервер сохранён'); void load(); }}
         />
       )}
-    </div>
+    </PageStack>
   );
 }
 __COREGSM_EOF__
@@ -19976,7 +21322,7 @@ __COREGSM_EOF__
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
-import { PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
+import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -20152,14 +21498,17 @@ export default function AdminStart() {
   ];
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconStart />}
-        title="Начало работы"
-        subtitle={me ? `Здравствуйте, ${me.username}! Пять шагов, и панель готова` : 'Пять шагов, и панель готова'}
-        hint="Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели."
-        help={<p>Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.</p>}
-      />
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconStart />}
+          title="Начало работы"
+          subtitle={me ? `Здравствуйте, ${me.username}! Пять шагов, и панель готова` : 'Пять шагов, и панель готова'}
+          hint="Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели."
+          help={<p>Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.</p>}
+        />
+      )}
+    >
 
       {s.loading ? (
         <StartSkeleton />
@@ -20271,14 +21620,14 @@ export default function AdminStart() {
           ))}
         </div>
       </section>
-    </div>
+    </AdminPage>
   );
 }
 
 function MapRow({ id, label, desc, icon }: { id: string; label: string; desc: string; icon: ReactNode }) {
   return (
     <li>
-      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-2xl px-2 py-2 transition hover:bg-soft">
+      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-ui-lg px-2 py-2 transition hover:bg-soft">
         <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-soft text-link">{icon}</span>
         <span className="min-w-0">
           <span className="block font-extrabold leading-tight">{label}</span>
@@ -20295,7 +21644,7 @@ import { useState } from 'react';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
-import { ErrorLine, GoLink, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, IconBell, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
 
 interface AlertsInfo {
   enabled: boolean;
@@ -20306,13 +21655,6 @@ interface AlertsInfo {
   mention: 'none' | 'here' | 'everyone';
   recent: { id: number; kind: 'down' | 'up' | 'test'; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
 }
-
-const IconBell = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-  </svg>
-);
-export { IconBell };
 
 const KIND = {
   down: { label: 'Сервер упал', cls: 'pill-bad' },
@@ -20343,16 +21685,20 @@ export default function AlertsPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconBell />}
-        title="Оповещения"
-        subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся"
-        hint="Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся."
-        help={<p>Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.</p>}
-      >
-        <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>Отправить тестовое сообщение</button>
-      </PageHead>
+    <AdminPage
+      narrow
+      head={(
+        <PageHead
+          icon={<IconBell />}
+          title="Оповещения"
+          subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся"
+          hint="Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся."
+          help={<p>Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.</p>}
+        >
+          <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>Отправить тестовое сообщение</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
       {tokenSet === false && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
@@ -20361,7 +21707,7 @@ export default function AlertsPage() {
       )}
 
       {info && (
-        <div className="panel space-y-5 p-6">
+        <Section>
           <label className="flex cursor-pointer items-start gap-3">
             <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Оповещения включены' : 'Оповещения выключены')} />
             <span>
@@ -20401,13 +21747,11 @@ export default function AlertsPage() {
               <p className="mt-1 text-sm font-semibold text-mute">Сообщение о возвращении сервера всегда без упоминания.</p>
             </div>
           </div>
-
-        </div>
+        </Section>
       )}
 
-      <div className="panel space-y-3 p-6">
-        <h2 className="text-lg font-black">Последние оповещения</h2>
-        {!info && <div className="skeleton h-14 rounded-2xl" aria-busy="true" aria-label="Загрузка" />}
+      <Section title="Последние оповещения">
+        {!info && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />}
         {info && info.recent.length === 0 && (
           <div className="fade-in flex flex-col items-center gap-1 py-2 text-center">
             <AlertsArt />
@@ -20429,8 +21773,8 @@ export default function AlertsPage() {
             </li>
           ))}
         </ul>
-      </div>
-    </div>
+      </Section>
+    </AdminPage>
   );
 }
 __COREGSM_EOF__
@@ -20439,7 +21783,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -20609,14 +21953,10 @@ export default function BackupsCard() {
   const disabled = restoring || busy != null;
 
   return (
-    <div className="panel space-y-5 p-6">
-      <div>
-        <h2 className="text-lg font-black">Резервные копии</h2>
-        <p className="font-semibold text-mute">
-          В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип.
-          Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными.
-        </p>
-      </div>
+    <Section
+      title="Резервные копии"
+      description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
+    >
       <ErrorLine text={error} />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -20634,7 +21974,7 @@ export default function BackupsCard() {
         </label>
       </div>
 
-      <form onSubmit={saveSettings} className="space-y-4 rounded-2xl bg-soft p-4">
+      <form onSubmit={saveSettings} className="space-y-4 rounded-ui-lg bg-soft p-4">
         <h3 className="font-black">Расписание и хранение</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Автоматические копии">
@@ -20728,7 +22068,7 @@ export default function BackupsCard() {
           </ul>
         )}
       </div>
-    </div>
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -20738,7 +22078,7 @@ import { useRef, useState, useEffect } from 'react';
 import { api, type Server } from '../api';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
-import { Burst, Empty, ErrorLine, IconCards, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
+import { AdminPage, Burst, Empty, ErrorLine, IconCards, IconCheck, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
   const [servers, setServers] = useState<Server[]>([]);
@@ -20778,16 +22118,19 @@ export default function CardsPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconCards />}
-        title="Карточки"
-        subtitle="Картинки состояния серверов"
-        hint="Карточка — это картинка с онлайном сервера, которая обновляется сама. Ссылку на неё можно вставить на сайт или в чат."
-        help={<p>Ссылка открыта: картинку видят все, у кого она есть. Бот использует такие же карточки в сообщениях Discord, если выбран стиль «Картинка» (раздел «Discord»).</p>}
-      >
-        <button className="btn btn-soft" onClick={refresh} aria-busy={spin || undefined}><IconRefresh spinning={spin} />Обновить</button>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconCards />}
+          title="Карточки"
+          subtitle="Картинки состояния серверов"
+          hint="Карточка — это картинка с онлайном сервера, которая обновляется сама. Ссылку на неё можно вставить на сайт или в чат."
+          help={<p>Ссылка открыта: картинку видят все, у кого она есть. Бот использует такие же карточки в сообщениях Discord, если выбран стиль «Картинка» (раздел «Discord»).</p>}
+        >
+          <button className="btn btn-soft" onClick={refresh} aria-busy={spin || undefined}><IconRefresh spinning={spin} />Обновить</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
       {!loaded && (
         <div className="grid gap-5 xl:grid-cols-2" aria-busy="true" aria-label="Загрузка">
@@ -20801,15 +22144,15 @@ export default function CardsPage() {
       )}
       <div className="fade-in grid gap-5 xl:grid-cols-2">
         {servers.map((s) => (
-          <div key={s.id} className="panel space-y-3 p-4">
-            <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-2xl bg-soft" />
+          <div key={s.id} className="panel space-y-3 p-5">
+            <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="min-w-0 break-words font-black">{s.name}</span>
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(s)}>
                   <span className="copy-ico" data-done={copied === s.id} aria-hidden>
                     <span className="ico-copy inline-grid"><IconCopy /></span>
-                    <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                    <IconCheck size={16} className="ico-check" />
                     {copied === s.id && <Burst />}
                   </span>
                   {copied === s.id ? 'Скопировано' : 'Копировать ссылку'}
@@ -20820,7 +22163,7 @@ export default function CardsPage() {
           </div>
         ))}
       </div>
-    </div>
+    </AdminPage>
   );
 }
 __COREGSM_EOF__
@@ -20830,7 +22173,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -20848,6 +22191,8 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
+  // bindings removed with «Отменить» pending: hidden here until the request is really sent
+  const [hidden, setHidden] = useState<number[]>([]);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
@@ -20872,22 +22217,38 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   };
 
   const server = (id: number) => servers.find((s) => s.id === id);
+  const shown = bindings.filter((b) => !hidden.includes(b.id));
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
 
-  const remove = async (b: Binding) => {
-    const ok = await confirmDialog({ title: 'Удалить привязку?', text: 'Сообщение в Discord останется, но обновляться перестанет.', confirmLabel: 'Удалить', danger: true });
-    if (!ok) return;
-    await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
-    load();
+  // a binding is easy to create again and the Discord message stays, so it goes away at once and can be taken back for 6 s
+  const removeMany = (ids: number[], text: string) => {
+    setHidden((h) => [...h, ...ids]);
+    setPicked((p) => p.filter((x) => !ids.includes(x)));
+    undoable({
+      text,
+      restore: () => setHidden((h) => h.filter((x) => !ids.includes(x))),
+      commit: async () => {
+        try {
+          if (ids.length === 1) await api(`/bindings/${ids[0]}`, 'DELETE');
+          else await api('/bindings/bulk', 'POST', { ids, action: 'delete' });
+        } catch (e) {
+          setError((e as Error).message);
+          toast('Не удалось удалить привязку', 'err');
+        }
+        setHidden((h) => h.filter((x) => !ids.includes(x)));
+        load();
+      },
+    });
   };
+  const remove = (b: Binding) => removeMany([b.id], 'Привязка удалена');
 
   const bulk = async (action: 'pause' | 'resume' | 'delete') => {
     if (action === 'delete') {
-      const ok = await confirmDialog({ title: `Удалить привязок: ${picked.length}?`, text: 'Сообщения в Discord останутся, но обновляться перестанут.', confirmLabel: 'Удалить', danger: true });
-      if (!ok) return;
+      removeMany(picked, `Удалено привязок: ${picked.length}`);
+      return;
     }
     await api('/bindings/bulk', 'POST', { ids: picked, action })
-      .then(() => toast(action === 'delete' ? 'Привязки удалены' : action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
+      .then(() => toast(action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
       .catch((e: Error) => setError(e.message));
     setPicked([]);
     load();
@@ -20907,16 +22268,19 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const allDone = steps.every((s) => s.done);
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconDiscord />}
-        title="Discord"
-        subtitle="Куда бот публикует состояние серверов"
-        hint="Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов."
-        help={<p>Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.</p>}
-      >
-        <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconDiscord />}
+          title="Discord"
+          subtitle="Куда бот публикует состояние серверов"
+          hint="Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов."
+          help={<p>Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.</p>}
+        >
+          <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
       {loaded && settings && !settings.discordTokenSet && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
@@ -20929,7 +22293,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </Notice>
       )}
 
-      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3">
+      <Strip>
         <div className="flex items-center gap-3">
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
@@ -20942,12 +22306,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         )}
         {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
-      </div>
+      </Strip>
 
       {!allDone && (
         <ol className="grid gap-3 md:grid-cols-3">
           {steps.map((s, i) => (
-            <li key={s.title} className="panel flex gap-3 p-4">
+            <li key={s.title} className="panel flex gap-3 p-5">
               <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
               <div>
                 <div className="font-black">{s.title}</div>
@@ -20960,7 +22324,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
 
-      {loaded && bindings.length === 0 && (
+      {loaded && shown.length === 0 && (
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
@@ -20968,10 +22332,10 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </Empty>
       )}
 
-      {bindings.length > 1 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-4 py-2.5">
+      {shown.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
           <label className="flex items-center gap-2 font-bold">
-            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === bindings.length} onChange={(e) => setPicked(e.target.checked ? bindings.map((b) => b.id) : [])} />
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === shown.length} onChange={(e) => setPicked(e.target.checked ? shown.map((b) => b.id) : [])} />
             {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
           </label>
           {picked.length > 0 && (
@@ -20985,13 +22349,13 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       )}
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-2">
-        {bindings.map((b) => {
+        {shown.map((b) => {
           const s = server(b.serverId);
           return (
             <div key={b.id} className={`panel min-w-0 space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  {bindings.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
+                  {shown.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
                     <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
@@ -21064,7 +22428,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           }}
         />
       )}
-    </div>
+    </AdminPage>
   );
 }
 
@@ -21442,7 +22806,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
-import { Empty, ErrorLine, IconJournal, PageHead, fmtDateTime, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, IconJournal, PageHead, fmtDateTime, usePoll } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -21457,14 +22821,17 @@ export default function JournalPage() {
   const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconJournal />}
-        title="Журнал"
-        subtitle="Кто и что менял в панели"
-        hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
-        help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
-      />
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconJournal />}
+          title="Журнал"
+          subtitle="Кто и что менял в панели"
+          hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
+          help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
+        />
+      )}
+    >
       <ErrorLine text={error} />
       <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
       {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
@@ -21480,7 +22847,7 @@ export default function JournalPage() {
           ))}
         </ul>
       )}
-    </div>
+    </AdminPage>
   );
 }
 __COREGSM_EOF__
@@ -21654,7 +23021,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -21687,6 +23054,9 @@ const excerpt = (n: NewsItem) => {
 
 function NewsList() {
   const [items, setItems] = useState<NewsItem[]>([]);
+  // items removed with «Отменить» pending stay hidden until the request is sent
+  const [hidden, setHidden] = useState<number[]>([]);
+  const list = items.filter((n) => !hidden.includes(n.id));
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -21749,30 +23119,53 @@ function NewsList() {
   };
   const remove = async (n: NewsItem) => {
     const sent = n.status === 'sent';
-    if (!(await confirmDialog({ title: 'Удалить новость?', text: sent ? 'Сообщение также будет удалено из Discord.' : undefined, confirmLabel: 'Удалить', danger: true }))) return;
-    await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
-    void load();
+    // a published news item also removes the Discord message: that stays behind a confirmation
+    if (sent || BUSY.has(n.status)) {
+      if (!(await confirmDialog({ title: 'Удалить новость?', text: sent ? 'Сообщение также будет удалено из Discord.' : undefined, confirmLabel: 'Удалить', danger: true }))) return;
+      await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
+      void load();
+      return;
+    }
+    // a draft or a scheduled item never reached Discord: it disappears at once and can be taken back for 6 s
+    setHidden((h) => [...h, n.id]);
+    undoable({
+      text: `Новость «${n.title}» удалена`,
+      restore: () => setHidden((h) => h.filter((x) => x !== n.id)),
+      commit: async () => {
+        try {
+          await api(`/news/${n.id}`, 'DELETE');
+        } catch (e) {
+          setError((e as Error).message);
+          toast('Не удалось удалить новость', 'err');
+        }
+        setHidden((h) => h.filter((x) => x !== n.id));
+        void load();
+      },
+    });
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconNews />}
-        title="Новости"
-        subtitle="Публикации от имени бота в Discord"
-        hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
-        help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
-      >
-        <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconNews />}
+          title="Новости"
+          subtitle="Публикации от имени бота в Discord"
+          hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
+          help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
+        >
+          <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
 
-      <div className="panel flex flex-wrap items-center gap-2 px-5 py-3">
+      <Strip className="!justify-start">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
         {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`#/admin/news/new/${t.id}`}>{t.label}</a>)}
-      </div>
+      </Strip>
 
-      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+      <Strip>
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
           <div className="font-black">
@@ -21785,9 +23178,9 @@ function NewsList() {
             <ChannelPicker id="news-default-channel" value={settings?.channelId ?? ''} onChange={(v) => void setChannel(v)} />
           </div>
         )}
-      </div>
+      </Strip>
 
-      <div className="panel flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+      <Strip>
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Тестовый канал</div>
           <div className="font-black">
@@ -21804,16 +23197,16 @@ function NewsList() {
             <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => { if (v) void setTestChannel(v); }} />
           </div>
         )}
-      </div>
+      </Strip>
 
       <div className="seg" role="group" aria-label="Вид списка">
         <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => pickView('list')}>Список</button>
         <button type="button" className="seg-item" aria-pressed={view === 'calendar'} onClick={() => pickView('calendar')}>Календарь</button>
       </div>
 
-      {view === 'calendar' && items.length > 0 && <NewsCalendar items={items} onMove={(n, day) => void reschedule(n, day)} />}
+      {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
-      {loaded && items.length === 0 && (
+      {loaded && list.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
         </Empty>
@@ -21826,7 +23219,7 @@ function NewsList() {
       )}
 
       <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
-        {items.map((n) => {
+        {list.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
             <article key={n.id} className="panel flex flex-col gap-3 overflow-hidden p-5" style={{ borderTop: `4px solid ${color}` }}>
@@ -21854,7 +23247,7 @@ function NewsList() {
           );
         })}
       </div>
-    </div>
+    </AdminPage>
   );
 }
 
@@ -22464,6 +23857,7 @@ import { api, getToken, type Server, type Session } from '../api';
 import { useAuth } from '../auth';
 import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
+import { AccentPicker } from '../components/AccentPicker';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast, useDensity, type Density } from '../ui';
 
 /** "Chrome · Windows" from a User-Agent string */
@@ -22566,6 +23960,7 @@ function AppearanceCard() {
         </div>
         <p className="mt-2 text-sm font-semibold text-mute">{options.find((o) => o[0] === density)?.[2]}. Запоминается в этом браузере.</p>
       </div>
+      <AccentPicker />
     </div>
   );
 }
@@ -23001,7 +24396,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type ServerDetails } from '../api';
+import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
@@ -23014,6 +24409,7 @@ import HistoryChart, { type Series } from '../components/server/HistoryChart';
 import PlayersList from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
+import Passport from '../components/server/Passport';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
@@ -23021,6 +24417,12 @@ import {
 } from '../components/server/helpers';
 
 export { SERVER_TABS } from '../components/server/helpers';
+
+/** details + the additive fields: when the server was added and (admins only) its Discord message */
+type ServerDetails = BaseDetails & {
+  createdAt?: number | null;
+  discord?: { channelId: string; channelName: string | null; guildName: string | null; guildId: string | null; messageId: string | null; enabled: boolean }[];
+};
 
 /** key={id}: switching between servers starts from a clean state */
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
@@ -23072,7 +24474,7 @@ function StatTile({ k, hint, i, children }: { k: string; hint?: ReactNode; i: nu
 function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) => void }) {
   return (
     <div className="seg" role="group" aria-label="Период">
-      {([[24, '24 ч'], [168, '7 дн']] as [number, string][]).map(([h, label]) => (
+      {([[24, '24 ч'], [168, '7 дн'], [720, '30 дн']] as [number, string][]).map(([h, label]) => (
         <button key={h} type="button" onClick={() => onChange(h)} aria-pressed={hours === h} className="seg-item">{label}</button>
       ))}
     </div>
@@ -23188,7 +24590,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const cName = countryName(code);
   const flag = flagEmoji(code);
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
-  const windowLabel = data.hours <= 24 ? 'за 24 часа' : 'за 7 дней';
+  const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
+  const windowShort = data.hours <= 24 ? '24 ч' : data.hours <= 168 ? '7 дн' : '30 дн';
   const chartLoading = data.hours !== hours;
 
   const pct = s.maxPlayers > 0 ? Math.min(100, Math.round((s.players / s.maxPlayers) * 100)) : 0;
@@ -23246,15 +24649,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     ),
   ];
 
-  const info: [string, string][] = [
-    ['Игра', gameLabel(s.game)],
-    ['Адрес', s.address],
-    ...(s.map && s.online ? [['Карта', s.map] as [string, string]] : []),
-    ...(realVersion ? [['Версия', realVersion] as [string, string]] : []),
-    ...(mode ? [['Режим', mode] as [string, string]] : []),
-    ...(cName ? [['Страна', `${flag} ${cName}`.trim()] as [string, string]] : []),
-    ['Обновлено', ago(s.updatedAt)],
-  ];
+  const discordLinks = (data.discord ?? []).map((b) => {
+    const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
+    const href = b.guildId ? `https://discord.com/channels/${b.guildId}/${b.channelId}${b.messageId ? `/${b.messageId}` : ''}` : null;
+    return { text, href };
+  });
 
   const refresh = async () => {
     setBusy(true);
@@ -23311,25 +24710,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
-    </section>
-  );
-
-  const aboutTile = (i: number) => (
-    <section className="tile tile-in p-5 lg:col-span-4" style={stagger(i)}>
-      <h2 className="mb-3 text-base font-extrabold">О сервере</h2>
-      <dl className="space-y-2.5">
-        {info.map(([k, v]) => (
-          <div key={k} className="flex items-baseline justify-between gap-4">
-            <dt className="shrink-0 text-sm font-bold text-mute">{k}</dt>
-            <dd className={`min-w-0 break-words text-right text-sm font-extrabold ${k === 'Адрес' ? 'break-all font-mono' : ''}`}>{v}</dd>
-          </div>
-        ))}
-      </dl>
     </section>
   );
 
@@ -23368,15 +24753,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(4, false)}
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-4" style={stagger(5)}>
+          <section className="tile tile-in p-4 sm:p-5 lg:col-span-4" style={stagger(5)} aria-label="Последние события">
+            <h2 className="mb-3 text-base font-extrabold">Последние события</h2>
+            <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
+          </section>
+          <section className="tile tile-in p-4 sm:p-5 lg:col-span-12" style={stagger(6)}>
             <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </section>
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-8" style={stagger(6)}>
-            <h2 className="mb-3 text-base font-extrabold">Последние события</h2>
-            <EventsFeed events={events} online={s.online} limit={5} moreHref={tabHref(id, 'events')} />
-          </section>
-          {aboutTile(7)}
         </div>
       </div>
     );
@@ -23400,10 +24784,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <GameAvatar game={s.game} size={64} glass vtId={s.id} />
           <div className="min-w-0 flex-1">
             <h1 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm font-bold text-white/90">
-              <span>{gameLabel(s.game)}</span>
-              <code className="min-w-0 break-all font-mono text-[13px] font-semibold">{s.address}</code>
-            </div>
           </div>
           {me && <FavStar on={isFav} name={s.name} onClick={() => void toggleFav()} />}
         </div>
@@ -23412,11 +24792,27 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="relative mt-3.5 flex flex-wrap items-center gap-2">
           <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
           <LiveBadge at={s.updatedAt} />
-          {cName && <span className="chip-glass" title="Страна сервера">{flag && <span aria-hidden>{flag}</span>}{cName}</span>}
-          {realVersion && <span className="chip-glass" title="Версия игры">v{realVersion.replace(/^v/i, '')}</span>}
-          {mode && <span className="chip-glass" title="Режим игры (по названию сервера)">{mode}</span>}
           {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
         </div>
+
+        <Passport
+          d={{
+            game: gameLabel(s.game),
+            version: realVersion,
+            flag,
+            country: cName,
+            map: s.map,
+            address: s.address,
+            ping: s.ping,
+            online: s.online,
+            uptimePct: stats.uptimePct,
+            uptimeLabel: windowShort,
+            createdAt: data.createdAt ?? null,
+            lastSeen: s.updatedAt,
+            mode,
+            discord: discordLinks,
+          }}
+        />
 
         {!s.online && s.error && (
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
@@ -23664,8 +25060,9 @@ import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
-import { ServersArt } from '../components/Illustrations';
-import { AnimatedNumber, Burst, Empty, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, IconServers, LAG_PING, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { ServersList, ServersTv, readView, saveView, type ServersView } from '../components/servers/ServerViews';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
@@ -23704,11 +25101,6 @@ function FavButton({ on, name, onClick, className = '' }: { on: boolean; name: s
       </span>
     </button>
   );
-}
-
-/** a red ring over the tile, once, when its server went online -> offline while the page was open */
-function useWentOffline(s: { online: boolean; hasStatus: boolean }): boolean {
-  return useFlashOnChange(s.online || !s.hasStatus, (prev, next) => prev && !next);
 }
 
 type Filter = 'all' | 'online' | 'offline' | 'fav';
@@ -23752,7 +25144,9 @@ function ServerList() {
   const [updatedAt, setUpdatedAt] = useState(0);
   const [filter, setFilterState] = useState<Filter>(() => {
     try {
-      const v = localStorage.getItem(FILTER_KEY);
+      // deep link: #/servers?filter=online
+      const q = window.location.hash.match(/[?&]filter=(\w+)/)?.[1];
+      const v = q ?? localStorage.getItem(FILTER_KEY);
       return v === 'online' || v === 'offline' || v === 'fav' ? v : 'all';
     } catch {
       return 'all';
@@ -23767,12 +25161,17 @@ function ServerList() {
     }
   };
 
+  const [view, setViewState] = useState<ServersView>(readView);
+  const setView = (v: ServersView) => { setViewState(v); saveView(v); };
+
   const load = () =>
     api<Server[]>('/servers')
       .then((s) => { setServers(s); setError(''); setUpdatedAt(Date.now()); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
-  usePoll(load, 10_000);
+  // the TV mode refreshes twice as often
+  usePoll(load, view === 'tv' ? 5_000 : 10_000);
+  const rx = useServerReactions(servers, loaded);
   // 30-day availability comes from the public status endpoint; the tile is simply hidden when it has no data
   usePoll(
     () => api<StatusInfo>('/status')
@@ -23809,6 +25208,10 @@ function ServerList() {
   const effFilter: Filter = filter === 'fav' && !me ? 'all' : filter;
   const filtered = effFilter === 'all' ? [] : sorted.filter((s) => (effFilter === 'online' ? s.online : effFilter === 'offline' ? !s.online : favs.includes(s.id)));
 
+  const effView: ServersView = servers.length === 0 ? 'tiles' : view;
+  const visible = effFilter === 'all' ? sorted : filtered;
+  const resetFilter = () => setFilter('all');
+
   const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
 
   const stats: { k: string; v: ReactNode; s: string; i: string; r?: number }[] = [
@@ -23843,46 +25246,65 @@ function ServerList() {
         {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
-      {servers.length > 1 && (
-        <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
-          {([
-            ['all', `Все · ${servers.length}`],
-            ['online', `Онлайн · ${online.length}`],
-            ['offline', `Недоступные · ${offlineCount}`],
-            ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
-          ] as [Filter, string][]).map(([id, label]) => (
-            <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
-          ))}
-        </nav>
+      {servers.length > 0 && (
+        <div className="srv-bar">
+          {servers.length > 1 ? (
+            <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+              {([
+                ['all', `Все · ${servers.length}`],
+                ['online', `Онлайн · ${online.length}`],
+                ['offline', `Недоступные · ${offlineCount}`],
+                ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
+              ] as [Filter, string][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
+              ))}
+            </nav>
+          ) : <span />}
+          <div className="seg" role="group" aria-label="Вид списка">
+            {([['tiles', 'Плитки'], ['list', 'Список'], ['tv', 'ТВ']] as [ServersView, string][]).map(([id, label]) => (
+              <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)} title={id === 'tv' ? 'Экран для большого телевизора' : undefined}>{label}</button>
+            ))}
+          </div>
+        </div>
       )}
       <ErrorLine text={error} />
 
-      {!loaded && (
-        <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-12" aria-busy="true" aria-label="Загрузка">
-          <div className="skeleton tile col-span-2 h-72 lg:col-span-6 lg:row-span-2 lg:h-auto" />
-          {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton tile h-32 lg:col-span-3" />)}
-          {[0, 1, 2].map((i) => <div key={i} className="skeleton tile col-span-2 h-60 sm:col-span-1 lg:col-span-3" />)}
-        </div>
+      {!loaded && (effView === 'list' ? <ListSkeleton /> : <TilesSkeleton />)}
+
+      {loaded && servers.length === 0 && <NoServersState isAdmin={isAdmin} />}
+
+      {servers.length > 0 && visible.length === 0 && (
+        effFilter === 'fav' && favCount === 0
+          ? <NoFavsState onReset={resetFilter} />
+          : <NoMatchState what={effFilter === 'offline' ? 'offline' : 'online'} onReset={resetFilter} />
       )}
 
-      {loaded && servers.length === 0 && (
-        <Empty art={<ServersArt />} title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'} text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже.'}>
-          {isAdmin && <a className="btn mt-3" href="#/admin/servers">Добавить в админке</a>}
-        </Empty>
+      {servers.length > 0 && visible.length > 0 && effView === 'list' && (
+        <ServersList
+          servers={visible}
+          uptime={uptime}
+          rx={rx}
+          favOf={(id) => (me ? favs.includes(id) : null)}
+          onOpen={open}
+          renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
+        />
       )}
 
-      {servers.length > 0 && effFilter !== 'all' && (
+      {servers.length > 0 && visible.length > 0 && effView === 'tv' && (
+        <ServersTv servers={visible} uptime={uptime} rx={rx} updatedAt={updatedAt} onExit={() => setView('tiles')} />
+      )}
+
+      {servers.length > 0 && effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
         <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
           {filtered.map((s, i) => (
-            <SmallTile key={s.id} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
+            <SmallTile key={s.id} rx={rx} s={s} idx={i} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
           ))}
-          {filtered.length === 0 && <p className="tile col-span-2 p-6 text-center font-bold text-mute lg:col-span-12">Подходящих серверов нет</p>}
         </div>
       )}
 
-      {servers.length > 0 && effFilter === 'all' && (
+      {servers.length > 0 && effView === 'tiles' && effFilter === 'all' && (
         <div className="fade-in grid grid-cols-2 gap-3.5 lg:grid-cols-12">
-          {hero && <HeroTile key={hero.id} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
+          {hero && <HeroTile key={hero.id} rx={rx} idx={0} s={hero} uptime={uptime.get(hero.id)} fav={me ? favs.includes(hero.id) : null} onFav={() => void toggleFav(hero.id)} onOpen={() => open(hero)} />}
 
           {stats.map((t, i) => (
             <div
@@ -23905,7 +25327,7 @@ function ServerList() {
           ))}
 
           {rest.map((s, i) => (
-            <SmallTile key={s.id} s={s} idx={i + 1 + stats.length} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
+            <SmallTile key={s.id} rx={rx} s={s} idx={i + 1 + stats.length} fav={me ? favs.includes(s.id) : null} onFav={() => void toggleFav(s.id)} onOpen={() => open(s)} />
           ))}
         </div>
       )}
@@ -23913,11 +25335,11 @@ function ServerList() {
   );
 }
 
-function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const depth = useDepth<HTMLElement>();
-  const flash = useWentOffline(s);
+  const r = reactionOf(rx, s.id);
   return (
     <article
       className="depth tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:col-span-6 lg:row-span-2 lg:p-6"
@@ -23927,7 +25349,6 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
     >
       <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
       <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
-      {flash && <span className="flash-ring" aria-hidden />}
 
       <div className="relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
@@ -23942,7 +25363,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} />}
         </div>
       </div>
@@ -23950,10 +25371,11 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
       {s.online ? (
         <>
           <div className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
-            <AnimatedNumber value={s.players} pulse delta className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" />
+            <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
             {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
           </div>
+          <CapacityBar className="relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
           <div className="relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
@@ -23976,17 +25398,16 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen }: { s: Server; idx: numb
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void }) {
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
-  const flash = useWentOffline(s);
+  const r = reactionOf(rx, s.id);
   return (
     <article className="tile tile-in tile-hover relative col-span-2 flex cursor-pointer flex-col gap-1.5 p-2.5 pb-3.5 sm:col-span-1 lg:col-span-3" style={stagger(idx)} onClick={onOpen}>
-      {flash && <span className="flash-ring" aria-hidden />}
       <div className={`flex h-[88px] items-start justify-between rounded-[18px] p-2.5 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={40} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
-          <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={`-mr-1 -mt-0.5 ${fav ? 'text-white' : 'text-white/85'}`} />}
         </div>
       </div>
@@ -24001,10 +25422,11 @@ function SmallTile({ s, idx, fav, onFav, onOpen }: { s: Server; idx: number; fav
       {s.online ? (
         <>
           <div className="flex items-baseline gap-1.5 px-1.5">
-            <AnimatedNumber value={s.players} pulse delta className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" />
+            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[30px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
+          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
           <div className="px-1.5"><Spark serverId={s.id} color={gameColor(s.game)} /></div>
         </>
       ) : (
@@ -24029,12 +25451,14 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { WHITE, brandVars, parseTriplet, triplet, type RGB } from '../colors';
+import { onAccentChange, paintBrand } from '../accent';
+import { parseHex } from '../colors';
+import { AccentPicker } from '../components/AccentPicker';
 import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { useAuth } from '../auth';
 import { Switch as ToggleSwitch } from '../components/Switch';
-import { CopyButton, ErrorLine, Field, GoLink, IconKey, IconSettings, IconTrash, IconUsers, Logo, InviteButton, PageHead, ProxyField, ago, toast, usePoll, type ProxyType } from '../ui';
+import { AdminPage, CopyButton, ErrorLine, Field, FieldError, GoLink, IconArrowUp, IconCheck, IconKey, IconSettings, IconTrash, IconUsers, Logo, InviteButton, PageHead, ProxyField, SaveBadge, Section, Spinner, TextField, ago, plural, toast, useAutosave, usePoll, type ProxyType } from '../ui';
 import BackupsCard from './Backups';
 import { SETTINGS_TABS } from './adminNav';
 
@@ -24059,7 +25483,7 @@ const THEME_PRESETS = [
   { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
 ] as const;
 
-/** название, цвет и логотип сообщества */
+/** название, цвет и логотип сообщества: изменения сохраняются сами */
 function BrandCard() {
   const { access, reload } = useAuth();
   const b = access.brand;
@@ -24076,34 +25500,36 @@ function BrandCard() {
   const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
   const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
 
-  // live preview of the chosen colours across the whole panel; the saved ones come back when leaving without saving
+  // live preview of the chosen colours across the whole panel (a game accent chosen in «Внешний вид» still wins, see accent.ts)
   useEffect(() => {
+    paintBrand(color, color2 || undefined);
     const root = document.documentElement;
-    const paint = (c: string, c2: string | undefined) => {
-      const attr = root.getAttribute('data-theme');
-      const dark = attr === 'dark' || (!attr && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      const st = getComputedStyle(root);
-      const surf = (n: string, f: RGB) => parseTriplet(st.getPropertyValue(`--${n}`)) ?? f;
-      const v = brandVars(c, c2, dark, surf('card', dark ? [23, 24, 29] : WHITE), surf('soft', dark ? [33, 34, 41] : [238, 240, 244]));
-      root.style.setProperty('--brand', triplet(v.fill));
-      root.style.setProperty('--brand-hover', triplet(v.hover));
-      root.style.setProperty('--brand-2', triplet(v.end));
-      root.style.setProperty('--link', triplet(v.link));
-    };
-    paint(color, color2 || undefined);
-    const mo = new MutationObserver(() => paint(color, color2 || undefined));
+    const mo = new MutationObserver(() => paintBrand(color, color2 || undefined));
     mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    const off = onAccentChange(() => paintBrand(color, color2 || undefined));
     return () => {
       mo.disconnect();
-      paint(savedRef.current.color, savedRef.current.color2 || undefined);
+      off();
+      paintBrand(savedRef.current.color, savedRef.current.color2 || undefined);
     };
   }, [color, color2]);
 
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setError('');
-    await api('/branding', 'PUT', { name, color, color2, preset }).then(() => { toast('Оформление сохранено'); return reload(); }).catch((x: Error) => setError(x.message));
-  };
+  // name and colours are saved as you go: on a pause, on leaving the name field, on picking a colour
+  const form = { name, color, color2, preset };
+  const savedForm = { name: b.name, color: b.color, color2: b.color2 ?? '', preset: b.preset ?? '' };
+  const nameError = !name.trim() ? 'Введите название сообщества' : name.trim().length > 32 ? 'Не длиннее 32 символов' : '';
+  const colorError = parseHex(color) ? '' : 'Цвет должен быть в формате #RRGGBB';
+  const auto = useAutosave({
+    value: form,
+    saved: savedForm,
+    delay: 800,
+    validate: (f) => (!f.name.trim() ? 'Введите название сообщества' : f.name.trim().length > 32 ? 'Не длиннее 32 символов' : parseHex(f.color) ? null : 'Цвет должен быть в формате #RRGGBB'),
+    save: async (f) => {
+      await api('/branding', 'PUT', { name: f.name.trim(), color: f.color, color2: f.color2, preset: f.preset });
+      await reload();
+    },
+  });
+
   const upload = async (file: File) => {
     setBusy(true);
     setError('');
@@ -24121,22 +25547,30 @@ function BrandCard() {
   const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
 
   return (
-    <form onSubmit={save} className="panel space-y-5 p-6" data-tour="brand">
-      <div>
-        <h2 className="text-lg font-black">Оформление</h2>
-        <p className="font-semibold text-mute">Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord.</p>
-      </div>
-      <Field label="Название">
-        <input id="brand-name" className="input" value={name} maxLength={32} onChange={(e) => setName(e.target.value)} />
-      </Field>
+    <Section
+      title="Оформление"
+      description="Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord. Изменения сохраняются сами."
+      actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+      data-tour="brand"
+    >
+      <TextField
+        id="brand-name"
+        label="Название"
+        value={name}
+        maxLength={32}
+        onChange={setName}
+        error={nameError && name !== b.name ? nameError : undefined}
+        onBlur={auto.flush}
+        hint={`${name.trim().length} / 32`}
+      />
       <div>
         <span className="label">Тема</span>
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {THEME_PRESETS.map((p) => {
             const on = preset === p.id;
             return (
-              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`rounded-2xl border bg-card p-2 text-left transition hover:-translate-y-0.5 ${on ? 'border-transparent ring-2 ring-ink ring-offset-2 ring-offset-card' : 'border-line'}`}>
-                <span className="block h-12 rounded-xl" style={{ background: `linear-gradient(135deg, ${p.c1}, ${p.c2})` }} />
+              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`rounded-ui-lg border bg-card p-2 text-left ${on ? 'border-transparent ring-2 ring-ink ring-offset-2 ring-offset-card' : 'border-line hover:shadow-1'}`}>
+                <span className="block h-12 rounded-ui-md" style={{ background: `linear-gradient(135deg, ${p.c1}, ${p.c2})` }} />
                 <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
               </button>
             );
@@ -24147,14 +25581,15 @@ function BrandCard() {
         <span className="label">Свой цвет</span>
         <div className="flex flex-wrap items-center gap-2">
           {swatches.map((c) => (
-            <button type="button" key={c} onClick={() => pickColor(c)} aria-label={c} aria-pressed={!preset && color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card transition ${!preset && color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
+            <button type="button" key={c} onClick={() => pickColor(c)} aria-label={c} aria-pressed={!preset && color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card ${!preset && color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
           ))}
-          <input type="color" value={color} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-lg border border-line bg-card" aria-label="Свой цвет" />
+          <input type="color" value={parseHex(color) ? color : '#4f46e5'} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-ui-sm border border-line bg-card" aria-label="Свой цвет" />
         </div>
+        <FieldError id="brand-color-err" text={colorError} />
       </div>
       <div>
         <span className="label">Как это выглядит</span>
-        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-soft p-4">
+        <div className="flex flex-wrap items-center gap-4 rounded-ui-lg border border-line bg-soft p-4">
           <Logo size={44} />
           <div className="min-w-0">
             <div className="truncate text-base font-black">{name.trim() || 'CoreGSM'}</div>
@@ -24162,8 +25597,8 @@ function BrandCard() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop" aria-hidden>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 7" /></svg>
+            <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-gradient-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
+              <IconCheck size={18} />
             </span>
           </div>
         </div>
@@ -24181,8 +25616,10 @@ function BrandCard() {
         </div>
       </div>
       <ErrorLine text={error} />
-      <button className="btn">Сохранить</button>
-    </form>
+      <div className="border-t border-line pt-4">
+        <AccentPicker />
+      </div>
+    </Section>
   );
 }
 
@@ -24206,7 +25643,7 @@ const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
   },
   brand: {
     hint: 'Название, цвет и логотип сообщества: их видят все посетители панели и участники в подвале сообщений Discord.',
-    help: <p>Готовые темы меняют цвета всей панели сразу. Пока вы не нажали «Сохранить», изменения видны только вам как предпросмотр.</p>,
+    help: <p>Готовые темы меняют цвета всей панели сразу. Изменения применяются и сохраняются сами; пока идёт сохранение или если оно не удалось, цвета видны только вам как предпросмотр. «Акцент по игре» действует только в вашем браузере.</p>,
   },
   security: {
     hint: 'Пароль администратора и сведения о доступе: кто может входить в панель и регистрироваться.',
@@ -24221,49 +25658,48 @@ const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
 export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
   const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
   return (
-    <div className="space-y-5">
-      <PageHead key={tab} icon={<IconSettings />} title="Настройки" subtitle="Бот, оформление, безопасность, обновления и копии" hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />
+    <AdminPage
+      narrow
+      head={<PageHead key={tab} icon={<IconSettings />} title="Настройки" subtitle="Бот, оформление, безопасность, обновления и копии" hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />}
+    >
       <nav className="flex w-full max-w-2xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
             key={t.id}
             href={`#/admin/settings/${t.id}`}
             aria-current={tab === t.id ? 'page' : undefined}
-            className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-pop' : 'text-mute hover:text-ink'}`}
+            className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-1' : 'text-mute hover:text-ink'}`}
           >
             {t.label}
             {t.id === 'updates' && updateAvailable && <span className="update-dot ml-1.5 align-middle" title="Доступно обновление" />}
           </a>
         ))}
       </nav>
-      <div className="max-w-2xl space-y-5">
-        {tab === 'bot' && <BotCard />}
-        {tab === 'brand' && <BrandCard />}
-        {tab === 'security' && (
-          <>
-            <PasswordCard />
-            <div className="panel space-y-3 p-6">
-              <h2 className="text-lg font-black">Вход и доступ</h2>
-              <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
-              <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
-              <div className="flex flex-wrap gap-x-5 gap-y-1">
-                <GoLink href="#/admin/users">Пользователи и доступ</GoLink>
-                <GoLink href="#/profile">Мои сеансы в профиле</GoLink>
-              </div>
+      {tab === 'bot' && <BotCard />}
+      {tab === 'brand' && <BrandCard />}
+      {tab === 'security' && (
+        <>
+          <PasswordCard />
+          <Section title="Вход и доступ">
+            <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
+            <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
+            <div className="flex flex-wrap gap-x-5 gap-y-1">
+              <GoLink href="#/admin/users">Пользователи и доступ</GoLink>
+              <GoLink href="#/profile">Мои сеансы в профиле</GoLink>
             </div>
-            <p className="font-semibold text-mute">
-              Домен и порты задаются при установке и хранятся в <span className="font-mono text-sm text-ink">/app/.env</span>. Изменить их можно командой <span className="font-mono text-sm text-ink">sudo coregsm</span> на сервере (пункт «Домен и прокси»).
-            </p>
-          </>
-        )}
-        {tab === 'updates' && (
-          <>
-            <UpdateCard />
-            <BackupsCard />
-          </>
-        )}
-      </div>
-    </div>
+          </Section>
+          <p className="font-semibold text-mute">
+            Домен и порты задаются при установке и хранятся в <span className="font-mono text-sm text-ink">/app/.env</span>. Изменить их можно командой <span className="font-mono text-sm text-ink">sudo coregsm</span> на сервере (пункт «Домен и прокси»).
+          </p>
+        </>
+      )}
+      {tab === 'updates' && (
+        <>
+          <UpdateCard />
+          <BackupsCard />
+        </>
+      )}
+    </AdminPage>
   );
 }
 
@@ -24330,13 +25766,13 @@ function BotCard() {
 
   const tokenSet = !!info?.discordTokenSet;
   const secretSet = !!info?.discordSecretSet;
+  // checked while typing; the message appears under the field, the button waits until it is fixed
+  const tokenWarn = token.trim() && !/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token.trim()) ? 'Похоже, это не токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Developer Portal (Bot → Reset Token).' : '';
+  const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? 'Формат: адрес:порт:логин:пароль или socks5://логин:пароль@адрес:порт' : '';
 
   return (
-    <form onSubmit={save} className="panel space-y-3.5 p-6">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-black">Бот и вход через Discord</h2>
-        <BotPill status={status} tokenSet={tokenSet} />
-      </div>
+    <Section title="Бот и вход через Discord" actions={<BotPill status={status} tokenSet={tokenSet} />}>
+    <form onSubmit={save} className="space-y-3.5">
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
       )}
@@ -24351,8 +25787,11 @@ function BotCard() {
           onChange={(e) => setTokenValue(e.target.value)}
           autoComplete="off"
           placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
+          aria-invalid={tokenWarn ? true : undefined}
+          aria-describedby={tokenWarn ? 'set-token-err' : undefined}
         />
       </Field>
+      <FieldError id="set-token-err" text={tokenWarn} />
       </div>
       {tokenSet && (
         <button type="button" className="text-sm font-extrabold text-bad hover:underline" onClick={removeToken}>Удалить сохранённый токен</button>
@@ -24369,6 +25808,7 @@ function BotCard() {
           placeholder={info?.proxyUrl ? `сейчас: ${info.proxyUrl}` : undefined}
         />
       </Field>
+      <FieldError id="set-proxy-err" text={proxyWarn} />
       {info?.proxyUrl && (
         <label className="flex items-center gap-2 text-sm font-bold text-mute">
           <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearProxy} onChange={(e) => setClearProxy(e.target.checked)} />
@@ -24377,7 +25817,7 @@ function BotCard() {
       )}
       <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
 
-      <div className="space-y-3 rounded-2xl bg-soft p-4">
+      <div className="space-y-3 rounded-ui-lg bg-soft p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-black">Вход через Discord</h3>
           <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? 'ВКЛЮЧЁН' : 'НЕ НАСТРОЕН'}</span>
@@ -24418,8 +25858,10 @@ function BotCard() {
         </div>
       )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
+      <p className="text-sm font-semibold text-mute">Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».</p>
       <button className="btn" disabled={busy || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
     </form>
+    </Section>
   );
 }
 
@@ -24428,11 +25870,18 @@ function PasswordCard() {
   const [next, setNext] = useState('');
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // validated while typing (the server checks again)
+  const nextError = next && next.length < 10 ? `Ещё ${10 - next.length} ${plural(10 - next.length, ['символ', 'символа', 'символов'])}: нужно от 10` : next && next === current ? 'Новый пароль совпадает с текущим' : '';
+  const ready = !!current && next.length >= 10 && !nextError;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!ready) return;
     setError('');
     setDone(false);
+    setBusy(true);
     try {
       await api('/auth/password', 'POST', { current, next });
       setDone(true);
@@ -24440,23 +25889,23 @@ function PasswordCard() {
       setCurrent('');
       setNext('');
     } catch (err) {
+      // the typed values stay in the form: nothing is lost, only the message appears
       setError((err as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <form onSubmit={submit} className="panel space-y-3.5 p-6">
-      <h2 className="text-lg font-black">Пароль администратора</h2>
-      <Field label="Текущий пароль">
-        <input id="pw-current" className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required />
-      </Field>
-      <Field label="Новый пароль (от 10 символов)">
-        <input id="pw-next" className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" minLength={10} required />
-      </Field>
-      <ErrorLine text={error} />
-      {done && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
-      <button className="btn">Сохранить пароль</button>
-    </form>
+    <Section title="Пароль администратора">
+      <form onSubmit={submit} className="space-y-3.5">
+        <TextField id="pw-current" label="Текущий пароль" type="password" value={current} onChange={(v) => { setCurrent(v); setError(''); }} autoComplete="current-password" />
+        <TextField id="pw-next" label="Новый пароль (от 10 символов)" type="password" value={next} onChange={setNext} autoComplete="new-password" error={nextError} />
+        <ErrorLine text={error} />
+        {done && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
+        <button className="btn" disabled={!ready || busy}>Сохранить пароль</button>
+      </form>
+    </Section>
   );
 }
 
@@ -24603,11 +26052,11 @@ function UpdateCard() {
             }`}
           >
             {state === 'latest' ? (
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+              <IconCheck size={30} />
             ) : state === 'running' ? (
-              <svg className="animate-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.55" /></svg>
+              <Spinner className="h-7 w-7" />
             ) : (
-              <svg className={state === 'available' ? 'update-bob' : ''} width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+              <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
             )}
           </span>
           <div className="min-w-0 flex-1">
@@ -24656,7 +26105,7 @@ function UpdateCard() {
             {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
             {finished && (
               <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                <IconCheck size={16} />
               </span>
             )}
           </div>
@@ -24705,8 +26154,7 @@ function UpdateCard() {
         <div className="relative"><ErrorLine text={error} /></div>
       </section>
 
-      <div id="update-changes" className="panel scroll-mt-24 space-y-3 p-6">
-        <h2 className="text-lg font-black">Что нового</h2>
+      <Section id="update-changes" title="Что нового" className="scroll-mt-24">
 
         {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
         {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
@@ -24722,7 +26170,7 @@ function UpdateCard() {
             ))}
           </ul>
         )}
-      </div>
+      </Section>
     </div>
   );
 }
@@ -24747,9 +26195,14 @@ export function UsersTab() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState('');
   const [rules, setRules] = useState('');
+  const rulesInit = useRef(false);
 
   const load = () => {
-    api<Access>('/access').then((a) => { setAccess(a); setRules(a.rules ?? ''); }).catch((e) => setError(e.message));
+    api<Access>('/access').then((a) => {
+      setAccess(a);
+      // the text is taken from the server once: a later reload must not replace what is being typed
+      if (!rulesInit.current) { rulesInit.current = true; setRules(a.rules ?? ''); }
+    }).catch((e) => setError(e.message));
     api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
   };
   useEffect(load, []);
@@ -24766,11 +26219,20 @@ export function UsersTab() {
     await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
     load();
   };
-  const saveRules = async () => {
-    await api<Access>('/access', 'PUT', { rules: rules.trim() })
-      .then((a) => { setAccess(a); setRules(a.rules ?? ''); void reload(); toast(rules.trim() ? 'Правила сохранены' : 'Правила убраны'); })
-      .catch((e) => setError(e.message));
-  };
+  // the rules text is saved as you type (after a pause and on leaving the field); the text is never replaced under the cursor
+  const rulesAuto = useAutosave({
+    value: rules,
+    saved: access?.rules ?? '',
+    enabled: !!access,
+    delay: 1200,
+    equal: (a, b) => a.trim() === b.trim(),
+    validate: (v) => (v.length > 5000 ? 'Не больше 5000 символов' : null),
+    save: async (v) => {
+      const a = await api<Access>('/access', 'PUT', { rules: v.trim() });
+      setAccess(a);
+      void reload();
+    },
+  });
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
     load();
@@ -24795,19 +26257,20 @@ export function UsersTab() {
   const pendingUsers = users.filter((u) => u.status === 'pending');
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconUsers />}
-        title="Пользователи"
-        subtitle="Аккаунты, роли, регистрация и правила"
-        hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
-        help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
-      >
-        <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
-      </PageHead>
-
-      <div className="panel space-y-4 p-6">
-        <h2 className="text-lg font-black">Кто видит панель</h2>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconUsers />}
+          title="Пользователи"
+          subtitle="Аккаунты, роли, регистрация и правила"
+          hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
+          help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
+        >
+          <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
+        </PageHead>
+      )}
+    >
+      <Section title="Кто видит панель">
         {access && (
           <>
             <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
@@ -24822,26 +26285,36 @@ export function UsersTab() {
           </>
         )}
         <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы и менять настройки могут администраторы.</p>
-        <div className="rounded-2xl bg-soft px-4 py-3 text-sm font-semibold text-mute">
+        <div className="rounded-ui-lg bg-soft px-4 py-3 text-sm font-semibold text-mute">
           <p><b className="text-ink">Игрок</b>: смотрит серверы и новости, ведёт свой профиль.</p>
           <p><b className="text-ink">Модератор</b>: пишет, публикует и удаляет новости, меняет канал новостей по умолчанию. Серверы, настройки, пользователи и система ему недоступны.</p>
           <p><b className="text-ink">Администратор</b>: полный доступ ко всему.</p>
         </div>
-      </div>
+      </Section>
 
-      <div className="panel space-y-3 p-6">
-        <h2 className="text-lg font-black">Правила сообщества</h2>
-        <p className="font-semibold text-mute">Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было.</p>
-        <textarea id="rules" className="input min-h-32" rows={6} maxLength={5000} value={rules} onChange={(e) => setRules(e.target.value)} aria-label="Правила сообщества" placeholder="1. Уважайте других игроков…" />
-        <div className="flex items-center justify-between gap-3">
-          <button className="btn" onClick={() => void saveRules()} disabled={!access || rules.trim() === (access.rules ?? '').trim()}>Сохранить</button>
-          <span className="text-sm font-semibold text-mute">{rules.length} / 5000</span>
-        </div>
-      </div>
+      <Section
+        title="Правила сообщества"
+        description="Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было. Текст сохраняется сам."
+        actions={<SaveBadge status={rulesAuto.status} error={rulesAuto.error} retry={rulesAuto.retry} />}
+      >
+        <TextField
+          id="rules"
+          label="Текст правил"
+          multiline
+          rows={6}
+          maxLength={5000}
+          value={rules}
+          onChange={setRules}
+          onBlur={rulesAuto.flush}
+          error={rulesAuto.invalid ? rulesAuto.error : undefined}
+          placeholder="1. Уважайте других игроков…"
+          hint={`${rules.length} / 5000`}
+          className="min-h-32"
+        />
+      </Section>
 
       {pendingUsers.length > 0 && (
-        <div className="panel space-y-3 p-6">
-          <h2 className="text-lg font-black">Заявки на регистрацию</h2>
+        <Section title="Заявки на регистрацию">
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
@@ -24851,11 +26324,10 @@ export function UsersTab() {
               </li>
             ))}
           </ul>
-        </div>
+        </Section>
       )}
 
-      <div className="panel space-y-3 p-6">
-        <h2 className="text-lg font-black">Пользователи</h2>
+      <Section title="Пользователи">
         <ErrorLine text={error} />
         <ul className="divide-y divide-line">
           {users.map((u) => (
@@ -24877,8 +26349,8 @@ export function UsersTab() {
           ))}
         </ul>
         <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="#/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
-      </div>
-    </div>
+      </Section>
+    </AdminPage>
   );
 }
 __COREGSM_EOF__
@@ -25136,7 +26608,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/System.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api, type CertInfo } from '../api';
-import { ErrorLine, GoLink, IconSystem, PageHead, ago, fmtDateTime, plural, usePoll } from '../ui';
+import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
+import { AdminPage, ErrorLine, GoLink, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -25157,13 +26630,15 @@ interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; det
 const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : `${(n / 1048576).toFixed(1)} МБ`);
 const dur = (s: number) => (s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч ${Math.floor((s % 3600) / 60)} мин` : `${Math.floor(s / 86400)} д ${Math.floor((s % 86400) / 3600)} ч`);
 
-const certTile = (c: CertInfo): [string, string, string | undefined, string | undefined] => {
-  const note = [c.issuer, c.selfSigned ? 'самоподписанный' : null].filter(Boolean).join(' · ') || undefined;
-  if (c.daysLeft == null) return ['Сертификат HTTPS', 'нет', note ?? 'панель работает по HTTP', undefined];
+// the backend reports the process memory and the database file only, so they are drawn against a fixed reference size
+const MEM_REF_MB = 512;
+const DB_REF_BYTES = 1024 * 1048576;
+
+const certTone = (c: CertInfo): GaugeTone => (c.daysLeft == null ? 'mute' : c.daysLeft <= 0 ? 'bad' : c.daysLeft <= 14 ? 'warn' : 'ok');
+const certText = (c: CertInfo) => {
+  if (c.daysLeft == null) return 'нет (панель работает по HTTP)';
   const d = c.daysLeft;
-  const value = d <= 0 ? 'истёк' : `${d} ${plural(d, ['день', 'дня', 'дней'])}`;
-  const tone = d <= 0 ? 'text-bad' : d <= 14 ? 'text-warn' : undefined;
-  return ['Сертификат HTTPS', value, note, tone];
+  return d <= 0 ? 'истёк' : `${d} ${plural(d, ['день', 'дня', 'дней'])}`;
 };
 
 /** Health, diagnostics and the certificate; the backups live under Settings → «Обновления и копии». */
@@ -25181,60 +26656,91 @@ export default function SystemPage() {
     setRunning(false);
   };
 
-  const tiles: [string, string, string?, string?][] = h
+  const diskUsed = h && h.diskTotal && h.diskFree != null ? 1 - h.diskFree / h.diskTotal : null;
+  const memFrac = h ? h.memoryMb / MEM_REF_MB : null;
+  const dbFrac = h && h.dbBytes != null ? h.dbBytes / DB_REF_BYTES : null;
+
+  const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
+  const status: { k: string; v: string; sub?: string; tone: GaugeTone }[] = h
     ? [
-        ['Версия', h.version ? h.version.slice(0, 7) : 'не задана', `Node ${h.node}`],
-        ['Работает', dur(h.uptimeSec), `память ${h.memoryMb} МБ`],
-        ['База данных', mb(h.dbBytes), `${h.counts.history.toLocaleString('ru-RU')} точек истории`],
-        ['Свободно на диске', mb(h.diskFree), h.diskTotal ? `из ${mb(h.diskTotal)}` : undefined],
-        ['Серверы', `${h.counts.online} из ${h.counts.servers}`, 'онлайн'],
-        ['Привязки Discord', String(h.counts.bindings), `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`],
-        ['Пользователи', String(h.counts.users)],
-        ...(h.cert ? [certTile(h.cert)] : []),
-        ['Бот', h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined)],
+        { k: 'Версия', v: h.version ? h.version.slice(0, 7) : 'не задана', sub: `Node ${h.node}`, tone: 'mute' },
+        { k: 'Работает', v: dur(h.uptimeSec), tone: 'ok' },
+        { k: 'Серверы', v: `${h.counts.online} из ${h.counts.servers} онлайн`, tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
+        { k: 'Привязки Discord', v: String(h.counts.bindings), sub: `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`, tone: 'mute' },
+        { k: 'Бот', v: h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', sub: h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined), tone: botTone },
+        ...(h.cert ? [{ k: 'Сертификат HTTPS', v: certText(h.cert), sub: [h.cert.issuer, h.cert.selfSigned ? 'самоподписанный' : null].filter(Boolean).join(' · ') || undefined, tone: certTone(h.cert) }] : []),
+        { k: 'Пользователи', v: String(h.counts.users), tone: 'mute' as GaugeTone },
       ]
     : [];
-  const dot = { ok: 'bg-ok', warn: 'bg-warn', fail: 'bg-bad' } as const;
+  const dot = { ok: 'dot-ok', warn: 'dot-warn', fail: 'dot-bad' } as const;
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconSystem />}
-        title="Система"
-        subtitle="Состояние панели и диагностика"
-        hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
-        help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
-      >
-        <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconSystem />}
+          title="Система"
+          subtitle="Состояние панели и диагностика"
+          hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
+          help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
+        >
+          <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
 
       {h ? (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {tiles.map(([k, v, hint, tone]) => (
-            <div key={k} className="panel px-5 py-4">
-              <div className="text-sm font-extrabold text-mute">{k}</div>
-              <div className={`truncate text-2xl font-black tabular-nums ${tone ?? 'text-link'}`}>{v}</div>
-              {hint && <div className="truncate text-sm font-semibold text-mute">{hint}</div>}
+        <>
+          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-3" role="group" aria-label="Ресурсы">
+            <div className="panel p-5 text-center">
+              <Gauge
+                value={diskUsed}
+                label="Диск: занято"
+                display={diskUsed == null ? '–' : `${Math.round(diskUsed * 100)} %`}
+                caption={h.diskFree != null ? `свободно ${mb(h.diskFree)}` : undefined}
+                icon={<IconDisk size={18} />}
+              />
+              <div className="mt-2 font-extrabold">Диск</div>
+              <div className="text-sm font-semibold text-mute">{h.diskTotal ? `всего ${mb(h.diskTotal)}` : 'размер неизвестен'}</div>
             </div>
-          ))}
-        </div>
+            <div className="panel p-5 text-center">
+              <Gauge value={memFrac} tone={usageTone(memFrac)} label="Память панели" display={`${h.memoryMb} МБ`} caption={`из ${MEM_REF_MB} МБ`} icon={<IconMemory size={18} />} />
+              <div className="mt-2 font-extrabold">Память</div>
+              <div className="text-sm font-semibold text-mute">процесс панели, ориентир {MEM_REF_MB} МБ</div>
+            </div>
+            <div className="panel p-5 text-center">
+              <Gauge value={dbFrac} tone={usageTone(dbFrac)} label="База данных" display={mb(h.dbBytes)} caption="ориентир 1 ГБ" icon={<IconDatabase size={18} />} />
+              <div className="mt-2 font-extrabold">База данных</div>
+              <div className="text-sm font-semibold text-mute">{h.counts.history.toLocaleString('ru-RU')} точек истории</div>
+            </div>
+          </div>
+
+          <Section title="Состояние">
+            <ul className="divide-y divide-line">
+              {status.map((r) => (
+                <li key={r.k} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5">
+                  <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full dot-${r.tone}`} />
+                  <span className="font-extrabold">{r.k}</span>
+                  {r.sub && <span className="min-w-0 break-words text-sm font-semibold text-mute">{r.sub}</span>}
+                  <span className={`ml-auto font-black tabular-nums ${r.tone === 'bad' ? 'text-bad' : r.tone === 'warn' ? 'text-warn' : ''}`}>{r.v}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        </>
       ) : (
-        <div className="skeleton panel h-40" />
+        <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />
       )}
 
-      <div className="panel space-y-4 p-6">
-        <div>
-          <h2 className="text-lg font-black">Диагностика</h2>
-          <p className="font-semibold text-mute">Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.</p>
-        </div>
+      <Section title="Диагностика" description="Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.">
         {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}
         {checks && (
           <>
-            <ul className="divide-y divide-line rounded-2xl border border-line">
+            <ul className="divide-y divide-line rounded-ui-lg border border-line">
               {checks.list.map((c) => (
                 <li key={c.id} className="flex items-start gap-3 px-4 py-2.5">
-                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} aria-label={c.status} />
+                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? 'в порядке' : c.status === 'warn' ? 'внимание' : 'ошибка'} />
                   <div className="min-w-0">
                     <div className="font-extrabold">{c.label}</div>
                     <div className="break-words text-sm font-semibold text-mute">{c.detail}</div>
@@ -25245,24 +26751,326 @@ export default function SystemPage() {
             <p className="text-sm font-semibold text-mute">Проверено {fmtDateTime(checks.at)}</p>
           </>
         )}
-      </div>
+      </Section>
 
-      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-5">
+      <Strip>
         <div className="min-w-0">
           <h2 className="text-lg font-black">Резервные копии</h2>
           <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
         </div>
         <GoLink href="#/admin/settings/updates">Обновления и копии</GoLink>
+      </Strip>
+    </AdminPage>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/UiKit.tsx" << '__COREGSM_EOF__'
+import { useState, type ReactNode } from 'react';
+import { AccentPicker } from '../components/AccentPicker';
+import { Gauge } from '../components/Gauge';
+import { confirmDialog, promptDialog } from '../confirm';
+import {
+  AdminPage, Button, Empty, ErrorLine, FieldError, FillBar, GoLink, ICON_SET, IconBell, IconPlus, IconRefresh, IconTrash, IconEdit, Modal,
+  Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
+  type SaveStatus,
+} from '../ui';
+
+/** reference page for future screens: #/_ui (administrators only, not listed in any menu) */
+
+const RADII: [string, string][] = [['sm', '8 px'], ['md', '12 px'], ['lg', '16 px'], ['xl', '26 px'], ['pill', '9999 px']];
+const SHADOWS: [string, string][] = [['shadow-1', 'мелкие элементы'], ['shadow-2', 'карточки'], ['shadow-3', 'всплывающее']];
+const SURFACES: [string, string, string][] = [
+  ['page', 'bg-page', 'фон страницы'], ['card', 'bg-card', 'карточка'], ['raised', 'bg-raised', 'диалоги, меню'], ['soft', 'bg-soft', 'поля, подложки'],
+];
+const TEXTS: [string, string][] = [['text-ink', 'Основной текст'], ['text-mute', 'Вторичный текст'], ['text-link', 'Ссылка и акцент'], ['text-ok', 'Успех'], ['text-warn', 'Внимание'], ['text-bad', 'Ошибка']];
+
+function Block({ title, note, children }: { title: string; note?: ReactNode; children: ReactNode }) {
+  return (
+    <Section title={title} description={note}>
+      {children}
+    </Section>
+  );
+}
+
+const Row = ({ label, children }: { label?: string; children: ReactNode }) => (
+  <div className="space-y-2">
+    {label && <div className="text-sm font-extrabold text-mute">{label}</div>}
+    <div className="flex flex-wrap items-center gap-2.5">{children}</div>
+  </div>
+);
+
+/** one specimen (buttons, pill, field, switch, card) that is shown in a forced theme next to the other one */
+function Specimen() {
+  const [on, setOn] = useState(true);
+  const [seg, setSeg] = useState('a');
+  return (
+    <div className="space-y-3.5">
+      <div className="panel space-y-3 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn btn-sm">Основная</button>
+          <button className="btn btn-soft btn-sm">Мягкая</button>
+          <button className="btn btn-danger btn-sm">Опасная</button>
+          <span className="pill pill-ok">ОНЛАЙН</span>
+          <span className="pill pill-warn">ЛАГИ</span>
+          <span className="pill pill-bad">ОФЛАЙН</span>
+          <span className="pill pill-mute">ОЖИДАНИЕ</span>
+        </div>
+        <input className="input" defaultValue="Поле ввода" aria-label="Пример поля" />
+        <label className="flex items-center gap-3 text-sm font-bold"><Switch checked={on} onChange={setOn} /> Переключатель</label>
+        <div className="seg">
+          {['a', 'b', 'c'].map((k, i) => <button key={k} type="button" className="seg-item" aria-pressed={seg === k} onClick={() => setSeg(k)}>Вкладка {i + 1}</button>)}
+        </div>
+      </div>
+      <div className="panel panel-raised space-y-1 p-4">
+        <div className="font-black">Приподнятая поверхность</div>
+        <p className="text-sm font-semibold text-mute">Диалоги и меню: на один шаг светлее карточки.</p>
+        <a href="#/_ui" className="text-sm font-extrabold text-link hover:underline">Ссылка</a>
       </div>
     </div>
+  );
+}
+
+export default function UiKitPage() {
+  const [seg, setSeg] = useState('day');
+  const [sw, setSw] = useState({ a: true, b: false });
+  const [text, setText] = useState('Мой сервер');
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [deleted, setDeleted] = useState(false);
+  const [dialog, setDialog] = useState(false);
+  const states: SaveStatus[] = ['idle', 'dirty', 'saving', 'saved', 'error'];
+
+  return (
+    <AdminPage
+      head={(
+        <PageHead
+          title="UI-кит"
+          subtitle="Справочник компонентов: кнопки, поля, карточки, уведомления, иконки"
+          hint="Эталон для новых экранов: берите компоненты и токены отсюда, а не придумывайте новые значения. Страница доступна только администраторам."
+          icon={<IconBell />}
+        >
+          <ThemeToggle />
+        </PageHead>
+      )}
+    >
+      <Block title="Обе темы рядом" note="Один и тот же набор в светлой и тёмной теме независимо от выбранной сейчас.">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="kit-theme" data-kit-theme="light"><div className="mb-3 text-sm font-extrabold text-mute">Светлая</div><Specimen /></div>
+          <div className="kit-theme" data-kit-theme="dark"><div className="mb-3 text-sm font-extrabold text-mute">Тёмная</div><Specimen /></div>
+        </div>
+      </Block>
+
+      <Block title="Токены" note="Один набор радиусов и теней. В коде: rounded-ui-sm|md|lg|xl|pill, shadow-1|2|3, bg-page|card|raised|soft.">
+        <Row label="Радиусы">
+          {RADII.map(([k, px]) => (
+            <div key={k} className="grid h-16 w-24 place-items-center border border-line bg-soft text-sm font-extrabold" style={{ borderRadius: `var(--r-${k})` }}>
+              <span>{k}<span className="block text-xs font-semibold text-mute">{px}</span></span>
+            </div>
+          ))}
+        </Row>
+        <Row label="Тени">
+          {SHADOWS.map(([k, d]) => (
+            <div key={k} className={`grid h-20 w-36 place-items-center rounded-ui-lg bg-card text-center text-sm font-extrabold ${k}`}>
+              <span>{k}<span className="block text-xs font-semibold text-mute">{d}</span></span>
+            </div>
+          ))}
+        </Row>
+        <Row label="Поверхности">
+          {SURFACES.map(([k, cls, d]) => (
+            <div key={k} className={`h-16 w-36 rounded-ui-md border border-line p-2 text-sm font-extrabold ${cls}`}>{k}<span className="block text-xs font-semibold text-mute">{d}</span></div>
+          ))}
+        </Row>
+        <Row label="Текст (контраст не ниже 4.5:1 на карточке и подложке)">
+          {TEXTS.map(([cls, t]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{t}</span>)}
+        </Row>
+      </Block>
+
+      <Block title="Кнопки" note="Одна основная кнопка на экран, остальные мягкие. На телефоне высота не меньше 44 px.">
+        <Row label="Варианты">
+          <button className="btn">Основная</button>
+          <button className="btn btn-soft">Мягкая</button>
+          <button className="btn btn-danger">Опасная</button>
+          <button className="btn btn-solid-danger">Удалить</button>
+          <a className="btn btn-soft" href="#/_ui">Ссылка-кнопка</a>
+        </Row>
+        <Row label="Размеры и состояния">
+          <button className="btn btn-sm">Малая</button>
+          <button className="btn" disabled>Недоступна</button>
+          <Button loading={busy} onClick={() => { setBusy(true); window.setTimeout(() => setBusy(false), 1500); }}>{busy ? 'Сохраняю…' : 'С индикатором'}</Button>
+          <button className="btn"><IconPlus size={16} />С иконкой</button>
+        </Row>
+        <Row label="Иконки-кнопки">
+          <button type="button" className="btn-icon" aria-label="Обновить"><IconRefresh /></button>
+          <button type="button" className="row-act" aria-label="Изменить"><IconEdit /></button>
+          <button type="button" className="row-act row-act-danger" aria-label="Удалить"><IconTrash /></button>
+        </Row>
+        <Row label="На градиенте">
+          <div className="cover-grad flex flex-wrap items-center gap-2.5 rounded-ui-lg p-4" style={{ ['--c1' as string]: '#4338ca', ['--c2' as string]: '#7c3aed' }}>
+            <button className="btn-on-grad">Белая</button>
+            <button className="btn-ghost-on-grad">Прозрачная</button>
+            <span className="chip-on-grad">Чип</span>
+          </div>
+        </Row>
+      </Block>
+
+      <Block title="Статусы и пилюли">
+        <Row>
+          <span className="pill pill-ok">ГОТОВО</span>
+          <span className="pill pill-warn">ВНИМАНИЕ</span>
+          <span className="pill pill-bad">ОШИБКА</span>
+          <span className="pill pill-mute">НЕЙТРАЛЬНО</span>
+          <StatusPill online known />
+          <StatusPill online known lag />
+          <StatusPill online={false} known />
+          <StatusPill online={false} known={false} />
+        </Row>
+        <Row label="Прогресс">
+          <div className="w-full max-w-sm space-y-2">
+            <FillBar value={30} max={100} color="rgb(var(--ok))" />
+            <FillBar value={78} max={100} color="rgb(var(--warn))" />
+            <FillBar value={95} max={100} color="rgb(var(--bad))" />
+          </div>
+        </Row>
+      </Block>
+
+      <Block title="Поля ввода" note="Проверка идёт при вводе, сообщение под полем. Изменённое поле показывает состояние сохранения.">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField id="kit-text" label="Обычное поле" value={text} onChange={setText} hint="Подсказка под полем" />
+          <TextField id="kit-err" label="С ошибкой" value="" onChange={() => undefined} error="Название не может быть пустым" />
+          <TextField id="kit-dis" label="Недоступно" value="Только чтение" onChange={() => undefined} disabled />
+          <div>
+            <label htmlFor="kit-sel" className="label">Выпадающий список</label>
+            <select id="kit-sel" className="input" defaultValue="2">
+              <option value="1">Каждый день</option>
+              <option value="2">Каждую неделю</option>
+              <option value="0">Выключено</option>
+            </select>
+          </div>
+          <TextField id="kit-area" label="Многострочное" value={text} onChange={setText} multiline rows={3} />
+          <PasswordField id="kit-pw" label="Пароль" value={pw} onChange={setPw} autoComplete="new-password" hint="От 10 символов" />
+        </div>
+        <Row label="Состояния сохранения (SaveBadge)">
+          {states.map((st) => (
+            <span key={st} className="rounded-ui-md bg-soft px-3 py-1.5"><SaveBadge status={st} error={st === 'error' ? 'нет связи' : undefined} retry={st === 'error' ? () => undefined : undefined} />{st === 'idle' && <span className="text-sm font-semibold text-mute">пусто</span>}</span>
+          ))}
+        </Row>
+        <FieldError id="kit-fe" text="Так выглядит сообщение об ошибке поля" />
+      </Block>
+
+      <Block title="Переключатели, флажки, сегменты">
+        <div className="space-y-3">
+          <label className="flex items-center gap-3 font-bold"><Switch checked={sw.a} onChange={(v) => setSw({ ...sw, a: v })} />Включён</label>
+          <label className="flex items-center gap-3 font-bold"><Switch checked={sw.b} onChange={(v) => setSw({ ...sw, b: v })} />Выключен</label>
+          <label className="flex items-center gap-3 font-bold opacity-100"><Switch checked disabled onChange={() => undefined} />Недоступен</label>
+          <label className="flex items-center gap-3 font-bold"><input type="checkbox" defaultChecked />Флажок</label>
+        </div>
+        <Row label="Сегментированный переключатель">
+          <div className="seg" role="group" aria-label="Период">
+            {[['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц']].map(([id, l]) => (
+              <button key={id} type="button" className="seg-item" aria-pressed={seg === id} onClick={() => setSeg(id)}>{l}</button>
+            ))}
+          </div>
+          <button type="button" className="chip-filter on">Фильтр включён</button>
+          <button type="button" className="chip-filter">Фильтр</button>
+        </Row>
+        <AccentPicker />
+      </Block>
+
+      <Block title="Карточки и панели">
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="panel p-5"><div className="font-black">panel</div><p className="text-sm font-semibold text-mute">Карточка по умолчанию: радиус xl, тень 2.</p></div>
+          <div className="tile tile-hover p-5"><div className="font-black">tile-hover</div><p className="text-sm font-semibold text-mute">Наведение меняет только тень.</p></div>
+          <div className="panel panel-raised p-5"><div className="font-black">panel-raised</div><p className="text-sm font-semibold text-mute">Над карточкой: тень 3.</p></div>
+        </div>
+        <Section title="Section" description="Заголовок, пояснение и действия справа: так устроены все разделы админки." actions={<button className="btn btn-soft btn-sm">Действие</button>} tone="soft">
+          <p className="font-semibold text-mute">Вложенная мягкая секция.</p>
+        </Section>
+        <Strip><span className="font-black">Strip</span><span className="text-sm font-semibold text-mute">тонкая карточка для панели инструментов</span><button className="btn btn-soft btn-sm">Кнопка</button></Strip>
+        <div className="space-y-2.5">
+          <Notice tone="info" action={<GoLink href="#/_ui">Перейти</GoLink>}>Информационная полоса с действием.</Notice>
+          <Notice tone="warn">Предупреждение: проверьте настройки.</Notice>
+          <Notice tone="bad">Ошибка: что-то пошло не так.</Notice>
+          <ErrorLine text="ErrorLine: короткая ошибка запроса" />
+        </div>
+      </Block>
+
+      <Block title="Пустое состояние">
+        <Empty title="Здесь пока пусто" text="Объясните, что это за раздел, и дайте один понятный шаг.">
+          <button className="btn mt-3"><IconPlus size={16} />Добавить</button>
+        </Empty>
+      </Block>
+
+      <Block title="Уведомления" note="toast(text), toast(text, 'err') и toast(text, { action: { label, onClick }, duration }). Удаление с отменой: undoable().">
+        <Row>
+          <button className="btn btn-soft" onClick={() => toast('Настройки сохранены')}>Успех</button>
+          <button className="btn btn-soft" onClick={() => toast('Не удалось сохранить', 'err')}>Ошибка</button>
+          <button className="btn btn-soft" onClick={() => toast('Сеанс завершён', 'info')}>Информация</button>
+          <button className="btn btn-soft" onClick={() => toast('Элемент удалён', { action: { label: 'Отменить', onClick: () => toast('Восстановлено') }, duration: 6000 })}>С отменой</button>
+          <button
+            className="btn btn-soft"
+            disabled={deleted}
+            onClick={() => { setDeleted(true); undoable({ text: 'Пример удалён', commit: () => toast('Удаление выполнено'), restore: () => setDeleted(false) }); }}
+          >
+            {deleted ? 'Скрыто на 6 секунд' : 'Отложенное удаление'}
+          </button>
+        </Row>
+      </Block>
+
+      <Block title="Диалоги">
+        <Row>
+          <button className="btn btn-soft" onClick={() => setDialog(true)}>Modal</button>
+          <button className="btn btn-soft" onClick={() => void confirmDialog({ title: 'Продолжить?', text: 'Обычное подтверждение без риска.', confirmLabel: 'Продолжить' })}>confirmDialog</button>
+          <button className="btn btn-soft" onClick={() => void confirmDialog({ title: 'Удалить сервер?', text: 'Это действие нельзя отменить.', confirmLabel: 'Удалить', danger: true })}>Опасное подтверждение</button>
+          <button className="btn btn-soft" onClick={() => void promptDialog({ title: 'Новое имя', label: 'Имя', value: 'Сервер' })}>promptDialog</button>
+        </Row>
+        {dialog && (
+          <Modal title="Диалог" onClose={() => setDialog(false)}>
+            <div className="space-y-3">
+              <p className="font-semibold text-mute">Окно с заголовком и кнопкой закрытия: на телефоне это нижний лист.</p>
+              <TextField id="kit-modal" label="Поле" value={text} onChange={setText} />
+              <div className="flex justify-end gap-2"><button className="btn btn-soft" onClick={() => setDialog(false)}>Закрыть</button></div>
+            </div>
+          </Modal>
+        )}
+      </Block>
+
+      <Block title="Загрузка">
+        <div className="space-y-3">
+          <div className="skeleton panel h-16" aria-hidden />
+          <div className="space-y-2" aria-hidden>
+            <div className="skeleton skel-line w-2/3" />
+            <div className="skeleton skel-line w-1/2" />
+            <div className="skeleton skel-line w-5/6" />
+          </div>
+          <div className="flex items-center gap-2 font-bold text-mute"><Spinner />Идёт загрузка…</div>
+        </div>
+      </Block>
+
+      <Block title="Круговые индикаторы" note="Цвет по порогам: до 75 % спокойный, от 75 % жёлтый, от 90 % красный. Значение всегда написано в центре.">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <Gauge value={0.32} label="Диск" display="32 %" caption="спокойно" />
+          <Gauge value={0.78} label="Память" display="78 %" caption="внимание" />
+          <Gauge value={0.94} label="База" display="94 %" caption="критично" />
+          <Gauge value={null} label="Нет данных" display="–" caption="неизвестно" />
+        </div>
+      </Block>
+
+      <Block title="Иконки" note="Один набор: сетка 24 px, штрих 2 px, цвет currentColor. Импорт из '../ui' (или из '../icons').">
+        <div className="kit-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(5.5rem, 1fr))' }}>
+          {ICON_SET.map(([name, Ic]) => (
+            <div key={name} className="kit-icon">{Ic({ size: 24 })}<span>Icon{name}</span></div>
+          ))}
+        </div>
+      </Block>
+    </AdminPage>
   );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
-import { IconCards, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
-import { IconBell } from './Alerts';
+import { IconBell, IconCards, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -25331,6 +27139,302 @@ export const ADMIN_LINKS: AdminLink[] = [
   { label: 'Добавить сервер', hint: 'Серверы', href: '#/admin/servers/new', keywords: 'новый игровой сервер игра адрес', icon: IconServers },
 ];
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
+/* detail: styles owned by the server page workstream (see main.tsx)
+   Rules: no transform transitions on blocks, no infinite animations, entrance = fill-mode backwards,
+   no outline styling (focus = box-shadow ring), no backdrop-filter / will-change. */
+
+/* ---------- chart ---------- */
+.hc-fade { animation: hc-fade .6s ease-out backwards; }
+@keyframes hc-fade { from { opacity: 0; } to { opacity: 1; } }
+.hc-wrap { outline: 0; }
+.hc-wrap:focus, .hc-wrap:focus-visible { outline: 0; }
+.hc-wrap:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.55); }
+.hc-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+.hc-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.hc-dot { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 9999px; }
+
+/* ---------- passport (inside the dark banner) ---------- */
+.pp {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden;
+  border-radius: 18px; background: rgba(255, 255, 255, 0.16); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.pp-i { min-width: 0; padding: 9px 12px; background: rgba(0, 0, 0, 0.26); }
+.pp-i.wide { grid-column: 1 / -1; }
+.pp-k { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.72); }
+.pp-v { margin-top: 1px; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 800; color: #fff; }
+.pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
+.pp-v a { text-decoration: underline; text-underline-offset: 3px; }
+.pp-copy {
+  display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 9999px;
+  color: #fff; background: rgba(255, 255, 255, 0.18); transition: background .15s ease;
+}
+.pp-copy:hover { background: rgba(255, 255, 255, 0.3); }
+.pp-copy:focus, .pp-copy:focus-visible { outline: 0; }
+.pp-copy:focus-visible { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
+.pp-tone-ok { color: #86efac; }
+.pp-tone-warn { color: #fde68a; }
+.pp-tone-bad { color: #fecaca; }
+@media (min-width: 640px) { .pp { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pp-i.wide { grid-column: span 2; } }
+@media (min-width: 1024px) { .pp { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* ---------- players ---------- */
+.pl-row {
+  display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; padding: 8px 6px; border-radius: 14px;
+  text-align: left; background: transparent; transition: background-color .15s ease;
+}
+.pl-row:hover { background: rgb(var(--soft)); }
+.pl-row:focus, .pl-row:focus-visible { outline: 0; }
+.pl-row:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.55); }
+.pl-chev { flex: none; color: rgb(var(--mute)); }
+.pl-chev[data-open='true'] { transform: rotate(180deg); }
+.pl-more {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 2px 6px 10px 54px;
+  padding: 12px 14px; border-radius: 14px; background: rgb(var(--soft)); animation: dt-in .25s ease-out backwards;
+}
+.pl-more dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.pl-more dd { font-size: 14px; font-weight: 800; }
+@keyframes dt-in { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 480px) { .pl-more { margin-left: 6px; } }
+
+/* ---------- connect ---------- */
+.cn-big {
+  display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; border-radius: 18px;
+  background: rgb(var(--soft));
+}
+.cn-big code {
+  min-width: 0; flex: 1 1 200px; overflow-x: auto; white-space: nowrap; padding: 10px 12px; border-radius: 12px;
+  background: rgb(var(--card)); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700;
+}
+.cn-big .btn { min-height: 44px; padding-left: 18px; padding-right: 18px; font-size: 15px; }
+.cn-step { display: flex; gap: 12px; }
+.cn-num {
+  display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 9999px;
+  background: rgb(var(--link)); color: #fff; font-size: 14px; font-weight: 800;
+}
+.cn-qr { display: block; margin: 0 auto; border-radius: 16px; background: #fff; padding: 12px; width: min(100%, 260px); height: auto; }
+.cn-qr svg { display: block; width: 100%; height: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-fade, .pl-more { animation: none !important; }
+  .pl-row, .pp-copy { transition: none !important; }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/servers.css" << '__COREGSM_EOF__'
+/* servers: styles owned by one workstream (see main.tsx) */
+/* Rules: no transform transitions on cards, no infinite animations (except skeleton/spinner), fill-mode backwards,
+   no outline styling, no backdrop-filter / will-change / masks. */
+
+/* ---------- capacity bar ---------- */
+.srv-cap { flex: 1 1 auto; min-width: 0; height: 6px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.srv-cap.big { height: 14px; }
+.srv-cap > i { display: block; height: 100%; border-radius: 9999px; background: var(--cap, rgb(var(--brand))); transition: width .8s cubic-bezier(.2, .8, .2, 1), background-color .4s ease; }
+.srv-cap.hot > i { background: rgb(var(--warn)) repeating-linear-gradient(135deg, rgb(255 255 255 / .38) 0 4px, transparent 4px 8px); }
+.srv-cap.on-dark { background: rgb(255 255 255 / .25); }
+.srv-cap.on-dark > i { background: #fff; }
+.srv-cap.on-dark.hot > i { background: #fbbf24 repeating-linear-gradient(135deg, rgb(255 255 255 / .45) 0 4px, transparent 4px 8px); }
+.srv-pct { flex: none; min-width: 2.6em; text-align: right; font-size: 12px; font-weight: 800; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; transition: color .3s ease; }
+.srv-pct.hot { color: rgb(var(--warn)); }
+.srv-pct.on-dark { color: rgb(255 255 255 / .9); }
+.srv-pct.on-dark.hot { color: #fde68a; }
+.srv-pct.big { font-size: clamp(16px, 1.5vw, 26px); }
+
+/* ---------- reactions to changes ---------- */
+.srv-num { position: relative; display: inline-block; border-radius: 10px; }
+.srv-num-up { animation: srv-num-up 1.8s ease-out backwards; }
+.srv-num-down { animation: srv-num-down 1.8s ease-out backwards; }
+.srv-num.on-dark.srv-num-up, .srv-num.on-dark.srv-num-down { animation-name: srv-num-dark; }
+@keyframes srv-num-up {
+  0%, 20% { background-color: rgb(var(--ok) / .3); color: rgb(var(--ok)); }
+  100% { background-color: rgb(var(--ok) / 0); }
+}
+@keyframes srv-num-down {
+  0%, 20% { background-color: rgb(var(--bad) / .26); color: rgb(var(--bad)); }
+  100% { background-color: rgb(var(--bad) / 0); }
+}
+@keyframes srv-num-dark {
+  0%, 20% { background-color: rgb(255 255 255 / .32); }
+  100% { background-color: rgb(255 255 255 / 0); }
+}
+.srv-chip {
+  position: absolute; right: -2px; bottom: 100%; margin-bottom: 1px; z-index: 3; pointer-events: none;
+  padding: 2px 7px; border-radius: 9999px; font-size: 12px; line-height: 1.2; font-weight: 800; letter-spacing: 0; white-space: nowrap;
+  opacity: 0; animation: srv-chip 2.2s ease-out backwards;
+}
+.srv-chip.up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.srv-chip.down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+@keyframes srv-chip {
+  0% { opacity: 0; }
+  10%, 65% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.srv-status { display: inline-flex; border-radius: 9999px; }
+.srv-flash-bad { animation: srv-flash-bad 1.8s ease-out backwards; }
+.srv-flash-ok { animation: srv-flash-ok 1.8s ease-out backwards; }
+@keyframes srv-flash-bad {
+  0% { box-shadow: 0 0 0 0 rgb(var(--bad) / 0); }
+  15% { box-shadow: 0 0 0 5px rgb(var(--bad) / .75), 0 0 22px 4px rgb(var(--bad) / .55); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--bad) / 0); }
+}
+@keyframes srv-flash-ok {
+  0% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
+  15% { box-shadow: 0 0 0 5px rgb(var(--ok) / .75), 0 0 22px 4px rgb(var(--ok) / .55); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
+}
+
+/* ---------- view switcher row ---------- */
+.srv-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; }
+
+/* ---------- list view ---------- */
+.srv-list { overflow: hidden; padding: 4px 0; }
+.srv-row {
+  display: grid; align-items: center; gap: 4px 16px; padding: 10px 18px;
+  grid-template-columns: 112px minmax(0, 2.2fr) minmax(0, 1.5fr) 72px 88px minmax(0, 1.3fr) 44px;
+  border-bottom: 1px solid rgb(var(--line) / .7);
+  cursor: pointer; transition: background-color .15s ease;
+}
+.srv-row:last-child { border-bottom: 0; }
+.srv-row:hover { background: rgb(var(--soft) / .7); }
+.srv-row.off .srv-c-name { opacity: .8; }
+.srv-head { cursor: default; padding-top: 8px; padding-bottom: 8px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
+.srv-head:hover { background: transparent; }
+.srv-c-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.srv-c-players { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.srv-c-ping, .srv-c-up { font-weight: 800; font-size: 14px; font-variant-numeric: tabular-nums; }
+.srv-c-fav { display: flex; justify-content: flex-end; }
+.srv-copy {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 5px 10px; border-radius: 10px;
+  font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); background: rgb(var(--soft));
+  transition: background-color .15s ease, color .15s ease;
+}
+.srv-copy:hover { color: rgb(var(--ink)); background: rgb(var(--line)); }
+.srv-copy.done { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
+.srv-copy:focus, .srv-copy:focus-visible { outline: 0; }
+.srv-copy:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
+
+@media (max-width: 860px) {
+  .srv-head { display: none; }
+  .srv-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'name name fav' 'status players players' 'ping up up' 'addr addr addr';
+    padding: 12px 14px; gap: 8px 12px;
+  }
+  .srv-c-name { grid-area: name; }
+  .srv-c-fav { grid-area: fav; }
+  .srv-c-status { grid-area: status; }
+  .srv-c-players { grid-area: players; }
+  .srv-c-ping { grid-area: ping; }
+  .srv-c-up { grid-area: up; }
+  .srv-c-addr { grid-area: addr; min-width: 0; }
+  .srv-c-ping::before, .srv-c-up::before { content: attr(data-label) ' '; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); }
+}
+
+/* ---------- TV mode ---------- */
+.srv-tv {
+  position: fixed; inset: 0; z-index: 90; overflow: auto; display: flex; flex-direction: column; gap: clamp(14px, 1.6vw, 28px);
+  padding: clamp(14px, 2vw, 36px); background: rgb(var(--page)); color: rgb(var(--ink));
+}
+.srv-tv-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 28px; }
+.srv-tv-time { font-size: clamp(36px, 4.6vw, 84px); font-weight: 800; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.srv-tv-date { margin-top: 4px; font-size: clamp(13px, 1.3vw, 22px); font-weight: 700; color: rgb(var(--mute)); text-transform: capitalize; }
+.srv-tv-total { text-align: center; }
+.srv-tv-total-n { font-size: clamp(32px, 4vw, 72px); font-weight: 800; line-height: 1; letter-spacing: -.03em; }
+.srv-tv-total-n small { font-size: .5em; font-weight: 700; color: rgb(var(--mute)); }
+.srv-tv-total-k { margin-top: 4px; font-size: clamp(12px, 1.1vw, 18px); font-weight: 700; color: rgb(var(--mute)); }
+.srv-tv-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.srv-tv-live { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 800; color: rgb(var(--mute)); }
+
+.srv-tv-grid { flex: 1 1 auto; display: grid; gap: clamp(12px, 1.4vw, 24px); grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); align-content: start; }
+@media (max-width: 900px) { .srv-tv-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); } }
+.srv-tv-card {
+  position: relative; display: flex; flex-direction: column; gap: clamp(12px, 1.4vw, 24px); min-width: 0;
+  padding: clamp(16px, 1.8vw, 32px); border-radius: 28px; background: rgb(var(--card));
+  border: 1px solid var(--tile-border); box-shadow: var(--shadow-soft), inset 0 5px 0 var(--accent);
+}
+.srv-tv-card.off { box-shadow: var(--shadow-soft), inset 0 5px 0 rgb(var(--bad)); background: rgb(var(--badbg) / .5); }
+.srv-tv-name { font-size: clamp(18px, 1.9vw, 34px); font-weight: 800; line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.srv-tv-sub { margin-top: 2px; font-size: clamp(13px, 1.1vw, 19px); font-weight: 700; color: rgb(var(--mute)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-tv-pill { flex: none; font-size: clamp(14px, 1.2vw, 20px); }
+.srv-tv-pill .pill { font-size: inherit; padding: .4em .9em; }
+.srv-tv-count { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+.srv-tv-big { font-size: clamp(64px, 8.5vw, 168px); font-weight: 800; line-height: 1; letter-spacing: -.045em; }
+.srv-tv-max { display: flex; flex-direction: column; font-size: clamp(22px, 2.6vw, 48px); font-weight: 800; line-height: 1.05; color: rgb(var(--mute)); }
+.srv-tv-max small { font-size: .42em; font-weight: 700; }
+.srv-tv-down { padding: clamp(16px, 2vw, 36px) 0; color: rgb(var(--bad)); }
+.srv-tv-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 18px; margin-top: auto; font-size: clamp(13px, 1.15vw, 20px); font-weight: 700; color: rgb(var(--mute)); }
+.srv-tv-foot b { color: rgb(var(--ink)); font-weight: 800; }
+.srv-tv-foot b.text-warn { color: rgb(var(--warn)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .srv-num-up, .srv-num-down, .srv-chip, .srv-flash-bad, .srv-flash-ok { animation: none !important; }
+  .srv-cap > i { transition: none; }
+  .srv-chip { opacity: 1; }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'
+/* system: styles owned by one workstream (see main.tsx): UI kit, gauges, autosave, accents, confirm dialog.
+   Rules that apply here: no transform transitions on big blocks, no infinite animations (except spinners and the
+   skeleton), entrance animations use fill-mode backwards, no outline styling, no backdrop-filter / will-change. */
+
+/* red confirm button: a solid fill (white text >= 4.5:1 in both themes), no gradient */
+.btn-solid-danger { background-image: none; background-color: rgb(var(--badsolid)); box-shadow: var(--shadow-1); }
+.btn-solid-danger::after { display: none; }
+.btn-solid-danger:hover { filter: brightness(1.1); }
+
+/* ---------- arc gauge (System page): static SVG, the arc is drawn by stroke-dasharray, no animation ---------- */
+.gauge { position: relative; display: grid; place-items: center; }
+.gauge svg { display: block; width: 100%; height: auto; }
+.gauge-track { stroke: rgb(var(--soft)); }
+.gauge-arc { stroke: rgb(var(--ok)); }
+.gauge-ok .gauge-arc { stroke: rgb(var(--ok)); }
+.gauge-warn .gauge-arc { stroke: rgb(var(--warn)); }
+.gauge-bad .gauge-arc { stroke: rgb(var(--bad)); }
+.gauge-mute .gauge-arc { stroke: rgb(var(--mute)); }
+.gauge-value { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; padding-top: 6%; }
+
+/* status dots in compact lists */
+.dot-ok { background: rgb(var(--ok)); }
+.dot-warn { background: rgb(var(--warn)); }
+.dot-bad { background: rgb(var(--bad)); }
+.dot-mute { background: rgb(var(--mute)); }
+
+/* ---------- UI kit page ---------- */
+.kit-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+.kit-swatch { height: 3rem; border-radius: var(--r-md); border: 1px solid var(--tile-border); }
+.kit-icon { display: grid; justify-items: center; gap: .35rem; padding: .75rem .25rem; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--ink)); font-size: 11px; font-weight: 700; text-align: center; overflow-wrap: anywhere; }
+.kit-icon span { color: rgb(var(--mute)); }
+/* a frame that shows a component in the other theme next to the current one */
+.kit-theme { border-radius: var(--r-xl); padding: 1.25rem; background: rgb(var(--page)); color: rgb(var(--ink)); border: 1px solid var(--tile-border); }
+:root .kit-theme[data-kit-theme='light'] {
+  --page: 243 244 248; --card: 255 255 255; --raised: 255 255 255; --ink: 18 20 26; --mute: 92 99 114; --line: 231 233 240; --field: 122 129 143;
+  --soft: 236 238 246; --link: 79 70 229; --ok: 18 120 66; --okbg: 220 247 232; --warn: 146 94 0; --warnbg: 255 241 205; --bad: 185 40 40; --badbg: 254 226 226;
+  --seg-on: 255 255 255; --tile-border: rgb(231 233 240);
+  --shadow-1: 0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
+  --shadow-2: 0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
+  --shadow-3: 0 1px 2px rgba(20, 24, 40, 0.06), 0 18px 38px rgba(40, 50, 110, 0.13);
+  color-scheme: light;
+}
+:root .kit-theme[data-kit-theme='dark'] {
+  --page: 9 10 14; --card: 18 20 27; --raised: 27 30 40; --ink: 226 228 236; --mute: 148 154 170; --line: 38 41 53; --field: 112 118 136;
+  --soft: 30 33 44; --link: 165 170 255; --ok: 74 222 128; --okbg: 18 52 36; --warn: 251 191 36; --warnbg: 54 43 14; --bad: 248 113 113; --badbg: 58 25 30;
+  --seg-on: 44 48 64; --tile-border: rgb(255 255 255 / 0.07);
+  --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
+  --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
+  color-scheme: dark;
+}
+
+/* accent chooser: a small round swatch before the label */
+.accent-dot { display: inline-block; width: .9rem; height: .9rem; border-radius: 9999px; flex: none; background: var(--sw, rgb(var(--brand))); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .15); }
+
+/* autosave: a field that has just been saved gets a calm green ring for a moment (box-shadow only) */
+.input[data-saved='true'] { box-shadow: 0 0 0 3px rgb(var(--ok) / .25); }
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
 import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
@@ -25341,6 +27445,10 @@ import { getToken, type Server } from './api';
 import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
 import { GAME_IMAGE, gameAbbr, gameGradient } from './games';
 import { gameIconPath, ICON_PATHS } from './gameIcons';
+import { IconAuto, IconCheck, IconClose, IconCopy, IconError, IconEye, IconEyeOff, IconInfo, IconMoon, IconOk, IconSun } from './icons';
+
+// one icon set (24 px grid, 2 px stroke, currentColor): see icons.tsx; every icon is re-exported from here
+export * from './icons';
 
 /**
  * Calls `fn` now and then every `ms` milliseconds.
@@ -25552,64 +27660,6 @@ export function plural(n: number, forms: [string, string, string]): string {
   return forms[2];
 }
 
-// ---------- icons (24x24, stroke follows the text colour) ----------
-function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {children}
-    </svg>
-  );
-}
-export const IconServers = () => (
-  <Icon><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01" /></Icon>
-);
-export const IconCards = () => (
-  <Icon><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.5" /><path d="M21 16l-5-5-8 8" /></Icon>
-);
-export const IconDiscord = () => (
-  <Icon><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></Icon>
-);
-export const IconSettings = () => (
-  <Icon><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></Icon>
-);
-export const IconNews = () => (
-  <Icon><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8 8 0 0 1 0 12" /></Icon>
-);
-const IconSun = () => (
-  <Icon><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Icon>
-);
-const IconMoon = () => (
-  <Icon><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></Icon>
-);
-const IconAuto = () => (
-  <Icon><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></Icon>
-);
-export const IconCopy = () => (
-  <Icon size={16}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></Icon>
-);
-/** circular arrows; turns on click and spins while `spinning` (busy) */
-export const IconRefresh = ({ spinning = false }: { spinning?: boolean }) => (
-  <span className={`ico-refresh inline-grid ${spinning ? 'spinning' : ''}`} aria-hidden>
-    <Icon size={16}><path d="M20 11a8 8 0 0 0-14.5-4.1M4 4v4h4M4 13a8 8 0 0 0 14.5 4.1M20 20v-4h-4" /></Icon>
-  </span>
-);
-/** arrow that nudges forward when its button is hovered */
-export const IconArrow = () => (
-  <span className="ico-nudge inline-grid" aria-hidden>
-    <Icon size={16}><path d="M5 12h14M13 6l6 6-6 6" /></Icon>
-  </span>
-);
-export const IconCheckMark = () => (
-  <span className="star-pop inline-grid" aria-hidden>
-    <Icon size={16}><path d="M5 12.5l4.5 4.5L19 7.5" /></Icon>
-  </span>
-);
-export const IconShare = () => (
-  <span className="ico-share inline-grid" aria-hidden>
-    <Icon size={16}><path d="M7 17L17 7M9 7h8v8" /></Icon>
-  </span>
-);
-
 /** a few dots flying out of the centre of the parent (the parent must be `relative`); CSS only */
 export function Burst({ count = 8, radius = 17 }: { count?: number; radius?: number }) {
   return (
@@ -25689,12 +27739,12 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="pop panel max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-3xl sm:p-6"
+        className="pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
           <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-soft text-mute transition hover:text-ink" onClick={onClose} aria-label="Закрыть">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+            <IconClose />
           </button>
         </div>
         {children}
@@ -26090,35 +28140,90 @@ export function Wordmark({ className = '' }: { className?: string }) {
 
 // ---------- toasts: short confirmations that do not interrupt ----------
 type ToastKind = 'ok' | 'err' | 'info';
-interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: { label: string; href: string } }
+/** an action button in a toast: `onClick` (undo and the like; the toast closes after it) or `href` (a link in a new tab) */
+export interface ToastAction { label: string; onClick?: () => void; href?: string }
+export interface ToastOptions {
+  kind?: ToastKind;
+  /** how long it stays, ms (default 3.5 s; 8 s for errors and links; 6 s when there is an action button) */
+  duration?: number;
+  action?: ToastAction;
+  /** called once when the toast goes away: 'action' (its button was pressed), 'dismiss' (closed by hand), 'timeout' */
+  onClose?: (reason: 'action' | 'dismiss' | 'timeout') => void;
+}
+interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: ToastAction; duration: number; onClose?: ToastOptions['onClose'] }
 let toasts: ToastItem[] = [];
 let toastSeq = 0;
+const toastTimers = new Map<number, number>();
 const toastListeners = new Set<(t: ToastItem[]) => void>();
 const emitToasts = () => toastListeners.forEach((l) => l(toasts));
 
-/** `ms`: how long it stays; errors stay longer (8 s) by default. Every toast can also be dismissed by hand. */
-export function toast(text: string, kind: ToastKind = 'ok', ms?: number, action?: { label: string; href: string }) {
-  const t: ToastItem = { id: ++toastSeq, text, kind, action };
-  toasts = [...toasts, t].slice(-4);
+const armToast = (id: number, ms: number) => {
+  window.clearTimeout(toastTimers.get(id));
+  toastTimers.set(id, window.setTimeout(() => dismissToast(id, 'timeout'), ms));
+};
+
+/**
+ * Shows a toast.
+ *   toast('Сохранено')                                   // green
+ *   toast('Не удалось', 'err')                           // red, stays longer
+ *   toast('Удалено', { action: { label: 'Отменить', onClick: undo }, duration: 6000 })
+ * The old positional form toast(text, kind, ms, { label, href }) keeps working. Returns the toast id.
+ */
+export function toast(text: string, kindOrOptions: ToastKind | ToastOptions = 'ok', ms?: number, action?: ToastAction): number {
+  const o: ToastOptions = typeof kindOrOptions === 'string' ? { kind: kindOrOptions, duration: ms, action } : kindOrOptions;
+  const kind = o.kind ?? 'ok';
+  const duration = o.duration ?? (kind === 'err' ? 8000 : o.action?.onClick ? 6000 : o.action ? 8000 : 3500);
+  const t: ToastItem = { id: ++toastSeq, text, kind, action: o.action, duration, onClose: o.onClose };
+  const next = [...toasts, t];
+  // the oldest ones are pushed out: they count as timed out, so a pending "delete after the undo window" still happens
+  const evicted = next.slice(0, Math.max(0, next.length - 4));
+  toasts = next.slice(-4);
+  evicted.forEach((e) => { window.clearTimeout(toastTimers.get(e.id)); toastTimers.delete(e.id); e.onClose?.('timeout'); });
   emitToasts();
-  setTimeout(() => dismissToast(t.id), ms ?? (kind === 'err' ? 8000 : action ? 8000 : 3500));
+  armToast(t.id, duration);
+  return t.id;
 }
 
-export function dismissToast(id: number) {
+export function dismissToast(id: number, reason: 'action' | 'dismiss' | 'timeout' = 'dismiss') {
   const t = toasts.find((x) => x.id === id);
   if (!t || t.leaving) return;
+  window.clearTimeout(toastTimers.get(id));
+  toastTimers.delete(id);
   // it springs out first (about 200 ms), then it is removed
   toasts = toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
   emitToasts();
-  setTimeout(() => {
+  t.onClose?.(reason);
+  window.setTimeout(() => {
     toasts = toasts.filter((x) => x.id !== id);
     emitToasts();
   }, 200);
 }
 
 /**
+ * «Удалено. Отменить»: the caller hides the item at once and passes `commit` (the real, irreversible request).
+ * `commit` runs when the toast times out or is closed by hand, and also when the page is left; it does not run
+ * after «Отменить», which calls `restore`. Use it only where the removal can wait a few seconds without harm.
+ */
+export function undoable({ text, commit, restore, duration = 6000, label = 'Отменить' }: { text: string; commit: () => unknown; restore: () => void; duration?: number; label?: string }) {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    window.removeEventListener('pagehide', finish);
+    void commit();
+  };
+  window.addEventListener('pagehide', finish);
+  toast(text, {
+    duration,
+    action: { label, onClick: () => { if (settled) return; settled = true; window.removeEventListener('pagehide', finish); restore(); } },
+    onClose: (reason) => { if (reason !== 'action') finish(); },
+  });
+}
+
+/**
  * Two sibling live regions (never nested): errors are announced assertively (role=alert), the rest politely.
- * They sit above the phone navigation bar and the home-indicator safe area.
+ * They sit above the phone navigation bar and the home-indicator safe area. A toast with an action stops its timer
+ * while the pointer or the keyboard focus is on it.
  */
 export function Toaster() {
   const [list, setList] = useState<ToastItem[]>(toasts);
@@ -26126,19 +28231,38 @@ export function Toaster() {
     toastListeners.add(setList);
     return () => { toastListeners.delete(setList); };
   }, []);
-  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-card text-ink ring-line' } as const;
+  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-raised text-ink ring-line' } as const;
+  const kindIcon = { ok: <IconOk size={18} />, err: <IconError size={18} />, info: <IconInfo size={18} /> };
+  const hold = (t: ToastItem) => { if (t.action?.onClick) window.clearTimeout(toastTimers.get(t.id)); };
+  const release = (t: ToastItem) => { if (t.action?.onClick && !t.leaving) armToast(t.id, Math.min(t.duration, 4000)); };
   const item = (t: ToastItem) => (
-    <div key={t.id} className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-2xl py-2 pl-4 pr-2 text-sm font-bold shadow-soft ring-1 max-sm:max-w-full ${tone[t.kind]}`}>
-      <span aria-hidden className="text-base">{t.kind === 'ok' ? '✓' : t.kind === 'err' ? '!' : 'i'}</span>
+    <div
+      key={t.id}
+      onPointerEnter={() => hold(t)}
+      onPointerLeave={() => release(t)}
+      onFocusCapture={() => hold(t)}
+      onBlurCapture={() => release(t)}
+      className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
+    >
+      <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
       <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
-      {t.action && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
+      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full px-2 py-1 font-extrabold underline">{t.action.label}</a>}
+      {t.action?.onClick && (
+        <button
+          type="button"
+          onClick={() => { t.action?.onClick?.(); dismissToast(t.id, 'action'); }}
+          className="shrink-0 rounded-full bg-ink/10 px-3 py-1.5 font-extrabold hover:underline max-sm:min-h-[44px]"
+        >
+          {t.action.label}
+        </button>
+      )}
       <button
         type="button"
-        onClick={() => dismissToast(t.id)}
+        onClick={() => dismissToast(t.id, 'dismiss')}
         className="grid h-9 w-9 shrink-0 place-items-center rounded-full opacity-80 hover:opacity-100 max-sm:h-11 max-sm:w-11"
         aria-label="Закрыть уведомление"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+        <IconClose size={14} />
       </button>
     </div>
   );
@@ -26273,13 +28397,6 @@ export function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
 export function FieldError({ id, text }: { id: string; text?: string }) {
   return text ? <p id={id} className="mt-1.5 text-sm font-bold text-bad" role="alert">{text}</p> : null;
 }
-
-const IconEye = () => (
-  <Icon size={20}><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></Icon>
-);
-const IconEyeOff = () => (
-  <Icon size={20}><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.4 4.5-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /></Icon>
-);
 
 /** password input with a show/hide button, a Caps Lock warning and an inline error */
 export const PasswordField = forwardRef<
@@ -26454,29 +28571,103 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
   );
 }
 
-// ---------- small action icons (18 px) shared by the admin pages ----------
-const I18 = ({ children }: { children: ReactNode }) => <Icon size={18}>{children}</Icon>;
-export const IconEdit = () => <I18><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></I18>;
-export const IconTrash = () => <I18><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" /></I18>;
-export const IconPause = () => <I18><path d="M8 5v14M16 5v14" /></I18>;
-export const IconPlay = () => <I18><path d="M7 4.5v15l12-7.5z" /></I18>;
-export const IconKey = () => <I18><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M16 7l3 3" /></I18>;
-export const IconDownload = () => <I18><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></I18>;
-export const IconRestore = () => <I18><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" /><path d="M12 8v4l3 2" /></I18>;
-export const IconCopyPlus = () => <I18><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></I18>;
-export const IconLinkOut = () => <I18><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></I18>;
-export const IconUsers = () => (
-  <Icon size={22}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></Icon>
-);
-export const IconJournal = () => (
-  <Icon size={22}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></Icon>
-);
-export const IconSystem = () => (
-  <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>
-);
-export const IconStart = () => (
-  <Icon size={22}><path d="M5 21V4M5 4h11l-2 4 2 4H5" /></Icon>
-);
+// ---------- admin page grid: one rhythm for every page of the admin area ----------
+export { useAutosave } from './autosave';
+export type { SaveStatus, AutosaveOptions } from './autosave';
+import type { SaveStatus } from './autosave';
+
+/**
+ * Root of an admin page: PageHead first, then sections 20 px apart. `narrow` (forms: settings, alerts) caps the
+ * content at 48rem; the PageHead always spans the full width, so titles sit at the same place on every page.
+ */
+export function AdminPage({ head, narrow = false, children }: { head: ReactNode; narrow?: boolean; children: ReactNode }) {
+  return (
+    <div className="space-y-5">
+      {head}
+      <div className={`space-y-5 ${narrow ? 'max-w-3xl' : ''}`}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
+ * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
+ */
+export function Section({ title, description, actions, children, className = '', id, tone = 'panel', ...rest }: {
+  title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
+  tone?: 'panel' | 'soft'; 'data-tour'?: string;
+}) {
+  const hid = useId();
+  return (
+    <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
+      {(title || actions) && (
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0 flex-1 basis-56">
+            {title && <h2 id={hid} className={`${tone === 'soft' ? 'text-base' : 'text-lg'} font-black`}>{title}</h2>}
+            {description && <p className="mt-0.5 font-semibold text-mute">{description}</p>}
+          </div>
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+/** a slim one-line card (channel pickers, toolbars): same panel, tighter padding */
+export function Strip({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3 ${className}`}>{children}</div>;
+}
+
+/** «Сохраняется… / Сохранено / Не сохранено»: the state of an autosaved field; `retry` shows «Повторить» after a failure */
+export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?: string; retry?: () => void }) {
+  let body: ReactNode = null;
+  if (status === 'dirty') body = <span className="text-mute">Изменено…</span>;
+  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />Сохраняется…</span>;
+  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />Сохранено</span>;
+  else if (status === 'error') {
+    body = (
+      <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
+        Не сохранено{error ? `: ${error}` : ''}
+        {retry && <button type="button" className="font-extrabold underline" onClick={retry}>Повторить</button>}
+      </span>
+    );
+  }
+  return <span className="min-h-[1.25rem] text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
+}
+
+/**
+ * Label + input + message under the field. `error` (validation) is red and replaces the hint; `save` shows the
+ * autosave state on the label row. Pass the rest of the input attributes through.
+ */
+export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, ...rest }: {
+  id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: ReactNode;
+  save?: { status: SaveStatus; error?: string; retry?: () => void }; className?: string; multiline?: boolean;
+  type?: string; placeholder?: string; maxLength?: number; disabled?: boolean; autoComplete?: string; rows?: number;
+  onBlur?: () => void; inputMode?: 'text' | 'url' | 'numeric'; spellCheck?: boolean;
+}) {
+  const describedBy = [error ? `${id}-err` : '', hint && !error ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
+  const common = {
+    id,
+    className: `input ${className}`,
+    value,
+    onChange: (e: { target: { value: string } }) => onChange(e.target.value),
+    'aria-invalid': error ? true : undefined,
+    'aria-describedby': describedBy,
+    ...rest,
+  };
+  return (
+    <div>
+      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3">
+        <label htmlFor={id} className="text-sm font-extrabold text-mute">{label}</label>
+        {save && <SaveBadge status={save.status} error={save.error} retry={save.retry} />}
+      </div>
+      {multiline ? <textarea {...common} /> : <input {...common} />}
+      <FieldError id={`${id}-err`} text={error} />
+      {hint && !error && <p id={`${id}-hint`} className="mt-1.5 text-sm font-semibold text-mute">{hint}</p>}
+    </div>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/useMotion.ts" << '__COREGSM_EOF__'
@@ -26750,6 +28941,8 @@ export default {
       colors: {
         page: c('page'),
         card: c('card'),
+        // floating surfaces (dialogs, menus): one step above the card in the dark theme, equal to it in the light one
+        raised: c('raised'),
         ink: c('ink'),
         mute: c('mute'),
         line: c('line'),
@@ -26772,8 +28965,21 @@ export default {
         sans: ['"Manrope Variable"', 'Manrope', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
-      borderRadius: { '4xl': '2rem', tile: '26px' },
+      // radius scale: rounded-ui-sm / -md / -lg / -xl / -pill (values in index.css); the stock rounded-* names stay as they were
+      borderRadius: {
+        '4xl': '2rem',
+        tile: 'var(--r-xl)',
+        'ui-sm': 'var(--r-sm)',
+        'ui-md': 'var(--r-md)',
+        'ui-lg': 'var(--r-lg)',
+        'ui-xl': 'var(--r-xl)',
+        'ui-pill': 'var(--r-pill)',
+      },
+      // shadow scale: shadow-1 (small controls), shadow-2 (cards at rest), shadow-3 (floating); soft / pop are the old names
       boxShadow: {
+        1: 'var(--shadow-1)',
+        2: 'var(--shadow-2)',
+        3: 'var(--shadow-3)',
         soft: 'var(--shadow-soft)',
         pop: 'var(--shadow-pop)',
       },

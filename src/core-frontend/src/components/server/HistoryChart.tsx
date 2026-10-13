@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
-import { fmtDateTime, plural, smoothPath } from '../../ui';
+import { fmtDateTime, plural, smoothPath, toast } from '../../ui';
 import { pingTone, TONE_TEXT } from './helpers';
 
 type Point = ServerDetails['points'][number];
+type Ev = ServerDetails['events'][number];
 export type Series = 'players' | 'ping';
 
 /** 0..yMax with about four steps of a "nice" size (1, 2, 5 x 10^n); the scale follows the data, not the server slots */
@@ -19,6 +20,12 @@ function niceScale(dataMax: number, minTop: number): { max: number; step: number
   return { max, step, ticks };
 }
 
+const MARK: Record<Ev['type'], { fill: string; path: string }> = {
+  down: { fill: 'rgb(var(--bad))', path: 'M12 5v12M7 13l5 5 5-5' },
+  up: { fill: 'rgb(var(--ok))', path: 'M5 12.5l4.5 4.5L19 7.5' },
+  peak: { fill: 'rgb(var(--link))', path: 'M12 19V6M7 11l5-5 5 5' },
+};
+
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
     ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -32,9 +39,9 @@ const fullTime = (ts: number) =>
  * that follows the mouse / finger / pen and the arrow keys, Y axis that fits the data.
  */
 export default function HistoryChart({
-  points, hours, max, color, series = 'players', loading = false,
-}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean }) {
-  const L = 38, R = 10, T = 14, B = 28;
+  points, hours, max, color, series = 'players', loading = false, events = [], title = '',
+}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string }) {
+  const L = 38, R = 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -42,6 +49,7 @@ export default function HistoryChart({
   const gid = useId();
   // the drawing is 1:1 with the screen, so labels keep a readable size on phones
   const [W, setW] = useState(720);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
@@ -57,10 +65,15 @@ export default function HistoryChart({
   const winStart = now - hours * 3600_000;
   const first = points.length ? points[0].ts : now;
   const sparse = points.length < 20;
+  // data may begin later than the window (new server, 30 days asked while 7 are kept)
+  const late = points.length > 0 && first - winStart > hours * 3600_000 * 0.08;
   // with only a few samples the window shrinks to them instead of leaving a lonely tail on the right
   let t0 = winStart;
-  if (sparse) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
+  if (sparse || late) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
   const span = now - t0;
+  // vertical markers for outages, returns and the busiest moment
+  const marks = events.filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
+  const T = marks.length ? 30 : 14;
   const x = (ts: number) => L + ((ts - t0) / span) * (W - L - R);
 
   const valueOf = (p: Point): number | null => {
@@ -139,17 +152,76 @@ export default function HistoryChart({
   const tx = hp ? Math.min(W - TW / 2 - 2, Math.max(TW / 2 + 2, x(hp.ts))) : 0;
   const seriesName = series === 'ping' ? 'Пинг' : 'Игроки';
 
+  /** the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas */
+  const exportPng = async () => {
+    const el = svg.current;
+    if (!el || saving) return;
+    setSaving(true);
+    try {
+      const props = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'fill-opacity', 'stroke-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'stop-color', 'stop-opacity'];
+      const clone = el.cloneNode(true) as SVGSVGElement;
+      const src = [el, ...Array.from(el.querySelectorAll('*'))];
+      const dst = [clone, ...Array.from(clone.querySelectorAll('*'))] as SVGElement[];
+      src.forEach((n, i) => {
+        const cs = getComputedStyle(n);
+        for (const p of props) dst[i].style.setProperty(p, cs.getPropertyValue(p));
+      });
+      clone.removeAttribute('class');
+      clone.removeAttribute('aria-hidden');
+      clone.setAttribute('x', '0');
+      clone.setAttribute('y', '38');
+      clone.setAttribute('width', String(W));
+      clone.setAttribute('height', String(H));
+      const bs = getComputedStyle(document.body);
+      const bg = bs.backgroundColor && bs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? bs.backgroundColor : '#ffffff';
+      const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+      const head = `${title ? `${title} · ` : ''}${seriesName}`;
+      const out =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H + 38}" viewBox="0 0 ${W} ${H + 38}">` +
+        `<rect width="100%" height="100%" fill="${bg}"/>` +
+        `<text x="${L}" y="24" fill="${bs.color}" font-family="${esc(bs.fontFamily)}" font-size="15" font-weight="800">${esc(head)}</text>` +
+        new XMLSerializer().serializeToString(clone) +
+        `</svg>`;
+      const url = URL.createObjectURL(new Blob([out], { type: 'image/svg+xml;charset=utf-8' }));
+      const img = new Image();
+      await new Promise<void>((ok, fail) => { img.onload = () => ok(); img.onerror = () => fail(new Error('img')); img.src = url; });
+      const k = 2;
+      const cv = document.createElement('canvas');
+      cv.width = W * k;
+      cv.height = (H + 38) * k;
+      const ctx = cv.getContext('2d');
+      if (!ctx) throw new Error('canvas');
+      ctx.scale(k, k);
+      ctx.drawImage(img, 0, 0, W, H + 38);
+      URL.revokeObjectURL(url);
+      const blob = await new Promise<Blob | null>((ok) => cv.toBlob(ok, 'image/png'));
+      if (!blob) throw new Error('blob');
+      const a = document.createElement('a');
+      const dl = URL.createObjectURL(blob);
+      a.href = dl;
+      a.download = `coregsm-${series}-${hours <= 24 ? '24h' : hours <= 168 ? '7d' : '30d'}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(dl), 4000);
+    } catch {
+      toast('Не удалось сохранить картинку', 'err');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className={`transition-opacity duration-300 ${loading ? 'opacity-60' : ''}`}>
-      {sparse && points.length > 0 && (
+      {(sparse || late) && points.length > 0 && (
         <p className="mb-2 flex items-center gap-2 rounded-xl bg-soft px-3 py-1.5 text-sm font-bold text-mute">
           <span aria-hidden className="live-dot !bg-warn" />
-          Данные накапливаются с {fmtDateTime(first)}
+          {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}
       <div
         ref={wrap}
-        className="relative rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-brand/60"
+        className="hc-wrap relative rounded-2xl"
         role="group"
         aria-label={summary}
         tabIndex={0}
@@ -160,7 +232,7 @@ export default function HistoryChart({
         <svg
           ref={svg}
           viewBox={`0 0 ${W} ${H}`}
-          className="chart-reveal block h-auto w-full touch-pan-y select-none"
+          className="hc-fade block h-auto w-full touch-pan-y select-none"
           aria-hidden
           onPointerDown={onPointer}
           onPointerMove={onPointer}
@@ -205,6 +277,19 @@ export default function HistoryChart({
               <circle cx={x(endPt.ts)} cy={y(endPt.v)} r="4.5" style={{ fill: color }} className="stroke-card" strokeWidth="2" />
             </>
           )}
+          {marks.map((m) => {
+            const mx = Math.min(W - R - 9, Math.max(L + 9, x(m.ts)));
+            const kind = MARK[m.type];
+            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : 'Сервер упал';
+            return (
+              <g key={`${m.type}-${m.ts}`}>
+                <title>{`${label} · ${fullTime(m.ts)}`}</title>
+                <line x1={x(m.ts)} x2={x(m.ts)} y1={20} y2={H - B} className="stroke-mute" strokeWidth="1" strokeDasharray="2 4" opacity="0.5" />
+                <circle cx={mx} cy={11} r="9" style={{ fill: kind.fill }} />
+                <svg x={mx - 6} y={5} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d={kind.path} /></svg>
+              </g>
+            );
+          })}
           {hp && <line x1={x(hp.ts)} x2={x(hp.ts)} y1={T} y2={H - B} className="stroke-mute" strokeWidth="1.5" strokeDasharray="3 3" opacity="0.7" />}
           {hp && hv != null && <circle cx={x(hp.ts)} cy={y(hv)} r="5.5" style={{ fill: color }} className="stroke-card" strokeWidth="2.5" />}
           {hp && hv == null && <circle cx={x(hp.ts)} cy={y(0)} r="4.5" className="fill-bad stroke-card" strokeWidth="2" />}
@@ -238,7 +323,8 @@ export default function HistoryChart({
         )}
         <span className="sr-only" aria-live="polite">{kbd && hp ? describe(hp) : ''}</span>
       </div>
-      <p className="mt-1 text-xs font-bold text-mute">
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      <p className="text-xs font-bold text-mute">
         {seriesName}{unit ? `, ${unit}` : ''}
         {hp && hv != null && series === 'ping' && (
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
@@ -247,6 +333,23 @@ export default function HistoryChart({
           <span className="ml-2 font-semibold">максимум за период: {Math.max(...points.map((p) => p.players))} {plural(Math.max(...points.map((p) => p.players)), ['игрок', 'игрока', 'игроков'])}</span>
         )}
       </p>
+      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title="Сохранить график как картинку PNG">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
+        {saving ? 'Готовим…' : 'Скачать PNG'}
+      </button>
+      </div>
+      {marks.length > 0 && (
+        <ul className="hc-legend" aria-label="Обозначения на графике">
+          {(['down', 'up', 'peak'] as const).filter((t) => marks.some((m) => m.type === t)).map((t) => (
+            <li key={t}>
+              <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
+              </span>
+              {t === 'down' ? 'сбой' : t === 'up' ? 'возврат' : 'пик'}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

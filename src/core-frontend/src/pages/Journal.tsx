@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
-import { Empty, ErrorLine, IconJournal, PageHead, fmtDateTime, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, IconJournal, PageHead, fmtDateTime, usePoll } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -15,14 +15,17 @@ export default function JournalPage() {
   const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconJournal />}
-        title="Журнал"
-        subtitle="Кто и что менял в панели"
-        hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
-        help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
-      />
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconJournal />}
+          title="Журнал"
+          subtitle="Кто и что менял в панели"
+          hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
+          help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
+        />
+      )}
+    >
       <ErrorLine text={error} />
       <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
       {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
@@ -38,6 +41,6 @@ export default function JournalPage() {
           ))}
         </ul>
       )}
-    </div>
+    </AdminPage>
   );
 }

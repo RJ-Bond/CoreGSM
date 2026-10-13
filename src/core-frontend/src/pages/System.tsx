@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api, type CertInfo } from '../api';
-import { ErrorLine, GoLink, IconSystem, PageHead, ago, fmtDateTime, plural, usePoll } from '../ui';
+import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
+import { AdminPage, ErrorLine, GoLink, IconDatabase, IconDisk, IconMemory, IconSystem, PageHead, Section, Strip, ago, fmtDateTime, plural, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -21,13 +22,15 @@ interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; det
 const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : `${(n / 1048576).toFixed(1)} МБ`);
 const dur = (s: number) => (s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч ${Math.floor((s % 3600) / 60)} мин` : `${Math.floor(s / 86400)} д ${Math.floor((s % 86400) / 3600)} ч`);
 
-const certTile = (c: CertInfo): [string, string, string | undefined, string | undefined] => {
-  const note = [c.issuer, c.selfSigned ? 'самоподписанный' : null].filter(Boolean).join(' · ') || undefined;
-  if (c.daysLeft == null) return ['Сертификат HTTPS', 'нет', note ?? 'панель работает по HTTP', undefined];
+// the backend reports the process memory and the database file only, so they are drawn against a fixed reference size
+const MEM_REF_MB = 512;
+const DB_REF_BYTES = 1024 * 1048576;
+
+const certTone = (c: CertInfo): GaugeTone => (c.daysLeft == null ? 'mute' : c.daysLeft <= 0 ? 'bad' : c.daysLeft <= 14 ? 'warn' : 'ok');
+const certText = (c: CertInfo) => {
+  if (c.daysLeft == null) return 'нет (панель работает по HTTP)';
   const d = c.daysLeft;
-  const value = d <= 0 ? 'истёк' : `${d} ${plural(d, ['день', 'дня', 'дней'])}`;
-  const tone = d <= 0 ? 'text-bad' : d <= 14 ? 'text-warn' : undefined;
-  return ['Сертификат HTTPS', value, note, tone];
+  return d <= 0 ? 'истёк' : `${d} ${plural(d, ['день', 'дня', 'дней'])}`;
 };
 
 /** Health, diagnostics and the certificate; the backups live under Settings → «Обновления и копии». */
@@ -45,60 +48,91 @@ export default function SystemPage() {
     setRunning(false);
   };
 
-  const tiles: [string, string, string?, string?][] = h
+  const diskUsed = h && h.diskTotal && h.diskFree != null ? 1 - h.diskFree / h.diskTotal : null;
+  const memFrac = h ? h.memoryMb / MEM_REF_MB : null;
+  const dbFrac = h && h.dbBytes != null ? h.dbBytes / DB_REF_BYTES : null;
+
+  const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
+  const status: { k: string; v: string; sub?: string; tone: GaugeTone }[] = h
     ? [
-        ['Версия', h.version ? h.version.slice(0, 7) : 'не задана', `Node ${h.node}`],
-        ['Работает', dur(h.uptimeSec), `память ${h.memoryMb} МБ`],
-        ['База данных', mb(h.dbBytes), `${h.counts.history.toLocaleString('ru-RU')} точек истории`],
-        ['Свободно на диске', mb(h.diskFree), h.diskTotal ? `из ${mb(h.diskTotal)}` : undefined],
-        ['Серверы', `${h.counts.online} из ${h.counts.servers}`, 'онлайн'],
-        ['Привязки Discord', String(h.counts.bindings), `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`],
-        ['Пользователи', String(h.counts.users)],
-        ...(h.cert ? [certTile(h.cert)] : []),
-        ['Бот', h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined)],
+        { k: 'Версия', v: h.version ? h.version.slice(0, 7) : 'не задана', sub: `Node ${h.node}`, tone: 'mute' },
+        { k: 'Работает', v: dur(h.uptimeSec), tone: 'ok' },
+        { k: 'Серверы', v: `${h.counts.online} из ${h.counts.servers} онлайн`, tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
+        { k: 'Привязки Discord', v: String(h.counts.bindings), sub: `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`, tone: 'mute' },
+        { k: 'Бот', v: h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', sub: h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined), tone: botTone },
+        ...(h.cert ? [{ k: 'Сертификат HTTPS', v: certText(h.cert), sub: [h.cert.issuer, h.cert.selfSigned ? 'самоподписанный' : null].filter(Boolean).join(' · ') || undefined, tone: certTone(h.cert) }] : []),
+        { k: 'Пользователи', v: String(h.counts.users), tone: 'mute' as GaugeTone },
       ]
     : [];
-  const dot = { ok: 'bg-ok', warn: 'bg-warn', fail: 'bg-bad' } as const;
+  const dot = { ok: 'dot-ok', warn: 'dot-warn', fail: 'dot-bad' } as const;
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconSystem />}
-        title="Система"
-        subtitle="Состояние панели и диагностика"
-        hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
-        help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
-      >
-        <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconSystem />}
+          title="Система"
+          subtitle="Состояние панели и диагностика"
+          hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
+          help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
+        >
+          <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
 
       {h ? (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {tiles.map(([k, v, hint, tone]) => (
-            <div key={k} className="panel px-5 py-4">
-              <div className="text-sm font-extrabold text-mute">{k}</div>
-              <div className={`truncate text-2xl font-black tabular-nums ${tone ?? 'text-link'}`}>{v}</div>
-              {hint && <div className="truncate text-sm font-semibold text-mute">{hint}</div>}
+        <>
+          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-3" role="group" aria-label="Ресурсы">
+            <div className="panel p-5 text-center">
+              <Gauge
+                value={diskUsed}
+                label="Диск: занято"
+                display={diskUsed == null ? '–' : `${Math.round(diskUsed * 100)} %`}
+                caption={h.diskFree != null ? `свободно ${mb(h.diskFree)}` : undefined}
+                icon={<IconDisk size={18} />}
+              />
+              <div className="mt-2 font-extrabold">Диск</div>
+              <div className="text-sm font-semibold text-mute">{h.diskTotal ? `всего ${mb(h.diskTotal)}` : 'размер неизвестен'}</div>
             </div>
-          ))}
-        </div>
+            <div className="panel p-5 text-center">
+              <Gauge value={memFrac} tone={usageTone(memFrac)} label="Память панели" display={`${h.memoryMb} МБ`} caption={`из ${MEM_REF_MB} МБ`} icon={<IconMemory size={18} />} />
+              <div className="mt-2 font-extrabold">Память</div>
+              <div className="text-sm font-semibold text-mute">процесс панели, ориентир {MEM_REF_MB} МБ</div>
+            </div>
+            <div className="panel p-5 text-center">
+              <Gauge value={dbFrac} tone={usageTone(dbFrac)} label="База данных" display={mb(h.dbBytes)} caption="ориентир 1 ГБ" icon={<IconDatabase size={18} />} />
+              <div className="mt-2 font-extrabold">База данных</div>
+              <div className="text-sm font-semibold text-mute">{h.counts.history.toLocaleString('ru-RU')} точек истории</div>
+            </div>
+          </div>
+
+          <Section title="Состояние">
+            <ul className="divide-y divide-line">
+              {status.map((r) => (
+                <li key={r.k} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5">
+                  <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full dot-${r.tone}`} />
+                  <span className="font-extrabold">{r.k}</span>
+                  {r.sub && <span className="min-w-0 break-words text-sm font-semibold text-mute">{r.sub}</span>}
+                  <span className={`ml-auto font-black tabular-nums ${r.tone === 'bad' ? 'text-bad' : r.tone === 'warn' ? 'text-warn' : ''}`}>{r.v}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        </>
       ) : (
-        <div className="skeleton panel h-40" />
+        <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />
       )}
 
-      <div className="panel space-y-4 p-6">
-        <div>
-          <h2 className="text-lg font-black">Диагностика</h2>
-          <p className="font-semibold text-mute">Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.</p>
-        </div>
+      <Section title="Диагностика" description="Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.">
         {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}
         {checks && (
           <>
-            <ul className="divide-y divide-line rounded-2xl border border-line">
+            <ul className="divide-y divide-line rounded-ui-lg border border-line">
               {checks.list.map((c) => (
                 <li key={c.id} className="flex items-start gap-3 px-4 py-2.5">
-                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} aria-label={c.status} />
+                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? 'в порядке' : c.status === 'warn' ? 'внимание' : 'ошибка'} />
                   <div className="min-w-0">
                     <div className="font-extrabold">{c.label}</div>
                     <div className="break-words text-sm font-semibold text-mute">{c.detail}</div>
@@ -109,15 +143,15 @@ export default function SystemPage() {
             <p className="text-sm font-semibold text-mute">Проверено {fmtDateTime(checks.at)}</p>
           </>
         )}
-      </div>
+      </Section>
 
-      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-5">
+      <Strip>
         <div className="min-w-0">
           <h2 className="text-lg font-black">Резервные копии</h2>
           <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
         </div>
         <GoLink href="#/admin/settings/updates">Обновления и копии</GoLink>
-      </div>
-    </div>
+      </Strip>
+    </AdminPage>
   );
 }

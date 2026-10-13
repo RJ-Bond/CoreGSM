@@ -1,1 +1,57 @@
-/* system: styles owned by one workstream (see main.tsx) */
+/* system: styles owned by one workstream (see main.tsx): UI kit, gauges, autosave, accents, confirm dialog.
+   Rules that apply here: no transform transitions on big blocks, no infinite animations (except spinners and the
+   skeleton), entrance animations use fill-mode backwards, no outline styling, no backdrop-filter / will-change. */
+
+/* red confirm button: a solid fill (white text >= 4.5:1 in both themes), no gradient */
+.btn-solid-danger { background-image: none; background-color: rgb(var(--badsolid)); box-shadow: var(--shadow-1); }
+.btn-solid-danger::after { display: none; }
+.btn-solid-danger:hover { filter: brightness(1.1); }
+
+/* ---------- arc gauge (System page): static SVG, the arc is drawn by stroke-dasharray, no animation ---------- */
+.gauge { position: relative; display: grid; place-items: center; }
+.gauge svg { display: block; width: 100%; height: auto; }
+.gauge-track { stroke: rgb(var(--soft)); }
+.gauge-arc { stroke: rgb(var(--ok)); }
+.gauge-ok .gauge-arc { stroke: rgb(var(--ok)); }
+.gauge-warn .gauge-arc { stroke: rgb(var(--warn)); }
+.gauge-bad .gauge-arc { stroke: rgb(var(--bad)); }
+.gauge-mute .gauge-arc { stroke: rgb(var(--mute)); }
+.gauge-value { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; padding-top: 6%; }
+
+/* status dots in compact lists */
+.dot-ok { background: rgb(var(--ok)); }
+.dot-warn { background: rgb(var(--warn)); }
+.dot-bad { background: rgb(var(--bad)); }
+.dot-mute { background: rgb(var(--mute)); }
+
+/* ---------- UI kit page ---------- */
+.kit-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+.kit-swatch { height: 3rem; border-radius: var(--r-md); border: 1px solid var(--tile-border); }
+.kit-icon { display: grid; justify-items: center; gap: .35rem; padding: .75rem .25rem; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--ink)); font-size: 11px; font-weight: 700; text-align: center; overflow-wrap: anywhere; }
+.kit-icon span { color: rgb(var(--mute)); }
+/* a frame that shows a component in the other theme next to the current one */
+.kit-theme { border-radius: var(--r-xl); padding: 1.25rem; background: rgb(var(--page)); color: rgb(var(--ink)); border: 1px solid var(--tile-border); }
+:root .kit-theme[data-kit-theme='light'] {
+  --page: 243 244 248; --card: 255 255 255; --raised: 255 255 255; --ink: 18 20 26; --mute: 92 99 114; --line: 231 233 240; --field: 122 129 143;
+  --soft: 236 238 246; --link: 79 70 229; --ok: 18 120 66; --okbg: 220 247 232; --warn: 146 94 0; --warnbg: 255 241 205; --bad: 185 40 40; --badbg: 254 226 226;
+  --seg-on: 255 255 255; --tile-border: rgb(231 233 240);
+  --shadow-1: 0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
+  --shadow-2: 0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
+  --shadow-3: 0 1px 2px rgba(20, 24, 40, 0.06), 0 18px 38px rgba(40, 50, 110, 0.13);
+  color-scheme: light;
+}
+:root .kit-theme[data-kit-theme='dark'] {
+  --page: 9 10 14; --card: 18 20 27; --raised: 27 30 40; --ink: 226 228 236; --mute: 148 154 170; --line: 38 41 53; --field: 112 118 136;
+  --soft: 30 33 44; --link: 165 170 255; --ok: 74 222 128; --okbg: 18 52 36; --warn: 251 191 36; --warnbg: 54 43 14; --bad: 248 113 113; --badbg: 58 25 30;
+  --seg-on: 44 48 64; --tile-border: rgb(255 255 255 / 0.07);
+  --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
+  --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
+  color-scheme: dark;
+}
+
+/* accent chooser: a small round swatch before the label */
+.accent-dot { display: inline-block; width: .9rem; height: .9rem; border-radius: 9999px; flex: none; background: var(--sw, rgb(var(--brand))); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .15); }
+
+/* autosave: a field that has just been saved gets a calm green ring for a moment (box-shadow only) */
+.input[data-saved='true'] { box-shadow: 0 0 0 3px rgb(var(--ok) / .25); }

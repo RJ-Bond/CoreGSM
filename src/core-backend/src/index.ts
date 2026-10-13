@@ -1095,7 +1095,8 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
   const id = Number(req.params.id);
   const server = getServer(id);
   if (!server) return res.status(404).json({ error: 'Сервер не найден' });
-  const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
+  // up to 30 days may be asked for; samples are kept for 7 days, so the chart simply shows what exists
+  const hours = Math.min(720, Math.max(1, Number(req.query.hours ?? 24)));
   const since = Date.now() - hours * 3600 * 1000;
   const bucketMs = Math.max(30_000, Math.ceil((hours * 3600 * 1000) / 180));
 
@@ -1132,9 +1133,20 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
 
   const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
 
+  // additive: when the server was added and (admins only) where its Discord message lives
+  const createdAt = (db.prepare('SELECT created_at FROM servers WHERE id = ?').get(id) as { created_at: number } | undefined)?.created_at || null;
+  const discord = isAdmin(req)
+    ? (db.prepare('SELECT * FROM bindings WHERE server_id = ? ORDER BY id').all(id) as BindingRow[]).map((b) => {
+        const c = channelInfo(b.channel_id);
+        return { channelId: b.channel_id, channelName: c.channelName, guildName: c.guildName, guildId: c.guildId, messageId: b.message_id, enabled: !!b.enabled };
+      })
+    : [];
+
   res.json({
     server: { ...(isAdmin(req) ? server : publicServer(server)), countryCode: server.country || countryOf(id, server.host) || '' },
     hours,
+    createdAt,
+    discord,
     playersNow,
     points,
     stats: {

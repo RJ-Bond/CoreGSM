@@ -3,6 +3,7 @@ import { api, getToken, type Server, type Session } from '../api';
 import { useAuth } from '../auth';
 import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
+import { AccentPicker } from '../components/AccentPicker';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, StatusPill, UserAvatar, toast, useDensity, type Density } from '../ui';
 
 /** "Chrome · Windows" from a User-Agent string */
@@ -105,6 +106,7 @@ function AppearanceCard() {
         </div>
         <p className="mt-2 text-sm font-semibold text-mute">{options.find((o) => o[0] === density)?.[2]}. Запоминается в этом браузере.</p>
       </div>
+      <AccentPicker />
     </div>
   );
 }

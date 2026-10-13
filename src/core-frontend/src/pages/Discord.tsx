@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Switch, ago, toast, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -20,6 +20,8 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [bot, setBot] = useState<BotStatus | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
+  // bindings removed with «Отменить» pending: hidden here until the request is really sent
+  const [hidden, setHidden] = useState<number[]>([]);
 
   const load = () =>
     Promise.all([api<Server[]>('/servers'), api<Binding[]>('/bindings'), api<SettingsInfo>('/settings'), api<BotStatus>('/bot/status')])
@@ -44,22 +46,38 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   };
 
   const server = (id: number) => servers.find((s) => s.id === id);
+  const shown = bindings.filter((b) => !hidden.includes(b.id));
   const working = bindings.some((b) => b.enabled && b.lastUpdate && !b.lastError);
 
-  const remove = async (b: Binding) => {
-    const ok = await confirmDialog({ title: 'Удалить привязку?', text: 'Сообщение в Discord останется, но обновляться перестанет.', confirmLabel: 'Удалить', danger: true });
-    if (!ok) return;
-    await api(`/bindings/${b.id}`, 'DELETE').then(() => toast('Привязка удалена')).catch((e) => setError(e.message));
-    load();
+  // a binding is easy to create again and the Discord message stays, so it goes away at once and can be taken back for 6 s
+  const removeMany = (ids: number[], text: string) => {
+    setHidden((h) => [...h, ...ids]);
+    setPicked((p) => p.filter((x) => !ids.includes(x)));
+    undoable({
+      text,
+      restore: () => setHidden((h) => h.filter((x) => !ids.includes(x))),
+      commit: async () => {
+        try {
+          if (ids.length === 1) await api(`/bindings/${ids[0]}`, 'DELETE');
+          else await api('/bindings/bulk', 'POST', { ids, action: 'delete' });
+        } catch (e) {
+          setError((e as Error).message);
+          toast('Не удалось удалить привязку', 'err');
+        }
+        setHidden((h) => h.filter((x) => !ids.includes(x)));
+        load();
+      },
+    });
   };
+  const remove = (b: Binding) => removeMany([b.id], 'Привязка удалена');
 
   const bulk = async (action: 'pause' | 'resume' | 'delete') => {
     if (action === 'delete') {
-      const ok = await confirmDialog({ title: `Удалить привязок: ${picked.length}?`, text: 'Сообщения в Discord останутся, но обновляться перестанут.', confirmLabel: 'Удалить', danger: true });
-      if (!ok) return;
+      removeMany(picked, `Удалено привязок: ${picked.length}`);
+      return;
     }
     await api('/bindings/bulk', 'POST', { ids: picked, action })
-      .then(() => toast(action === 'delete' ? 'Привязки удалены' : action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
+      .then(() => toast(action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
       .catch((e: Error) => setError(e.message));
     setPicked([]);
     load();
@@ -79,16 +97,19 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const allDone = steps.every((s) => s.done);
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        icon={<IconDiscord />}
-        title="Discord"
-        subtitle="Куда бот публикует состояние серверов"
-        hint="Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов."
-        help={<p>Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.</p>}
-      >
-        <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
-      </PageHead>
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconDiscord />}
+          title="Discord"
+          subtitle="Куда бот публикует состояние серверов"
+          hint="Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов."
+          help={<p>Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.</p>}
+        >
+          <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
       {loaded && settings && !settings.discordTokenSet && (
         <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
@@ -101,7 +122,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </Notice>
       )}
 
-      <div className="panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3">
+      <Strip>
         <div className="flex items-center gap-3">
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
@@ -114,12 +135,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         )}
         {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
-      </div>
+      </Strip>
 
       {!allDone && (
         <ol className="grid gap-3 md:grid-cols-3">
           {steps.map((s, i) => (
-            <li key={s.title} className="panel flex gap-3 p-4">
+            <li key={s.title} className="panel flex gap-3 p-5">
               <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-black ${s.done ? 'bg-okbg text-ok' : 'bg-soft text-mute'}`}>{s.done ? '✓' : i + 1}</span>
               <div>
                 <div className="font-black">{s.title}</div>
@@ -132,7 +153,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
 
-      {loaded && bindings.length === 0 && (
+      {loaded && shown.length === 0 && (
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
@@ -140,10 +161,10 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </Empty>
       )}
 
-      {bindings.length > 1 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-4 py-2.5">
+      {shown.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
           <label className="flex items-center gap-2 font-bold">
-            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === bindings.length} onChange={(e) => setPicked(e.target.checked ? bindings.map((b) => b.id) : [])} />
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === shown.length} onChange={(e) => setPicked(e.target.checked ? shown.map((b) => b.id) : [])} />
             {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
           </label>
           {picked.length > 0 && (
@@ -157,13 +178,13 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       )}
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-2">
-        {bindings.map((b) => {
+        {shown.map((b) => {
           const s = server(b.serverId);
           return (
             <div key={b.id} className={`panel min-w-0 space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  {bindings.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
+                  {shown.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
                     <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
@@ -236,7 +257,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           }}
         />
       )}
-    </div>
+    </AdminPage>
   );
 }
 

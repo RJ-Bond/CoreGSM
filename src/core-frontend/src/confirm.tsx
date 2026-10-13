@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
+import { IconInfo, IconWarn } from './icons';
 
 /**
  * Styled replacements for window.confirm / window.prompt.
@@ -199,10 +200,17 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
         aria-labelledby="cd-title"
         aria-describedby={o.text ? 'cd-text' : undefined}
         onSubmit={submit}
-        className="pop panel max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-3xl sm:pb-6"
+        className="pop panel panel-raised max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
       >
-        <h2 id="cd-title" className="text-xl font-black">{o.title}</h2>
-        {o.text && <p id="cd-text" className="whitespace-pre-line font-semibold text-mute">{o.text}</p>}
+        <div className="flex items-start gap-3.5">
+          <span aria-hidden className={`grid h-11 w-11 shrink-0 place-items-center rounded-ui-md ${o.danger ? 'bg-badbg text-bad' : 'bg-soft text-link'}`}>
+            {o.danger ? <IconWarn size={22} /> : <IconInfo size={22} />}
+          </span>
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <h2 id="cd-title" className="text-xl font-black leading-tight">{o.title}</h2>
+            {o.text && <p id="cd-text" className="whitespace-pre-line font-semibold text-mute">{o.text}</p>}
+          </div>
+        </div>
         {req.kind === 'prompt' && (
           <div>
             <label htmlFor="cd-input" className="label">{req.opts.label}</label>
@@ -227,7 +235,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
           {!readOnly && (
             <button type="button" data-cancel className="btn btn-soft min-h-[44px]" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
           )}
-          <button data-ok className={`btn min-h-[44px] ${o.danger ? '!bg-badsolid hover:!brightness-110' : ''}`}>
+          <button data-ok className={`btn min-h-[44px] ${o.danger ? 'btn-solid-danger' : ''}`}>
             {o.confirmLabel ?? (readOnly ? 'Готово' : o.danger ? 'Удалить' : 'Подтвердить')}
           </button>
         </div>

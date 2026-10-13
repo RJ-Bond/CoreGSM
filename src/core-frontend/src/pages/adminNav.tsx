@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
-import { IconCards, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
-import { IconBell } from './Alerts';
+import { IconBell, IconCards, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {

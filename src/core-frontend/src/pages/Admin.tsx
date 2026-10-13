@@ -3,7 +3,7 @@ import { api, type CertInfo, type Server, type ServerInput } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { Empty, ErrorLine, GameAvatar, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
 import AdminStart, { AdminHome } from './AdminStart';
 import AlertsPage from './Alerts';
@@ -95,7 +95,7 @@ function UpdateBanner() {
     <div className="update-hero relative flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden rounded-[22px] px-5 py-3.5 text-white" role="status">
       <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/15" />
       <span aria-hidden className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20">
-        <svg className="update-bob" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+        <IconArrowUp className="update-bob" />
       </span>
       <div className="relative min-w-0 flex-1">
         <div className="font-extrabold leading-tight">Доступно обновление панели</div>
@@ -136,7 +136,7 @@ function CertWarning() {
         aria-label="Скрыть предупреждение до конца сессии"
         onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
       >
-        ✕
+        <IconClose size={14} />
       </button>
     </div>
   );
@@ -184,16 +184,19 @@ function ServersManage({ sub }: { sub: string }) {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHead
-        title="Серверы"
-        subtitle="Добавление и настройка игровых серверов"
-        icon={<IconServers />}
-        hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
-        help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
-      >
-        <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
-      </PageHead>
+    <PageStack
+      head={(
+        <PageHead
+          title="Серверы"
+          subtitle="Добавление и настройка игровых серверов"
+          icon={<IconServers />}
+          hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
+          help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
+        >
+          <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+        </PageHead>
+      )}
+    >
       <ErrorLine text={error} />
 
       {!loaded && (
@@ -248,6 +251,6 @@ function ServersManage({ sub }: { sub: string }) {
           onSaved={() => { closeForm(); toast('Сервер сохранён'); void load(); }}
         />
       )}
-    </div>
+    </PageStack>
   );
 }

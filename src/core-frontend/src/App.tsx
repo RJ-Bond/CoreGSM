@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
-import { WHITE, brandVars, parseTriplet, triplet, type RGB } from './colors';
+import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import CommandPalette from './components/CommandPalette';
 import NotFound from './components/NotFound';
 import Tour from './components/Tour';
@@ -14,6 +14,7 @@ import { NewsFeed } from './pages/News';
 import AdminPage from './pages/Admin';
 import ProfilePage from './pages/Profile';
 import StatusPage from './pages/Status';
+import UiKitPage from './pages/UiKit';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, parseHash, toast, useHash } from './ui';
 
 const IconStatus = () => (
@@ -47,9 +48,6 @@ const ADMIN_TITLES: Record<string, string> = {
 
 const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registrationMode: 'open', rules: '', discordLogin: false, brand: { name: 'CoreGSM', color: '#4f46e5', hasLogo: false, logoV: 0 } };
 
-const isDarkNow = (root: HTMLElement) =>
-  root.getAttribute('data-theme') === 'dark' || (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-
 /**
  * Brand colour, name and tab colour; recomputed when the theme flips.
  * Safeguards: white text on filled buttons keeps >= 4.5:1 (the fill is darkened, hue kept); brand-coloured text (--link)
@@ -58,30 +56,18 @@ const isDarkNow = (root: HTMLElement) =>
 function useBrand(b: Access['brand']) {
   useEffect(() => {
     const root = document.documentElement;
-    const apply = () => {
-      const dark = isDarkNow(root);
-      const style = getComputedStyle(root);
-      const surface = (name: string, fallback: RGB) => parseTriplet(style.getPropertyValue(`--${name}`)) ?? fallback;
-      const card = surface('card', dark ? [23, 24, 29] : WHITE);
-      const soft = surface('soft', dark ? [33, 34, 41] : [238, 240, 244]);
-
-      // fill: white text on buttons >= 4.5:1; hover darker; end: gradient end (second colour or a darker mix);
-      // link: brand-coloured text and focus rings (see brandVars in colors.ts)
-      const { fill, hover, end, link } = brandVars(b.color, b.color2, dark, card, soft);
-      root.style.setProperty('--brand', triplet(fill));
-      root.style.setProperty('--brand-hover', triplet(hover));
-      root.style.setProperty('--brand-2', triplet(end));
-      root.style.setProperty('--link', triplet(link));
-    };
+    // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
+    const apply = () => paintBrand(b.color, b.color2);
     apply();
     const mo = new MutationObserver(apply);
     mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    const off = onAccentChange(apply);
     // "as in the system" theme: follow the OS switching while the page is open
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     mq.addEventListener?.('change', apply);
-    document.querySelector('meta[name=theme-color]')?.setAttribute('content', b.color);
     return () => {
       mo.disconnect();
+      off();
       mq.removeEventListener?.('change', apply);
     };
   }, [b.color, b.color2]);
@@ -239,6 +225,7 @@ export default function App() {
   }, [load]);
 
   useBrand(access.brand);
+  useAutoAccent(boot.ready && !boot.offline && !boot.needsSetup, { page: rawPage, sub });
 
   // Ctrl/Cmd+K: the command palette (not over another dialog, not on the sign-in screens)
   useEffect(() => {
@@ -261,14 +248,16 @@ export default function App() {
   const showAuth = !me && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'profile' && me ? 'profile' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', '_ui'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   const sectionTitle = boot.needsSetup
     ? 'Первый запуск'
     : showAuth
       ? rawPage === 'register' && access.registration ? 'Регистрация' : 'Вход'
-      : page === '404'
+      : page === '_ui'
+        ? 'UI-кит'
+        : page === '404'
         ? 'Не найдено'
         : page === 'profile'
         ? 'Профиль'
@@ -425,6 +414,7 @@ export default function App() {
           {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
+          {page === '_ui' && <UiKitPage />}
           {page === '404' && <NotFound />}
         </main>
 

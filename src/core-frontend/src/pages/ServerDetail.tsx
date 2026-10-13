@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type ServerDetails } from '../api';
+import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
@@ -12,6 +12,7 @@ import HistoryChart, { type Series } from '../components/server/HistoryChart';
 import PlayersList from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
+import Passport from '../components/server/Passport';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
@@ -19,6 +20,12 @@ import {
 } from '../components/server/helpers';
 
 export { SERVER_TABS } from '../components/server/helpers';
+
+/** details + the additive fields: when the server was added and (admins only) its Discord message */
+type ServerDetails = BaseDetails & {
+  createdAt?: number | null;
+  discord?: { channelId: string; channelName: string | null; guildName: string | null; guildId: string | null; messageId: string | null; enabled: boolean }[];
+};
 
 /** key={id}: switching between servers starts from a clean state */
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
@@ -70,7 +77,7 @@ function StatTile({ k, hint, i, children }: { k: string; hint?: ReactNode; i: nu
 function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) => void }) {
   return (
     <div className="seg" role="group" aria-label="Период">
-      {([[24, '24 ч'], [168, '7 дн']] as [number, string][]).map(([h, label]) => (
+      {([[24, '24 ч'], [168, '7 дн'], [720, '30 дн']] as [number, string][]).map(([h, label]) => (
         <button key={h} type="button" onClick={() => onChange(h)} aria-pressed={hours === h} className="seg-item">{label}</button>
       ))}
     </div>
@@ -186,7 +193,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const cName = countryName(code);
   const flag = flagEmoji(code);
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
-  const windowLabel = data.hours <= 24 ? 'за 24 часа' : 'за 7 дней';
+  const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
+  const windowShort = data.hours <= 24 ? '24 ч' : data.hours <= 168 ? '7 дн' : '30 дн';
   const chartLoading = data.hours !== hours;
 
   const pct = s.maxPlayers > 0 ? Math.min(100, Math.round((s.players / s.maxPlayers) * 100)) : 0;
@@ -244,15 +252,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     ),
   ];
 
-  const info: [string, string][] = [
-    ['Игра', gameLabel(s.game)],
-    ['Адрес', s.address],
-    ...(s.map && s.online ? [['Карта', s.map] as [string, string]] : []),
-    ...(realVersion ? [['Версия', realVersion] as [string, string]] : []),
-    ...(mode ? [['Режим', mode] as [string, string]] : []),
-    ...(cName ? [['Страна', `${flag} ${cName}`.trim()] as [string, string]] : []),
-    ['Обновлено', ago(s.updatedAt)],
-  ];
+  const discordLinks = (data.discord ?? []).map((b) => {
+    const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
+    const href = b.guildId ? `https://discord.com/channels/${b.guildId}/${b.channelId}${b.messageId ? `/${b.messageId}` : ''}` : null;
+    return { text, href };
+  });
 
   const refresh = async () => {
     setBusy(true);
@@ -309,25 +313,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : color} series={withSeries ? series : 'players'} loading={chartLoading} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
-    </section>
-  );
-
-  const aboutTile = (i: number) => (
-    <section className="tile tile-in p-5 lg:col-span-4" style={stagger(i)}>
-      <h2 className="mb-3 text-base font-extrabold">О сервере</h2>
-      <dl className="space-y-2.5">
-        {info.map(([k, v]) => (
-          <div key={k} className="flex items-baseline justify-between gap-4">
-            <dt className="shrink-0 text-sm font-bold text-mute">{k}</dt>
-            <dd className={`min-w-0 break-words text-right text-sm font-extrabold ${k === 'Адрес' ? 'break-all font-mono' : ''}`}>{v}</dd>
-          </div>
-        ))}
-      </dl>
     </section>
   );
 
@@ -366,15 +356,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">{statTiles(true)}</div>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(4, false)}
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-4" style={stagger(5)}>
+          <section className="tile tile-in p-4 sm:p-5 lg:col-span-4" style={stagger(5)} aria-label="Последние события">
+            <h2 className="mb-3 text-base font-extrabold">Последние события</h2>
+            <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
+          </section>
+          <section className="tile tile-in p-4 sm:p-5 lg:col-span-12" style={stagger(6)}>
             <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </section>
-          <section className="tile tile-in p-4 sm:p-5 lg:col-span-8" style={stagger(6)}>
-            <h2 className="mb-3 text-base font-extrabold">Последние события</h2>
-            <EventsFeed events={events} online={s.online} limit={5} moreHref={tabHref(id, 'events')} />
-          </section>
-          {aboutTile(7)}
         </div>
       </div>
     );
@@ -398,10 +387,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <GameAvatar game={s.game} size={64} glass vtId={s.id} />
           <div className="min-w-0 flex-1">
             <h1 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm font-bold text-white/90">
-              <span>{gameLabel(s.game)}</span>
-              <code className="min-w-0 break-all font-mono text-[13px] font-semibold">{s.address}</code>
-            </div>
           </div>
           {me && <FavStar on={isFav} name={s.name} onClick={() => void toggleFav()} />}
         </div>
@@ -410,11 +395,27 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="relative mt-3.5 flex flex-wrap items-center gap-2">
           <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} />
           <LiveBadge at={s.updatedAt} />
-          {cName && <span className="chip-glass" title="Страна сервера">{flag && <span aria-hidden>{flag}</span>}{cName}</span>}
-          {realVersion && <span className="chip-glass" title="Версия игры">v{realVersion.replace(/^v/i, '')}</span>}
-          {mode && <span className="chip-glass" title="Режим игры (по названию сервера)">{mode}</span>}
           {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
         </div>
+
+        <Passport
+          d={{
+            game: gameLabel(s.game),
+            version: realVersion,
+            flag,
+            country: cName,
+            map: s.map,
+            address: s.address,
+            ping: s.ping,
+            online: s.online,
+            uptimePct: stats.uptimePct,
+            uptimeLabel: windowShort,
+            createdAt: data.createdAt ?? null,
+            lastSeen: s.updatedAt,
+            mode,
+            discord: discordLinks,
+          }}
+        />
 
         {!s.online && s.error && (
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
