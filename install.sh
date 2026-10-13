@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5c2dd8ac9a2b"
+COREGSM_BUILD="dca8ecf22d72"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -38197,13 +38197,13 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   );
 
   const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
-  const playerCountBadge = s.online ? <span className="ml-2 rounded-full bg-soft px-2.5 py-0.5 text-xs font-extrabold text-link">{s.players}</span> : null;
+  const playerCountBadge = s.online ? <span className="ml-2 inline-block shrink-0 whitespace-nowrap rounded-full bg-soft px-2.5 py-0.5 text-center text-xs font-extrabold tabular-nums leading-5 text-link">{s.players}</span> : null;
 
   let panel: ReactNode;
   if (tab === 'players') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
-        <h2 className="mb-3 flex items-center text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+        <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
         <PlayersList {...playersProps} />
       </section>
     );
@@ -38238,7 +38238,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <SectionCard id="ov-events" state={sections} className="lg:col-span-5" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center">Сейчас в игре{playerCountBadge}</span>}>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
