@@ -14,7 +14,7 @@ const FILTERS: { id: Filter; label: TKey; kinds: string[] | null }[] = [
   { id: 'all', label: 'pf.journal.f.all', kinds: null },
   { id: 'logins', label: 'pf.journal.f.logins', kinds: ['login', 'login_new_device', 'login_failed', 'sessions_revoked'] },
   { id: 'secrets', label: 'pf.journal.f.secrets', kinds: ['password_changed', 'email_changed'] },
-  { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked'] },
+  { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked', 'register_discord'] },
 ];
 
 const KIND_LABEL: Record<string, TKey> = {
@@ -30,6 +30,7 @@ const KIND_LABEL: Record<string, TKey> = {
   sessions_revoked: 'pf.journal.k.sessions_revoked',
   prefs_changed: 'pf.journal.k.prefs_changed',
   profile_changed: 'pf.journal.k.profile_changed',
+  register_discord: 'pf.journal.k.register_discord',
 };
 
 /** «Журнал аккаунта»: a timeline of the account's own events and the «Выйти на всех устройствах» button */

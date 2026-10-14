@@ -46,7 +46,8 @@ export type AccountEventKind =
   | 'banner_changed'
   | 'sessions_revoked'
   | 'prefs_changed'
-  | 'profile_changed';
+  | 'profile_changed'
+  | 'register_discord';
 
 /** Records an event in the user's own journal. Never throws. */
 export function logAccount(req: Request, userId: number, kind: AccountEventKind, detail = ''): void {
@@ -291,7 +292,7 @@ interface Achievement {
   earnedAt: number | null;
 }
 
-function achievementsOf(userId: number): Achievement[] {
+export function achievementsOf(userId: number): Achievement[] {
   const nick = playerOf(userId).gameNick;
   const now = Date.now();
   const tz = prefsOf(userId).timezone;
@@ -581,6 +582,7 @@ const EVENT_TEXT: Record<string, string> = {
   sessions_revoked: 'Завершены сеансы на других устройствах',
   prefs_changed: 'Изменены настройки интерфейса',
   profile_changed: 'Изменён игровой профиль',
+  register_discord: 'Регистрация через Discord',
 };
 
 // ---------- routes ----------

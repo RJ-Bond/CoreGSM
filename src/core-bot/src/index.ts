@@ -106,11 +106,12 @@ let state: BotState = 'idle';
 let tag: string | null = null;
 let lastError: string | null = null;
 let clientId: string | null = null;
+let commandsCount: number | null = null;
 const lastRun = new Map<number, number>();
 
 async function publishStatus(): Promise<void> {
   try {
-    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError }) });
+    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError, commands: commandsCount }) });
   } catch {
     /* backend is restarting: the next tick will retry */
   }
@@ -191,6 +192,152 @@ async function stopClient(): Promise<void> {
   }
 }
 
+// ---------- slash commands: registration of players from Discord ----------
+const COMMANDS = [
+  {
+    name: 'register',
+    description: 'Создать аккаунт в панели CoreGSM и указать игровой ник',
+    options: [
+      { type: 3, name: 'nick', description: 'Ваш игровой ник (для статистики)', required: true, min_length: 2, max_length: 40 },
+      { type: 5, name: 'agree', description: 'Я согласен с правилами сообщества', required: false },
+    ],
+  },
+  {
+    name: 'nick',
+    description: 'Сменить игровой ник для статистики',
+    options: [{ type: 3, name: 'nick', description: 'Новый игровой ник', required: true, min_length: 2, max_length: 40 }],
+  },
+  { name: 'profile', description: 'Ваш профиль: ник, ранг V Rising, достижения и ссылка на панель' },
+];
+
+async function registerCommands(c: DiscordClient): Promise<void> {
+  try {
+    const set = await c.application?.commands.set(COMMANDS as never);
+    commandsCount = set ? set.size : null;
+    log(`Slash commands registered: ${commandsCount}`);
+  } catch (e) {
+    commandsCount = 0;
+    log('Slash commands registration failed:', humanDiscordError(e));
+  }
+  await publishStatus();
+}
+
+const EPHEMERAL = 64;
+const COLORS = { ok: 0x2ecc71, warn: 0xf5b01e, bad: 0xe74c3c, info: 0x9b1c31 };
+
+interface RegisterAnswer {
+  status: 'created' | 'exists' | 'pending' | 'disabled' | 'rules' | 'conflict';
+  username?: string;
+  profileUrl?: string;
+  rulesText?: string;
+  message?: string;
+}
+
+function replyEmbed(title: string, description: string, color: number, url?: string) {
+  const e = new EmbedBuilder().setTitle(title.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color);
+  if (url && /^https?:\/\//.test(url)) e.setURL(url);
+  return { embeds: [e] };
+}
+
+async function backendJson<T>(path: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const r = await backend(path, init);
+  let data: T | null = null;
+  try {
+    data = (await r.json()) as T;
+  } catch {
+    /* not JSON */
+  }
+  return { ok: r.ok, status: r.status, data };
+}
+
+async function handleInteraction(i: import('discord.js').Interaction): Promise<void> {
+  if (!i.isChatInputCommand()) return;
+  const name = i.commandName;
+  if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch {
+    return; // the interaction expired
+  }
+  const reply = async (p: ReturnType<typeof replyEmbed>) => {
+    try {
+      await i.editReply(p);
+    } catch (e) {
+      log('reply failed:', (e as Error).message);
+    }
+  };
+  const user = i.user;
+  const displayName = (user.globalName || user.username || '').trim();
+  const who = { discordId: user.id, displayName, avatarHash: user.avatar ?? null };
+  const friendly = () => reply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad));
+  try {
+    if (name === 'register') {
+      const agree = i.options.getBoolean('agree') ?? undefined;
+      const { ok, status, data } = await backendJson<RegisterAnswer>('/internal/discord/register', {
+        method: 'POST',
+        body: JSON.stringify({ ...who, gameNick: i.options.getString('nick', true), agree }),
+      });
+      if (!data) return void (await friendly());
+      if (!ok || !data.status) {
+        const bad = status === 429 || status === 400;
+        return void (await reply(replyEmbed(bad ? 'Проверьте команду' : 'Не получилось', data.message || 'Панель отклонила запрос.', COLORS.warn)));
+      }
+      const url = data.profileUrl;
+      const link = url ? `\n\n[Открыть профиль в панели](${url})` : '';
+      switch (data.status) {
+        case 'created':
+          return void (await reply(replyEmbed('Аккаунт создан', `Логин в панели: **${data.username}**.\nВходите кнопкой «Войти через Discord»: пароль не нужен.${link}`, COLORS.ok, url)));
+        case 'exists':
+          return void (await reply(replyEmbed('Аккаунт уже есть', `${data.message ?? ''}\nЛогин в панели: **${data.username}**.${link}`, COLORS.ok, url)));
+        case 'pending':
+          return void (await reply(replyEmbed('Заявка отправлена', data.message ?? 'Дождитесь одобрения администратора.', COLORS.warn)));
+        case 'disabled':
+          return void (await reply(replyEmbed('Регистрация закрыта', data.message ?? 'Администратор закрыл регистрацию.', COLORS.bad)));
+        case 'rules':
+          return void (await reply(replyEmbed('Правила сообщества', `${data.rulesText ?? ''}\n\nЕсли согласны, повторите команду: \`/register nick:... agree:True\`.`, COLORS.info)));
+        case 'conflict':
+          return void (await reply(replyEmbed('Ник занят', data.message ?? 'Этот игровой ник уже занят другим аккаунтом.', COLORS.bad)));
+      }
+      return void (await friendly());
+    }
+    if (name === 'nick') {
+      const { data } = await backendJson<{ status?: string; gameNick?: string }>('/internal/discord/nick', {
+        method: 'POST',
+        body: JSON.stringify({ ...who, gameNick: i.options.getString('nick', true) }),
+      });
+      if (!data) return void (await friendly());
+      if (data.status === 'ok') return void (await reply(replyEmbed('Ник сохранён', `Игровой ник: **${data.gameNick ?? ''}**. Статистика считается по нему.`, COLORS.ok)));
+      if (data.status === 'notfound') return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));
+      if (data.status === 'conflict') return void (await reply(replyEmbed('Ник занят', 'Этот игровой ник уже занят другим аккаунтом.', COLORS.bad)));
+      return void (await reply(replyEmbed('Проверьте ник', 'Игровой ник: от 2 до 40 символов.', COLORS.warn)));
+    }
+    const q = new URLSearchParams({ discordId: user.id, displayName });
+    if (user.avatar) q.set('avatarHash', user.avatar);
+    const { data } = await backendJson<{
+      found: boolean;
+      username: string;
+      displayName: string;
+      gameNick: string;
+      rank: { name: string; hours: number } | null;
+      achievements: number;
+      profileUrl: string;
+    }>(`/internal/discord/profile?${q.toString()}`);
+    if (!data) return void (await friendly());
+    if (!data.found) return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));
+    const lines = [
+      `Имя в панели: **${data.username}**`,
+      `Игровой ник: **${data.gameNick || 'не задан'}**`,
+      data.rank ? `Ранг V Rising: **${data.rank.name}** (${data.rank.hours} ч)` : 'Ранг V Rising: появится после игры на сервере',
+      `Достижений: **${data.achievements}**`,
+    ];
+    if (data.profileUrl && /^https?:\/\//.test(data.profileUrl)) lines.push(`\n[Открыть профиль в панели](${data.profileUrl})`);
+    await reply(replyEmbed(data.displayName || data.username, lines.join('\n'), COLORS.info, data.profileUrl));
+  } catch (e) {
+    log('command failed:', (e as Error).message);
+    await friendly();
+  }
+}
+
 /** Fetches token/proxy from the panel and (re)connects when they change. */
 async function applyConfig(): Promise<void> {
   const res = await backend('/internal/config');
@@ -205,6 +352,7 @@ async function applyConfig(): Promise<void> {
 
   await stopClient();
   gatewayAgent = undefined;
+  commandsCount = null;
   lastRun.clear();
   lastGuildsJson = '';
 
@@ -235,12 +383,16 @@ async function applyConfig(): Promise<void> {
     ...(proxy ? { rest: { agent: proxy.rest } } : {}),
   });
   c.on('error', (e) => log('client error', e));
+  c.on('interactionCreate', (i) => {
+    void handleInteraction(i).catch((e) => log('interaction failed:', (e as Error).message));
+  });
   client = c;
   setState('connecting');
   try {
     await c.login(cfg.discordToken);
     log(`Logged in as ${c.user?.tag}`);
     setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
+    void registerCommands(c);
   } catch (e) {
     log('Discord login failed:', (e as Error).message);
     setState('error', { error: humanDiscordError(e) });
