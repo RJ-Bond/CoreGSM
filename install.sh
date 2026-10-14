@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="107a3b69c2ae"
+COREGSM_BUILD="a26df8240b47"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -9209,6 +9209,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The gateway socket is created inside discord.js, so the proxy hook must be installed before it is loaded.
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
+let warmTimer: ReturnType<typeof setInterval> | undefined;
 patchGatewayAgent(() => gatewayAgent);
 const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
@@ -9382,6 +9383,10 @@ async function publishGuilds(): Promise<void> {
 }
 
 async function stopClient(): Promise<void> {
+  if (warmTimer) {
+    clearInterval(warmTimer);
+    warmTimer = undefined;
+  }
   if (!client) return;
   const c = client;
   client = null;
@@ -9671,6 +9676,11 @@ async function applyConfig(): Promise<void> {
     lastGuildsJson = '';
     void publishGuilds().catch(() => undefined);
   };
+  // a warm connection to Discord: a tiny request every 25 s keeps the (proxied) HTTPS connection open, so that the
+  // acknowledgement of a slash command does not pay for a new TCP + proxy + TLS handshake
+  if (warmTimer) clearInterval(warmTimer);
+  warmTimer = setInterval(() => { void c.rest.get('/gateway').catch(() => undefined); }, 25_000);
+  warmTimer.unref?.();
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
@@ -10014,6 +10024,13 @@ import { socksDispatcher } from 'fetch-socks';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
+/**
+ * Keep the HTTPS connection to Discord open between requests. undici closes an idle connection after 4 s by default,
+ * and a new one through a SOCKS/HTTP proxy costs a TCP + SOCKS + TLS handshake (seconds on a far proxy): that alone
+ * can exceed the 3 s Discord gives a slash command to answer («Приложение не отвечает»).
+ */
+const KEEP_ALIVE = { keepAliveTimeout: 120_000, keepAliveMaxTimeout: 600_000, connections: 4 };
+
 export interface ProxySetup {
   /** dispatcher for Discord REST (HTTPS API) */
   rest: Dispatcher;
@@ -10049,12 +10066,15 @@ export function parseProxy(raw: string): ProxySetup | null {
       const port = Number(u.port) || 1080;
       const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
       return {
-        rest: socksDispatcher({
-          type: 5,
-          host: u.hostname,
-          port,
-          ...(user ? { userId: user, password: pass } : {}),
-        }) as unknown as Dispatcher,
+        rest: socksDispatcher(
+          {
+            type: 5,
+            host: u.hostname,
+            port,
+            ...(user ? { userId: user, password: pass } : {}),
+          },
+          KEEP_ALIVE,
+        ) as unknown as Dispatcher,
         ws: new SocksProxyAgent(`socks5h://${auth}${u.hostname}:${port}`) as unknown as Agent,
         label,
       };
@@ -10062,7 +10082,7 @@ export function parseProxy(raw: string): ProxySetup | null {
     case 'http:':
     case 'https:':
       return {
-        rest: new ProxyAgent(u.toString()),
+        rest: new ProxyAgent({ uri: u.toString(), ...KEEP_ALIVE }),
         ws: new HttpsProxyAgent(u.toString()) as unknown as Agent,
         label,
       };
