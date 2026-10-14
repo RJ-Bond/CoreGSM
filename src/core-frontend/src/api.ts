@@ -466,6 +466,14 @@ export interface Prefs {
   dateFormat: 'dmy' | 'mdy' | 'iso';
 }
 
+/** GET /me/nick-status */
+export interface NickStatus {
+  nick: string;
+  seen: boolean;
+  lastSeenAt: number | null;
+  similar: string[];
+}
+
 /** GET/PUT /me/player */
 export interface PlayerProfile {
   gameNick: string;
@@ -530,7 +538,7 @@ export interface ActivityItem {
 
 export type JournalKind =
   | 'login' | 'login_failed' | 'password_changed' | 'email_changed' | 'discord_linked' | 'discord_unlinked'
-  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed' | 'register_discord';
+  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed' | 'register_discord' | 'nick_seen';
 
 /** GET /me/journal */
 export interface JournalItem {

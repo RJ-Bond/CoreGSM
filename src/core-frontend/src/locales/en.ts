@@ -312,6 +312,10 @@ const en: Record<keyof typeof ru, string> = {
   'pf.journal.k.prefs_changed': 'Language and region changed',
   'pf.journal.k.profile_changed': 'Player profile changed',
   'pf.journal.k.register_discord': 'Registered via Discord',
+  'pf.journal.k.nick_seen': 'Nick found on a server',
+  'pf.nick.unseen': 'The nick has not been found on the servers yet. Check the spelling: it must match the in-game name.',
+  'pf.nick.similar': 'Did you mean:',
+  'pf.nick.seen': 'Nick found: last seen {when}',
 
   // ---- public profile ----
   'pub.missingTitle': 'Profile not found',

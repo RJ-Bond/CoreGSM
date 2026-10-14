@@ -12,13 +12,13 @@ export interface VrRank {
 
 export const VR_RANKS: readonly VrRank[] = [
   { id: 'awakened', name: 'Пробуждённый', minHours: 0, color: '#9ca3af', image: '/vrising/ranks/rank-1-awakened.png' },
-  { id: 'wanderer', name: 'Ночной скиталец', minHours: 5, color: '#9b1c31', image: '/vrising/ranks/rank-2-wanderer.png' },
-  { id: 'hunter', name: 'Охотник на кровь', minHours: 20, color: '#dc2626', image: '/vrising/ranks/rank-3-hunter.png' },
-  { id: 'warden', name: 'Страж замка', minHours: 50, color: '#9f1239', image: '/vrising/ranks/rank-4-warden.png' },
-  { id: 'baron', name: 'Барон тьмы', minHours: 100, color: '#7c3aed', image: '/vrising/ranks/rank-5-baron.png' },
-  { id: 'lord', name: 'Кровавый лорд', minHours: 200, color: '#a855f7', image: '/vrising/ranks/rank-6-lord.png' },
-  { id: 'elder', name: 'Древний', minHours: 400, color: '#d4af37', image: '/vrising/ranks/rank-7-elder.png' },
-  { id: 'progenitor', name: 'Первородный', minHours: 800, color: '#f5b01e', image: '/vrising/ranks/rank-8-progenitor.png' },
+  { id: 'wanderer', name: 'Ночной скиталец', minHours: 10, color: '#9b1c31', image: '/vrising/ranks/rank-2-wanderer.png' },
+  { id: 'hunter', name: 'Охотник на кровь', minHours: 30, color: '#dc2626', image: '/vrising/ranks/rank-3-hunter.png' },
+  { id: 'warden', name: 'Страж замка', minHours: 70, color: '#9f1239', image: '/vrising/ranks/rank-4-warden.png' },
+  { id: 'baron', name: 'Барон тьмы', minHours: 150, color: '#7c3aed', image: '/vrising/ranks/rank-5-baron.png' },
+  { id: 'lord', name: 'Кровавый лорд', minHours: 310, color: '#a855f7', image: '/vrising/ranks/rank-6-lord.png' },
+  { id: 'elder', name: 'Древний', minHours: 630, color: '#d4af37', image: '/vrising/ranks/rank-7-elder.png' },
+  { id: 'progenitor', name: 'Первородный', minHours: 1270, color: '#f5b01e', image: '/vrising/ranks/rank-8-progenitor.png' },
 ];
 
 export function rankForHours(hours: number): VrRank {

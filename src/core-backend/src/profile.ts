@@ -21,7 +21,7 @@ import path from 'node:path';
 import skia from 'skia-canvas';
 import { z } from 'zod';
 import { DATA_DIR, db, EFFECTIVE_NAME } from './db.js';
-import { nextRank, rankForHours, rankProgress } from './ranks.js';
+import { nextRank, rankForHours, rankProgress, VR_RANKS } from './ranks.js';
 
 const { Canvas, loadImage } = skia;
 
@@ -33,6 +33,8 @@ export function uaLabel(ua: string | undefined): string {
   const os = /Windows/.test(s) ? 'Windows' : /Android/.test(s) ? 'Android' : /iPhone|iPad|iOS/.test(s) ? 'iOS' : /Mac OS X|Macintosh/.test(s) ? 'macOS' : /Linux/.test(s) ? 'Linux' : '';
   return os ? `${browser} · ${os}` : browser;
 }
+
+import { checkNickNow } from './nickOnboarding.js';
 
 export type AccountEventKind =
   | 'login'
@@ -47,7 +49,8 @@ export type AccountEventKind =
   | 'sessions_revoked'
   | 'prefs_changed'
   | 'profile_changed'
-  | 'register_discord';
+  | 'register_discord'
+  | 'nick_seen';
 
 /** Records an event in the user's own journal. Never throws. */
 export function logAccount(req: Request, userId: number, kind: AccountEventKind, detail = ''): void {
@@ -517,7 +520,7 @@ export function vrAchievementsOf(userId: number): VrAchievement[] {
     return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null, game: 'vrising', image: `/vrising/achievements/${id}.png` };
   };
   const loyal = share >= 0.8 && hours >= 20;
-  const crowned = rankHours >= 800;
+  const crowned = rankHours >= VR_RANKS[VR_RANKS.length - 1]!.minHours;
 
   return [
     mk('vr-first-bite', 'Первый укус', 'Проведите первую сессию на сервере V Rising', 'star', Math.min(count, 1), 1, firstAt),
@@ -583,6 +586,7 @@ const EVENT_TEXT: Record<string, string> = {
   prefs_changed: 'Изменены настройки интерфейса',
   profile_changed: 'Изменён игровой профиль',
   register_discord: 'Регистрация через Discord',
+  nick_seen: 'Ник найден на сервере',
 };
 
 // ---------- routes ----------
@@ -641,6 +645,7 @@ export function registerProfile(deps: {
        ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile`,
     ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0);
     if (JSON.stringify(cur) !== JSON.stringify(next)) logAccount(req, userId(req), 'profile_changed');
+    if (next.gameNick !== cur.gameNick) checkNickNow(userId(req), next.gameNick);
     res.json(next);
   });
 

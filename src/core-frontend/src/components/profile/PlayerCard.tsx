@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, type PlayerProfile } from '../../api';
+import { api, type NickStatus, type PlayerProfile } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { Button, CopyButton, ErrorLine, Section, Switch, TextField, toast } from '../../ui';
+import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast } from '../../ui';
 import { isObject, useFetched } from './useFetched';
 
 const NICK_MAX = 32;
@@ -15,6 +15,7 @@ export const publicLink = (username: string) => `${window.location.origin}${wind
 export function PlayerCard() {
   const { me } = useAuth();
   const { data, reload } = useFetched<PlayerProfile>('/me/player', isObject);
+  const status = useFetched<NickStatus>('/me/nick-status', isObject);
   const [nick, setNick] = useState('');
   const [bio, setBio] = useState('');
   const [pub, setPub] = useState(false);
@@ -40,6 +41,7 @@ export function PlayerCard() {
       await api('/me/player', 'PUT', { gameNick: nick.trim(), bio: bio.trim(), publicProfile: pub });
       toast(t('pf.player.saved'));
       reload();
+      status.reload();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -55,6 +57,25 @@ export function PlayerCard() {
         ) : (
           <>
             <TextField id="pl-nick" label={t('pf.player.nick')} value={nick} onChange={setNick} maxLength={NICK_MAX} autoComplete="off" placeholder={t('pf.player.nickPh')} hint={t('pf.player.nickHint')} />
+            {!!data?.gameNick && status.data && status.data.nick === data.gameNick && (
+              status.data.seen ? (
+                <p className="text-sm font-bold text-ok" role="status">
+                  {t('pf.nick.seen', { when: status.data.lastSeenAt ? ago(status.data.lastSeenAt) : '–' })}
+                </p>
+              ) : (
+                <div className="space-y-2 rounded-xl bg-warnbg px-3 py-2" role="status">
+                  <p className="text-sm font-bold text-warn">{t('pf.nick.unseen')}</p>
+                  {status.data.similar.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-mute">{t('pf.nick.similar')}</span>
+                      {status.data.similar.slice(0, 5).map((s) => (
+                        <button key={s} type="button" className="btn btn-soft btn-xs" onClick={() => setNick(s.slice(0, NICK_MAX))}>{s}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            )}
             <TextField
               id="pl-bio"
               label={t('pf.player.bio')}

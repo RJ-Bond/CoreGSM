@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { db } from './db.js';
 import { cleanGameNick, sanitizeLogin, uniqueLogin } from './discordNames.js';
 import { achievementsOf, logAccount, vrAchievementsOf, vrHoursOf } from './profile.js';
+import { checkNickNow, nickSeenOf, nickSuggestions } from './nickOnboarding.js';
 import { rankForHours, nextRank, rankProgress } from './ranks.js';
 
 const ATTEMPTS = 5;
@@ -53,13 +54,15 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
   const byDiscord = (id: string) => db.prepare('SELECT id, username, status, discord_id, discord_name FROM users WHERE discord_id = ?').get(id) as UserRow | undefined;
   const nickOwner = (nick: string, exceptUser: number) =>
     db.prepare('SELECT user_id FROM user_player WHERE ulower(game_nick) = ulower(?) AND user_id != ?').get(nick, exceptUser) as { user_id: number } | undefined;
-  const setNick = (userId: number, nick: string) =>
+  const setNick = (userId: number, nick: string) => {
     db
       .prepare(
         `INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, '', 0)
          ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick`,
       )
       .run(userId, nick);
+    checkNickNow(userId, nick);
+  };
   const refresh = (id: number, name: string, avatar: string | null) =>
     db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(name, avatar, id);
 
@@ -145,13 +148,19 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
     }),
   );
 
+  // autocomplete of the nick option: must answer within Discord's 3 s, never fails
+  app.get('/internal/discord/nick-suggest', internal, (req, res) => {
+    const names = nickSuggestions(String(req.query.q ?? ''), String(req.query.discordId ?? ''));
+    res.json({ names: names.filter((n) => n.length <= 100).slice(0, 25) });
+  });
+
   app.get(
     '/internal/discord/profile',
     internal,
     wrap((req, res) => {
       const id = String(req.query.discordId ?? '');
       const u = idSchema.safeParse(id).success ? byDiscord(id) : undefined;
-      if (!u) return res.json({ found: false, username: '', displayName: '', gameNick: '', rank: null, achievements: 0, profileUrl: profileUrl() });
+      if (!u) return res.json({ found: false, username: '', displayName: '', gameNick: '', rank: null, achievements: 0, profileUrl: profileUrl(), nickSeen: false, lastSeenAt: null });
       const name = String(req.query.displayName ?? '').trim().slice(0, 100);
       if (name) refresh(u.id, name, /^[a-z0-9_]{1,64}$/i.test(String(req.query.avatarHash ?? '')) ? String(req.query.avatarHash) : null);
       const p = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined;
@@ -174,6 +183,7 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
           progress: rankProgress(hours),
         };
       }
+      const seen = nickSeenOf(gameNick);
       const all = [...achievementsOf(u.id), ...vrAchievementsOf(u.id)];
       const earned = all.filter((a) => a.earned).length;
       res.json({
@@ -182,6 +192,8 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
         username: u.username,
         displayName: name || u.discord_name || u.username,
         gameNick,
+        nickSeen: seen.seen,
+        lastSeenAt: seen.lastSeenAt,
         rank,
         achievements: earned,
         achievementsTotal: all.length,
