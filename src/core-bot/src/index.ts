@@ -318,9 +318,9 @@ function cardReply(
   if (base) {
     components.push(
       new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('👤 Профиль').setURL(`${base}/#/profile`),
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('🏆 Достижения').setURL(`${base}/#/profile/player`),
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📊 Серверы').setURL(`${base}/#/servers`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('👤 Профиль').setURL(`${base}/go/profile`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('🏆 Достижения').setURL(`${base}/go/profile/player`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📊 Серверы').setURL(`${base}/go/servers`),
       ),
     );
   }

@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="886fc9901308"
+COREGSM_BUILD="1e6f5365434f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3047,7 +3047,11 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       const rest = s.players - shown.length;
       let list = nameRows(shown);
       if (limit === 0) list = '';
-      if (rest > 0) list += (list ? '\n' : '') + extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
+      if (rest > 0) {
+        const tail = extra.baseUrl && extra.serverId ? `… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/go/servers/${extra.serverId}/players)` : `… и ещё ${rest}`;
+        list = list ? `${list}
+${tail}` : tail;
+      }
       fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list || '\u200b', 1000) });
     } else if (s.players === 0) {
       fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
@@ -3066,7 +3070,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   return {
     title: cut(s.name, 256),
-    url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/#/servers/${extra.serverId}` : undefined,
+    url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/go/servers/${extra.serverId}` : undefined,
     description: lines.length ? lines.join('\n') : undefined,
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
@@ -9779,9 +9783,9 @@ function cardReply(
   if (base) {
     components.push(
       new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('👤 Профиль').setURL(`${base}/#/profile`),
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('🏆 Достижения').setURL(`${base}/#/profile/player`),
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📊 Серверы').setURL(`${base}/#/servers`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('👤 Профиль').setURL(`${base}/go/profile`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('🏆 Достижения').setURL(`${base}/go/profile/player`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📊 Серверы').setURL(`${base}/go/servers`),
       ),
     );
   }
@@ -10528,6 +10532,14 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+  }
+
+  # short links for Discord: https://host/go/servers/3/players -> https://host/#/servers/3/players
+  # (a URL fragment is easy to lose in chat clients and link scanners; a plain path is not)
+  location ~ ^/go(/(.*))?$ {
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    return 302 /#/$2;
   }
 
   location / {
@@ -37828,6 +37840,170 @@ export function Preview({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/PublicFeed.tsx" << '__COREGSM_EOF__'
+import { useState, type CSSProperties } from 'react';
+import type { PublicNews } from '../../api';
+import { fmtDate } from '../../ui';
+import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
+
+/** the news text uses the panel's own colours (light and dark), not Discord's */
+const PANEL_THEME: DTheme = {
+  name: 'light',
+  outer: 'transparent',
+  embed: 'transparent',
+  embedBorder: 'transparent',
+  text: 'rgb(var(--ink))',
+  title: 'rgb(var(--ink))',
+  muted: 'rgb(var(--mute))',
+  link: 'rgb(var(--link))',
+  code: 'rgb(var(--soft))',
+  quote: 'rgb(var(--line))',
+  spoilerHide: 'rgb(var(--soft))',
+  spoilerShow: 'rgb(var(--soft))',
+  mentionBg: 'rgb(var(--soft))',
+  mentionFg: 'rgb(var(--link))',
+  chipBg: 'rgb(var(--soft))',
+};
+
+interface Card {
+  id: number;
+  title: string;
+  text: string;
+  author: { name: string; icon?: string } | null;
+  image: string | null;
+  link: string | null;
+  accent: string;
+  at: number | null;
+  fields: { name: string; value: string }[];
+}
+
+const hex = (n: number | undefined) => `#${(n ?? 0x5b4fe0).toString(16).padStart(6, '0')}`;
+
+function cardOf(n: PublicNews): Card {
+  const e = n.payload.embed;
+  const img = e?.image?.upload ? `/api/news/images/${e.image.upload}` : e?.image?.url || e?.thumbnailUrl || null;
+  const url = e?.url && /^https?:\/\//i.test(e.url) ? e.url : null;
+  return {
+    id: n.id,
+    title: e?.title || n.title || 'Новость',
+    text: (e?.description || n.payload.content || '').trim(),
+    author: e?.author?.name ? { name: e.author.name, icon: e.author.iconUrl } : null,
+    image: img,
+    link: url,
+    accent: hex(e?.color),
+    at: n.sentAt,
+    fields: (e?.fields ?? []).filter((f) => f.name && f.value).map((f) => ({ name: f.name, value: f.value })),
+  };
+}
+
+function Author({ a }: { a: NonNullable<Card['author']> }) {
+  return (
+    <span className="nf-author">
+      {a.icon && /^https?:\/\//i.test(a.icon) ? (
+        <img src={a.icon} alt="" width={22} height={22} loading="lazy" />
+      ) : (
+        <span className="nf-ava" aria-hidden>{a.name.slice(0, 1).toUpperCase()}</span>
+      )}
+      {a.name}
+    </span>
+  );
+}
+
+function Body({ c }: { c: Card }) {
+  return (
+    <ThemeCtx.Provider value={PANEL_THEME}>
+      <div className="nf-body">
+        {c.text && <DiscordMd text={c.text} />}
+        {c.fields.length > 0 && (
+          <dl className="nf-fields">
+            {c.fields.map((f, i) => (
+              <div key={i}>
+                <dt>{f.name}</dt>
+                <dd><DiscordMd text={f.value} /></dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+    </ThemeCtx.Provider>
+  );
+}
+
+const coverStyle = (c: Card): CSSProperties =>
+  c.image
+    ? { backgroundImage: `url("${c.image}")` }
+    : { backgroundImage: `linear-gradient(135deg, ${c.accent}33, ${c.accent}14 55%, rgb(var(--soft)))` };
+
+/** the latest news large (hero), the rest as a list with previews; light, no chat-client chrome */
+export function PublicFeed({ items }: { items: PublicNews[] }) {
+  const cards = [...items].sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0)).map(cardOf);
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const toggle = (id: number) =>
+    setOpen((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  if (cards.length === 0) return null;
+  const [hero, ...rest] = cards;
+  const h = hero!;
+  const heroOpen = open.has(h.id);
+
+  return (
+    <div className="nf">
+      <article className="nf-hero" style={{ ['--nf-accent' as string]: h.accent }}>
+        {h.image && <div className="nf-hero-img" style={coverStyle(h)} role="img" aria-label={h.title} />}
+        <div className="nf-hero-in">
+          <div className="nf-meta">
+            {h.at && <span className="nf-date">{fmtDate(h.at)}</span>}
+            {h.author && <Author a={h.author} />}
+          </div>
+          <h2 className="nf-title">{h.title}</h2>
+          <div className={`nf-text ${heroOpen ? '' : 'is-clamped'}`}><Body c={h} /></div>
+          <div className="nf-actions">
+            {(h.text.length > 220 || h.fields.length > 0) && (
+              <button type="button" className="btn btn-soft" aria-expanded={heroOpen} onClick={() => toggle(h.id)}>
+                {heroOpen ? 'Свернуть' : 'Читать полностью'}
+              </button>
+            )}
+            {h.link && <a className="btn" href={h.link} target="_blank" rel="noopener noreferrer">Открыть ссылку →</a>}
+          </div>
+        </div>
+      </article>
+
+      {rest.length > 0 && <h3 className="nf-more">Ранее</h3>}
+      <div className="nf-list">
+        {rest.map((c) => {
+          const isOpen = open.has(c.id);
+          return (
+            <article key={c.id} className="nf-item" style={{ ['--nf-accent' as string]: c.accent }}>
+              <div className="nf-thumb" style={coverStyle(c)} aria-hidden />
+              <div className="nf-item-in">
+                <div className="nf-meta">
+                  {c.at && <span className="nf-date">{fmtDate(c.at)}</span>}
+                  {c.author && <Author a={c.author} />}
+                </div>
+                <h3 className="nf-item-title">{c.title}</h3>
+                <div className={`nf-text ${isOpen ? '' : 'is-clamped-2'}`}><Body c={c} /></div>
+                <div className="nf-actions">
+                  {(c.text.length > 120 || c.fields.length > 0) && (
+                    <button type="button" className="btn-link btn-xs" aria-expanded={isOpen} onClick={() => toggle(c.id)}>
+                      {isOpen ? 'Свернуть' : 'Читать'}
+                    </button>
+                  )}
+                  {c.link && <a className="btn-link btn-xs" href={c.link} target="_blank" rel="noopener noreferrer">Открыть ссылку →</a>}
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/StatusServers.tsx" << '__COREGSM_EOF__'
 import type { Server } from '../../api';
 import { GameAvatar } from '../../ui';
@@ -45828,6 +46004,7 @@ import './index.css';
 import './styles/servers.css';
 import './styles/detail.css';
 import './styles/system.css';
+import './styles/news.css';
 import './styles/profile.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
@@ -48455,6 +48632,7 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
+import { PublicFeed } from '../components/news/PublicFeed';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
@@ -48712,14 +48890,7 @@ export function NewsFeed() {
           {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}
         </div>
       )}
-      <div className="fade-in mx-auto max-w-2xl space-y-4">
-        {items.map((n) => (
-          <article key={n.id} className="panel space-y-2 p-4">
-            {n.sentAt && <div className="text-sm font-bold text-mute">{fmtDateTime(n.sentAt)}</div>}
-            <EmbedView embed={toView(n.payload.embed)} content={n.payload.content} />
-          </article>
-        ))}
-      </div>
+      <div className="fade-in"><PublicFeed items={items} /></div>
     </div>
   );
 }
@@ -53976,6 +54147,41 @@ __COREGSM_EOF__
 }
 html[data-motion='reduce'] .srv-more-pop { animation: none !important; }
 html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none !important; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'
+/* public news feed: the latest news large, the rest as a list with previews. Colours and shadows only; no transforms. */
+.nf { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.25rem; }
+.nf-hero { position: relative; overflow: hidden; border-radius: 1.75rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: 0 1px 2px rgb(20 24 40 / .06); }
+.nf-hero::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 6px; background: var(--nf-accent, rgb(var(--brand))); opacity: .85; z-index: 1; }
+.nf-hero-img { height: 15rem; background-size: cover; background-position: center; background-color: rgb(var(--soft)); }
+.nf-hero-in { padding: 1.75rem 2rem 2rem; display: grid; gap: .75rem; background-image: linear-gradient(180deg, color-mix(in srgb, var(--nf-accent, #5b4fe0) 9%, transparent), transparent 9rem); }
+.nf-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .9rem; font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+.nf-date { padding: .15rem .7rem; border-radius: 9999px; background: color-mix(in srgb, var(--nf-accent, #5b4fe0) 14%, rgb(var(--card))); color: rgb(var(--ink)); }
+.nf-author { display: inline-flex; align-items: center; gap: .4rem; }
+.nf-author img, .nf-ava { width: 22px; height: 22px; border-radius: 9999px; object-fit: cover; }
+.nf-ava { display: inline-grid; place-items: center; background: rgb(var(--brand)); color: #fff; font-size: .75rem; font-weight: 800; }
+.nf-title { margin: 0; font-size: clamp(1.6rem, 4vw, 2.3rem); line-height: 1.12; font-weight: 900; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.nf-text { font-size: 1.0625rem; line-height: 1.6; color: rgb(var(--ink)); overflow-wrap: anywhere; }
+.nf-text.is-clamped { display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
+.nf-text.is-clamped-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: .98rem; color: rgb(var(--mute)); }
+.nf-actions { display: flex; flex-wrap: wrap; gap: .5rem .75rem; align-items: center; margin-top: .25rem; }
+.nf-fields { display: grid; gap: .5rem; margin: .9rem 0 0; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
+.nf-fields > div { padding: .6rem .8rem; border-radius: 1rem; background: rgb(var(--soft)); }
+.nf-fields dt { font-size: .8125rem; font-weight: 800; color: rgb(var(--mute)); }
+.nf-fields dd { margin: .1rem 0 0; font-weight: 700; }
+.nf-more { margin: .5rem .25rem 0; font-size: .875rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
+.nf-list { display: grid; gap: .75rem; }
+.nf-item { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 1rem; padding: .75rem; border-radius: 1.25rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
+.nf-thumb { border-radius: .9rem; min-height: 6.5rem; background-size: cover; background-position: center; background-color: rgb(var(--soft)); }
+.nf-item-in { display: grid; gap: .3rem; align-content: center; min-width: 0; padding-right: .25rem; }
+.nf-item-title { margin: 0; font-size: 1.15rem; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .nf-hero-in { padding: 1.25rem 1.1rem 1.4rem; }
+  .nf-hero-img { height: 11rem; }
+  .nf-item { grid-template-columns: 5.5rem minmax(0, 1fr); gap: .75rem; }
+  .nf-thumb { min-height: 5.5rem; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'

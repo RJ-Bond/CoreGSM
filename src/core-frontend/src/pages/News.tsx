@@ -4,6 +4,7 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
+import { PublicFeed } from '../components/news/PublicFeed';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
@@ -261,14 +262,7 @@ export function NewsFeed() {
           {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}
         </div>
       )}
-      <div className="fade-in mx-auto max-w-2xl space-y-4">
-        {items.map((n) => (
-          <article key={n.id} className="panel space-y-2 p-4">
-            {n.sentAt && <div className="text-sm font-bold text-mute">{fmtDateTime(n.sentAt)}</div>}
-            <EmbedView embed={toView(n.payload.embed)} content={n.payload.content} />
-          </article>
-        ))}
-      </div>
+      <div className="fade-in"><PublicFeed items={items} /></div>
     </div>
   );
 }

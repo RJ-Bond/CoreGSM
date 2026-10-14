@@ -168,7 +168,11 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       const rest = s.players - shown.length;
       let list = nameRows(shown);
       if (limit === 0) list = '';
-      if (rest > 0) list += (list ? '\n' : '') + extra.baseUrl && extra.serverId ? `\n… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/#/servers/${extra.serverId}/players)` : `\n… и ещё ${rest}`;
+      if (rest > 0) {
+        const tail = extra.baseUrl && extra.serverId ? `… и ещё ${rest}: [все игроки в панели](${extra.baseUrl}/go/servers/${extra.serverId}/players)` : `… и ещё ${rest}`;
+        list = list ? `${list}
+${tail}` : tail;
+      }
       fields.push({ name: `🧑‍🤝‍🧑 Сейчас в игре (${s.players})`, value: cut(list || '\u200b', 1000) });
     } else if (s.players === 0) {
       fields.push({ name: '🧑‍🤝‍🧑 Сейчас в игре', value: 'Пока никого нет' });
@@ -187,7 +191,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
 
   return {
     title: cut(s.name, 256),
-    url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/#/servers/${extra.serverId}` : undefined,
+    url: extra.baseUrl && extra.serverId ? `${extra.baseUrl}/go/servers/${extra.serverId}` : undefined,
     description: lines.length ? lines.join('\n') : undefined,
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
