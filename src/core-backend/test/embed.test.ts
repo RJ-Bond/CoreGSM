@@ -27,7 +27,7 @@ describe('discord embed', () => {
   });
 
   it('links the title to the server page', () => {
-    assert.equal(e.url, 'https://panel.example.ru/#/servers/7');
+    assert.equal(e.url, 'https://panel.example.ru/go/servers/7');
   });
 
   it('puts status, players and uptime in the first row and the address on its own row', () => {
@@ -48,7 +48,7 @@ describe('discord embed', () => {
   it('links the players that do not fit to the panel', () => {
     const list = e.fields!.find((x) => /Сейчас в игре/.test(x.name))!;
     assert.match(list.value, /и ещё 23/);
-    assert.match(list.value, /\(https:\/\/panel\.example\.ru\/#\/servers\/7\/players\)/);
+    assert.match(list.value, /\(https:\/\/panel\.example\.ru\/go\/servers\/7\/players\)/);
   });
 
   it('pads the address row so embeds in one message have equal width, with no empty line under the title', () => {
