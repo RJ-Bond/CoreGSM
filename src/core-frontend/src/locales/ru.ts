@@ -451,6 +451,8 @@ const ru = {
   'srv.hero.fav': 'Избранный',
   'srv.hero.busiest': 'Самый загруженный',
   'srv.new.title': 'Что нового',
+  'srv.new.openLink': 'Открыть ссылку →',
+  'srv.new.allNews': 'Все новости →',
   'srv.new.news': 'Новости',
   'srv.new.untitled': 'Без заголовка',
   'srv.new.noNews': 'Новостей пока нет',

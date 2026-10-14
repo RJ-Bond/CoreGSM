@@ -1,5 +1,5 @@
 // «Что нового»: the latest news item, planned maintenance and the last events of all servers.
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
@@ -24,11 +24,64 @@ const saveOpen = (v: boolean) => {
   }
 };
 
+/** the link of a news item (the embed address), only http(s) */
+export function newsLink(n: Pick<PublicNews, 'payload'>): string | null {
+  const u = n.payload?.embed?.url;
+  return typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null;
+}
+
 /** a plain-text teaser: markdown marks removed */
 export function excerptOf(n: Pick<PublicNews, 'payload'>, max = 150): string {
   const raw = n.payload?.embed?.description || n.payload?.content || '';
   const s = raw.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/^\s*[-*•]\s+/gm, '• ').replace(/[*_~`|>#]/g, '').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max).trimEnd()}…` : s;
+}
+
+/** a news teaser as nodes: markdown links, http(s) addresses and bare domains become real links (http/https only) */
+export function teaserNodes(n: Pick<PublicNews, 'payload'>, max = 220): ReactNode[] {
+  const raw = (n.payload?.embed?.description || n.payload?.content || '')
+    .replace(/^\s*[-*•]\s+/gm, '• ')
+    .replace(/[*_~`|>#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s)]+)|\b((?:[a-z0-9-]+\.)+(?:ru|com|net|org|io|gg|tv|me|su|рф|app|dev|xyz)(?:\/[^\s)]*)?)/giu;
+  const out: ReactNode[] = [];
+  let used = 0;
+  let last = 0;
+  let key = 0;
+  const push = (text: string): boolean => {
+    if (!text) return true;
+    const room = max - used;
+    if (room <= 0) return false;
+    if (text.length > room) {
+      out.push(text.slice(0, room).trimEnd() + '…');
+      used = max;
+      return false;
+    }
+    out.push(text);
+    used += text.length;
+    return true;
+  };
+  for (const m of raw.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (!push(raw.slice(last, at))) return out;
+    const label = m[1] ?? m[3] ?? m[4] ?? '';
+    const href = m[2] ?? (m[3] ? m[3] : m[4] ? `https://${m[4]}` : '');
+    const shown = label.length > 38 ? `${label.slice(0, 37)}…` : label;
+    if (used + shown.length > max) {
+      push(shown);
+      return out;
+    }
+    out.push(
+      <a key={key++} href={href} target="_blank" rel="noopener noreferrer" className="srv-new-link" onClick={(e) => e.stopPropagation()}>
+        {shown}
+      </a>,
+    );
+    used += shown.length;
+    last = at + m[0].length;
+  }
+  push(raw.slice(last));
+  return out;
 }
 
 const DOT: Record<RecentEvent['type'], string> = { up: 'bg-ok', down: 'bg-bad', peak: 'bg-link', maintenance: 'bg-warn' };
@@ -79,11 +132,19 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             {news === undefined ? (
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
             ) : news ? (
-              <a href="#/news" className="srv-new-news">
-                <span className="srv-new-news-title">{news.title || t('srv.new.untitled')}</span>
-                {excerptOf(news) && <span className="srv-new-news-text">{excerptOf(news)}</span>}
-                {news.sentAt && <span className="srv-new-date">{fmtDateTime(news.sentAt)}</span>}
-              </a>
+              <div className="srv-new-news">
+                <a href="#/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
+                {teaserNodes(news).length > 0 && <span className="srv-new-news-text">{teaserNodes(news)}</span>}
+                <span className="srv-new-news-foot">
+                  {news.sentAt && <span className="srv-new-date">{fmtDateTime(news.sentAt)}</span>}
+                  {newsLink(news) && (
+                    <a href={newsLink(news)!} target="_blank" rel="noopener noreferrer" className="btn-link btn-xs">
+                      {t('srv.new.openLink')}
+                    </a>
+                  )}
+                  <a href="#/news" className="btn-link btn-xs">{t('srv.new.allNews')}</a>
+                </span>
+              </div>
             ) : (
               <StateView bare compact title={t('srv.new.noNews')} text="" />
             )}

@@ -130,3 +130,39 @@ describe('profile', () => {
     assert.ok(j.body.some((e: { kind: string }) => e.kind === 'prefs_changed'));
   });
 });
+
+describe('news mentions', () => {
+  let api: Api;
+  let token = '';
+  const channelId = '123456789012345678';
+  const internal = { 'x-internal-token': 'i'.repeat(48) };
+  before(async () => { api = await startBackend(); token = await setupAdmin(api); });
+  after(async () => { await api.stop(); });
+
+  const sendAndRead = async (payload: Record<string, unknown>) => {
+    const c = await api.call('POST', '/api/news', { token, body: { channelId, action: 'now', payload } });
+    assert.ok([200, 201].includes(c.status), JSON.stringify(c.body));
+    const pending = await api.call('GET', '/internal/news/pending', { headers: internal });
+    return (pending.body as { id: number; payload: { mention: string; content?: string } }[]).find((x) => x.id === c.body.id)!;
+  };
+
+  it('keeps the chosen mention', async () => {
+    const r = await sendAndRead({ content: 'hello', mention: 'everyone', embed: { title: 'T' } });
+    assert.equal(r.payload.mention, 'everyone');
+  });
+
+  it('turns @everyone typed into the text into a real ping', async () => {
+    const r = await sendAndRead({ content: '@everyone запуск', mention: 'none', embed: { title: 'T' } });
+    assert.equal(r.payload.mention, 'everyone');
+  });
+
+  it('turns @here typed into an embed description into a ping on the message', async () => {
+    const r = await sendAndRead({ content: '', mention: 'none', embed: { title: 'T', description: 'внимание @here всем' } });
+    assert.equal(r.payload.mention, 'here');
+  });
+
+  it('does not ping when nothing asks for it', async () => {
+    const r = await sendAndRead({ content: 'просто текст', mention: 'none', embed: { title: 'T', description: 'почта a@everyone.ru' } });
+    assert.equal(r.payload.mention, 'none');
+  });
+});
