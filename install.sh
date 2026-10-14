@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1e6f5365434f"
+COREGSM_BUILD="4281071d01da"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -42185,7 +42185,7 @@ export function NoMatchArt() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/WhatsNew.tsx" << '__COREGSM_EOF__'
-// «Что нового»: the latest news item, planned maintenance and the last events of all servers.
+// «Что нового»: the latest news item and planned maintenance (the events feed of all servers was removed from the main page).
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
@@ -42286,20 +42286,13 @@ function eventText(e: RecentEvent): string {
 export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle: () => void; overview: OverviewData | null }) {
   useI18n();
   const [news, setNews] = useState<PublicNews | null | undefined>(undefined);
-  const [events, setEvents] = useState<RecentEvent[] | null>(null);
-  const [failed, setFailed] = useState(false);
 
   // nothing is fetched while the block is folded
   usePoll(() => {
     if (!open) return;
-    return Promise.all([
-      api<PublicNews[]>('/news')
-        .then((l) => setNews(l.find((n) => n.status === 'sent' || n.status === 'edit_queued') ?? null))
-        .catch(() => setNews(null)),
-      api<RecentEvent[]>('/events/recent?limit=8')
-        .then((l) => { setEvents(l); setFailed(false); })
-        .catch(() => setFailed(true)),
-    ]);
+    return api<PublicNews[]>('/news')
+      .then((l) => setNews(l.find((n) => n.status === 'sent' || n.status === 'edit_queued') ?? null))
+      .catch(() => setNews(null));
   }, 60_000);
 
   const maint = overview?.maintenance ?? [];
@@ -42358,28 +42351,6 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             )}
           </section>
 
-          <section>
-            <h3 className="srv-new-h">{t('srv.new.events')}</h3>
-            {events === null && !failed ? (
-              <div className="skeleton h-24 rounded-2xl" aria-busy="true" />
-            ) : failed && !events ? (
-              <StateView bare compact kind="error" title={t('srv.new.evFail')} text="" />
-            ) : !events || events.length === 0 ? (
-              <StateView bare compact title={t('srv.new.noEvents')} text="" />
-            ) : (
-              <ul className="srv-new-list">
-                {events.map((e, i) => (
-                  <li key={`${e.type}-${e.serverId}-${e.ts}-${i}`}>
-                    <span className={`srv-new-dot ${DOT[e.type]}`} aria-hidden />
-                    <a className="srv-new-ev" href={e.serverId != null ? `#/servers/${e.serverId}/events` : '#/servers'}>
-                      <span className="block truncate font-bold">{eventText(e)}</span>
-                      <span className="text-[13px] font-bold text-mute" title={fmtDateTime(e.ts)}>{ago(e.ts)}</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
         </div>
       )}
     </aside>
