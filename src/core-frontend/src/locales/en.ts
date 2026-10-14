@@ -450,6 +450,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.hero.fav': 'Favourite',
   'srv.hero.busiest': 'Busiest',
   'srv.new.title': "What's new",
+  'srv.new.openLink': 'Open link →',
+  'srv.new.allNews': 'All news →',
   'srv.new.news': 'News',
   'srv.new.untitled': 'Untitled',
   'srv.new.noNews': 'No news yet',

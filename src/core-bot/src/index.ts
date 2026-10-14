@@ -381,7 +381,9 @@ interface NewsItem {
 
 async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[] = []) {
   const files: InstanceType<typeof AttachmentBuilder>[] = [];
-  const mention = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
+  const token = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
+  // the token is added once: not when the text already has it
+  const mention = token && !(p.content ?? '').includes(token) ? token : '';
   const content = [mention, p.content?.trim()].filter(Boolean).join('\n');
   const embeds: InstanceType<typeof EmbedBuilder>[] = [];
   const attached = new Set<string>();

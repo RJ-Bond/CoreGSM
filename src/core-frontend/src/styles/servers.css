@@ -261,3 +261,9 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
 }
 .srv-tile { min-width: 0; }
+
+/* news card in «Что нового»: the title and the foot are links, the text carries live links */
+.srv-new-news-title { font-weight: 800; color: rgb(var(--ink)); }
+.srv-new-news-title:hover { color: rgb(var(--link)); }
+.srv-new-news-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.srv-new-link { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }

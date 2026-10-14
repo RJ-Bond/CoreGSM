@@ -349,6 +349,12 @@ export function registerNews(deps: {
     });
     let content = cut(r(p.content ?? ''), 2000);
     let mention = p.mention;
+    // a mention typed into the text counts as the choice "ping" (an embed alone never pings)
+    if (mention === 'none') {
+      const typed = [content, ...[p.embed, ...(p.extraEmbeds ?? [])].map((e) => e?.description ?? '')].join('\n');
+      if (/(^|[^\w])@everyone\b/.test(typed)) mention = 'everyone';
+      else if (/(^|[^\w])@here\b/.test(typed)) mention = 'here';
+    }
     if (test) {
       mention = 'none';
       content = cut(`[ТЕСТ]${content.trim() ? ` ${content}` : ''}`, 2000);
