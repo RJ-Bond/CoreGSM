@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4281071d01da"
+COREGSM_BUILD="2fdb3f0a98fc"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5657,6 +5657,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 registerNews({
   app,
   staff,
+  auth,
   viewer,
   internal,
   channelInfo,
@@ -6211,6 +6212,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
+import { gameProfile } from './games.js';
 
 const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
 fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -6258,7 +6260,22 @@ try {
   /* column already exists */
 }
 
+try {
+  // the user who created the item (its role is resolved at read time, see authorRole)
+  db.exec('ALTER TABLE news ADD COLUMN created_by INTEGER');
+} catch {
+  /* column already exists */
+}
+
 db.exec(`
+CREATE TABLE IF NOT EXISTS news_reactions (
+  news_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  emoji TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (news_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_news_reactions_news ON news_reactions (news_id);
 CREATE TABLE IF NOT EXISTS news_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   news_id INTEGER NOT NULL,
@@ -6290,6 +6307,7 @@ interface NewsRow {
   error: string | null;
   created_at: number;
   updated_at: number;
+  created_by?: number | null;
 }
 
 // ---------- validation (Discord limits) ----------
@@ -6298,6 +6316,17 @@ const link = z
   .trim()
   .max(2000)
   .refine((v) => v === '' || /^https?:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с http:// или https://');
+
+/** links of the site-only fields: https only (an empty string means "none") */
+const httpsLink = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine((v) => v === '' || /^https:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с https://');
+const UPLOAD_RE = /^[a-f0-9]{24}\.(png|jpg|gif|webp)$/;
+export const NEWS_CATEGORIES = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
+/** reactions players can leave on a published item (the heart carries the emoji variation selector) */
+export const NEWS_REACTIONS = ['👍', '🔥', '\u2764\uFE0F', '😮'] as const;
 
 const embedSchema = z.object({
   title: z.string().max(256, 'Заголовок: не более 256 символов').optional(),
@@ -6329,6 +6358,39 @@ const payloadSchema = z.object({
   extraEmbeds: z.array(embedSchema).max(9, 'Дополнительных embed не больше 9').optional(),
   // live status cards of these servers are appended to the message at send time
   statusServerIds: z.array(z.number().int().positive()).max(5, 'Статусов серверов не больше 5').optional(),
+  // ---- site-only fields (ignored by Discord, except `actions` which become link buttons) ----
+  category: z.enum(NEWS_CATEGORIES).optional(),
+  pinned: z.boolean().optional(),
+  game: z
+    .string()
+    .trim()
+    .max(40)
+    .refine((v) => v === '' || !!gameProfile(v), 'Неизвестная игра')
+    .optional(),
+  gallery: z
+    .array(z.object({ url: httpsLink.optional(), upload: z.string().regex(UPLOAD_RE).optional() }))
+    .max(6, 'В галерее не больше 6 картинок')
+    .optional(),
+  changes: z
+    .array(
+      z.object({
+        kind: z.enum(['add', 'fix', 'remove', 'change']),
+        text: z.string().trim().min(1, 'Текст изменения не может быть пустым').max(200, 'Изменение: не более 200 символов'),
+      }),
+    )
+    .max(20, 'Изменений не больше 20')
+    .optional(),
+  countdownAt: z.number().int().min(0).optional(),
+  countdownLabel: z.string().trim().max(60, 'Подпись таймера: не более 60 символов').optional(),
+  actions: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1, 'У кнопки должна быть подпись').max(40, 'Подпись кнопки: не более 40 символов'),
+        url: httpsLink.refine((v) => v !== '', 'У кнопки должна быть ссылка'),
+      }),
+    )
+    .max(3, 'Кнопок не больше 3')
+    .optional(),
 });
 
 type EmbedIn = z.infer<typeof embedSchema>;
@@ -6361,12 +6423,25 @@ function tidyEmbed(e: EmbedIn | undefined): EmbedIn | undefined {
 function tidy(p: NewsPayload): NewsPayload {
   const extra = (p.extraEmbeds ?? []).map(tidyEmbed).filter((e): e is EmbedIn => !!e);
   const ids = [...new Set(p.statusServerIds ?? [])];
-  return {
+  const gallery = (p.gallery ?? []).filter((g) => g.url || g.upload).map((g) => (g.upload ? { upload: g.upload } : { url: g.url }));
+  const out: NewsPayload = {
     ...p,
     embed: tidyEmbed(p.embed),
     extraEmbeds: extra.length ? extra : undefined,
     statusServerIds: ids.length ? ids : undefined,
+    gallery: gallery.length ? gallery : undefined,
+    changes: p.changes?.length ? p.changes : undefined,
+    actions: p.actions?.length ? p.actions : undefined,
+    game: p.game || undefined,
+    countdownLabel: p.countdownLabel || undefined,
   };
+  if (!out.pinned) delete out.pinned;
+  if (!out.countdownAt) {
+    delete out.countdownAt;
+    delete out.countdownLabel;
+  }
+  for (const k of Object.keys(out) as (keyof NewsPayload)[]) if (out[k] === undefined) delete out[k];
+  return out;
 }
 
 const allEmbeds = (p: NewsPayload): EmbedIn[] => [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])];
@@ -6443,12 +6518,16 @@ export function registerNews(deps: {
   channelInfo: ChannelInfo;
   /** the signed-in user is an administrator or a moderator */
   isStaff: (req: Request) => boolean;
+  /** any signed-in user (reactions); without it the reaction route falls back to staff */
+  auth?: RequestHandler;
   /** every server with its current status (for variables) */
   servers: () => NewsServerInfo[];
   /** the status card of a server (the one the bot posts), or null */
   statusEmbed: (serverId: number) => StatusEmbed | null;
 }) {
   const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
+  const authed = deps.auth ?? staff;
+  const uidOf = (req: Request) => (req as Request & { user?: { id?: number } }).user?.id ?? null;
   const actorOf = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '—';
   const userKeyOf = (req: Request) => {
     const u = (req as Request & { user?: { id?: number; username?: string } }).user;
@@ -6560,6 +6639,8 @@ export function registerNews(deps: {
     }
     const out: NewsPayload = { content, mention, ...(p.embed ? { embed: embed(p.embed) } : {}) };
     if (p.extraEmbeds?.length) out.extraEmbeds = p.extraEmbeds.map(embed);
+    // link buttons under the message
+    if (p.actions?.length) out.actions = p.actions;
     // status cards: they never push the message over 10 embeds or 6000 characters
     const statusEmbeds: StatusEmbed[] = [];
     const used = allEmbeds(out);
@@ -6583,10 +6664,32 @@ export function registerNews(deps: {
     Promise.resolve(fn(req, res)).catch(next);
   };
 
-  const serialize = (r: NewsRow) => {
+  // ---------- reactions, author role ----------
+  const isReaction = (e: string) => (NEWS_REACTIONS as readonly string[]).includes(e);
+  /** accepts the heart with or without the variation selector */
+  const canonEmoji = (e: string) => (e === '\u2764' ? '\u2764\uFE0F' : e);
+  const reactionRows = db.prepare('SELECT emoji, COUNT(*) AS n FROM news_reactions WHERE news_id = ? GROUP BY emoji');
+  const myReaction = db.prepare('SELECT emoji FROM news_reactions WHERE news_id = ? AND user_id = ?');
+  function reactionsOf(newsId: number, uid: number | null) {
+    const counts = new Map((reactionRows.all(newsId) as { emoji: string; n: number }[]).map((x) => [x.emoji, x.n]));
+    const mine = uid != null ? (myReaction.get(newsId, uid) as { emoji: string } | undefined)?.emoji : undefined;
+    return NEWS_REACTIONS.filter((e) => (counts.get(e) ?? 0) > 0).map((e) => ({ emoji: e as string, count: counts.get(e)!, mine: mine === e }));
+  }
+  const roleOf = db.prepare('SELECT role FROM users WHERE id = ?');
+  function authorRoleOf(r: NewsRow): 'admin' | 'moderator' | 'player' | null {
+    if (r.created_by == null) return null;
+    const u = roleOf.get(r.created_by) as { role: string } | undefined;
+    return u && (u.role === 'admin' || u.role === 'moderator' || u.role === 'player') ? u.role : null;
+  }
+
+  const serialize = (r: NewsRow, uid: number | null = null) => {
     const payload = JSON.parse(r.payload) as NewsPayload;
     const ch = channelInfo(r.channel_id);
     return {
+      category: payload.category ?? 'announcement',
+      pinned: !!payload.pinned,
+      authorRole: authorRoleOf(r),
+      reactions: reactionsOf(r.id, uid),
       id: r.id,
       status: r.status,
       title: titleOf(payload),
@@ -6717,21 +6820,93 @@ export function registerNews(deps: {
 
   // ---------- CRUD ----------
   /** the public view of a posted news item: no channel ids, errors or schedule */
-  const publicNews = (r: NewsRow) => {
-    const full = serialize(r);
-    return { id: full.id, status: full.status, title: full.title, payload: full.payload, sentAt: full.sentAt };
+  const publicNews = (r: NewsRow, uid: number | null) => {
+    const full = serialize(r, uid);
+    return {
+      id: full.id,
+      status: full.status,
+      title: full.title,
+      payload: full.payload,
+      sentAt: full.sentAt,
+      category: full.category,
+      pinned: full.pinned,
+      authorRole: full.authorRole,
+      reactions: full.reactions,
+    };
   };
+  const isPublished = (r: { status: string }) => r.status === 'sent' || r.status === 'edit_queued';
+  const pinnedOf = (r: NewsRow) => {
+    try {
+      return !!(JSON.parse(r.payload) as NewsPayload).pinned;
+    } catch {
+      return false;
+    }
+  };
+  /** the order of published items by time, newest first */
+  const byTime = (a: NewsRow, b: NewsRow) => (b.sent_at ?? b.created_at) - (a.sent_at ?? a.created_at) || b.id - a.id;
 
   app.get('/api/news', viewer, (req, res) => {
+    const uid = uidOf(req);
     const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
-    if (isAdmin(req)) return res.json(rows.map(serialize));
-    res.json(rows.filter((r) => r.status === 'sent' || r.status === 'edit_queued').map(publicNews));
+    if (isAdmin(req)) return res.json(rows.map((r) => serialize(r, uid)));
+    const pub = rows.filter(isPublished).sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
+    res.json(pub.map((r) => publicNews(r, uid)));
   });
 
   app.get('/api/news/:id', viewer, (req, res) => {
+    const uid = uidOf(req);
     const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
-    if (!r || (!isAdmin(req) && r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
-    res.json(isAdmin(req) ? serialize(r) : publicNews(r));
+    if (!r || (!isAdmin(req) && !isPublished(r))) return res.status(404).json({ error: 'Новость не найдена' });
+    const base = isAdmin(req) ? serialize(r, uid) : publicNews(r, uid);
+    // neighbours among published items: prev is the one before it in the list (newer), next the one after (older)
+    const pub = (db.prepare('SELECT * FROM news WHERE test = 0').all() as NewsRow[]).filter(isPublished).sort(byTime);
+    const i = pub.findIndex((x) => x.id === r.id);
+    const ref = (x: NewsRow | undefined) => (x ? { id: x.id, title: titleOf(JSON.parse(x.payload) as NewsPayload) } : null);
+    res.json({ ...base, prev: i > 0 ? ref(pub[i - 1]) : null, next: i >= 0 ? ref(pub[i + 1]) : null });
+  });
+
+  // a signed-in user's single reaction on a published item
+  const reactHits = new Map<number, { n: number; reset: number }>();
+  app.put('/api/news/:id/reaction', authed, (req, res) => {
+    const uid = uidOf(req);
+    if (uid == null) return res.status(401).json({ error: 'Требуется вход' });
+    const now = Date.now();
+    const h = reactHits.get(uid);
+    if (!h || h.reset <= now) reactHits.set(uid, { n: 1, reset: now + 60_000 });
+    else if (++h.n > 30) {
+      const retryAfter = Math.max(1, Math.ceil((h.reset - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'Слишком много реакций. Подождите минуту.', retryAfter });
+    }
+    const b = z.object({ emoji: z.string().nullable() }).safeParse(req.body);
+    const emoji = b.success && b.data.emoji !== null ? canonEmoji(b.data.emoji) : null;
+    if (!b.success || (emoji !== null && !isReaction(emoji))) return res.status(400).json({ error: 'Неверная реакция' });
+    const id = Number(req.params.id);
+    const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(id) as NewsRow | undefined;
+    if (!r || !isPublished(r)) return res.status(404).json({ error: 'Новость не найдена' });
+    if (emoji === null) db.prepare('DELETE FROM news_reactions WHERE news_id = ? AND user_id = ?').run(id, uid);
+    else {
+      db.prepare(
+        'INSERT INTO news_reactions (news_id, user_id, emoji, ts) VALUES (?, ?, ?, ?) ON CONFLICT(news_id, user_id) DO UPDATE SET emoji = excluded.emoji, ts = excluded.ts',
+      ).run(id, uid, emoji, now);
+    }
+    res.json(reactionsOf(id, uid));
+  });
+
+  // pin / unpin (staff); site-only, nothing changes in Discord
+  app.patch('/api/news/:id/pin', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const b = z.object({ pinned: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Укажите pinned: true или false' });
+    const p = JSON.parse(item.payload) as NewsPayload;
+    if (b.data.pinned) p.pinned = true;
+    else delete p.pinned;
+    const json = JSON.stringify(p);
+    db.prepare('UPDATE news SET payload = ?, updated_at = ? WHERE id = ?').run(json, Date.now(), id);
+    addVersion(id, json, actorOf(req), b.data.pinned ? 'Закреплено' : 'Откреплено');
+    res.json(serialize(loadItem(id)!, uidOf(req)));
   });
 
   function statusFor(action: 'draft' | 'now' | 'schedule', at: number | undefined): { status: string; at: number | null; error?: string } {
@@ -6754,8 +6929,8 @@ export function registerNews(deps: {
       if (st.error) return res.status(400).json({ error: st.error });
       const now = Date.now();
       const info = db
-        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now);
+        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now, uidOf(req));
       addVersion(Number(info.lastInsertRowid), JSON.stringify(payload), actorOf(req), 'Создано');
       res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
     }),
@@ -6869,6 +7044,7 @@ export function registerNews(deps: {
     const info = db
       .prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('draft', ?, ?, NULL, 'none', ?, ?)")
       .run(src.channel_id, json, now, now);
+    db.prepare('UPDATE news SET created_by = ? WHERE id = ?').run(uidOf(req), info.lastInsertRowid);
     addVersion(Number(info.lastInsertRowid), json, actorOf(req), `Копия новости #${src.id}`);
     res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
   });
@@ -6986,7 +7162,7 @@ export function registerNews(deps: {
       // the first successful post of a repeating item schedules the next one
       if (prev && prev.repeat !== 'none' && !prev.sent_at && prev.scheduled_at) {
         const next = nextOccurrence(prev.scheduled_at, prev.repeat, now);
-        db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('scheduled', ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now);
+        db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at, created_by) VALUES ('scheduled', ?, ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now, prev.created_by ?? null);
       }
       ledger('sent', (before?.attempts ?? 0) + 1, null, null);
       db.prepare("UPDATE news SET status = 'sent', attempts = 0, next_try_at = NULL, message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(
@@ -7297,6 +7473,7 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/news\/(\d+)\/duplicate$/, label: 'Создана копия новости', pre: (id) => `#${id}` },
   { m: 'PATCH', re: /^\/api\/news\/(\d+)\/schedule$/, label: 'Изменено время публикации новости', pre: (id) => `#${id}` },
   { m: 'POST', re: /^\/api\/news\/(\d+)\/versions\/\d+\/restore$/, label: 'Новость восстановлена из версии', pre: (id) => `#${id}` },
+  { m: 'PATCH', re: /^\/api\/news\/(\d+)\/pin$/, label: 'Изменено закрепление новости', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${r.body?.pinned ? 'закреплена' : 'откреплена'}` },
   { m: 'POST', re: /^\/api\/news\/test$/, label: 'Тестовая отправка новости', detail: (r) => s(r.body?.payload?.embed?.title) || s(r.body?.payload?.content, 60) },
   { m: 'PUT', re: /^\/api\/news\/settings$/, label: 'Изменён канал новостей' },
   { m: 'PUT', re: /^\/api\/users\/(\d+)$/, label: 'Изменена роль пользователя', pre: userName, detail: (r, p) => `${p ?? ''} → ${s(r.body?.role, 10)}` },
@@ -9662,6 +9839,22 @@ async function stopClient(): Promise<void> {
   }
 }
 
+/** a pooled connection that the proxy closed under us: the request never reached Discord, so one more try is safe */
+const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated/i;
+async function retrySocket<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const err = e as Error & { code?: string; cause?: { message?: string; code?: string } };
+      const text = `${err.message} ${err.code ?? ''} ${err.cause?.message ?? ''} ${err.cause?.code ?? ''}`;
+      if (i >= tries || !SOCKET_ERR.test(text)) throw e;
+      log(`connection to Discord was closed by the other side, retry ${i}/${tries - 1}`);
+      await new Promise((r) => setTimeout(r, 300 * i));
+    }
+  }
+}
+
 // ---------- slash commands: registration of players from Discord ----------
 const COMMANDS = [
   {
@@ -9981,7 +10174,7 @@ async function applyConfig(): Promise<void> {
   // a warm connection to Discord: a tiny request every 25 s keeps the (proxied) HTTPS connection open, so that the
   // acknowledgement of a slash command does not pay for a new TCP + proxy + TLS handshake
   if (warmTimer) clearInterval(warmTimer);
-  warmTimer = setInterval(() => { void c.rest.get('/gateway').catch(() => undefined); }, 25_000);
+  warmTimer = setInterval(() => { void c.rest.get('/gateway').catch(() => undefined); }, 10_000);
   warmTimer.unref?.();
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
@@ -10083,22 +10276,22 @@ async function buildPayload(b: Binding) {
 async function update(c: DiscordClient, b: Binding): Promise<void> {
   const built = await buildPayload(b);
 
-  const channel = await c.channels.fetch(b.channelId);
+  const channel = await retrySocket(() => c.channels.fetch(b.channelId));
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
   const payload = () => built;
 
   if (b.messageId) {
     try {
-      const msg = await channel.messages.fetch(b.messageId);
+      const msg = await retrySocket(() => channel.messages.fetch(b.messageId!));
       // attachments: [] drops a picture left over from a previous style
-      await msg.edit({ ...payload(), attachments: [] });
+      await retrySocket(() => msg.edit({ ...payload(), attachments: [] }));
       return await report(b.id, { error: null });
     } catch (e) {
       log(`binding ${b.id}: cannot edit message, posting a new one`, (e as Error).message);
     }
   }
-  const sent = await channel.send(payload());
+  const sent = await retrySocket<{ id: string }>(() => channel.send(payload()));
   await report(b.id, { messageId: sent.id, error: null });
 }
 
@@ -10121,6 +10314,8 @@ interface NewsPayload {
   embed?: NewsEmbed;
   /** more embeds in the same message (variables are already substituted by the panel) */
   extraEmbeds?: NewsEmbed[];
+  /** link buttons under the message (at most 3) */
+  actions?: { label: string; url: string }[];
 }
 interface NewsItem {
   id: number;
@@ -10169,10 +10364,18 @@ async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[]
     if (embeds.length >= 10) break;
     embeds.push(new EmbedBuilder(raw as ConstructorParameters<typeof EmbedBuilder>[0]));
   }
+  const components = (p.actions ?? []).length
+    ? [
+        new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(
+          (p.actions ?? []).slice(0, 3).map((a) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(a.label.slice(0, 80)).setURL(a.url)),
+        ),
+      ]
+    : [];
   return {
     content: content || undefined,
     embeds,
     files,
+    components,
     allowedMentions: { parse: (p.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
   };
 }
@@ -10193,7 +10396,7 @@ async function processNews(): Promise<void> {
   const items = (await res.json()) as NewsItem[];
   for (const it of items) {
     try {
-      const channel = await c.channels.fetch(it.channelId);
+      const channel = await retrySocket(() => c.channels.fetch(it.channelId));
       if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
       if (it.action === 'delete') {
@@ -10209,12 +10412,12 @@ async function processNews(): Promise<void> {
 
       const msg = await buildNews(it.payload, it.statusEmbeds ?? []);
       if (it.action === 'edit' && it.messageId) {
-        const m = await channel.messages.fetch(it.messageId);
-        await m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, attachments: [], allowedMentions: msg.allowedMentions });
+        const m = await retrySocket(() => channel.messages.fetch(it.messageId!));
+        await retrySocket(() => m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, components: msg.components, attachments: [], allowedMentions: msg.allowedMentions }));
         await reportNews(it.id, { status: 'sent', messageId: it.messageId });
         log(`news ${it.id}: message edited`);
       } else {
-        const sent = await channel.send(msg);
+        const sent = await retrySocket<{ id: string }>(() => channel.send(msg));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
         log(`news ${it.id}: posted`);
       }
@@ -10331,7 +10534,9 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
  * and a new one through a SOCKS/HTTP proxy costs a TCP + SOCKS + TLS handshake (seconds on a far proxy): that alone
  * can exceed the 3 s Discord gives a slash command to answer («Приложение не отвечает»).
  */
-const KEEP_ALIVE = { keepAliveTimeout: 120_000, keepAliveMaxTimeout: 600_000, connections: 4 };
+// Idle sockets are kept for 20 s only (and refreshed by the bot every 10 s): a longer keep-alive meant reusing sockets
+// that the proxy or Cloudflare had already closed, which fails with «other side closed».
+const KEEP_ALIVE = { keepAliveTimeout: 20_000, keepAliveMaxTimeout: 60_000, connections: 4 };
 
 export interface ProxySetup {
   /** dispatcher for Discord REST (HTTPS API) */
@@ -33078,7 +33283,7 @@ export default function App() {
 
         <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
           {page === 'servers' && <ServersPage sub={sub} />}
-          {page === 'news' && <NewsFeed />}
+          {page === 'news' && <NewsFeed sub={sub} />}
           {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}
@@ -33620,7 +33825,23 @@ export interface NewsPayload {
   extraEmbeds?: Embed[];
   /** live status block: up to 5 servers, refreshed by the bot when the message is sent */
   statusServerIds?: number[];
+  /** site-only fields (optional; an older backend simply does not send them) */
+  category?: NewsCategory;
+  pinned?: boolean;
+  /** game id (games.ts); drives the default cover */
+  game?: string;
+  gallery?: NewsGalleryItem[];
+  changes?: NewsChange[];
+  countdownAt?: number | null;
+  countdownLabel?: string;
+  actions?: NewsAction[];
 }
+
+export type NewsCategory = 'announcement' | 'wipe' | 'update' | 'event' | 'maintenance' | 'other';
+export interface NewsGalleryItem { url?: string; upload?: string }
+export type NewsChangeKind = 'add' | 'fix' | 'remove' | 'change';
+export interface NewsChange { kind: NewsChangeKind; text: string }
+export interface NewsAction { label: string; url: string }
 
 /** GET /news/variables */
 export interface NewsVariable {
@@ -33885,6 +34106,20 @@ export interface PublicNews {
   title: string;
   payload: NewsPayload;
   sentAt: number | null;
+  /** all of the below may be missing on an older backend */
+  category?: NewsCategory;
+  pinned?: boolean;
+  authorRole?: 'admin' | 'moderator' | 'player' | null;
+  reactions?: NewsReaction[];
+}
+
+export type NewsEmoji = '👍' | '🔥' | '❤️' | '😮';
+export interface NewsReaction { emoji: string; count: number; mine: boolean }
+
+/** GET /news/:id */
+export interface PublicNewsFull extends PublicNews {
+  prev?: { id: number; title: string } | null;
+  next?: { id: number; title: string } | null;
 }
 
 /** who signs a news item (the Discord display name 1:1 and picture when linked, else the site login and picture) */
@@ -37714,6 +37949,724 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
 export const MarkdownField = memo(MarkdownFieldImpl);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/NewsArticle.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import type { NewsReaction, PublicNewsFull, Server } from '../../api';
+import { t } from '../../i18n';
+import { toast } from '../../ui';
+import { cardOf, NewsCover } from './PublicFeed';
+import { IconCopyLink } from './NewsIcons';
+import {
+  ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
+} from './NewsParts';
+
+/** one news item in full: cover, text, what changed, server cards, gallery, buttons, reactions, previous / next */
+export function NewsArticle({
+  item, servers, canReact, onReactions, preview = false,
+}: {
+  item: PublicNewsFull;
+  servers: Server[] | null;
+  canReact: boolean;
+  onReactions: (r: NewsReaction[]) => void;
+  /** the editor's «Как будет на сайте»: no navigation, no reactions */
+  preview?: boolean;
+}) {
+  const c = cardOf(item);
+  const [viewer, setViewer] = useState<number | null>(null);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href.split('?')[0]);
+      toast(t('nw.copied'));
+    } catch {
+      toast(t('nw.copyFail'), 'err');
+    }
+  };
+
+  return (
+    <article className="nw-article">
+      <NewsCover c={c} servers={servers} as="h1" tall />
+      <div className="nw-article-in">
+        {(c.author || c.countdownAt) && (
+          <div className="nf-meta">
+            {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
+          </div>
+        )}
+        {(c.text || c.fields.length > 0) && <NewsText className="nw-prose-lg" text={c.text} fields={c.fields} />}
+        <ChangesBlock changes={c.changes} />
+        <StatusCards ids={c.statusIds} servers={servers} />
+        <GalleryGrid urls={c.gallery} onOpen={setViewer} />
+        {(c.actions.length > 0 || c.link) && (
+          <div className="nw-actions-wrap">
+            <ActionButtons actions={c.actions} />
+            {c.link && <a className="btn btn-soft" href={c.link} target="_blank" rel="noopener noreferrer">{t('nw.openLink')}</a>}
+          </div>
+        )}
+        {!preview && (
+          <>
+            <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
+            <div className="nw-toolbar">
+              <a className="btn btn-soft" href="#/news">{t('nw.back')}</a>
+              <button type="button" className="btn btn-soft" onClick={() => void copy()}>
+                <IconCopyLink />
+                {t('nw.copyLink')}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {!preview && (item.prev || item.next) && (
+        <nav className="nw-prevnext" aria-label={t('nw.prevnext')}>
+          {item.prev ? (
+            <a href={`#/news/${item.prev.id}`} className="nw-pn nw-pn-prev">
+              <span className="nw-pn-kicker">← {t('nw.prev')}</span>
+              <span className="nw-pn-title">{item.prev.title}</span>
+            </a>
+          ) : <span />}
+          {item.next ? (
+            <a href={`#/news/${item.next.id}`} className="nw-pn nw-pn-next">
+              <span className="nw-pn-kicker">{t('nw.next')} →</span>
+              <span className="nw-pn-title">{item.next.title}</span>
+            </a>
+          ) : <span />}
+        </nav>
+      )}
+      {viewer != null && c.gallery.length > 0 && <GalleryViewer urls={c.gallery} index={Math.min(viewer, c.gallery.length - 1)} onIndex={setViewer} onClose={() => setViewer(null)} />}
+    </article>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/NewsIcons.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+import type { NewsCategory, NewsChangeKind } from '../../api';
+import { Icon } from '../../icons';
+
+/** one small inline pictogram per news category and per kind of change (colours come from news.css tone classes) */
+const CATEGORY_PATHS: Record<NewsCategory, ReactNode> = {
+  // megaphone
+  announcement: <><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></>,
+  // refresh / reset
+  wipe: <><path d="M20 12a8 8 0 1 1-2.6-5.9" /><path d="M20 4v5h-5" /></>,
+  // arrow up in a circle
+  update: <><circle cx="12" cy="12" r="9" /><path d="M12 16V8M8.5 11.5 12 8l3.5 3.5" /></>,
+  // star
+  event: <path d="m12 3 2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.5 6.8 19.2l1-5.9L3.5 9.2l5.9-.8z" />,
+  // wrench
+  maintenance: <path d="M14.7 6.3a4 4 0 0 0-5.4 5.1L3.5 17.2a1.8 1.8 0 0 0 2.6 2.6l5.8-5.8a4 4 0 0 0 5.1-5.4l-2.4 2.4-2.1-.5-.5-2.1z" />,
+  // info
+  other: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>,
+};
+
+export function CategoryIcon({ category, size = 16 }: { category: NewsCategory; size?: number }) {
+  return <Icon size={size}>{CATEGORY_PATHS[category]}</Icon>;
+}
+
+export function PinIcon({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z" />
+      <path d="M12 14v6" />
+    </Icon>
+  );
+}
+
+const CHANGE_PATHS: Record<NewsChangeKind, ReactNode> = {
+  add: <path d="M12 5v14M5 12h14" />,
+  fix: <path d="m5 12.5 4.2 4.2L19 7" />,
+  remove: <path d="M5 12h14" />,
+  change: <><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5" /><path d="M20 4v4.5h-4.5" /><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.5" /><path d="M4 20v-4.5h4.5" /></>,
+};
+
+export function ChangeIcon({ kind, size = 16 }: { kind: NewsChangeKind; size?: number }) {
+  return <Icon size={size}>{CHANGE_PATHS[kind]}</Icon>;
+}
+
+export const IconCopyLink = ({ size = 16 }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+    <path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1" />
+  </Icon>
+);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/NewsParts.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
+import { api, type NewsAction, type NewsCategory, type NewsChange, type NewsReaction, type Server } from '../../api';
+import { t, useI18n } from '../../i18n';
+import { GameAvatar, StatusPill, UserAvatar, toast, usePoll } from '../../ui';
+import { IconClose } from '../../icons';
+import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
+import { CategoryIcon, ChangeIcon, PinIcon } from './NewsIcons';
+import { CHANGE_ORDER, countdownText, fullReactions, groupChanges, toggleReaction, validActions, type RubricFilter } from './newsLogic';
+
+/** the news text uses the panel's own colours (light and dark), not Discord's */
+export const PANEL_THEME: DTheme = {
+  name: 'light',
+  outer: 'transparent',
+  embed: 'transparent',
+  embedBorder: 'transparent',
+  text: 'rgb(var(--ink))',
+  title: 'rgb(var(--ink))',
+  muted: 'rgb(var(--mute))',
+  link: 'rgb(var(--link))',
+  code: 'rgb(var(--soft))',
+  quote: 'rgb(var(--line))',
+  spoilerHide: 'rgb(var(--soft))',
+  spoilerShow: 'rgb(var(--soft))',
+  mentionBg: 'rgb(var(--soft))',
+  mentionFg: 'rgb(var(--link))',
+  chipBg: 'rgb(var(--soft))',
+};
+
+export function NewsText({ text, fields, className = '' }: { text: string; fields?: { name: string; value: string }[]; className?: string }) {
+  return (
+    <ThemeCtx.Provider value={PANEL_THEME}>
+      <div className={`nw-prose ${className}`}>
+        {text && <DiscordMd text={text} />}
+        {fields && fields.length > 0 && (
+          <dl className="nf-fields">
+            {fields.map((f, i) => (
+              <div key={i}>
+                <dt>{f.name}</dt>
+                <dd><DiscordMd text={f.value} /></dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+    </ThemeCtx.Provider>
+  );
+}
+
+// ---------- the clock: one tick per second while the tab is visible; text only ----------
+export function useNow(enabled = true): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let timer = 0;
+    const stop = () => window.clearInterval(timer);
+    const start = () => {
+      stop();
+      setNow(Date.now());
+      timer = window.setInterval(() => setNow(Date.now()), 1000);
+    };
+    const vis = () => (document.hidden ? stop() : start());
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', vis);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', vis);
+    };
+  }, [enabled]);
+  return now;
+}
+
+export function Countdown({ at, label, compact = false }: { at: number; label?: string; compact?: boolean }) {
+  const { lang } = useI18n();
+  const live = at > Date.now();
+  const now = useNow(live);
+  const done = at - now <= 0;
+  return (
+    <span className={`nw-countdown ${done ? 'is-done' : ''} ${compact ? 'is-compact' : ''}`} role="timer">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2M9 2h6" />
+      </svg>
+      <span className="tabular-nums">{countdownText(at, now, label ?? '', lang)}</span>
+    </span>
+  );
+}
+
+// ---------- chips ----------
+export function categoryLabel(c: NewsCategory | RubricFilter): string {
+  switch (c) {
+    case 'all': return t('nw.rubric.all');
+    case 'announcement': return t('nw.cat.announcement');
+    case 'wipe': return t('nw.cat.wipe');
+    case 'update': return t('nw.cat.update');
+    case 'event': return t('nw.cat.event');
+    case 'maintenance': return t('nw.cat.maintenance');
+    default: return t('nw.cat.other');
+  }
+}
+
+/** singular form on a card: «Вайп», «Обновление» */
+export function categoryOne(c: NewsCategory): string {
+  switch (c) {
+    case 'announcement': return t('nw.kind.announcement');
+    case 'wipe': return t('nw.kind.wipe');
+    case 'update': return t('nw.kind.update');
+    case 'event': return t('nw.kind.event');
+    case 'maintenance': return t('nw.kind.maintenance');
+    default: return t('nw.kind.other');
+  }
+}
+
+export function CategoryChip({ category }: { category: NewsCategory }) {
+  return (
+    <span className={`nw-chip nw-tone-${category}`}>
+      <CategoryIcon category={category} size={14} />
+      {categoryOne(category)}
+    </span>
+  );
+}
+
+export function PinChip() {
+  return (
+    <span className="nw-chip nw-chip-pin">
+      <PinIcon size={13} />
+      {t('nw.pinned')}
+    </span>
+  );
+}
+
+export function roleLabel(role: 'admin' | 'moderator' | 'player' | null | undefined): string {
+  return role === 'admin' ? t('nw.role.admin') : role === 'moderator' ? t('nw.role.moderator') : '';
+}
+
+export function AuthorLine({ name, icon, role }: { name: string; icon?: string | null; role?: 'admin' | 'moderator' | 'player' | null }) {
+  const url = icon && /^https?:\/\//i.test(icon) ? icon : null;
+  const badge = roleLabel(role);
+  return (
+    <span className="nf-author">
+      <UserAvatar name={name} url={url} size={24} tone="brand" />
+      <span className="nw-author-name">{name}</span>
+      {badge && <span className={`nw-role nw-role-${role}`}>{badge}</span>}
+    </span>
+  );
+}
+
+// ---------- «Что изменилось» ----------
+const CHANGE_KEY = { add: 'nw.change.add', fix: 'nw.change.fix', change: 'nw.change.change', remove: 'nw.change.remove' } as const;
+
+export function ChangesBlock({ changes }: { changes: NewsChange[] | undefined }) {
+  const groups = groupChanges(changes);
+  if (groups.length === 0) return null;
+  return (
+    <section className="nw-changes" aria-label={t('nw.changes')}>
+      <h2 className="nw-h2">{t('nw.changes')}</h2>
+      <div className="nw-changes-grid">
+        {CHANGE_ORDER.map((k) => {
+          const g = groups.find((x) => x.kind === k);
+          if (!g) return null;
+          return (
+            <div key={k} className={`nw-change nw-change-${k}`}>
+              <h3 className="nw-change-head">
+                <span className="nw-change-ico"><ChangeIcon kind={k} size={16} /></span>
+                {t(CHANGE_KEY[k])}
+              </h3>
+              <ul>
+                {g.items.map((x, i) => <li key={i}>{x}</li>)}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// ---------- action buttons ----------
+export function ActionButtons({ actions }: { actions: NewsAction[] | undefined }) {
+  const list = validActions(actions);
+  if (list.length === 0) return null;
+  return (
+    <div className="nw-actions">
+      {list.map((a, i) => (
+        <a key={i} className={i === 0 ? 'btn' : 'btn btn-soft'} href={a.url} target="_blank" rel="noopener noreferrer">
+          {a.label}
+          <span aria-hidden> ↗</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+// ---------- gallery ----------
+export function GalleryGrid({ urls, onOpen }: { urls: string[]; onOpen: (i: number) => void }) {
+  if (urls.length === 0) return null;
+  return (
+    <section aria-label={t('nw.gallery')}>
+      <h2 className="nw-h2">{t('nw.gallery')}</h2>
+      <ul className={`nw-gallery nw-gallery-${Math.min(urls.length, 6)}`}>
+        {urls.map((u, i) => (
+          <li key={u + i}>
+            <button type="button" className="nw-gal-item" onClick={() => onOpen(i)} aria-label={t('nw.img.open', { n: i + 1 })}>
+              <img src={u} alt="" loading="lazy" decoding="async" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** the picture in a modal: Esc closes, arrows switch, no transforms */
+export function GalleryViewer({ urls, index, onIndex, onClose }: { urls: string[]; index: number; onIndex: (i: number) => void; onClose: () => void }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const n = urls.length;
+  const go = (d: number) => onIndex((index + d + n) % n);
+  const goRef = useRef(go);
+  goRef.current = go;
+  const closeFn = useRef(onClose);
+  closeFn.current = onClose;
+  useEffect(() => {
+    const prevFocus = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeFn.current(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); goRef.current(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); goRef.current(1); }
+    };
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('keydown', key);
+      document.body.style.overflow = prevOverflow;
+      prevFocus?.focus?.();
+    };
+  }, []);
+  if (n === 0) return null;
+  return (
+    <div className="nw-viewer" role="dialog" aria-modal="true" aria-label={t('nw.gallery')} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <button ref={closeRef} type="button" className="nw-viewer-btn nw-viewer-close" onClick={onClose} aria-label={t('common.close')}><IconClose /></button>
+      {n > 1 && <button type="button" className="nw-viewer-btn nw-viewer-prev" onClick={() => go(-1)} aria-label={t('nw.img.prev')}>‹</button>}
+      <img className="nw-viewer-img" src={urls[index]} alt="" />
+      {n > 1 && <button type="button" className="nw-viewer-btn nw-viewer-next" onClick={() => go(1)} aria-label={t('nw.img.next')}>›</button>}
+      <div className="nw-viewer-count" aria-live="polite">{t('nw.img.of', { i: index + 1, n })}</div>
+    </div>
+  );
+}
+
+// ---------- live server cards ----------
+/** public server list, refreshed with the page; failures are silent (the cards simply do not show) */
+export function useNewsServers(ms = 30_000, enabled = true): Server[] | null {
+  const [servers, setServers] = useState<Server[] | null>(null);
+  usePoll(() => {
+    if (!enabled) return undefined;
+    return api<Server[]>('/servers').then((s) => { if (Array.isArray(s)) setServers(s); }).catch(() => undefined);
+  }, ms);
+  return servers;
+}
+
+export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[] | null }) {
+  if (!ids.length) return null;
+  const shown = ids.map((id) => servers?.find((s) => s.id === id)).filter((s): s is Server => !!s);
+  if (servers && shown.length === 0) return null;
+  return (
+    <section aria-label={t('nw.servers')}>
+      <h2 className="nw-h2">{t('nw.servers')}</h2>
+      <ul className="nw-srv-list">
+        {!servers && ids.slice(0, 5).map((id) => <li key={id} className="skeleton nw-srv-skel" aria-hidden />)}
+        {shown.map((s) => (
+          <li key={s.id}>
+            <a className="nw-srv" href={`#/servers/${s.id}`}>
+              <GameAvatar game={s.game} size={40} />
+              <span className="nw-srv-main">
+                <span className="nw-srv-name">{s.name}</span>
+                <span className="nw-srv-meta">
+                  <span className="tabular-nums">{s.online ? t('nw.srv.players', { n: s.players, max: s.maxPlayers }) : t('nw.srv.offline')}</span>
+                  {s.online && s.ping != null && <span className="tabular-nums">{s.ping} {t('nw.srv.ms')}</span>}
+                </span>
+              </span>
+              <StatusPill online={s.online} known={s.hasStatus} maintenance={!!s.maintenance} />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ---------- reactions ----------
+export function Reactions({
+  id, reactions, canReact, onChange,
+}: {
+  id: number;
+  reactions: NewsReaction[] | undefined;
+  canReact: boolean;
+  onChange: (r: NewsReaction[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const list = fullReactions(reactions);
+  const click = async (emoji: string) => {
+    if (!canReact || busy) return;
+    const prev = list;
+    const { list: opt, next } = toggleReaction(prev, emoji);
+    onChange(opt);
+    setBusy(true);
+    try {
+      const r = await api<NewsReaction[] | { reactions?: NewsReaction[] }>(`/news/${id}/reaction`, 'PUT', { emoji: next });
+      const arr = Array.isArray(r) ? r : r?.reactions;
+      if (Array.isArray(arr)) onChange(fullReactions(arr));
+    } catch {
+      onChange(prev);
+      toast(t('nw.react.error'), 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="nw-react">
+      <div className="nw-react-row" role="group" aria-label={t('nw.react.title')}>
+        {list.map((r) => (
+          <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} disabled={!canReact} onClick={() => void click(r.emoji)}>
+            <span aria-hidden className="nw-react-emoji">{r.emoji}</span>
+            <span className="tabular-nums">{r.count}</span>
+          </button>
+        ))}
+      </div>
+      {!canReact && <p className="nw-react-hint">{t('nw.react.login')}</p>}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/NewsPublicPages.tsx" << '__COREGSM_EOF__'
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull } from '../../api';
+import { useAuth } from '../../auth';
+import { t } from '../../i18n';
+import { NewsArt } from '../Illustrations';
+import type { OverviewData } from '../servers/overviewLogic';
+import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '../../ui';
+import { NewsArticle } from './NewsArticle';
+import { CategoryIcon, PinIcon } from './NewsIcons';
+import { categoryLabel, useNewsServers } from './NewsParts';
+import { PublicFeed } from './PublicFeed';
+import { RUBRICS, countByCategory, filterByCategory, isRubricFilter, orderFeed, type RubricFilter } from './newsLogic';
+
+const STORE = 'news_rubric';
+const loadRubric = (): RubricFilter => {
+  try {
+    const v = localStorage.getItem(STORE);
+    return isRubricFilter(v) ? v : 'all';
+  } catch {
+    return 'all';
+  }
+};
+
+function useMedia(q: string): boolean {
+  const [on, setOn] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia?.(q);
+    if (!m) return undefined;
+    const h = () => setOn(m.matches);
+    h();
+    m.addEventListener('change', h);
+    return () => m.removeEventListener('change', h);
+  }, [q]);
+  return on;
+}
+
+type Works = NonNullable<OverviewData['maintenance']>;
+
+/** upcoming and running maintenance windows (public overview); empty when the endpoint is unavailable */
+function useWorks(): Works {
+  const [works, setWorks] = useState<Works>([]);
+  usePoll(
+    () => api<OverviewData>('/overview?hours=24').then((o) => setWorks(Array.isArray(o?.maintenance) ? o.maintenance : [])).catch(() => undefined),
+    60_000,
+  );
+  return works;
+}
+
+function AsideSection({ id, title, wide, children, className = '' }: { id: string; title: string; wide: boolean; children: ReactNode; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const shown = wide || open;
+  return (
+    <section className={`nw-side-sec ${className}`}>
+      {wide ? (
+        <h2 className="nw-side-h">{title}</h2>
+      ) : (
+        <button type="button" className="nw-side-toggle" aria-expanded={open} aria-controls={`nw-side-${id}`} onClick={() => setOpen((v) => !v)}>
+          <span>{title}</span>
+          <span aria-hidden>{open ? '−' : '+'}</span>
+        </button>
+      )}
+      {shown && <div id={`nw-side-${id}`} className="nw-side-body">{children}</div>}
+    </section>
+  );
+}
+
+function FeedSkeleton() {
+  return (
+    <div className="nw-skel" aria-busy="true" aria-label={t('nw.loading')}>
+      <div className="skeleton nw-skel-hero" />
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="nw-skel-row">
+          <div className="skeleton nw-skel-thumb" />
+          <div className="nw-skel-lines">
+            <div className="skeleton h-3 w-24 rounded-full" />
+            <div className="skeleton h-5 w-4/5 rounded-full" />
+            <div className="skeleton h-4 w-3/5 rounded-full" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** #/news: rubrics, pinned first, month groups, the side panel */
+export function NewsListPage() {
+  const [items, setItems] = useState<PublicNews[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
+  const [rubric, setRubricState] = useState<RubricFilter>(loadRubric);
+  const wide = useMedia('(min-width: 1100px)');
+  const servers = useNewsServers();
+  const works = useWorks();
+
+  const load = () => api<PublicNews[]>('/news')
+    .then((n) => { setItems(Array.isArray(n) ? n : []); setError(''); })
+    .catch((e: Error) => setError(e.message))
+    .finally(() => setLoaded(true));
+  usePoll(load, 30_000);
+
+  const setRubric = (r: RubricFilter) => {
+    setRubricState(r);
+    try { localStorage.setItem(STORE, r); } catch { /* not remembered */ }
+  };
+
+  const ordered = useMemo(() => orderFeed(items), [items]);
+  const counts = useMemo(() => countByCategory(ordered), [ordered]);
+  const filter: RubricFilter = rubric;
+  const shown = useMemo(() => filterByCategory(ordered, filter), [ordered, filter]);
+  const pinned = ordered.filter((n) => (n.pinned ?? n.payload?.pinned)).slice(0, 5);
+  const now = Date.now();
+  const upcoming = works.filter((w) => w.endTs > now).sort((a, b) => a.startTs - b.startTs).slice(0, 3);
+
+  const chip = (id: RubricFilter) => (
+    <button key={id} type="button" className="nw-rub" aria-pressed={filter === id} onClick={() => setRubric(id)}>
+      {id !== 'all' && <CategoryIcon category={id} size={15} />}
+      {categoryLabel(id)}
+      <span className="nw-rub-n tabular-nums">{counts[id]}</span>
+    </button>
+  );
+
+  const hasSide = pinned.length > 0 || upcoming.length > 0 || ordered.length > 0;
+
+  return (
+    <div className="nw-page">
+      <div className={`nw-grid ${hasSide ? 'has-side' : ''}`}>
+        <div className="nw-main">
+          <PageHead icon={<IconNews />} title={t('nav.news')} subtitle={t('nw.subtitle')} />
+          {ordered.length > 0 && (
+            <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
+              {chip('all')}
+              {RUBRICS.map((r) => chip(r))}
+            </div>
+          )}
+          {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
+          {!loaded && <FeedSkeleton />}
+          {loaded && !error && ordered.length === 0 && <StateView kind="empty" art={<NewsArt />} title={t('nw.empty.title')} text={t('nw.empty.text')} />}
+          {loaded && ordered.length > 0 && shown.length === 0 && (
+            <StateView
+              kind="empty"
+              art={<NewsArt />}
+              title={t('nw.emptyRubric.title')}
+              text={t('nw.emptyRubric.text')}
+              action={<button type="button" className="btn btn-soft" onClick={() => setRubric('all')}>{t('nw.showAll')}</button>}
+            />
+          )}
+          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} /></div>}
+        </div>
+
+        {hasSide && (
+          <aside className="nw-aside" aria-label={t('nw.side')}>
+            {pinned.length > 0 && (
+              <AsideSection id="pinned" title={t('nw.pinnedList')} wide={wide}>
+                <ul className="nw-side-list">
+                  {pinned.map((n) => (
+                    <li key={n.id}>
+                      <a href={`#/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
+                    </li>
+                  ))}
+                </ul>
+              </AsideSection>
+            )}
+            <AsideSection id="rubrics" title={t('nw.rubrics')} wide={wide}>
+              <ul className="nw-side-list">
+                {RUBRICS.map((r) => (
+                  <li key={r}>
+                    <button type="button" className="nw-side-rub" aria-pressed={filter === r} onClick={() => setRubric(filter === r ? 'all' : r)}>
+                      <CategoryIcon category={r} size={15} />
+                      <span>{categoryLabel(r)}</span>
+                      <span className="nw-rub-n tabular-nums">{counts[r]}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </AsideSection>
+            {upcoming.length > 0 && (
+              <AsideSection id="works" title={t('nw.works')} wide={wide}>
+                <ul className="nw-side-list nw-works">
+                  {upcoming.map((w) => (
+                    <li key={w.id}>
+                      <span className="nw-work-name">{w.name}</span>
+                      <span className="nw-work-meta">
+                        {w.active || w.startTs <= now ? t('nw.works.now') : fmtDateTime(w.startTs)}
+                        {w.serverName ? ` · ${w.serverName}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </AsideSection>
+            )}
+          </aside>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** #/news/<id> */
+export function NewsArticlePage({ id }: { id: number }) {
+  const { me } = useAuth();
+  const [item, setItem] = useState<PublicNewsFull | null>(null);
+  const [error, setError] = useState<{ status: number; text: string } | null>(null);
+  const servers = useNewsServers(30_000, true);
+
+  useEffect(() => { setItem(null); setError(null); }, [id]);
+
+  const load = () => api<PublicNewsFull>(`/news/${id}`)
+    .then((n) => { setItem((cur) => (cur && cur.id === n.id && cur.reactions && n.reactions === undefined ? { ...n, reactions: cur.reactions } : n)); setError(null); })
+    .catch((e: unknown) => setError({ status: e instanceof ApiError ? e.status : 0, text: (e as Error).message }));
+  usePoll(load, 30_000);
+
+  const back = <a className="btn btn-soft" href="#/news">{t('nw.back')}</a>;
+  return (
+    <div className="nw-page">
+      <div className="nw-article-wrap">
+        {error && !item && (error.status === 404
+          ? <StateView kind="notfound" title={t('nw.notfound.title')} text={t('nw.notfound.text')}>{back}</StateView>
+          : <LoadError error={error.text} onRetry={() => void load()} />)}
+        {!item && !error && (
+          <div className="nw-skel" aria-busy="true" aria-label={t('nw.loading')}>
+            <div className="skeleton nw-skel-hero is-tall" />
+            <div className="skeleton h-5 w-2/3 rounded-full" />
+            <div className="skeleton h-5 w-full rounded-full" />
+            <div className="skeleton h-5 w-5/6 rounded-full" />
+          </div>
+        )}
+        {item && (
+          <div className="fade-in">
+            <NewsArticle
+              item={item}
+              servers={servers}
+              canReact={!!me}
+              onReactions={(r: NewsReaction[]) => setItem((cur) => (cur ? { ...cur, reactions: r } : cur))}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/Preview.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState } from 'react';
 import type { Server } from '../../api';
@@ -37841,164 +38794,188 @@ export function Preview({
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/PublicFeed.tsx" << '__COREGSM_EOF__'
-import { useState, type CSSProperties } from 'react';
-import type { PublicNews } from '../../api';
+import type { CSSProperties } from 'react';
+import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
+import { useI18n, t } from '../../i18n';
 import { fmtDate } from '../../ui';
-import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
+import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
+import {
+  categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isPinned, newsImage, plainExcerpt,
+} from './newsLogic';
 
-/** the news text uses the panel's own colours (light and dark), not Discord's */
-const PANEL_THEME: DTheme = {
-  name: 'light',
-  outer: 'transparent',
-  embed: 'transparent',
-  embedBorder: 'transparent',
-  text: 'rgb(var(--ink))',
-  title: 'rgb(var(--ink))',
-  muted: 'rgb(var(--mute))',
-  link: 'rgb(var(--link))',
-  code: 'rgb(var(--soft))',
-  quote: 'rgb(var(--line))',
-  spoilerHide: 'rgb(var(--soft))',
-  spoilerShow: 'rgb(var(--soft))',
-  mentionBg: 'rgb(var(--soft))',
-  mentionFg: 'rgb(var(--link))',
-  chipBg: 'rgb(var(--soft))',
-};
+export { PANEL_THEME } from './NewsParts';
 
-interface Card {
+export interface Card {
   id: number;
   title: string;
   text: string;
   author: { name: string; icon?: string } | null;
+  role: 'admin' | 'moderator' | 'player' | null;
   image: string | null;
   link: string | null;
   accent: string;
   at: number | null;
   fields: { name: string; value: string }[];
+  category: NewsCategory;
+  pinned: boolean;
+  gallery: string[];
+  countdownAt: number | null;
+  countdownLabel: string;
+  changes: NewsChange[];
+  actions: NewsAction[];
+  statusIds: number[];
+  game: string;
+  reactions: NewsReaction[];
 }
 
 const hex = (n: number | undefined) => `#${(n ?? 0x5b4fe0).toString(16).padStart(6, '0')}`;
 
-function cardOf(n: PublicNews): Card {
-  const e = n.payload.embed;
-  const img = e?.image?.upload ? `/api/news/images/${e.image.upload}` : e?.image?.url || e?.thumbnailUrl || null;
+export function cardOf(n: PublicNews): Card {
+  const p = n.payload ?? { content: '', mention: 'none' as const };
+  const e = p.embed;
   const url = e?.url && /^https?:\/\//i.test(e.url) ? e.url : null;
+  const at = typeof p.countdownAt === 'number' && Number.isFinite(p.countdownAt) && p.countdownAt > 0 ? p.countdownAt : null;
   return {
     id: n.id,
-    title: e?.title || n.title || 'Новость',
-    text: (e?.description || n.payload.content || '').trim(),
+    title: e?.title || n.title || t('nw.untitled'),
+    text: (e?.description || p.content || '').trim(),
     author: e?.author?.name ? { name: e.author.name, icon: e.author.iconUrl } : null,
-    image: img,
+    role: n.authorRole ?? null,
+    image: newsImage(p),
     link: url,
     accent: hex(e?.color),
     at: n.sentAt,
     fields: (e?.fields ?? []).filter((f) => f.name && f.value).map((f) => ({ name: f.name, value: f.value })),
+    category: categoryOf(n),
+    pinned: isPinned(n),
+    gallery: galleryUrls(p.gallery),
+    countdownAt: at,
+    countdownLabel: p.countdownLabel ?? '',
+    changes: Array.isArray(p.changes) ? p.changes : [],
+    actions: Array.isArray(p.actions) ? p.actions : [],
+    statusIds: Array.isArray(p.statusServerIds) ? p.statusServerIds : [],
+    game: typeof p.game === 'string' ? p.game : '',
+    reactions: Array.isArray(n.reactions) ? n.reactions : [],
   };
 }
 
-function Author({ a }: { a: NonNullable<Card['author']> }) {
-  return (
-    <span className="nf-author">
-      {a.icon && /^https?:\/\//i.test(a.icon) ? (
-        <img src={a.icon} alt="" width={22} height={22} loading="lazy" />
-      ) : (
-        <span className="nf-ava" aria-hidden>{a.name.slice(0, 1).toUpperCase()}</span>
-      )}
-      {a.name}
-    </span>
-  );
+/** background of a cover: the picture, else the default cover (game artwork or a gradient) */
+export function coverStyle(c: Card, servers: Server[] | null | undefined, small = false): CSSProperties {
+  if (c.image) return { backgroundImage: `url("${c.image}")` };
+  return { background: defaultCoverBackground({ game: c.game, statusServerIds: c.statusIds, servers, category: c.category }, small) };
 }
 
-function Body({ c }: { c: Card }) {
+/** big cover with the title over a bottom gradient; used by the feed hero and by the news page */
+export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean }) {
   return (
-    <ThemeCtx.Provider value={PANEL_THEME}>
-      <div className="nf-body">
-        {c.text && <DiscordMd text={c.text} />}
-        {c.fields.length > 0 && (
-          <dl className="nf-fields">
-            {c.fields.map((f, i) => (
-              <div key={i}>
-                <dt>{f.name}</dt>
-                <dd><DiscordMd text={f.value} /></dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </div>
-    </ThemeCtx.Provider>
-  );
-}
-
-const coverStyle = (c: Card): CSSProperties =>
-  c.image
-    ? { backgroundImage: `url("${c.image}")` }
-    : { backgroundImage: `linear-gradient(135deg, ${c.accent}33, ${c.accent}14 55%, rgb(var(--soft)))` };
-
-/** the latest news large (hero), the rest as a list with previews; light, no chat-client chrome */
-export function PublicFeed({ items }: { items: PublicNews[] }) {
-  const cards = [...items].sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0)).map(cardOf);
-  const [open, setOpen] = useState<Set<number>>(new Set());
-  const toggle = (id: number) =>
-    setOpen((s) => {
-      const n = new Set(s);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  if (cards.length === 0) return null;
-  const [hero, ...rest] = cards;
-  const h = hero!;
-  const heroOpen = open.has(h.id);
-
-  return (
-    <div className="nf">
-      <article className="nf-hero" style={{ ['--nf-accent' as string]: h.accent }}>
-        {h.image && <div className="nf-hero-img" style={coverStyle(h)} role="img" aria-label={h.title} />}
-        <div className="nf-hero-in">
-          <div className="nf-meta">
-            {h.at && <span className="nf-date">{fmtDate(h.at)}</span>}
-            {h.author && <Author a={h.author} />}
-          </div>
-          <h2 className="nf-title">{h.title}</h2>
-          <div className={`nf-text ${heroOpen ? '' : 'is-clamped'}`}><Body c={h} /></div>
-          <div className="nf-actions">
-            {(h.text.length > 220 || h.fields.length > 0) && (
-              <button type="button" className="btn btn-soft" aria-expanded={heroOpen} onClick={() => toggle(h.id)}>
-                {heroOpen ? 'Свернуть' : 'Читать полностью'}
-              </button>
-            )}
-            {h.link && <a className="btn" href={h.link} target="_blank" rel="noopener noreferrer">Открыть ссылку →</a>}
-          </div>
+    <div className={`nw-cover ${tall ? 'is-tall' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
+      <div className="nw-cover-bg" style={coverStyle(c, servers)} aria-hidden />
+      <div className="nw-cover-shade" aria-hidden />
+      <div className="nw-cover-in">
+        <div className="nw-cover-chips">
+          {c.pinned && <PinChip />}
+          <CategoryChip category={c.category} />
+          {c.at && <span className="nw-chip nw-chip-date">{fmtDate(c.at)}</span>}
         </div>
-      </article>
-
-      {rest.length > 0 && <h3 className="nf-more">Ранее</h3>}
-      <div className="nf-list">
-        {rest.map((c) => {
-          const isOpen = open.has(c.id);
-          return (
-            <article key={c.id} className="nf-item" style={{ ['--nf-accent' as string]: c.accent }}>
-              <div className="nf-thumb" style={coverStyle(c)} aria-hidden />
-              <div className="nf-item-in">
-                <div className="nf-meta">
-                  {c.at && <span className="nf-date">{fmtDate(c.at)}</span>}
-                  {c.author && <Author a={c.author} />}
-                </div>
-                <h3 className="nf-item-title">{c.title}</h3>
-                <div className={`nf-text ${isOpen ? '' : 'is-clamped-2'}`}><Body c={c} /></div>
-                <div className="nf-actions">
-                  {(c.text.length > 120 || c.fields.length > 0) && (
-                    <button type="button" className="btn-link btn-xs" aria-expanded={isOpen} onClick={() => toggle(c.id)}>
-                      {isOpen ? 'Свернуть' : 'Читать'}
-                    </button>
-                  )}
-                  {c.link && <a className="btn-link btn-xs" href={c.link} target="_blank" rel="noopener noreferrer">Открыть ссылку →</a>}
-                </div>
-              </div>
-            </article>
-          );
-        })}
+        <H className="nw-cover-title">{href ? <a href={href}>{c.title}</a> : c.title}</H>
       </div>
+    </div>
+  );
+}
+
+function monthFormatter(lang: 'ru' | 'en') {
+  const f = new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ru-RU', { month: 'long', year: 'numeric' });
+  return (y: number, m: number) => {
+    const s = f.format(new Date(y, m, 1)).replace(/\s*г\.$/, '');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+}
+
+function Thumbs({ c, href }: { c: Card; href: string }) {
+  if (c.gallery.length === 0) return null;
+  const shown = c.gallery.slice(0, 4);
+  const more = c.gallery.length - shown.length;
+  return (
+    <a className="nw-strip" href={href} aria-label={t('nw.gallery')}>
+      {shown.map((u, i) => <img key={u + i} src={u} alt="" loading="lazy" decoding="async" />)}
+      {more > 0 && <span className="nw-strip-more">+{more}</span>}
+    </a>
+  );
+}
+
+function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+  const href = `#/news/${c.id}`;
+  return (
+    <article className="nf-hero nw-hero" style={{ ['--nf-accent' as string]: c.accent }}>
+      <NewsCover c={c} servers={servers} href={href} />
+      <div className="nf-hero-in">
+        {(c.author || c.countdownAt) && (
+          <div className="nf-meta">
+            {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
+          </div>
+        )}
+        {(c.text || c.fields.length > 0) && <div className="nf-text is-clamped"><NewsText text={c.text} fields={c.fields} /></div>}
+        <Thumbs c={c} href={href} />
+        <div className="nf-actions">
+          <a className="btn" href={href}>{t('nw.read')}</a>
+          {c.link && <a className="btn btn-soft" href={c.link} target="_blank" rel="noopener noreferrer">{t('nw.openLink')}</a>}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+  const href = `#/news/${c.id}`;
+  return (
+    <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
+      <a className="nf-thumb nw-thumb" href={href} style={coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1} />
+      <div className="nf-item-in">
+        <div className="nw-chips">
+          {c.pinned && <PinChip />}
+          <CategoryChip category={c.category} />
+          {c.at && <span className="nw-date">{fmtDate(c.at)}</span>}
+        </div>
+        <h3 className="nf-item-title"><a href={href}>{c.title}</a></h3>
+        {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
+        <div className="nf-actions">
+          {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * The feed column: the first item large, then pinned ones, then the rest grouped by month.
+ * `items` must already be ordered (pinned first, newest first) and filtered.
+ */
+export function PublicFeed({ items, servers, flat = false }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean }) {
+  const { lang } = useI18n();
+  if (items.length === 0) return null;
+  const cards = items.map(cardOf);
+  const [hero, ...rest] = cards;
+  const pinned = rest.filter((c) => c.pinned);
+  const normal = rest.filter((c) => !c.pinned);
+  const groups = flat ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
+
+  return (
+    <div className="nf nw-feed">
+      <Hero c={hero!} servers={servers} />
+      {pinned.length > 0 && (
+        <section className="nw-group">
+          <h3 className="nf-more">{t('nw.pinned')}</h3>
+          <div className="nf-list">{pinned.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+        </section>
+      )}
+      {groups.map((g) => (
+        <section key={g.key} className="nw-group">
+          <h3 className="nf-more">{g.label || t('nw.earlier')}</h3>
+          <div className="nf-list">{g.items.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+        </section>
+      ))}
     </div>
   );
 }
@@ -38093,7 +39070,8 @@ export function searchEmoji(query: string, limit = 6): [string, string][] {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/model.ts" << '__COREGSM_EOF__'
-import { getToken, type NewsEmbed, type NewsPayload } from '../../api';
+import { getToken, type NewsCategory, type NewsChangeKind, type NewsEmbed, type NewsPayload } from '../../api';
+import { isHttpsUrl, isChangeKind, normCategory } from './newsLogic';
 import { GAMES } from '../../games';
 
 // ---------- limits (Discord) ----------
@@ -38109,6 +39087,12 @@ export const LIMITS = {
   total: 6000,
   embeds: 10,
   statusServers: 5,
+  gallery: 6,
+  changes: 20,
+  changeText: 200,
+  actions: 3,
+  actionLabel: 40,
+  countdownLabel: 60,
 } as const;
 
 // ---------- draft <-> payload ----------
@@ -38136,7 +39120,21 @@ export interface Draft {
   /** the first one is `payload.embed`, the others `payload.extraEmbeds` */
   embeds: EmbedDraft[];
   statusServerIds: number[];
+  // site-only fields (the Discord message ignores them)
+  category: NewsCategory;
+  pinned: boolean;
+  game: string;
+  gallery: GalleryRow[];
+  changes: ChangeRow[];
+  /** value of a datetime-local input ('' = no countdown) */
+  countdownAt: string;
+  countdownLabel: string;
+  actions: ActionRow[];
 }
+
+export interface GalleryRow { k: string; url: string; upload: string }
+export interface ChangeRow { k: string; kind: NewsChangeKind; text: string }
+export interface ActionRow { k: string; label: string; url: string }
 
 let keySeq = 0;
 export const newKey = () => `f${Date.now().toString(36)}${(keySeq++).toString(36)}`;
@@ -38146,7 +39144,11 @@ export const blankEmbed = (): EmbedDraft => ({
   thumbnail: '', imageUrl: '', imageUpload: '', fields: [], footer: '', timestamp: false,
 });
 
-export const blank = (channelId: string): Draft => ({ channelId, content: '', mention: 'none', embeds: [blankEmbed()], statusServerIds: [] });
+export const blankSite = (): Pick<Draft, 'category' | 'pinned' | 'game' | 'gallery' | 'changes' | 'countdownAt' | 'countdownLabel' | 'actions'> => ({
+  category: 'announcement', pinned: false, game: '', gallery: [], changes: [], countdownAt: '', countdownLabel: '', actions: [],
+});
+
+export const blank = (channelId: string): Draft => ({ channelId, content: '', mention: 'none', embeds: [blankEmbed()], statusServerIds: [], ...blankSite() });
 
 function embedToPayload(d: EmbedDraft): NewsEmbed {
   return {
@@ -38167,6 +39169,20 @@ export function toPayload(d: Draft): NewsPayload {
   const p: NewsPayload = { content: d.content, mention: d.mention, embed: embedToPayload(d.embeds[0] ?? blankEmbed()) };
   if (d.embeds.length > 1) p.extraEmbeds = d.embeds.slice(1).map(embedToPayload);
   if (d.statusServerIds.length) p.statusServerIds = d.statusServerIds;
+  if (d.category !== 'announcement') p.category = d.category;
+  if (d.pinned) p.pinned = true;
+  if (d.game) p.game = d.game;
+  const gallery = d.gallery.filter((g) => g.upload || g.url.trim()).slice(0, LIMITS.gallery).map((g) => (g.upload ? { upload: g.upload } : { url: g.url.trim() }));
+  if (gallery.length) p.gallery = gallery;
+  const changes = d.changes.filter((c) => c.text.trim()).slice(0, LIMITS.changes).map((c) => ({ kind: c.kind, text: c.text.trim() }));
+  if (changes.length) p.changes = changes;
+  const at = d.countdownAt ? new Date(d.countdownAt).getTime() : NaN;
+  if (Number.isFinite(at)) {
+    p.countdownAt = at;
+    if (d.countdownLabel.trim()) p.countdownLabel = d.countdownLabel.trim();
+  }
+  const actions = d.actions.filter((a) => a.label.trim() && a.url.trim()).slice(0, LIMITS.actions).map((a) => ({ label: a.label.trim(), url: a.url.trim() }));
+  if (actions.length) p.actions = actions;
   return p;
 }
 
@@ -38195,6 +39211,14 @@ export function fromPayload(p: NewsPayload, channelId: string): Draft {
     mention: p.mention ?? 'none',
     embeds: [embedFromPayload(p.embed), ...(p.extraEmbeds ?? []).map((e) => embedFromPayload(e))].slice(0, LIMITS.embeds),
     statusServerIds: (p.statusServerIds ?? []).slice(0, LIMITS.statusServers),
+    category: normCategory(p.category),
+    pinned: !!p.pinned,
+    game: typeof p.game === 'string' ? p.game : '',
+    gallery: (Array.isArray(p.gallery) ? p.gallery : []).slice(0, LIMITS.gallery).map((g) => ({ k: newKey(), url: g?.url ?? '', upload: g?.upload ?? '' })),
+    changes: (Array.isArray(p.changes) ? p.changes : []).slice(0, LIMITS.changes).map((c) => ({ k: newKey(), kind: isChangeKind(c?.kind) ? c.kind : 'change', text: c?.text ?? '' })),
+    countdownAt: typeof p.countdownAt === 'number' && Number.isFinite(p.countdownAt) && p.countdownAt > 0 ? toLocalInput(p.countdownAt) : '',
+    countdownLabel: p.countdownLabel ?? '',
+    actions: (Array.isArray(p.actions) ? p.actions : []).slice(0, LIMITS.actions).map((a) => ({ k: newKey(), label: a?.label ?? '', url: a?.url ?? '' })),
   };
 }
 
@@ -38229,7 +39253,7 @@ export const TEMPLATES: { id: string; label: string; apply: TemplateApply }[] = 
 export function applyTemplate(d: Draft, t: TemplateApply): Draft {
   const { mention, fields, ...rest } = t;
   const e: EmbedDraft = { ...blankEmbed(), ...rest, fields: (fields ?? []).map((f) => ({ ...f, k: newKey() })) };
-  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e] };
+  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e], category: d.category, pinned: d.pinned, game: d.game, gallery: d.gallery, changes: d.changes, countdownAt: d.countdownAt, countdownLabel: d.countdownLabel, actions: d.actions };
 }
 
 // ---------- message types: colour + icon + title prefix ----------
@@ -38375,6 +39399,10 @@ export function runChecks(d: Draft): Check[] {
     out.push({ level: 'warn', text: 'Сообщение упомянет @here: уведомление получат все, кто сейчас онлайн.' });
   }
 
+  const badAction = d.actions.filter((a) => (a.label.trim() || a.url.trim()) && !(a.label.trim() && isHttpsUrl(a.url))).length;
+  if (badAction) out.push({ level: 'warn', text: `Кнопок на сайте с пустой подписью или ссылкой не по https://: ${badAction}. Они не будут показаны.` });
+  if (d.countdownAt && new Date(d.countdownAt).getTime() < Date.now()) out.push({ level: 'warn', text: 'Время отсчёта уже прошло: на сайте будет «Началось».' });
+
   const httpImg: string[] = [];
   d.embeds.forEach((e) => {
     for (const u of [e.imageUrl, e.thumbnail, e.authorIcon]) if (u && !/^https:\/\//i.test(u)) httpImg.push(u);
@@ -38390,6 +39418,259 @@ export function runChecks(d: Draft): Check[] {
   if (words.size) out.push({ level: 'warn', text: `В тексте остались слова шаблона: ${[...words].join(', ')}. Замените их на свои.` });
 
   return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/newsLogic.ts" << '__COREGSM_EOF__'
+import type { NewsAction, NewsCategory, NewsChange, NewsChangeKind, NewsGalleryItem, NewsPayload, PublicNews } from '../../api';
+import { gameGradient } from '../../games';
+import { coverBackground } from '../../cover';
+
+/** pure helpers of the public news pages (kept free of React so they are easy to test) */
+
+export const NEWS_CATEGORIES: NewsCategory[] = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'];
+/** categories shown as rubric chips (besides «Все»); «other» is only counted under «Все» */
+export const RUBRICS: NewsCategory[] = ['announcement', 'wipe', 'update', 'event', 'maintenance'];
+
+export const CATEGORY_LABEL_RU: Record<NewsCategory, string> = {
+  announcement: 'Объявления',
+  wipe: 'Вайпы',
+  update: 'Обновления',
+  event: 'Ивенты',
+  maintenance: 'Обслуживание',
+  other: 'Другое',
+};
+/** accent used in default cover gradients */
+export const CATEGORY_HEX: Record<NewsCategory, string> = {
+  announcement: '#5b4fe0',
+  wipe: '#ea580c',
+  update: '#16a34a',
+  event: '#db2777',
+  maintenance: '#ca8a04',
+  other: '#64748b',
+};
+
+export const normCategory = (c: unknown): NewsCategory =>
+  typeof c === 'string' && (NEWS_CATEGORIES as string[]).includes(c) ? (c as NewsCategory) : 'announcement';
+
+/** category of a feed item: the item field first, then the payload, default «announcement» */
+export const categoryOf = (n: Pick<PublicNews, 'category' | 'payload'>): NewsCategory => normCategory(n.category ?? n.payload?.category);
+export const isPinned = (n: Pick<PublicNews, 'pinned' | 'payload'>): boolean => !!(n.pinned ?? n.payload?.pinned);
+
+/** pinned first, then the newest; a stable order for equal timestamps */
+export function orderFeed<T extends Pick<PublicNews, 'id' | 'sentAt' | 'pinned' | 'payload'>>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const pa = isPinned(a) ? 1 : 0;
+    const pb = isPinned(b) ? 1 : 0;
+    if (pa !== pb) return pb - pa;
+    const d = (b.sentAt ?? 0) - (a.sentAt ?? 0);
+    return d !== 0 ? d : b.id - a.id;
+  });
+}
+
+export type RubricFilter = 'all' | NewsCategory;
+
+export function countByCategory(items: Pick<PublicNews, 'category' | 'payload'>[]): Record<RubricFilter, number> {
+  const out = { all: items.length, announcement: 0, wipe: 0, update: 0, event: 0, maintenance: 0, other: 0 } as Record<RubricFilter, number>;
+  for (const n of items) out[categoryOf(n)]++;
+  return out;
+}
+
+export function filterByCategory<T extends Pick<PublicNews, 'category' | 'payload'>>(items: T[], f: RubricFilter): T[] {
+  return f === 'all' ? items : items.filter((n) => categoryOf(n) === f);
+}
+
+export const isRubricFilter = (v: unknown): v is RubricFilter => v === 'all' || (typeof v === 'string' && (NEWS_CATEGORIES as string[]).includes(v));
+
+// ---------- grouping by month ----------
+export interface MonthGroup<T> { key: string; label: string; items: T[] }
+
+/** items must already be in the order to show; groups follow the order of first appearance. `monthName` is injected for tests. */
+export function groupByMonth<T extends { sentAt: number | null }>(
+  items: T[],
+  monthName: (year: number, month: number) => string = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}`,
+  utc = false,
+): MonthGroup<T>[] {
+  const groups: MonthGroup<T>[] = [];
+  const idx = new Map<string, MonthGroup<T>>();
+  for (const it of items) {
+    let key = 'none';
+    let label = '';
+    if (it.sentAt) {
+      const d = new Date(it.sentAt);
+      const y = utc ? d.getUTCFullYear() : d.getFullYear();
+      const m = utc ? d.getUTCMonth() : d.getMonth();
+      key = `${y}-${String(m + 1).padStart(2, '0')}`;
+      label = monthName(y, m);
+    }
+    let g = idx.get(key);
+    if (!g) {
+      g = { key, label, items: [] };
+      idx.set(key, g);
+      groups.push(g);
+    }
+    g.items.push(it);
+  }
+  return groups;
+}
+
+// ---------- countdown ----------
+export interface CountdownParts { d: number; h: number; m: number; s: number; done: boolean }
+
+export function countdownParts(at: number, now: number): CountdownParts {
+  const left = Math.max(0, Math.floor((at - now) / 1000));
+  return { d: Math.floor(left / 86400), h: Math.floor((left % 86400) / 3600), m: Math.floor((left % 3600) / 60), s: left % 60, done: at - now <= 0 };
+}
+
+const UNITS = {
+  ru: { d: 'д', h: 'ч', m: 'мин', s: 'с', in: 'через', started: 'Началось', inNoLabel: 'Через' },
+  en: { d: 'd', h: 'h', m: 'min', s: 's', in: 'in', started: 'Started', inNoLabel: 'In' },
+} as const;
+
+/** «2 д 4 ч 10 мин»; seconds only when under an hour is left */
+export function countdownDuration(at: number, now: number, lang: 'ru' | 'en' = 'ru'): string {
+  const u = UNITS[lang];
+  const p = countdownParts(at, now);
+  const out: string[] = [];
+  if (p.d) out.push(`${p.d} ${u.d}`);
+  if (p.d || p.h) out.push(`${p.h} ${u.h}`);
+  out.push(`${p.m} ${u.m}`);
+  if (!p.d && !p.h) out.push(`${p.s} ${u.s}`);
+  return out.join(' ');
+}
+
+/** «Вайп через 2 д 4 ч 10 мин»; after the moment: «Началось» */
+export function countdownText(at: number, now: number, label = '', lang: 'ru' | 'en' = 'ru'): string {
+  const u = UNITS[lang];
+  const l = label.trim();
+  if (at - now <= 0) return u.started;
+  const dur = countdownDuration(at, now, lang);
+  return l ? `${l} ${u.in} ${dur}` : `${u.inNoLabel} ${dur}`;
+}
+
+// ---------- covers ----------
+export interface CoverInput {
+  game?: string | null;
+  statusServerIds?: number[];
+  servers?: { id: number; game: string }[] | null;
+  category?: NewsCategory;
+}
+
+/** the game of the cover: payload.game, else the game of the first status server, else '' */
+export function coverGame(i: CoverInput): string {
+  if (i.game) return i.game;
+  const first = i.statusServerIds?.[0];
+  if (first != null) {
+    const s = i.servers?.find((x) => x.id === first);
+    if (s?.game) return s.game;
+  }
+  return '';
+}
+
+/** a gradient for a news without a picture: the game's colours, else the category's */
+export function coverGradient(i: CoverInput): string {
+  const g = coverGame(i);
+  if (g) {
+    const [a, b] = gameGradient(g);
+    return `linear-gradient(135deg, ${a}, ${b})`;
+  }
+  const c = CATEGORY_HEX[normCategory(i.category)];
+  return `linear-gradient(135deg, color-mix(in srgb, ${c} 82%, #000), ${c})`;
+}
+
+/** CSS `background` of the default cover (the game's artwork when it ships one, else the gradient) */
+export function defaultCoverBackground(i: CoverInput, small = false): string {
+  return coverBackground(null, coverGradient(i), { game: coverGame(i), small, strong: true });
+}
+
+/** the picture of a news item: big embed image, then the first gallery picture, then the thumbnail */
+export function newsImage(p: NewsPayload): string | null {
+  const e = p.embed;
+  if (e?.image?.upload) return `/api/news/images/${e.image.upload}`;
+  if (e?.image?.url && /^https?:\/\//i.test(e.image.url)) return e.image.url;
+  const g = galleryUrls(p.gallery)[0];
+  if (g) return g;
+  if (e?.thumbnailUrl && /^https?:\/\//i.test(e.thumbnailUrl)) return e.thumbnailUrl;
+  return null;
+}
+
+export function galleryUrls(g: NewsGalleryItem[] | undefined | null): string[] {
+  if (!Array.isArray(g)) return [];
+  const out: string[] = [];
+  for (const it of g) {
+    if (!it) continue;
+    if (it.upload) out.push(`/api/news/images/${it.upload}`);
+    else if (it.url && /^https?:\/\//i.test(it.url)) out.push(it.url);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+// ---------- changes / actions ----------
+export const CHANGE_ORDER: NewsChangeKind[] = ['add', 'fix', 'change', 'remove'];
+export const CHANGE_LABEL_RU: Record<NewsChangeKind, string> = { add: 'Добавлено', fix: 'Исправлено', change: 'Изменено', remove: 'Удалено' };
+
+export const isChangeKind = (k: unknown): k is NewsChangeKind => k === 'add' || k === 'fix' || k === 'remove' || k === 'change';
+
+/** groups in the fixed order (добавлено, исправлено, изменено, удалено); empty texts and unknown kinds are dropped */
+export function groupChanges(changes: NewsChange[] | undefined | null): { kind: NewsChangeKind; items: string[] }[] {
+  if (!Array.isArray(changes)) return [];
+  const by = new Map<NewsChangeKind, string[]>();
+  for (const c of changes) {
+    const text = typeof c?.text === 'string' ? c.text.trim() : '';
+    if (!text) continue;
+    const kind = isChangeKind(c.kind) ? c.kind : 'change';
+    by.set(kind, [...(by.get(kind) ?? []), text]);
+  }
+  return CHANGE_ORDER.filter((k) => by.has(k)).map((k) => ({ kind: k, items: by.get(k)! }));
+}
+
+export const isHttpsUrl = (u: string) => {
+  try {
+    return new URL(u.trim()).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+/** only actions with a label and an https link, at most three */
+export function validActions(a: NewsAction[] | undefined | null): NewsAction[] {
+  if (!Array.isArray(a)) return [];
+  return a.filter((x) => x && typeof x.label === 'string' && x.label.trim() && typeof x.url === 'string' && isHttpsUrl(x.url)).slice(0, 3).map((x) => ({ label: x.label.trim(), url: x.url.trim() }));
+}
+
+/** plain-text preview of markdown-ish text (list cards) */
+export function plainExcerpt(text: string, max = 180): string {
+  const s = text.replace(/```[\s\S]*?```/g, ' ').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+}
+
+// ---------- reactions ----------
+export const REACTION_EMOJIS = ['👍', '🔥', '❤️', '😮'] as const;
+
+/** all four emojis in a fixed order, with counts (missing = 0) */
+export function fullReactions(list: { emoji: string; count: number; mine: boolean }[] | undefined | null): { emoji: string; count: number; mine: boolean }[] {
+  const by = new Map((Array.isArray(list) ? list : []).map((r) => [r.emoji, r]));
+  return REACTION_EMOJIS.map((e) => ({ emoji: e as string, count: Math.max(0, by.get(e)?.count ?? 0), mine: !!by.get(e)?.mine }));
+}
+
+/** optimistic update: one reaction per user; clicking your own reaction removes it. `next` is the value to send. */
+export function toggleReaction(
+  list: { emoji: string; count: number; mine: boolean }[] | undefined | null,
+  emoji: string,
+): { list: { emoji: string; count: number; mine: boolean }[]; next: string | null } {
+  const cur = fullReactions(list);
+  const was = cur.find((r) => r.mine)?.emoji ?? null;
+  const next = was === emoji ? null : emoji;
+  return {
+    next,
+    list: cur.map((r) => {
+      let count = r.count;
+      if (r.emoji === was) count = Math.max(0, count - 1);
+      if (r.emoji === next) count += 1;
+      return { ...r, count, mine: r.emoji === next };
+    }),
+  };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
@@ -45346,6 +46627,65 @@ const en: Record<keyof typeof ru, string> = {
   'vr.ach.vr-founder.d': 'Account created within the first 30 days of the panel',
   'vr.ach.vr-crowned.t': 'Crowned',
   'vr.ach.vr-crowned.d': 'Reach the Progenitor rank',
+  'nw.subtitle': 'Announcements, updates and events',
+  'nw.rubrics': 'Categories',
+  'nw.rubric.all': 'All',
+  'nw.side': 'Side panel',
+  'nw.cat.announcement': 'Announcements',
+  'nw.cat.wipe': 'Wipes',
+  'nw.cat.update': 'Updates',
+  'nw.cat.event': 'Events',
+  'nw.cat.maintenance': 'Maintenance',
+  'nw.cat.other': 'Other',
+  'nw.kind.announcement': 'Announcement',
+  'nw.kind.wipe': 'Wipe',
+  'nw.kind.update': 'Update',
+  'nw.kind.event': 'Event',
+  'nw.kind.maintenance': 'Maintenance',
+  'nw.kind.other': 'Other',
+  'nw.pinned': 'Pinned',
+  'nw.pinnedList': 'Pinned',
+  'nw.works': 'Upcoming maintenance',
+  'nw.works.now': 'in progress',
+  'nw.earlier': 'Earlier',
+  'nw.read': 'Read in full',
+  'nw.readShort': 'Read',
+  'nw.openLink': 'Open link →',
+  'nw.untitled': 'News',
+  'nw.back': 'Back to news',
+  'nw.copyLink': 'Copy link',
+  'nw.copied': 'Link copied',
+  'nw.copyFail': 'Could not copy the link',
+  'nw.prev': 'Newer',
+  'nw.next': 'Older',
+  'nw.prevnext': 'Neighbouring news',
+  'nw.changes': 'What has changed',
+  'nw.change.add': 'Added',
+  'nw.change.fix': 'Fixed',
+  'nw.change.change': 'Changed',
+  'nw.change.remove': 'Removed',
+  'nw.gallery': 'Gallery',
+  'nw.img.open': 'Open picture {n}',
+  'nw.img.prev': 'Previous picture',
+  'nw.img.next': 'Next picture',
+  'nw.img.of': '{i} of {n}',
+  'nw.servers': 'Servers',
+  'nw.srv.players': '{n}/{max} players',
+  'nw.srv.offline': 'offline',
+  'nw.srv.ms': 'ms',
+  'nw.react.title': 'Reactions',
+  'nw.react.login': 'Sign in to react',
+  'nw.react.error': 'Could not save the reaction',
+  'nw.empty.title': 'No news yet',
+  'nw.empty.text': 'Once an administrator publishes something, it will show up here.',
+  'nw.emptyRubric.title': 'Nothing in this category',
+  'nw.emptyRubric.text': 'Try another category or show all news.',
+  'nw.showAll': 'Show all',
+  'nw.notfound.title': 'News not found',
+  'nw.notfound.text': 'It may have been deleted or the link is wrong.',
+  'nw.loading': 'Loading',
+  'nw.role.admin': 'Administrator',
+  'nw.role.moderator': 'Moderator',
 };
 
 export default en;
@@ -45961,6 +47301,65 @@ const ru = {
   'vr.ach.vr-founder.d': 'Аккаунт создан в первые 30 дней работы панели',
   'vr.ach.vr-crowned.t': 'Коронованный',
   'vr.ach.vr-crowned.d': 'Достигните ранга «Первородный»',
+  'nw.subtitle': 'Объявления, обновления и ивенты',
+  'nw.rubrics': 'Рубрики',
+  'nw.rubric.all': 'Все',
+  'nw.side': 'Боковая панель',
+  'nw.cat.announcement': 'Объявления',
+  'nw.cat.wipe': 'Вайпы',
+  'nw.cat.update': 'Обновления',
+  'nw.cat.event': 'Ивенты',
+  'nw.cat.maintenance': 'Обслуживание',
+  'nw.cat.other': 'Другое',
+  'nw.kind.announcement': 'Объявление',
+  'nw.kind.wipe': 'Вайп',
+  'nw.kind.update': 'Обновление',
+  'nw.kind.event': 'Ивент',
+  'nw.kind.maintenance': 'Обслуживание',
+  'nw.kind.other': 'Другое',
+  'nw.pinned': 'Закреплено',
+  'nw.pinnedList': 'Закреплённое',
+  'nw.works': 'Ближайшие работы',
+  'nw.works.now': 'идут сейчас',
+  'nw.earlier': 'Ранее',
+  'nw.read': 'Читать полностью',
+  'nw.readShort': 'Читать',
+  'nw.openLink': 'Открыть ссылку →',
+  'nw.untitled': 'Новость',
+  'nw.back': 'К списку новостей',
+  'nw.copyLink': 'Скопировать ссылку',
+  'nw.copied': 'Ссылка скопирована',
+  'nw.copyFail': 'Не удалось скопировать ссылку',
+  'nw.prev': 'Новее',
+  'nw.next': 'Ранее',
+  'nw.prevnext': 'Соседние новости',
+  'nw.changes': 'Что изменилось',
+  'nw.change.add': 'Добавлено',
+  'nw.change.fix': 'Исправлено',
+  'nw.change.change': 'Изменено',
+  'nw.change.remove': 'Удалено',
+  'nw.gallery': 'Галерея',
+  'nw.img.open': 'Открыть картинку {n}',
+  'nw.img.prev': 'Предыдущая картинка',
+  'nw.img.next': 'Следующая картинка',
+  'nw.img.of': '{i} из {n}',
+  'nw.servers': 'Серверы',
+  'nw.srv.players': '{n}/{max} игроков',
+  'nw.srv.offline': 'офлайн',
+  'nw.srv.ms': 'мс',
+  'nw.react.title': 'Реакции',
+  'nw.react.login': 'Войдите, чтобы реагировать',
+  'nw.react.error': 'Не удалось сохранить реакцию',
+  'nw.empty.title': 'Новостей пока нет',
+  'nw.empty.text': 'Когда администратор что-нибудь опубликует, это появится здесь.',
+  'nw.emptyRubric.title': 'В этой рубрике ничего нет',
+  'nw.emptyRubric.text': 'Попробуйте другую рубрику или покажите все новости.',
+  'nw.showAll': 'Показать все',
+  'nw.notfound.title': 'Новость не найдена',
+  'nw.notfound.text': 'Возможно, она была удалена или ссылка неверна.',
+  'nw.loading': 'Загрузка',
+  'nw.role.admin': 'Администратор',
+  'nw.role.moderator': 'Модератор',
 };
 
 export default ru;
@@ -45976,6 +47375,7 @@ import './styles/servers.css';
 import './styles/detail.css';
 import './styles/system.css';
 import './styles/news.css';
+import './styles/news-page.css';
 import './styles/profile.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
@@ -48603,7 +50003,7 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
-import { PublicFeed } from '../components/news/PublicFeed';
+import { NewsArticlePage, NewsListPage } from '../components/news/NewsPublicPages';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
@@ -48843,27 +50243,11 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
   return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
 }
 
-/** read-only feed for players and guests: only what has been posted */
-export function NewsFeed() {
-  const [items, setItems] = useState<PublicNews[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState('');
-  const load = () => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true));
-  usePoll(load, 30_000);
-
-  return (
-    <div className="space-y-5">
-      <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
-      {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      {loaded && !error && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
-      {!loaded && (
-        <div className="mx-auto max-w-2xl space-y-4" aria-busy="true" aria-label="Загрузка">
-          {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}
-        </div>
-      )}
-      <div className="fade-in"><PublicFeed items={items} /></div>
-    </div>
-  );
+/** read-only feed for players and guests: the list (#/news) or one news item (#/news/<id>) */
+export function NewsFeed({ sub = '' }: { sub?: string }) {
+  const id = Number(sub.split('/')[0]);
+  if (sub && Number.isInteger(id) && id > 0) return <NewsArticlePage id={id} />;
+  return <NewsListPage />;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
@@ -48882,9 +50266,12 @@ import { LimitsPanel } from '../components/news/LimitsPanel';
 import { Counter, MarkdownField } from '../components/news/MarkdownField';
 import {
   LIMITS, PALETTE, PRESETS, TEMPLATES, applyPreset, applyTemplate as applyTpl, blank, blankEmbed, embedHasContent, fromPayload, gameColors, hex, parseHex, payloadKey, presetOf,
-  sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type VarServer,
+  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
+import { PublicFeed } from '../components/news/PublicFeed';
+import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isChangeKind, isHttpsUrl } from '../components/news/newsLogic';
+import { GAMES } from '../games';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
 import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast } from '../ui';
@@ -48962,6 +50349,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [pickTest, setPickTest] = useState(false);
   const [restore, setRestore] = useState<{ payload: NewsPayload; channelId?: string; ts?: number } | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [pvTab, setPvTab] = useState<'discord' | 'site'>('discord');
 
   const baseline = useRef('');
   const autosaveOff = useRef(false);
@@ -49429,12 +50817,105 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </Section>
           )}
 
+          <Section title="На сайте" hint="Эти поля видны только на странице новостей панели; в Discord они не попадают.">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Рубрика">
+                <select id="news-category" className="input" value={d.category} onChange={(ev) => set({ category: ev.target.value as Draft['category'] })}>
+                  {NEWS_CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_LABEL_RU[c]}</option>)}
+                </select>
+              </Field>
+              <Field label="Игра (для обложки по умолчанию)">
+                <select id="news-game" className="input" value={d.game} onChange={(ev) => set({ game: ev.target.value })}>
+                  <option value="">нет</option>
+                  {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
+                </select>
+              </Field>
+            </div>
+            <label className="flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={d.pinned} onChange={(on) => set({ pinned: on })} /> Закрепить вверху ленты
+            </label>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Отсчёт времени</span>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input id="news-cd-at" type="datetime-local" className="input" aria-label="Когда" value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
+                <input id="news-cd-label" className="input" aria-label="Подпись отсчёта" maxLength={LIMITS.countdownLabel} placeholder="Вайп" value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
+              </div>
+              <p className="text-xs font-semibold text-mute">На сайте: «Вайп через 2 д 4 ч 10 мин», после времени «Началось». {d.countdownAt && <button type="button" className="btn-link" onClick={() => set({ countdownAt: '', countdownLabel: '' })}>Убрать отсчёт</button>}</p>
+            </div>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
+              {d.gallery.map((g, i) => (
+                <ImageDrop
+                  key={g.k}
+                  id={'news-gal-' + i}
+                  label={'Картинка ' + (i + 1)}
+                  url={g.url}
+                  upload={g.upload}
+                  allowUpload
+                  minWidth={400}
+                  onUrl={(v) => set({ gallery: d.gallery.map((x) => (x.k === g.k ? { ...x, url: v, upload: v ? '' : x.upload } : x)) })}
+                  onUpload={(n) => set({ gallery: n ? d.gallery.map((x) => (x.k === g.k ? { ...x, upload: n, url: '' } : x)) : d.gallery.filter((x) => x.k !== g.k) })}
+                />
+              ))}
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.gallery.length >= LIMITS.gallery} onClick={() => set({ gallery: [...d.gallery, { k: newKey(), url: '', upload: '' }] })}>+ Добавить картинку</button>
+            </div>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
+              {d.changes.map((c, i) => (
+                <div key={c.k} className="nw-edit-row">
+                  <select aria-label={'Тип изменения ' + (i + 1)} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
+                    {CHANGE_ORDER.map((k) => <option key={k} value={k}>{CHANGE_LABEL_RU[k]}</option>)}
+                  </select>
+                  <input aria-label={'Текст изменения ' + (i + 1)} className="input" maxLength={LIMITS.changeText} value={c.text} placeholder="Что именно" onChange={(ev) => set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, text: ev.target.value } : x)) })} />
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ changes: d.changes.filter((x) => x.k !== c.k) })}>Убрать</button>
+                </div>
+              ))}
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.changes.length >= LIMITS.changes} onClick={() => set({ changes: [...d.changes, { k: newKey(), kind: 'add', text: '' }] })}>+ Добавить пункт</button>
+            </div>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
+              {d.actions.map((a, i) => {
+                const bad = !!a.url.trim() && !isHttpsUrl(a.url);
+                return (
+                  <div key={a.k} className="space-y-1">
+                    <div className="nw-edit-row">
+                      <input aria-label={'Подпись кнопки ' + (i + 1)} className="input" maxLength={LIMITS.actionLabel} value={a.label} placeholder="Подробнее" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, label: ev.target.value } : x)) })} />
+                      <input aria-label={'Ссылка кнопки ' + (i + 1)} aria-invalid={bad} className="input" value={a.url} placeholder="https://…" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, url: ev.target.value.trim() } : x)) })} />
+                      <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ actions: d.actions.filter((x) => x.k !== a.k) })}>Убрать</button>
+                    </div>
+                    {bad && <p className="text-sm font-bold text-bad" role="alert">Ссылка должна начинаться с https://</p>}
+                  </div>
+                );
+              })}
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.actions.length >= LIMITS.actions} onClick={() => set({ actions: [...d.actions, { k: newKey(), label: '', url: '' }] })}>+ Добавить кнопку</button>
+            </div>
+          </Section>
+
           {id && <HistoryPanel id={id} locked={item?.status === 'sending' || item?.status === 'queued'} onRestored={(it) => { setItem(it); const nd = fromPayload(it.payload, it.channelId); baseline.current = payloadKey(toPayload(nd)); setD(nd); setActive(0); }} />}
         </div>
 
         <aside className="space-y-4 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:space-y-4 lg:overflow-y-auto lg:overscroll-contain">
           <div className={mobileTab === 'editor' ? 'hidden space-y-4 lg:block' : 'space-y-4'}>
-            <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
+            <div className="seg" role="group" aria-label="Вид предпросмотра">
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>В Discord</button>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>Как будет на сайте</button>
+            </div>
+            {pvTab === 'discord' ? (
+              <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
+            ) : (
+              <div className="panel p-3">
+                <PublicFeed
+                  flat
+                  servers={servers}
+                  items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
+                />
+                {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">Начните писать: здесь появится карточка новости.</p>}
+              </div>
+            )}
             {hasLive && <p className="px-1 text-xs font-semibold text-mute">Карточки серверов показаны образцом: настоящие данные появятся при отправке.</p>}
             <LimitsPanel d={d} active={cur} />
           </div>
@@ -54118,6 +55599,172 @@ __COREGSM_EOF__
 }
 html[data-motion='reduce'] .srv-more-pop { animation: none !important; }
 html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none !important; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
+/* news page (public): rubrics, two columns, cover, article. Colours / shadows / opacity only; no transforms, no infinite animation */
+.nw-page { position: relative; min-height: calc(100dvh - 7rem); padding: .25rem 0 3rem; border-radius: 2rem;
+  background: linear-gradient(180deg, color-mix(in srgb, rgb(var(--brand)) 8%, transparent) 0, color-mix(in srgb, rgb(var(--brand)) 4%, transparent) 45%, transparent 100%); }
+.nw-grid { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.5rem; }
+.nw-main { display: grid; gap: 1.25rem; min-width: 0; align-content: start; }
+.nw-feed { max-width: none; margin: 0; }
+.nw-group { display: grid; gap: .75rem; }
+.nw-article-wrap { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.25rem; }
+@media (min-width: 1100px) {
+  .nw-grid.has-side { max-width: 76rem; grid-template-columns: minmax(0, 1fr) 19rem; align-items: start; }
+  .nw-aside { position: sticky; top: 1rem; }
+}
+
+.nw-rubrics { display: flex; gap: .5rem; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; padding: .1rem .1rem .35rem; margin: 0 -.1rem; }
+.nw-rubrics::-webkit-scrollbar { display: none; }
+.nw-rub { flex: 0 0 auto; scroll-snap-align: start; display: inline-flex; align-items: center; gap: .4rem; min-height: 44px; padding: 0 .95rem; border-radius: 9999px;
+  border: 1px solid rgb(var(--line)); background: rgb(var(--card)); color: rgb(var(--ink)); font-weight: 800; font-size: .9375rem; cursor: pointer;
+  transition: background-color .15s, border-color .15s, color .15s, box-shadow .15s; }
+.nw-rub:hover { border-color: rgb(var(--field)); }
+.nw-rub[aria-pressed='true'] { background: rgb(var(--brand)); border-color: rgb(var(--brand)); color: #fff; }
+.nw-rub-n { min-width: 1.4rem; padding: 0 .4rem; border-radius: 9999px; background: rgb(var(--soft)); color: rgb(var(--mute)); font-size: .8125rem; font-weight: 800; text-align: center; line-height: 1.4rem; }
+.nw-rub[aria-pressed='true'] .nw-rub-n { background: rgb(255 255 255 / .22); color: #fff; }
+@media (min-width: 640px) { .nw-rubrics { flex-wrap: wrap; overflow: visible; } }
+
+.nw-chip { display: inline-flex; align-items: center; gap: .3rem; padding: .2rem .65rem; border-radius: 9999px; font-size: .8125rem; font-weight: 800; line-height: 1.3;
+  background: var(--nw-bg, rgb(var(--soft))); color: var(--nw-fg, rgb(var(--ink))); }
+.nw-tone-announcement, .nw-tone-event { --nw-fg: rgb(var(--link)); --nw-bg: rgb(var(--soft)); }
+.nw-tone-wipe { --nw-fg: rgb(var(--bad)); --nw-bg: rgb(var(--badbg)); }
+.nw-tone-update { --nw-fg: rgb(var(--ok)); --nw-bg: rgb(var(--okbg)); }
+.nw-tone-maintenance { --nw-fg: rgb(var(--warn)); --nw-bg: rgb(var(--warnbg)); }
+.nw-tone-other { --nw-fg: rgb(var(--mute)); --nw-bg: rgb(var(--soft)); }
+.nw-chip-pin { --nw-fg: rgb(var(--ink)); --nw-bg: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--field)); }
+.nw-chip-date { --nw-fg: rgb(var(--ink)); --nw-bg: rgb(var(--soft)); }
+.nw-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; }
+.nw-date { font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+
+.nw-hero::before { display: none; }
+.nw-cover { position: relative; overflow: hidden; display: flex; align-items: flex-end; min-height: 17rem; background: rgb(var(--soft)); color: #fff; }
+.nw-cover.is-tall { min-height: 22rem; }
+.nw-cover-bg { position: absolute; inset: 0; background-size: cover; background-position: center; }
+.nw-cover-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgb(8 10 20 / .08) 18%, rgb(8 10 20 / .86) 100%); }
+.nw-cover-in { position: relative; width: 100%; display: grid; gap: .6rem; padding: 3rem 2rem 1.4rem; }
+.nw-cover-chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.nw-cover-title { margin: 0; font-size: clamp(1.6rem, 4vw, 2.4rem); line-height: 1.15; font-weight: 900; letter-spacing: -.02em; overflow-wrap: anywhere; color: #fff; }
+.nw-cover-title a { color: inherit; text-decoration: none; }
+.nw-cover-title a:hover { text-decoration: underline; }
+
+.nw-thumb { display: block; }
+.nw-item .nf-item-title a { color: inherit; text-decoration: none; }
+.nw-item .nf-item-title a:hover { text-decoration: underline; }
+.nw-more { display: inline-flex; align-items: center; min-height: 44px; font-weight: 800; color: rgb(var(--link)); text-decoration: none; }
+.nw-more:hover { text-decoration: underline; }
+.nw-strip { display: flex; gap: .4rem; flex-wrap: wrap; text-decoration: none; }
+.nw-strip img, .nw-strip-more { width: 4.5rem; height: 3rem; border-radius: .6rem; object-fit: cover; background: rgb(var(--soft)); }
+.nw-strip-more { display: grid; place-items: center; font-weight: 800; color: rgb(var(--mute)); }
+.nw-author-name { color: rgb(var(--ink)); }
+.nw-role { padding: .05rem .5rem; border-radius: 9999px; font-size: .75rem; font-weight: 800; background: rgb(var(--soft)); color: rgb(var(--link)); }
+.nw-role-moderator { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+
+.nw-countdown { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .8rem; border-radius: 9999px; font-weight: 800; background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
+.nw-countdown.is-done { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.nw-countdown.is-compact { padding: .15rem .6rem; font-size: .875rem; }
+
+.nw-prose { font-size: 1.0625rem; max-width: 70ch; overflow-wrap: anywhere; }
+.nw-prose-lg { font-size: 1.125rem; }
+.nw-prose .leading-snug { line-height: 1.7; }
+.nw-prose-lg .h-\[0\.6em\] { height: .85em; }
+.nw-prose .flex.gap-2, .nw-prose .flex.gap-1\.5 { margin: .2em 0; }
+.nw-prose div[style*='border-left'] { margin: .7em 0; padding: .25em 0 .25em 1em; }
+.nw-prose pre { margin: .7em 0; }
+.nf-text .nw-prose { max-width: none; }
+
+.nw-h2 { margin: 0 0 .75rem; font-size: 1.125rem; font-weight: 900; letter-spacing: -.01em; }
+.nw-changes-grid { display: grid; gap: .75rem; }
+@media (min-width: 640px) { .nw-changes-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.nw-change { --nw-fg: rgb(var(--link)); --nw-bg: rgb(var(--soft)); padding: .85rem 1rem; border-radius: 1.1rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); border-left: 4px solid var(--nw-fg); }
+.nw-change-add { --nw-fg: rgb(var(--ok)); --nw-bg: rgb(var(--okbg)); }
+.nw-change-change { --nw-fg: rgb(var(--warn)); --nw-bg: rgb(var(--warnbg)); }
+.nw-change-remove { --nw-fg: rgb(var(--bad)); --nw-bg: rgb(var(--badbg)); }
+.nw-change-head { display: flex; align-items: center; gap: .5rem; margin: 0 0 .5rem; font-size: 1rem; font-weight: 800; }
+.nw-change-ico { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 9999px; background: var(--nw-bg); color: var(--nw-fg); }
+.nw-change ul { margin: 0; padding: 0 0 0 1.1rem; display: grid; gap: .3rem; line-height: 1.5; }
+
+.nw-gallery { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); }
+.nw-gallery-1 { grid-template-columns: minmax(0, 1fr); }
+.nw-gallery-2, .nw-gallery-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.nw-gal-item { display: block; width: 100%; padding: 0; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 1rem; border: 1px solid rgb(var(--line)); background: rgb(var(--soft)); cursor: pointer; transition: box-shadow .15s, opacity .15s; }
+.nw-gal-item:hover { box-shadow: var(--shadow-2); opacity: .92; }
+.nw-gal-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.nw-viewer { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 4rem 1rem 3.5rem; background: rgb(8 10 20 / .88); }
+.nw-viewer-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: .75rem; }
+.nw-viewer-btn { position: absolute; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 9999px; border: 0; background: rgb(255 255 255 / .16); color: #fff; font-size: 1.75rem; line-height: 1; cursor: pointer; transition: background-color .15s; }
+.nw-viewer-btn:hover { background: rgb(255 255 255 / .28); }
+.nw-viewer-close { top: .75rem; right: .75rem; }
+.nw-viewer-prev { left: .5rem; top: 50%; margin-top: -24px; }
+.nw-viewer-next { right: .5rem; top: 50%; margin-top: -24px; }
+.nw-viewer-count { position: absolute; bottom: 1rem; left: 0; right: 0; text-align: center; color: #fff; font-weight: 700; }
+
+.nw-srv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); }
+.nw-srv { display: flex; align-items: center; gap: .75rem; min-height: 56px; padding: .65rem .85rem; border-radius: 1.1rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); color: inherit; text-decoration: none; transition: box-shadow .15s, border-color .15s; }
+.nw-srv:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--field)); }
+.nw-srv-main { flex: 1; min-width: 0; display: grid; gap: .1rem; }
+.nw-srv-name { font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nw-srv-meta { display: flex; gap: .6rem; font-size: .8125rem; font-weight: 700; color: rgb(var(--mute)); }
+.nw-srv-skel { height: 56px; border-radius: 1.1rem; }
+
+.nw-actions, .nw-actions-wrap, .nw-toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.nw-react { display: grid; gap: .4rem; }
+.nw-react-row { display: flex; flex-wrap: wrap; gap: .5rem; }
+.nw-react-btn { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; min-height: 44px; min-width: 68px; padding: 0 .9rem; border-radius: 9999px; border: 1px solid rgb(var(--line));
+  background: rgb(var(--card)); color: rgb(var(--ink)); font-weight: 800; cursor: pointer; transition: background-color .15s, border-color .15s, box-shadow .15s; }
+.nw-react-btn:hover:not(:disabled) { border-color: rgb(var(--field)); box-shadow: var(--shadow-1); }
+.nw-react-btn[aria-pressed='true'] { background: rgb(var(--soft)); border-color: rgb(var(--brand)); box-shadow: inset 0 0 0 1px rgb(var(--brand)); }
+.nw-react-btn:disabled { cursor: default; opacity: .8; }
+.nw-react-emoji { font-size: 1.15rem; }
+.nw-react-hint { margin: 0; font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+.nw-prevnext { display: grid; gap: .75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 1.25rem 1.25rem; }
+.nw-pn { display: grid; gap: .15rem; min-height: 44px; padding: .75rem 1rem; border-radius: 1.1rem; background: rgb(var(--soft)); color: inherit; text-decoration: none; transition: box-shadow .15s; }
+.nw-pn:hover { box-shadow: var(--shadow-1); }
+.nw-pn-next { text-align: right; grid-column: 2; }
+.nw-pn-kicker { font-size: .8125rem; font-weight: 800; color: rgb(var(--mute)); }
+.nw-pn-title { font-weight: 800; overflow-wrap: anywhere; }
+
+.nw-article { background: rgb(var(--card)); border: 1px solid rgb(var(--line)); border-radius: 1.75rem; overflow: hidden; box-shadow: var(--shadow-1); }
+.nw-article-in { display: grid; gap: 1.5rem; padding: 1.5rem 2rem 2rem; }
+
+.nw-aside { display: grid; gap: .75rem; }
+.nw-side-sec { padding: .5rem 1rem; border-radius: 1.25rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
+.nw-side-h { margin: .6rem 0 .3rem; font-size: .8125rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
+.nw-side-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0; border: 0; background: none; color: rgb(var(--ink)); font-weight: 800; font-size: 1rem; cursor: pointer; }
+.nw-side-body { padding-bottom: .5rem; }
+.nw-side-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.nw-side-list a, .nw-side-rub { display: flex; align-items: center; gap: .5rem; width: 100%; min-height: 44px; padding: 0; border: 0; background: none; color: rgb(var(--ink)); font-weight: 700; text-align: left; text-decoration: none; cursor: pointer; }
+.nw-side-list a span { overflow: hidden; text-overflow: ellipsis; }
+.nw-side-list a:hover, .nw-side-rub:hover, .nw-side-rub[aria-pressed='true'] { color: rgb(var(--link)); }
+.nw-side-rub span:nth-child(2) { flex: 1; }
+.nw-works li { display: grid; gap: .1rem; padding: .5rem 0; }
+.nw-work-name { font-weight: 800; }
+.nw-work-meta { font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+
+.nw-skel { display: grid; gap: 1rem; }
+.nw-skel-hero { height: 20rem; border-radius: 1.75rem; }
+.nw-skel-hero.is-tall { height: 22rem; }
+.nw-skel-row { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 1rem; padding: .75rem; border-radius: 1.25rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
+.nw-skel-thumb { min-height: 6.5rem; border-radius: .9rem; }
+.nw-skel-lines { display: grid; gap: .6rem; align-content: center; }
+
+/* editor */
+.nw-edit-row { display: grid; gap: .5rem; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto; align-items: center; }
+
+@media (max-width: 560px) {
+  .nw-page { border-radius: 1.25rem; }
+  .nw-hero, .nw-article { border-radius: 1.25rem; }
+  .nw-cover { min-height: 13rem; }
+  .nw-cover.is-tall { min-height: 15rem; }
+  .nw-cover-in { padding: 2.5rem 1.1rem 1.1rem; }
+  .nw-article-in { padding: 1.25rem 1.1rem 1.5rem; }
+  .nw-skel-row { grid-template-columns: 5.5rem minmax(0, 1fr); }
+  .nw-skel-hero { height: 14rem; }
+  .nw-prevnext { grid-template-columns: minmax(0, 1fr); }
+  .nw-pn-next { grid-column: auto; }
+  .nw-edit-row { grid-template-columns: minmax(0, 1fr); }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'

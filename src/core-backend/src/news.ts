@@ -12,6 +12,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
+import { gameProfile } from './games.js';
 
 const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
 fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -59,7 +60,22 @@ try {
   /* column already exists */
 }
 
+try {
+  // the user who created the item (its role is resolved at read time, see authorRole)
+  db.exec('ALTER TABLE news ADD COLUMN created_by INTEGER');
+} catch {
+  /* column already exists */
+}
+
 db.exec(`
+CREATE TABLE IF NOT EXISTS news_reactions (
+  news_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  emoji TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (news_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_news_reactions_news ON news_reactions (news_id);
 CREATE TABLE IF NOT EXISTS news_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   news_id INTEGER NOT NULL,
@@ -91,6 +107,7 @@ interface NewsRow {
   error: string | null;
   created_at: number;
   updated_at: number;
+  created_by?: number | null;
 }
 
 // ---------- validation (Discord limits) ----------
@@ -99,6 +116,17 @@ const link = z
   .trim()
   .max(2000)
   .refine((v) => v === '' || /^https?:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с http:// или https://');
+
+/** links of the site-only fields: https only (an empty string means "none") */
+const httpsLink = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine((v) => v === '' || /^https:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с https://');
+const UPLOAD_RE = /^[a-f0-9]{24}\.(png|jpg|gif|webp)$/;
+export const NEWS_CATEGORIES = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
+/** reactions players can leave on a published item (the heart carries the emoji variation selector) */
+export const NEWS_REACTIONS = ['👍', '🔥', '\u2764\uFE0F', '😮'] as const;
 
 const embedSchema = z.object({
   title: z.string().max(256, 'Заголовок: не более 256 символов').optional(),
@@ -130,6 +158,39 @@ const payloadSchema = z.object({
   extraEmbeds: z.array(embedSchema).max(9, 'Дополнительных embed не больше 9').optional(),
   // live status cards of these servers are appended to the message at send time
   statusServerIds: z.array(z.number().int().positive()).max(5, 'Статусов серверов не больше 5').optional(),
+  // ---- site-only fields (ignored by Discord, except `actions` which become link buttons) ----
+  category: z.enum(NEWS_CATEGORIES).optional(),
+  pinned: z.boolean().optional(),
+  game: z
+    .string()
+    .trim()
+    .max(40)
+    .refine((v) => v === '' || !!gameProfile(v), 'Неизвестная игра')
+    .optional(),
+  gallery: z
+    .array(z.object({ url: httpsLink.optional(), upload: z.string().regex(UPLOAD_RE).optional() }))
+    .max(6, 'В галерее не больше 6 картинок')
+    .optional(),
+  changes: z
+    .array(
+      z.object({
+        kind: z.enum(['add', 'fix', 'remove', 'change']),
+        text: z.string().trim().min(1, 'Текст изменения не может быть пустым').max(200, 'Изменение: не более 200 символов'),
+      }),
+    )
+    .max(20, 'Изменений не больше 20')
+    .optional(),
+  countdownAt: z.number().int().min(0).optional(),
+  countdownLabel: z.string().trim().max(60, 'Подпись таймера: не более 60 символов').optional(),
+  actions: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1, 'У кнопки должна быть подпись').max(40, 'Подпись кнопки: не более 40 символов'),
+        url: httpsLink.refine((v) => v !== '', 'У кнопки должна быть ссылка'),
+      }),
+    )
+    .max(3, 'Кнопок не больше 3')
+    .optional(),
 });
 
 type EmbedIn = z.infer<typeof embedSchema>;
@@ -162,12 +223,25 @@ function tidyEmbed(e: EmbedIn | undefined): EmbedIn | undefined {
 function tidy(p: NewsPayload): NewsPayload {
   const extra = (p.extraEmbeds ?? []).map(tidyEmbed).filter((e): e is EmbedIn => !!e);
   const ids = [...new Set(p.statusServerIds ?? [])];
-  return {
+  const gallery = (p.gallery ?? []).filter((g) => g.url || g.upload).map((g) => (g.upload ? { upload: g.upload } : { url: g.url }));
+  const out: NewsPayload = {
     ...p,
     embed: tidyEmbed(p.embed),
     extraEmbeds: extra.length ? extra : undefined,
     statusServerIds: ids.length ? ids : undefined,
+    gallery: gallery.length ? gallery : undefined,
+    changes: p.changes?.length ? p.changes : undefined,
+    actions: p.actions?.length ? p.actions : undefined,
+    game: p.game || undefined,
+    countdownLabel: p.countdownLabel || undefined,
   };
+  if (!out.pinned) delete out.pinned;
+  if (!out.countdownAt) {
+    delete out.countdownAt;
+    delete out.countdownLabel;
+  }
+  for (const k of Object.keys(out) as (keyof NewsPayload)[]) if (out[k] === undefined) delete out[k];
+  return out;
 }
 
 const allEmbeds = (p: NewsPayload): EmbedIn[] => [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])];
@@ -244,12 +318,16 @@ export function registerNews(deps: {
   channelInfo: ChannelInfo;
   /** the signed-in user is an administrator or a moderator */
   isStaff: (req: Request) => boolean;
+  /** any signed-in user (reactions); without it the reaction route falls back to staff */
+  auth?: RequestHandler;
   /** every server with its current status (for variables) */
   servers: () => NewsServerInfo[];
   /** the status card of a server (the one the bot posts), or null */
   statusEmbed: (serverId: number) => StatusEmbed | null;
 }) {
   const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
+  const authed = deps.auth ?? staff;
+  const uidOf = (req: Request) => (req as Request & { user?: { id?: number } }).user?.id ?? null;
   const actorOf = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '—';
   const userKeyOf = (req: Request) => {
     const u = (req as Request & { user?: { id?: number; username?: string } }).user;
@@ -361,6 +439,8 @@ export function registerNews(deps: {
     }
     const out: NewsPayload = { content, mention, ...(p.embed ? { embed: embed(p.embed) } : {}) };
     if (p.extraEmbeds?.length) out.extraEmbeds = p.extraEmbeds.map(embed);
+    // link buttons under the message
+    if (p.actions?.length) out.actions = p.actions;
     // status cards: they never push the message over 10 embeds or 6000 characters
     const statusEmbeds: StatusEmbed[] = [];
     const used = allEmbeds(out);
@@ -384,10 +464,32 @@ export function registerNews(deps: {
     Promise.resolve(fn(req, res)).catch(next);
   };
 
-  const serialize = (r: NewsRow) => {
+  // ---------- reactions, author role ----------
+  const isReaction = (e: string) => (NEWS_REACTIONS as readonly string[]).includes(e);
+  /** accepts the heart with or without the variation selector */
+  const canonEmoji = (e: string) => (e === '\u2764' ? '\u2764\uFE0F' : e);
+  const reactionRows = db.prepare('SELECT emoji, COUNT(*) AS n FROM news_reactions WHERE news_id = ? GROUP BY emoji');
+  const myReaction = db.prepare('SELECT emoji FROM news_reactions WHERE news_id = ? AND user_id = ?');
+  function reactionsOf(newsId: number, uid: number | null) {
+    const counts = new Map((reactionRows.all(newsId) as { emoji: string; n: number }[]).map((x) => [x.emoji, x.n]));
+    const mine = uid != null ? (myReaction.get(newsId, uid) as { emoji: string } | undefined)?.emoji : undefined;
+    return NEWS_REACTIONS.filter((e) => (counts.get(e) ?? 0) > 0).map((e) => ({ emoji: e as string, count: counts.get(e)!, mine: mine === e }));
+  }
+  const roleOf = db.prepare('SELECT role FROM users WHERE id = ?');
+  function authorRoleOf(r: NewsRow): 'admin' | 'moderator' | 'player' | null {
+    if (r.created_by == null) return null;
+    const u = roleOf.get(r.created_by) as { role: string } | undefined;
+    return u && (u.role === 'admin' || u.role === 'moderator' || u.role === 'player') ? u.role : null;
+  }
+
+  const serialize = (r: NewsRow, uid: number | null = null) => {
     const payload = JSON.parse(r.payload) as NewsPayload;
     const ch = channelInfo(r.channel_id);
     return {
+      category: payload.category ?? 'announcement',
+      pinned: !!payload.pinned,
+      authorRole: authorRoleOf(r),
+      reactions: reactionsOf(r.id, uid),
       id: r.id,
       status: r.status,
       title: titleOf(payload),
@@ -518,21 +620,93 @@ export function registerNews(deps: {
 
   // ---------- CRUD ----------
   /** the public view of a posted news item: no channel ids, errors or schedule */
-  const publicNews = (r: NewsRow) => {
-    const full = serialize(r);
-    return { id: full.id, status: full.status, title: full.title, payload: full.payload, sentAt: full.sentAt };
+  const publicNews = (r: NewsRow, uid: number | null) => {
+    const full = serialize(r, uid);
+    return {
+      id: full.id,
+      status: full.status,
+      title: full.title,
+      payload: full.payload,
+      sentAt: full.sentAt,
+      category: full.category,
+      pinned: full.pinned,
+      authorRole: full.authorRole,
+      reactions: full.reactions,
+    };
   };
+  const isPublished = (r: { status: string }) => r.status === 'sent' || r.status === 'edit_queued';
+  const pinnedOf = (r: NewsRow) => {
+    try {
+      return !!(JSON.parse(r.payload) as NewsPayload).pinned;
+    } catch {
+      return false;
+    }
+  };
+  /** the order of published items by time, newest first */
+  const byTime = (a: NewsRow, b: NewsRow) => (b.sent_at ?? b.created_at) - (a.sent_at ?? a.created_at) || b.id - a.id;
 
   app.get('/api/news', viewer, (req, res) => {
+    const uid = uidOf(req);
     const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
-    if (isAdmin(req)) return res.json(rows.map(serialize));
-    res.json(rows.filter((r) => r.status === 'sent' || r.status === 'edit_queued').map(publicNews));
+    if (isAdmin(req)) return res.json(rows.map((r) => serialize(r, uid)));
+    const pub = rows.filter(isPublished).sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
+    res.json(pub.map((r) => publicNews(r, uid)));
   });
 
   app.get('/api/news/:id', viewer, (req, res) => {
+    const uid = uidOf(req);
     const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
-    if (!r || (!isAdmin(req) && r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
-    res.json(isAdmin(req) ? serialize(r) : publicNews(r));
+    if (!r || (!isAdmin(req) && !isPublished(r))) return res.status(404).json({ error: 'Новость не найдена' });
+    const base = isAdmin(req) ? serialize(r, uid) : publicNews(r, uid);
+    // neighbours among published items: prev is the one before it in the list (newer), next the one after (older)
+    const pub = (db.prepare('SELECT * FROM news WHERE test = 0').all() as NewsRow[]).filter(isPublished).sort(byTime);
+    const i = pub.findIndex((x) => x.id === r.id);
+    const ref = (x: NewsRow | undefined) => (x ? { id: x.id, title: titleOf(JSON.parse(x.payload) as NewsPayload) } : null);
+    res.json({ ...base, prev: i > 0 ? ref(pub[i - 1]) : null, next: i >= 0 ? ref(pub[i + 1]) : null });
+  });
+
+  // a signed-in user's single reaction on a published item
+  const reactHits = new Map<number, { n: number; reset: number }>();
+  app.put('/api/news/:id/reaction', authed, (req, res) => {
+    const uid = uidOf(req);
+    if (uid == null) return res.status(401).json({ error: 'Требуется вход' });
+    const now = Date.now();
+    const h = reactHits.get(uid);
+    if (!h || h.reset <= now) reactHits.set(uid, { n: 1, reset: now + 60_000 });
+    else if (++h.n > 30) {
+      const retryAfter = Math.max(1, Math.ceil((h.reset - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'Слишком много реакций. Подождите минуту.', retryAfter });
+    }
+    const b = z.object({ emoji: z.string().nullable() }).safeParse(req.body);
+    const emoji = b.success && b.data.emoji !== null ? canonEmoji(b.data.emoji) : null;
+    if (!b.success || (emoji !== null && !isReaction(emoji))) return res.status(400).json({ error: 'Неверная реакция' });
+    const id = Number(req.params.id);
+    const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(id) as NewsRow | undefined;
+    if (!r || !isPublished(r)) return res.status(404).json({ error: 'Новость не найдена' });
+    if (emoji === null) db.prepare('DELETE FROM news_reactions WHERE news_id = ? AND user_id = ?').run(id, uid);
+    else {
+      db.prepare(
+        'INSERT INTO news_reactions (news_id, user_id, emoji, ts) VALUES (?, ?, ?, ?) ON CONFLICT(news_id, user_id) DO UPDATE SET emoji = excluded.emoji, ts = excluded.ts',
+      ).run(id, uid, emoji, now);
+    }
+    res.json(reactionsOf(id, uid));
+  });
+
+  // pin / unpin (staff); site-only, nothing changes in Discord
+  app.patch('/api/news/:id/pin', staff, (req, res) => {
+    const id = Number(req.params.id);
+    const item = loadItem(id);
+    if (!item) return res.status(404).json({ error: 'Новость не найдена' });
+    const b = z.object({ pinned: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Укажите pinned: true или false' });
+    const p = JSON.parse(item.payload) as NewsPayload;
+    if (b.data.pinned) p.pinned = true;
+    else delete p.pinned;
+    const json = JSON.stringify(p);
+    db.prepare('UPDATE news SET payload = ?, updated_at = ? WHERE id = ?').run(json, Date.now(), id);
+    addVersion(id, json, actorOf(req), b.data.pinned ? 'Закреплено' : 'Откреплено');
+    res.json(serialize(loadItem(id)!, uidOf(req)));
   });
 
   function statusFor(action: 'draft' | 'now' | 'schedule', at: number | undefined): { status: string; at: number | null; error?: string } {
@@ -555,8 +729,8 @@ export function registerNews(deps: {
       if (st.error) return res.status(400).json({ error: st.error });
       const now = Date.now();
       const info = db
-        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now);
+        .prepare('INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(st.status, b.data.channelId, JSON.stringify(payload), st.at, st.status === 'scheduled' ? (b.data.repeat ?? 'none') : 'none', now, now, uidOf(req));
       addVersion(Number(info.lastInsertRowid), JSON.stringify(payload), actorOf(req), 'Создано');
       res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
     }),
@@ -670,6 +844,7 @@ export function registerNews(deps: {
     const info = db
       .prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('draft', ?, ?, NULL, 'none', ?, ?)")
       .run(src.channel_id, json, now, now);
+    db.prepare('UPDATE news SET created_by = ? WHERE id = ?').run(uidOf(req), info.lastInsertRowid);
     addVersion(Number(info.lastInsertRowid), json, actorOf(req), `Копия новости #${src.id}`);
     res.status(201).json(serialize(db.prepare('SELECT * FROM news WHERE id = ?').get(info.lastInsertRowid) as NewsRow));
   });
@@ -787,7 +962,7 @@ export function registerNews(deps: {
       // the first successful post of a repeating item schedules the next one
       if (prev && prev.repeat !== 'none' && !prev.sent_at && prev.scheduled_at) {
         const next = nextOccurrence(prev.scheduled_at, prev.repeat, now);
-        db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at) VALUES ('scheduled', ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now);
+        db.prepare("INSERT INTO news (status, channel_id, payload, scheduled_at, repeat, created_at, updated_at, created_by) VALUES ('scheduled', ?, ?, ?, ?, ?, ?, ?)").run(prev.channel_id, prev.payload, next, prev.repeat, now, now, prev.created_by ?? null);
       }
       ledger('sent', (before?.attempts ?? 0) + 1, null, null);
       db.prepare("UPDATE news SET status = 'sent', attempts = 0, next_try_at = NULL, message_id = COALESCE(?, message_id), sent_at = COALESCE(sent_at, ?), error = ?, updated_at = ? WHERE id = ?").run(

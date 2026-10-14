@@ -352,7 +352,23 @@ export interface NewsPayload {
   extraEmbeds?: Embed[];
   /** live status block: up to 5 servers, refreshed by the bot when the message is sent */
   statusServerIds?: number[];
+  /** site-only fields (optional; an older backend simply does not send them) */
+  category?: NewsCategory;
+  pinned?: boolean;
+  /** game id (games.ts); drives the default cover */
+  game?: string;
+  gallery?: NewsGalleryItem[];
+  changes?: NewsChange[];
+  countdownAt?: number | null;
+  countdownLabel?: string;
+  actions?: NewsAction[];
 }
+
+export type NewsCategory = 'announcement' | 'wipe' | 'update' | 'event' | 'maintenance' | 'other';
+export interface NewsGalleryItem { url?: string; upload?: string }
+export type NewsChangeKind = 'add' | 'fix' | 'remove' | 'change';
+export interface NewsChange { kind: NewsChangeKind; text: string }
+export interface NewsAction { label: string; url: string }
 
 /** GET /news/variables */
 export interface NewsVariable {
@@ -617,6 +633,20 @@ export interface PublicNews {
   title: string;
   payload: NewsPayload;
   sentAt: number | null;
+  /** all of the below may be missing on an older backend */
+  category?: NewsCategory;
+  pinned?: boolean;
+  authorRole?: 'admin' | 'moderator' | 'player' | null;
+  reactions?: NewsReaction[];
+}
+
+export type NewsEmoji = '👍' | '🔥' | '❤️' | '😮';
+export interface NewsReaction { emoji: string; count: number; mine: boolean }
+
+/** GET /news/:id */
+export interface PublicNewsFull extends PublicNews {
+  prev?: { id: number; title: string } | null;
+  next?: { id: number; title: string } | null;
 }
 
 /** who signs a news item (the Discord display name 1:1 and picture when linked, else the site login and picture) */

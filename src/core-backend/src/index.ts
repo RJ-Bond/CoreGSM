@@ -1729,6 +1729,7 @@ app.patch('/internal/bindings/:id', internal, (req, res) => {
 registerNews({
   app,
   staff,
+  auth,
   viewer,
   internal,
   channelInfo,

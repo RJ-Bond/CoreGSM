@@ -4,7 +4,7 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
-import { PublicFeed } from '../components/news/PublicFeed';
+import { NewsArticlePage, NewsListPage } from '../components/news/NewsPublicPages';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
@@ -244,25 +244,9 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
   return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
 }
 
-/** read-only feed for players and guests: only what has been posted */
-export function NewsFeed() {
-  const [items, setItems] = useState<PublicNews[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState('');
-  const load = () => api<PublicNews[]>('/news').then((n) => { setItems(n); setError(''); }).catch((e) => setError(e.message)).finally(() => setLoaded(true));
-  usePoll(load, 30_000);
-
-  return (
-    <div className="space-y-5">
-      <PageHead icon={<IconNews />} title="Новости" subtitle="Последние объявления" />
-      {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      {loaded && !error && items.length === 0 && <Empty art={<NewsArt />} title="Новостей пока нет" text="Когда администратор что-нибудь опубликует, это появится здесь." />}
-      {!loaded && (
-        <div className="mx-auto max-w-2xl space-y-4" aria-busy="true" aria-label="Загрузка">
-          {[0, 1].map((i) => <div key={i} className="skeleton panel h-52" />)}
-        </div>
-      )}
-      <div className="fade-in"><PublicFeed items={items} /></div>
-    </div>
-  );
+/** read-only feed for players and guests: the list (#/news) or one news item (#/news/<id>) */
+export function NewsFeed({ sub = '' }: { sub?: string }) {
+  const id = Number(sub.split('/')[0]);
+  if (sub && Number.isInteger(id) && id > 0) return <NewsArticlePage id={id} />;
+  return <NewsListPage />;
 }
