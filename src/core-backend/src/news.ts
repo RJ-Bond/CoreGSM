@@ -904,7 +904,7 @@ export function registerNews(deps: {
            OR (status = 'scheduled' AND scheduled_at <= ?)
            OR (status = 'sending' AND updated_at < ?)`,
       )
-      .all(now, now, now - 5 * 60_000) as NewsRow[];
+      .all(now, now, now - 2 * 60_000) as NewsRow[];
     const claim = db.prepare("UPDATE news SET status = 'sending', updated_at = ? WHERE id = ?");
     const out = rows.map((r) => {
       const action = r.status === 'edit_queued' ? 'edit' : r.status === 'delete_queued' ? 'delete' : 'send';
