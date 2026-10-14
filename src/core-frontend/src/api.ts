@@ -313,6 +313,8 @@ export interface PlayerNow {
   name: string;
   /** ms: when the player joined */
   since: number;
+  /** V Rising servers only: rank id of the ladder (see vrisingRanks.ts) */
+  rankId?: string;
 }
 
 export interface DiscordGuild {
@@ -498,6 +500,24 @@ export interface Achievement {
   earnedAt: number | null;
 }
 
+/** GET /me/rank (V Rising) */
+export interface MyRank {
+  game: 'vrising';
+  hours: number;
+  rank: { id: string; name: string; minHours: number; color: string; image: string };
+  next: { id: string; name: string; minHours: number; color: string; image: string } | null;
+  /** 0..1 towards `next` */
+  progress: number;
+  sessions: number;
+  nick: string;
+}
+
+/** GET /me/achievements/vrising */
+export interface VrAchievement extends Achievement {
+  game: 'vrising';
+  image: string;
+}
+
 /** GET /me/activity */
 export interface ActivityItem {
   ts: number;
@@ -532,6 +552,8 @@ export interface PublicProfile {
   memberSince: number | string | null;
   stats: { totalSeconds: number; sessions: number; streakDays: number; favouriteServerName: string | null };
   achievements: { id: string; title: string; icon: string }[];
+  rank?: { id: string; name: string; color: string; image: string };
+  vrAchievements?: { id: string; title: string; image: string }[];
 }
 
 export interface Session {
