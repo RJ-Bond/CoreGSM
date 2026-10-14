@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c37b963c020a"
+COREGSM_BUILD="e46910445d02"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2630,6 +2630,216 @@ export function registerDeliveries(deps: { app: Express; admin: RequestHandler; 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/discordNames.ts" << '__COREGSM_EOF__'
+/** Turns a Discord display name into a panel login (3-32 chars: letters, digits, _ . - and single spaces between words). */
+export const LOGIN_MIN = 3;
+export const LOGIN_MAX = 32;
+
+export function sanitizeLogin(displayName: string, discordId: string): string {
+  const tail = (String(discordId).replace(/\D/g, '').slice(-4) || '0000').padStart(4, '0');
+  let s = String(displayName ?? '')
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{N}_.\- ]/gu, '')
+    .replace(/ +/g, ' ')
+    .trim()
+    .slice(0, LOGIN_MAX)
+    .trim();
+  if (s.length < LOGIN_MIN) s = `${s || 'player'} ${tail}`.trim();
+  return s.slice(0, LOGIN_MAX).trim();
+}
+
+/** adds a short numeric suffix until `taken` stops matching; the result stays within 32 chars */
+export function uniqueLogin(base: string, taken: (candidate: string) => boolean, random: () => number = Math.random): string {
+  if (!taken(base)) return base;
+  const fit = (suffix: string) => `${base.slice(0, LOGIN_MAX - suffix.length).trim()}${suffix}`;
+  for (let i = 2; i < 40; i++) {
+    const c = fit(` ${i}`);
+    if (!taken(c)) return c;
+  }
+  for (;;) {
+    const c = fit(` ${1000 + Math.floor(random() * 9000)}`);
+    if (!taken(c)) return c;
+  }
+}
+
+/** the in-game nick: control characters out, collapsed to one line, 2..40 chars or null */
+export function cleanGameNick(raw: string): string | null {
+  const s = String(raw ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.length >= 2 && s.length <= 40 ? s : null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/discordRegister.ts" << '__COREGSM_EOF__'
+/**
+ * Registration and profile from Discord slash commands (the bot calls these internal routes).
+ * A Discord-registered account is a normal `player` without a password: the Discord identity is the login.
+ */
+import crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
+import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
+import { z } from 'zod';
+import { db } from './db.js';
+import { cleanGameNick, sanitizeLogin, uniqueLogin } from './discordNames.js';
+import { achievementsOf, logAccount, vrAchievementsOf, vrHoursOf } from './profile.js';
+import { rankForHours } from './ranks.js';
+
+const ATTEMPTS = 5;
+const WINDOW_MS = 3600_000;
+const attempts = new Map<string, number[]>();
+
+/** true while the Discord id is within its limit; counts the attempt */
+function allowAttempt(discordId: string): boolean {
+  const now = Date.now();
+  const list = (attempts.get(discordId) ?? []).filter((t) => now - t < WINDOW_MS);
+  if (list.length >= ATTEMPTS) {
+    attempts.set(discordId, list);
+    return false;
+  }
+  list.push(now);
+  attempts.set(discordId, list);
+  if (attempts.size > 5000) for (const [k, v] of attempts) if (v.every((t) => now - t >= WINDOW_MS)) attempts.delete(k);
+  return true;
+}
+
+interface UserRow {
+  id: number;
+  username: string;
+  status: string;
+  discord_id: string | null;
+  discord_name: string | null;
+}
+
+export interface DiscordRegisterDeps {
+  app: Express;
+  internal: RequestHandler;
+  wrap: (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => void;
+  publicBase: () => string | null;
+  registrationOpen: () => boolean;
+  registrationMode: () => 'open' | 'approval';
+  rulesText: () => string;
+}
+
+export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
+  const { app, internal, wrap } = deps;
+  const profileUrl = () => `${deps.publicBase() ?? ''}/#/profile`;
+  const byDiscord = (id: string) => db.prepare('SELECT id, username, status, discord_id, discord_name FROM users WHERE discord_id = ?').get(id) as UserRow | undefined;
+  const nickOwner = (nick: string, exceptUser: number) =>
+    db.prepare('SELECT user_id FROM user_player WHERE ulower(game_nick) = ulower(?) AND user_id != ?').get(nick, exceptUser) as { user_id: number } | undefined;
+  const setNick = (userId: number, nick: string) =>
+    db
+      .prepare(
+        `INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, '', 0)
+         ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick`,
+      )
+      .run(userId, nick);
+  const refresh = (id: number, name: string, avatar: string | null) =>
+    db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(name, avatar, id);
+
+  const idSchema = z.string().regex(/^\d{15,25}$/);
+  const nameSchema = z.string().trim().min(1).max(100);
+  const avatarSchema = z.string().max(64).regex(/^[a-z0-9_]+$/i).nullable().optional();
+
+  app.post(
+    '/internal/discord/register',
+    internal,
+    wrap((req, res) => {
+      const b = z
+        .object({ discordId: idSchema, displayName: nameSchema, avatarHash: avatarSchema, gameNick: z.string().max(200), agree: z.boolean().optional() })
+        .safeParse(req.body);
+      if (!b.success) return res.status(400).json({ error: 'bad body' });
+      const { discordId, displayName } = b.data;
+      const avatar = b.data.avatarHash ?? null;
+      const nick = cleanGameNick(b.data.gameNick);
+      if (!allowAttempt(discordId)) {
+        return res.status(429).json({ error: 'rate', message: 'Слишком много попыток регистрации. Повторите через час.' });
+      }
+      if (!nick) return res.status(400).json({ error: 'nick', message: 'Игровой ник: от 2 до 40 символов.' });
+
+      const existing = byDiscord(discordId);
+      if (existing) {
+        if (nickOwner(nick, existing.id)) return res.json({ status: 'conflict', username: existing.username, profileUrl: profileUrl(), message: 'Этот игровой ник уже занят другим аккаунтом.' });
+        setNick(existing.id, nick);
+        refresh(existing.id, displayName, avatar);
+        const pending = existing.status === 'pending';
+        return res.json({
+          status: pending ? 'pending' : 'exists',
+          username: existing.username,
+          profileUrl: profileUrl(),
+          message: pending ? 'Ваша заявка ещё ожидает одобрения администратора. Игровой ник сохранён.' : 'Аккаунт уже есть: игровой ник и данные Discord обновлены.',
+        });
+      }
+
+      if (!deps.registrationOpen()) return res.json({ status: 'disabled', username: '', profileUrl: profileUrl(), message: 'Регистрация закрыта администратором.' });
+      const rules = deps.rulesText();
+      if (rules && b.data.agree !== true) {
+        return res.json({ status: 'rules', username: '', profileUrl: profileUrl(), rulesText: rules, message: 'Прочитайте правила и повторите команду с параметром agree:True.' });
+      }
+      if (nickOwner(nick, 0)) return res.json({ status: 'conflict', username: '', profileUrl: profileUrl(), message: 'Этот игровой ник уже занят другим аккаунтом.' });
+
+      const base = sanitizeLogin(displayName, discordId);
+      const login = uniqueLogin(base, (c) => !!db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(c.toLowerCase()));
+      const pending = deps.registrationMode() === 'approval';
+      const status = pending ? 'pending' : 'active';
+      let id = 0;
+      db.transaction(() => {
+        id = Number(
+          db
+            .prepare("INSERT INTO users (username, password_hash, role, created_at, status, discord_id, discord_name, discord_avatar, no_password) VALUES (?, ?, 'player', ?, ?, ?, ?, ?, 1)")
+            .run(login, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), status, discordId, displayName, avatar).lastInsertRowid,
+        );
+        setNick(id, nick);
+      })();
+      logAccount(req, id, 'register_discord', pending ? 'ожидает одобрения' : '');
+      res.json({
+        status: pending ? 'pending' : 'created',
+        username: login,
+        profileUrl: profileUrl(),
+        message: pending ? 'Заявка отправлена: дождитесь одобрения администратора.' : 'Аккаунт создан. Входите в панель кнопкой «Войти через Discord».',
+      });
+    }),
+  );
+
+  app.post(
+    '/internal/discord/nick',
+    internal,
+    wrap((req, res) => {
+      const b = z.object({ discordId: idSchema, gameNick: z.string().max(200), displayName: nameSchema.optional(), avatarHash: avatarSchema }).safeParse(req.body);
+      if (!b.success) return res.status(400).json({ error: 'bad body' });
+      const nick = cleanGameNick(b.data.gameNick);
+      if (!nick) return res.status(400).json({ error: 'nick', status: 'invalid' });
+      const u = byDiscord(b.data.discordId);
+      if (!u) return res.json({ status: 'notfound' });
+      if (nickOwner(nick, u.id)) return res.json({ status: 'conflict' });
+      setNick(u.id, nick);
+      if (b.data.displayName) refresh(u.id, b.data.displayName, b.data.avatarHash ?? null);
+      logAccount(req, u.id, 'profile_changed', 'ник из Discord');
+      res.json({ status: 'ok', gameNick: nick });
+    }),
+  );
+
+  app.get(
+    '/internal/discord/profile',
+    internal,
+    wrap((req, res) => {
+      const id = String(req.query.discordId ?? '');
+      const u = idSchema.safeParse(id).success ? byDiscord(id) : undefined;
+      if (!u) return res.json({ found: false, username: '', displayName: '', gameNick: '', rank: null, achievements: 0, profileUrl: profileUrl() });
+      const name = String(req.query.displayName ?? '').trim().slice(0, 100);
+      if (name) refresh(u.id, name, /^[a-z0-9_]{1,64}$/i.test(String(req.query.avatarHash ?? '')) ? String(req.query.avatarHash) : null);
+      const p = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined;
+      const gameNick = p?.game_nick ?? '';
+      let rank: { name: string; hours: number } | null = null;
+      if (gameNick) {
+        const { hours } = vrHoursOf(u.id, gameNick);
+        rank = { name: rankForHours(hours).name, hours: Math.round(hours * 10) / 10 };
+      }
+      const earned = achievementsOf(u.id).filter((a) => a.earned).length + vrAchievementsOf(u.id).filter((a) => a.earned).length;
+      res.json({ found: true, status: u.status, username: u.username, displayName: name || u.discord_name || u.username, gameNick, rank, achievements: earned, profileUrl: profileUrl() });
+    }),
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/embed.ts" << '__COREGSM_EOF__'
 /**
  * The Discord embed for a server: one definition used by the bot (what is posted in the channel)
@@ -3692,6 +3902,7 @@ import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
 import { registerGames } from './games.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel, vrRankIdFor } from './profile.js';
+import { registerDiscordRegistration } from './discordRegister.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
@@ -4074,12 +4285,14 @@ let botStatus: {
   tag: string | null;
   clientId: string | null;
   error: string | null;
+  commands: number | null;
   updatedAt: number;
 } = {
   state: 'idle',
   tag: null,
   clientId: null,
   error: null,
+  commands: null,
   updatedAt: 0,
 };
 
@@ -4097,11 +4310,18 @@ function clientIdFromToken(token: string | null): string | null {
   }
 }
 
+/** slash commands of the bot (the bot registers the same set; shown in the panel) */
+const BOT_COMMANDS = [
+  { name: '/register', description: 'Создать аккаунт в панели; параметры: nick (игровой ник), agree (согласие с правилами)' },
+  { name: '/nick', description: 'Сменить игровой ник для статистики' },
+  { name: '/profile', description: 'Ваш профиль: ник, ранг V Rising, достижения, ссылка на панель' },
+];
+
 function invitePayload() {
   const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
   return {
     clientId,
-    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=${BOT_PERMISSIONS}` : null,
+    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot%20applications.commands&permissions=${BOT_PERMISSIONS}` : null,
   };
 }
 
@@ -4109,7 +4329,7 @@ app.get('/api/bot/status', admin, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
-  res.json({ ...base, ...invitePayload(), guildCount: botGuilds.length, channelCount: botGuilds.reduce((n, g) => n + g.channels.length, 0) });
+  res.json({ ...base, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: botGuilds.length, channelCount: botGuilds.reduce((n, g) => n + g.channels.length, 0) });
 });
 
 // ---------- updates ----------
@@ -5335,10 +5555,11 @@ app.post('/internal/bot-status', internal, (req, res) => {
       tag: z.string().max(100).nullable().optional(),
       clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
       error: z.string().max(300).nullable().optional(),
+      commands: z.number().int().min(0).max(200).nullable().optional(),
     })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
-  botStatus = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, updatedAt: Date.now() };
+  botStatus = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, commands: b.data.commands ?? null, updatedAt: Date.now() };
   res.json({ ok: true });
 });
 
@@ -5429,6 +5650,7 @@ registerProfile({
     return customAvatarUrl(id) ?? (u ? avatarUrl(u) : null);
   },
 });
+registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
@@ -7336,7 +7558,8 @@ export type AccountEventKind =
   | 'banner_changed'
   | 'sessions_revoked'
   | 'prefs_changed'
-  | 'profile_changed';
+  | 'profile_changed'
+  | 'register_discord';
 
 /** Records an event in the user's own journal. Never throws. */
 export function logAccount(req: Request, userId: number, kind: AccountEventKind, detail = ''): void {
@@ -7581,7 +7804,7 @@ interface Achievement {
   earnedAt: number | null;
 }
 
-function achievementsOf(userId: number): Achievement[] {
+export function achievementsOf(userId: number): Achievement[] {
   const nick = playerOf(userId).gameNick;
   const now = Date.now();
   const tz = prefsOf(userId).timezone;
@@ -7871,6 +8094,7 @@ const EVENT_TEXT: Record<string, string> = {
   sessions_revoked: 'Завершены сеансы на других устройствах',
   prefs_changed: 'Изменены настройки интерфейса',
   profile_changed: 'Изменён игровой профиль',
+  register_discord: 'Регистрация через Discord',
 };
 
 // ---------- routes ----------
@@ -9058,11 +9282,12 @@ let state: BotState = 'idle';
 let tag: string | null = null;
 let lastError: string | null = null;
 let clientId: string | null = null;
+let commandsCount: number | null = null;
 const lastRun = new Map<number, number>();
 
 async function publishStatus(): Promise<void> {
   try {
-    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError }) });
+    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError, commands: commandsCount }) });
   } catch {
     /* backend is restarting: the next tick will retry */
   }
@@ -9143,6 +9368,152 @@ async function stopClient(): Promise<void> {
   }
 }
 
+// ---------- slash commands: registration of players from Discord ----------
+const COMMANDS = [
+  {
+    name: 'register',
+    description: 'Создать аккаунт в панели CoreGSM и указать игровой ник',
+    options: [
+      { type: 3, name: 'nick', description: 'Ваш игровой ник (для статистики)', required: true, min_length: 2, max_length: 40 },
+      { type: 5, name: 'agree', description: 'Я согласен с правилами сообщества', required: false },
+    ],
+  },
+  {
+    name: 'nick',
+    description: 'Сменить игровой ник для статистики',
+    options: [{ type: 3, name: 'nick', description: 'Новый игровой ник', required: true, min_length: 2, max_length: 40 }],
+  },
+  { name: 'profile', description: 'Ваш профиль: ник, ранг V Rising, достижения и ссылка на панель' },
+];
+
+async function registerCommands(c: DiscordClient): Promise<void> {
+  try {
+    const set = await c.application?.commands.set(COMMANDS as never);
+    commandsCount = set ? set.size : null;
+    log(`Slash commands registered: ${commandsCount}`);
+  } catch (e) {
+    commandsCount = 0;
+    log('Slash commands registration failed:', humanDiscordError(e));
+  }
+  await publishStatus();
+}
+
+const EPHEMERAL = 64;
+const COLORS = { ok: 0x2ecc71, warn: 0xf5b01e, bad: 0xe74c3c, info: 0x9b1c31 };
+
+interface RegisterAnswer {
+  status: 'created' | 'exists' | 'pending' | 'disabled' | 'rules' | 'conflict';
+  username?: string;
+  profileUrl?: string;
+  rulesText?: string;
+  message?: string;
+}
+
+function replyEmbed(title: string, description: string, color: number, url?: string) {
+  const e = new EmbedBuilder().setTitle(title.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color);
+  if (url && /^https?:\/\//.test(url)) e.setURL(url);
+  return { embeds: [e] };
+}
+
+async function backendJson<T>(path: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const r = await backend(path, init);
+  let data: T | null = null;
+  try {
+    data = (await r.json()) as T;
+  } catch {
+    /* not JSON */
+  }
+  return { ok: r.ok, status: r.status, data };
+}
+
+async function handleInteraction(i: import('discord.js').Interaction): Promise<void> {
+  if (!i.isChatInputCommand()) return;
+  const name = i.commandName;
+  if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch {
+    return; // the interaction expired
+  }
+  const reply = async (p: ReturnType<typeof replyEmbed>) => {
+    try {
+      await i.editReply(p);
+    } catch (e) {
+      log('reply failed:', (e as Error).message);
+    }
+  };
+  const user = i.user;
+  const displayName = (user.globalName || user.username || '').trim();
+  const who = { discordId: user.id, displayName, avatarHash: user.avatar ?? null };
+  const friendly = () => reply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad));
+  try {
+    if (name === 'register') {
+      const agree = i.options.getBoolean('agree') ?? undefined;
+      const { ok, status, data } = await backendJson<RegisterAnswer>('/internal/discord/register', {
+        method: 'POST',
+        body: JSON.stringify({ ...who, gameNick: i.options.getString('nick', true), agree }),
+      });
+      if (!data) return void (await friendly());
+      if (!ok || !data.status) {
+        const bad = status === 429 || status === 400;
+        return void (await reply(replyEmbed(bad ? 'Проверьте команду' : 'Не получилось', data.message || 'Панель отклонила запрос.', COLORS.warn)));
+      }
+      const url = data.profileUrl;
+      const link = url ? `\n\n[Открыть профиль в панели](${url})` : '';
+      switch (data.status) {
+        case 'created':
+          return void (await reply(replyEmbed('Аккаунт создан', `Логин в панели: **${data.username}**.\nВходите кнопкой «Войти через Discord»: пароль не нужен.${link}`, COLORS.ok, url)));
+        case 'exists':
+          return void (await reply(replyEmbed('Аккаунт уже есть', `${data.message ?? ''}\nЛогин в панели: **${data.username}**.${link}`, COLORS.ok, url)));
+        case 'pending':
+          return void (await reply(replyEmbed('Заявка отправлена', data.message ?? 'Дождитесь одобрения администратора.', COLORS.warn)));
+        case 'disabled':
+          return void (await reply(replyEmbed('Регистрация закрыта', data.message ?? 'Администратор закрыл регистрацию.', COLORS.bad)));
+        case 'rules':
+          return void (await reply(replyEmbed('Правила сообщества', `${data.rulesText ?? ''}\n\nЕсли согласны, повторите команду: \`/register nick:... agree:True\`.`, COLORS.info)));
+        case 'conflict':
+          return void (await reply(replyEmbed('Ник занят', data.message ?? 'Этот игровой ник уже занят другим аккаунтом.', COLORS.bad)));
+      }
+      return void (await friendly());
+    }
+    if (name === 'nick') {
+      const { data } = await backendJson<{ status?: string; gameNick?: string }>('/internal/discord/nick', {
+        method: 'POST',
+        body: JSON.stringify({ ...who, gameNick: i.options.getString('nick', true) }),
+      });
+      if (!data) return void (await friendly());
+      if (data.status === 'ok') return void (await reply(replyEmbed('Ник сохранён', `Игровой ник: **${data.gameNick ?? ''}**. Статистика считается по нему.`, COLORS.ok)));
+      if (data.status === 'notfound') return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));
+      if (data.status === 'conflict') return void (await reply(replyEmbed('Ник занят', 'Этот игровой ник уже занят другим аккаунтом.', COLORS.bad)));
+      return void (await reply(replyEmbed('Проверьте ник', 'Игровой ник: от 2 до 40 символов.', COLORS.warn)));
+    }
+    const q = new URLSearchParams({ discordId: user.id, displayName });
+    if (user.avatar) q.set('avatarHash', user.avatar);
+    const { data } = await backendJson<{
+      found: boolean;
+      username: string;
+      displayName: string;
+      gameNick: string;
+      rank: { name: string; hours: number } | null;
+      achievements: number;
+      profileUrl: string;
+    }>(`/internal/discord/profile?${q.toString()}`);
+    if (!data) return void (await friendly());
+    if (!data.found) return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));
+    const lines = [
+      `Имя в панели: **${data.username}**`,
+      `Игровой ник: **${data.gameNick || 'не задан'}**`,
+      data.rank ? `Ранг V Rising: **${data.rank.name}** (${data.rank.hours} ч)` : 'Ранг V Rising: появится после игры на сервере',
+      `Достижений: **${data.achievements}**`,
+    ];
+    if (data.profileUrl && /^https?:\/\//.test(data.profileUrl)) lines.push(`\n[Открыть профиль в панели](${data.profileUrl})`);
+    await reply(replyEmbed(data.displayName || data.username, lines.join('\n'), COLORS.info, data.profileUrl));
+  } catch (e) {
+    log('command failed:', (e as Error).message);
+    await friendly();
+  }
+}
+
 /** Fetches token/proxy from the panel and (re)connects when they change. */
 async function applyConfig(): Promise<void> {
   const res = await backend('/internal/config');
@@ -9157,6 +9528,7 @@ async function applyConfig(): Promise<void> {
 
   await stopClient();
   gatewayAgent = undefined;
+  commandsCount = null;
   lastRun.clear();
   lastGuildsJson = '';
 
@@ -9187,12 +9559,16 @@ async function applyConfig(): Promise<void> {
     ...(proxy ? { rest: { agent: proxy.rest } } : {}),
   });
   c.on('error', (e) => log('client error', e));
+  c.on('interactionCreate', (i) => {
+    void handleInteraction(i).catch((e) => log('interaction failed:', (e as Error).message));
+  });
   client = c;
   setState('connecting');
   try {
     await c.login(cfg.discordToken);
     log(`Logged in as ${c.user?.tag}`);
     setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
+    void registerCommands(c);
   } catch (e) {
     log('Discord login failed:', (e as Error).message);
     setState('error', { error: humanDiscordError(e) });
@@ -32648,6 +33024,9 @@ export interface BotStatus {
   /** Discord servers the bot is on, and text channels it can post in */
   guildCount?: number;
   channelCount?: number;
+  /** slash commands the bot registered in Discord (null: not reported yet) */
+  commands?: number | null;
+  commandList?: { name: string; description: string }[];
   error: string | null;
   updatedAt: number;
 }
@@ -32975,7 +33354,7 @@ export interface ActivityItem {
 
 export type JournalKind =
   | 'login' | 'login_failed' | 'password_changed' | 'email_changed' | 'discord_linked' | 'discord_unlinked'
-  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed';
+  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed' | 'register_discord';
 
 /** GET /me/journal */
 export interface JournalItem {
@@ -37766,7 +38145,7 @@ const FILTERS: { id: Filter; label: TKey; kinds: string[] | null }[] = [
   { id: 'all', label: 'pf.journal.f.all', kinds: null },
   { id: 'logins', label: 'pf.journal.f.logins', kinds: ['login', 'login_new_device', 'login_failed', 'sessions_revoked'] },
   { id: 'secrets', label: 'pf.journal.f.secrets', kinds: ['password_changed', 'email_changed'] },
-  { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked'] },
+  { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked', 'register_discord'] },
 ];
 
 const KIND_LABEL: Record<string, TKey> = {
@@ -37782,6 +38161,7 @@ const KIND_LABEL: Record<string, TKey> = {
   sessions_revoked: 'pf.journal.k.sessions_revoked',
   prefs_changed: 'pf.journal.k.prefs_changed',
   profile_changed: 'pf.journal.k.profile_changed',
+  register_discord: 'pf.journal.k.register_discord',
 };
 
 /** «Журнал аккаунта»: a timeline of the account's own events and the «Выйти на всех устройствах» button */
@@ -38618,6 +38998,7 @@ export function JournalIcon({ kind, size = 18 }: { kind: string; size?: number }
     case 'sessions_revoked': return <IconShield size={size} />;
     case 'prefs_changed': return <Icon size={size}><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /></Icon>;
     case 'profile_changed': return <Icon size={size}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></Icon>;
+    case 'register_discord': return <Icon size={size}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0M19 3v4M17 5h4" /></Icon>;
     default: return <Icon size={size}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Icon>;
   }
 }
@@ -43813,6 +44194,7 @@ const en: Record<keyof typeof ru, string> = {
   'auth.guest': 'Continue without signing in',
   'auth.or': 'or',
   'auth.discordLogin': 'Sign in with Discord',
+  'auth.discordRegisterHint': 'Or register in Discord with the /register command and sign in with the "Sign in with Discord" button',
   'login.user': 'Username',
   'login.pass': 'Password',
   'login.enterUser': 'Enter your username',
@@ -43990,6 +44372,7 @@ const en: Record<keyof typeof ru, string> = {
   // ---- security ----
   'pf.pass.titleChange': 'Change password',
   'pf.pass.titleSet': 'Set a password',
+  'pf.pass.discordNoNeed': 'You sign in with Discord, no password is needed. Set a password if you also want to sign in with your username.',
   'pf.pass.discordOnly': 'You currently sign in with Discord only. A password lets you sign in with your username too.',
   'pf.pass.current': 'Current password',
   'pf.pass.new': 'New password (8+ characters)',
@@ -44058,6 +44441,7 @@ const en: Record<keyof typeof ru, string> = {
   'pf.journal.k.sessions_revoked': 'Other sessions ended',
   'pf.journal.k.prefs_changed': 'Language and region changed',
   'pf.journal.k.profile_changed': 'Player profile changed',
+  'pf.journal.k.register_discord': 'Registered via Discord',
 
   // ---- public profile ----
   'pub.missingTitle': 'Profile not found',
@@ -44421,6 +44805,7 @@ const ru = {
   'auth.guest': 'Продолжить без входа',
   'auth.or': 'или',
   'auth.discordLogin': 'Войти через Discord',
+  'auth.discordRegisterHint': 'Или зарегистрируйтесь в Discord командой /register и входите кнопкой «Войти через Discord»',
   'login.user': 'Логин',
   'login.pass': 'Пароль',
   'login.enterUser': 'Введите логин',
@@ -44598,6 +44983,7 @@ const ru = {
   // ---- security ----
   'pf.pass.titleChange': 'Смена пароля',
   'pf.pass.titleSet': 'Задать пароль',
+  'pf.pass.discordNoNeed': 'Вход выполняется через Discord, пароль не нужен. Установите пароль, если хотите входить и по логину.',
   'pf.pass.discordOnly': 'Сейчас вы входите только через Discord. Пароль позволит входить и по логину.',
   'pf.pass.current': 'Текущий пароль',
   'pf.pass.new': 'Новый пароль (от 8 символов)',
@@ -44666,6 +45052,7 @@ const ru = {
   'pf.journal.k.sessions_revoked': 'Завершены остальные сеансы',
   'pf.journal.k.prefs_changed': 'Изменены язык и регион',
   'pf.journal.k.profile_changed': 'Изменён профиль игрока',
+  'pf.journal.k.register_discord': 'Регистрация через Discord',
 
   // ---- public profile ----
   'pub.missingTitle': 'Профиль не найден',
@@ -46577,6 +46964,29 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </Strip>
 
+      {settings?.discordTokenSet && bot?.state === 'online' && (
+        <div className="panel space-y-2 p-5">
+          <h2 className="text-lg font-black">Команды бота</h2>
+          {bot.commands === 0 && (
+            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">Пригласить бота<span aria-hidden>↗</span></a> : undefined}>
+              Команды ещё не зарегистрированы. Переприглашите бота со ссылкой ниже, чтобы работали команды /register.
+            </Notice>
+          )}
+          <ul className="space-y-1.5">
+            {(bot.commandList ?? []).map((c) => (
+              <li key={c.name} className="text-sm">
+                <code className="font-black">{c.name}</code> <span className="font-semibold text-mute">{c.description}</span>
+              </li>
+            ))}
+          </ul>
+          {bot.inviteUrl && (
+            <p className="text-sm font-semibold text-mute">
+              Команды работают, если бот приглашён со ссылкой с правом «applications.commands»: <a className="btn-link" href={bot.inviteUrl} target="_blank" rel="noreferrer">ссылка-приглашение</a>.
+            </p>
+          )}
+        </div>
+      )}
+
       {loaded && settings && (!wizard.complete || wizardOpen) && (
         <DiscordWizard
           input={{ tokenSet: !!settings.discordTokenSet, bot, guilds, bindings, serverCount: servers.length }}
@@ -47354,6 +47764,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         <>
           <OrDivider />
           <DiscordButton label={t('auth.discordLogin')} href="/api/auth/discord/start?mode=login" />
+          <p className="text-center text-sm font-semibold text-mute">{t('auth.discordRegisterHint')}</p>
         </>
       )}
     </form>
@@ -48583,7 +48994,7 @@ function SecurityTab() {
       <NewDeviceBanner onRevoked={() => setRev((x) => x + 1)} />
       <div className="grid items-start gap-5 md:grid-cols-2">
         <EmailCard onChanged={reload} />
-        <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
+        <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
         <DiscordCard onChanged={reload} />
         <SessionsCard key={rev} />
       </div>
@@ -48592,7 +49003,7 @@ function SecurityTab() {
   );
 }
 
-function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChanged: () => Promise<void> }) {
+function PasswordCard({ hasPassword, discordLinked, onChanged }: { hasPassword: boolean; discordLinked: boolean; onChanged: () => Promise<void> }) {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [again, setAgain] = useState('');
@@ -48629,7 +49040,7 @@ function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChan
   return (
     <form onSubmit={submit} noValidate className="panel space-y-3.5 p-6">
       <h2 className="text-lg font-black">{hasPassword ? t('pf.pass.titleChange') : t('pf.pass.titleSet')}</h2>
-      {!hasPassword && <p className="font-semibold text-mute">{t('pf.pass.discordOnly')}</p>}
+      {!hasPassword && <p className="font-semibold text-mute">{discordLinked ? t('pf.pass.discordNoNeed') : t('pf.pass.discordOnly')}</p>}
       {hasPassword && (
         <PasswordField id="pf-current" ref={curRef} label={t('pf.pass.current')} value={current} onChange={setCurrent} autoComplete="current-password" error={curErr} />
       )}
@@ -49149,6 +49560,7 @@ export default function Register({ onDone }: { onDone: () => void }) {
         <>
           <OrDivider />
           <DiscordButton label={t('auth.discordLogin')} href="/api/auth/discord/start?mode=login" />
+          <p className="text-center text-sm font-semibold text-mute">{t('auth.discordRegisterHint')}</p>
         </>
       )}
     </form>

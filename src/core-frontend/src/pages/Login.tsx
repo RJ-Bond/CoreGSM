@@ -155,6 +155,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         <>
           <OrDivider />
           <DiscordButton label={t('auth.discordLogin')} href="/api/auth/discord/start?mode=login" />
+          <p className="text-center text-sm font-semibold text-mute">{t('auth.discordRegisterHint')}</p>
         </>
       )}
     </form>

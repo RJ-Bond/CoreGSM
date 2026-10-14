@@ -200,6 +200,9 @@ export interface BotStatus {
   /** Discord servers the bot is on, and text channels it can post in */
   guildCount?: number;
   channelCount?: number;
+  /** slash commands the bot registered in Discord (null: not reported yet) */
+  commands?: number | null;
+  commandList?: { name: string; description: string }[];
   error: string | null;
   updatedAt: number;
 }
@@ -527,7 +530,7 @@ export interface ActivityItem {
 
 export type JournalKind =
   | 'login' | 'login_failed' | 'password_changed' | 'email_changed' | 'discord_linked' | 'discord_unlinked'
-  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed';
+  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed' | 'register_discord';
 
 /** GET /me/journal */
 export interface JournalItem {

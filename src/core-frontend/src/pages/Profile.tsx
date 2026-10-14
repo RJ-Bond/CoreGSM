@@ -156,7 +156,7 @@ function SecurityTab() {
       <NewDeviceBanner onRevoked={() => setRev((x) => x + 1)} />
       <div className="grid items-start gap-5 md:grid-cols-2">
         <EmailCard onChanged={reload} />
-        <PasswordCard hasPassword={me.hasPassword} onChanged={reload} />
+        <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
         <DiscordCard onChanged={reload} />
         <SessionsCard key={rev} />
       </div>
@@ -165,7 +165,7 @@ function SecurityTab() {
   );
 }
 
-function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChanged: () => Promise<void> }) {
+function PasswordCard({ hasPassword, discordLinked, onChanged }: { hasPassword: boolean; discordLinked: boolean; onChanged: () => Promise<void> }) {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [again, setAgain] = useState('');
@@ -202,7 +202,7 @@ function PasswordCard({ hasPassword, onChanged }: { hasPassword: boolean; onChan
   return (
     <form onSubmit={submit} noValidate className="panel space-y-3.5 p-6">
       <h2 className="text-lg font-black">{hasPassword ? t('pf.pass.titleChange') : t('pf.pass.titleSet')}</h2>
-      {!hasPassword && <p className="font-semibold text-mute">{t('pf.pass.discordOnly')}</p>}
+      {!hasPassword && <p className="font-semibold text-mute">{discordLinked ? t('pf.pass.discordNoNeed') : t('pf.pass.discordOnly')}</p>}
       {hasPassword && (
         <PasswordField id="pf-current" ref={curRef} label={t('pf.pass.current')} value={current} onChange={setCurrent} autoComplete="current-password" error={curErr} />
       )}

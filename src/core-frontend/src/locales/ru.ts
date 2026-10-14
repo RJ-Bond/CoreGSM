@@ -65,6 +65,7 @@ const ru = {
   'auth.guest': 'Продолжить без входа',
   'auth.or': 'или',
   'auth.discordLogin': 'Войти через Discord',
+  'auth.discordRegisterHint': 'Или зарегистрируйтесь в Discord командой /register и входите кнопкой «Войти через Discord»',
   'login.user': 'Логин',
   'login.pass': 'Пароль',
   'login.enterUser': 'Введите логин',
@@ -242,6 +243,7 @@ const ru = {
   // ---- security ----
   'pf.pass.titleChange': 'Смена пароля',
   'pf.pass.titleSet': 'Задать пароль',
+  'pf.pass.discordNoNeed': 'Вход выполняется через Discord, пароль не нужен. Установите пароль, если хотите входить и по логину.',
   'pf.pass.discordOnly': 'Сейчас вы входите только через Discord. Пароль позволит входить и по логину.',
   'pf.pass.current': 'Текущий пароль',
   'pf.pass.new': 'Новый пароль (от 8 символов)',
@@ -310,6 +312,7 @@ const ru = {
   'pf.journal.k.sessions_revoked': 'Завершены остальные сеансы',
   'pf.journal.k.prefs_changed': 'Изменены язык и регион',
   'pf.journal.k.profile_changed': 'Изменён профиль игрока',
+  'pf.journal.k.register_discord': 'Регистрация через Discord',
 
   // ---- public profile ----
   'pub.missingTitle': 'Профиль не найден',

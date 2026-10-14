@@ -64,6 +64,7 @@ const en: Record<keyof typeof ru, string> = {
   'auth.guest': 'Continue without signing in',
   'auth.or': 'or',
   'auth.discordLogin': 'Sign in with Discord',
+  'auth.discordRegisterHint': 'Or register in Discord with the /register command and sign in with the "Sign in with Discord" button',
   'login.user': 'Username',
   'login.pass': 'Password',
   'login.enterUser': 'Enter your username',
@@ -241,6 +242,7 @@ const en: Record<keyof typeof ru, string> = {
   // ---- security ----
   'pf.pass.titleChange': 'Change password',
   'pf.pass.titleSet': 'Set a password',
+  'pf.pass.discordNoNeed': 'You sign in with Discord, no password is needed. Set a password if you also want to sign in with your username.',
   'pf.pass.discordOnly': 'You currently sign in with Discord only. A password lets you sign in with your username too.',
   'pf.pass.current': 'Current password',
   'pf.pass.new': 'New password (8+ characters)',
@@ -309,6 +311,7 @@ const en: Record<keyof typeof ru, string> = {
   'pf.journal.k.sessions_revoked': 'Other sessions ended',
   'pf.journal.k.prefs_changed': 'Language and region changed',
   'pf.journal.k.profile_changed': 'Player profile changed',
+  'pf.journal.k.register_discord': 'Registered via Discord',
 
   // ---- public profile ----
   'pub.missingTitle': 'Profile not found',

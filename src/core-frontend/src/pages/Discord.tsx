@@ -150,6 +150,29 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </Strip>
 
+      {settings?.discordTokenSet && bot?.state === 'online' && (
+        <div className="panel space-y-2 p-5">
+          <h2 className="text-lg font-black">Команды бота</h2>
+          {bot.commands === 0 && (
+            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">Пригласить бота<span aria-hidden>↗</span></a> : undefined}>
+              Команды ещё не зарегистрированы. Переприглашите бота со ссылкой ниже, чтобы работали команды /register.
+            </Notice>
+          )}
+          <ul className="space-y-1.5">
+            {(bot.commandList ?? []).map((c) => (
+              <li key={c.name} className="text-sm">
+                <code className="font-black">{c.name}</code> <span className="font-semibold text-mute">{c.description}</span>
+              </li>
+            ))}
+          </ul>
+          {bot.inviteUrl && (
+            <p className="text-sm font-semibold text-mute">
+              Команды работают, если бот приглашён со ссылкой с правом «applications.commands»: <a className="btn-link" href={bot.inviteUrl} target="_blank" rel="noreferrer">ссылка-приглашение</a>.
+            </p>
+          )}
+        </div>
+      )}
+
       {loaded && settings && (!wizard.complete || wizardOpen) && (
         <DiscordWizard
           input={{ tokenSet: !!settings.discordTokenSet, bot, guilds, bindings, serverCount: servers.length }}

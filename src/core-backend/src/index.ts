@@ -22,6 +22,7 @@ import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
 import { registerGames } from './games.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel, vrRankIdFor } from './profile.js';
+import { registerDiscordRegistration } from './discordRegister.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
@@ -404,12 +405,14 @@ let botStatus: {
   tag: string | null;
   clientId: string | null;
   error: string | null;
+  commands: number | null;
   updatedAt: number;
 } = {
   state: 'idle',
   tag: null,
   clientId: null,
   error: null,
+  commands: null,
   updatedAt: 0,
 };
 
@@ -427,11 +430,18 @@ function clientIdFromToken(token: string | null): string | null {
   }
 }
 
+/** slash commands of the bot (the bot registers the same set; shown in the panel) */
+const BOT_COMMANDS = [
+  { name: '/register', description: 'Создать аккаунт в панели; параметры: nick (игровой ник), agree (согласие с правилами)' },
+  { name: '/nick', description: 'Сменить игровой ник для статистики' },
+  { name: '/profile', description: 'Ваш профиль: ник, ранг V Rising, достижения, ссылка на панель' },
+];
+
 function invitePayload() {
   const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
   return {
     clientId,
-    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot&permissions=${BOT_PERMISSIONS}` : null,
+    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot%20applications.commands&permissions=${BOT_PERMISSIONS}` : null,
   };
 }
 
@@ -439,7 +449,7 @@ app.get('/api/bot/status', admin, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - botStatus.updatedAt > 45_000;
   const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
-  res.json({ ...base, ...invitePayload(), guildCount: botGuilds.length, channelCount: botGuilds.reduce((n, g) => n + g.channels.length, 0) });
+  res.json({ ...base, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: botGuilds.length, channelCount: botGuilds.reduce((n, g) => n + g.channels.length, 0) });
 });
 
 // ---------- updates ----------
@@ -1665,10 +1675,11 @@ app.post('/internal/bot-status', internal, (req, res) => {
       tag: z.string().max(100).nullable().optional(),
       clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
       error: z.string().max(300).nullable().optional(),
+      commands: z.number().int().min(0).max(200).nullable().optional(),
     })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
-  botStatus = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, updatedAt: Date.now() };
+  botStatus = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, commands: b.data.commands ?? null, updatedAt: Date.now() };
   res.json({ ok: true });
 });
 
@@ -1759,6 +1770,7 @@ registerProfile({
     return customAvatarUrl(id) ?? (u ? avatarUrl(u) : null);
   },
 });
+registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
