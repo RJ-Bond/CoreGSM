@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="75a3a2d9608b"
+COREGSM_BUILD="db19295a8691"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2681,7 +2681,7 @@ import { z } from 'zod';
 import { db } from './db.js';
 import { cleanGameNick, sanitizeLogin, uniqueLogin } from './discordNames.js';
 import { achievementsOf, logAccount, vrAchievementsOf, vrHoursOf } from './profile.js';
-import { rankForHours } from './ranks.js';
+import { rankForHours, nextRank, rankProgress } from './ranks.js';
 
 const ATTEMPTS = 5;
 const WINDOW_MS = 3600_000;
@@ -2828,13 +2828,37 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
       if (name) refresh(u.id, name, /^[a-z0-9_]{1,64}$/i.test(String(req.query.avatarHash ?? '')) ? String(req.query.avatarHash) : null);
       const p = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined;
       const gameNick = p?.game_nick ?? '';
-      let rank: { name: string; hours: number } | null = null;
+      let rank: {
+        id: string; name: string; hours: number; color: string; image: string;
+        next: { name: string; minHours: number } | null; progress: number;
+      } | null = null;
       if (gameNick) {
         const { hours } = vrHoursOf(u.id, gameNick);
-        rank = { name: rankForHours(hours).name, hours: Math.round(hours * 10) / 10 };
+        const r = rankForHours(hours);
+        const nx = nextRank(hours);
+        rank = {
+          id: r.id,
+          name: r.name,
+          hours: Math.round(hours * 10) / 10,
+          color: r.color,
+          image: r.image,
+          next: nx ? { name: nx.name, minHours: nx.minHours } : null,
+          progress: rankProgress(hours),
+        };
       }
-      const earned = achievementsOf(u.id).filter((a) => a.earned).length + vrAchievementsOf(u.id).filter((a) => a.earned).length;
-      res.json({ found: true, status: u.status, username: u.username, displayName: name || u.discord_name || u.username, gameNick, rank, achievements: earned, profileUrl: profileUrl() });
+      const all = [...achievementsOf(u.id), ...vrAchievementsOf(u.id)];
+      const earned = all.filter((a) => a.earned).length;
+      res.json({
+        found: true,
+        status: u.status,
+        username: u.username,
+        displayName: name || u.discord_name || u.username,
+        gameNick,
+        rank,
+        achievements: earned,
+        achievementsTotal: all.length,
+        profileUrl: profileUrl(),
+      });;
     }),
   );
 }
@@ -4312,9 +4336,9 @@ function clientIdFromToken(token: string | null): string | null {
 
 /** slash commands of the bot (the bot registers the same set; shown in the panel) */
 const BOT_COMMANDS = [
-  { name: '/register', description: 'Создать аккаунт в панели; параметры: nick (игровой ник), agree (согласие с правилами)' },
-  { name: '/nick', description: 'Сменить игровой ник для статистики' },
-  { name: '/profile', description: 'Ваш профиль: ник, ранг V Rising, достижения, ссылка на панель' },
+  { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
+  { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
+  { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
 ];
 
 function invitePayload() {
@@ -9372,18 +9396,18 @@ async function stopClient(): Promise<void> {
 const COMMANDS = [
   {
     name: 'register',
-    description: 'Создать аккаунт в панели CoreGSM и указать игровой ник',
+    description: 'Зарегистрироваться на сайте через ваш Discord: пароль не нужен',
     options: [
-      { type: 3, name: 'nick', description: 'Ваш игровой ник (для статистики)', required: true, min_length: 2, max_length: 40 },
-      { type: 5, name: 'agree', description: 'Я согласен с правилами сообщества', required: false },
+      { type: 3, name: 'nick', description: 'Ваш ник В ИГРЕ (V Rising), точно как в игре: по нему считаются часы и ранг', required: true, min_length: 2, max_length: 40 },
+      { type: 5, name: 'agree', description: 'Поставьте True, если согласны с правилами сообщества (нужно, если правила есть)', required: false },
     ],
   },
   {
     name: 'nick',
-    description: 'Сменить игровой ник для статистики',
-    options: [{ type: 3, name: 'nick', description: 'Новый игровой ник', required: true, min_length: 2, max_length: 40 }],
+    description: 'Сменить игровой ник, по которому считается статистика',
+    options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40 }],
   },
-  { name: 'profile', description: 'Ваш профиль: ник, ранг V Rising, достижения и ссылка на панель' },
+  { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
 ];
 
 async function registerCommands(c: DiscordClient): Promise<void> {
@@ -9409,10 +9433,78 @@ interface RegisterAnswer {
   message?: string;
 }
 
+/** a status mark in front of a plain reply title, unless the title already starts with an emoji */
+const markOf = (color: number) => (color === COLORS.ok ? '✅' : color === COLORS.bad ? '❌' : color === COLORS.warn ? '⚠️' : 'ℹ️');
+
 function replyEmbed(title: string, description: string, color: number, url?: string) {
-  const e = new EmbedBuilder().setTitle(title.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color);
+  const lead = /^\p{Extended_Pictographic}/u.test(title) ? '' : `${markOf(color)} `;
+  const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color).setFooter({ text: 'CoreGSM' });
   if (url && /^https?:\/\//.test(url)) e.setURL(url);
   return { embeds: [e] };
+}
+
+interface ProfileData {
+  found: boolean;
+  username: string;
+  displayName: string;
+  gameNick: string;
+  rank: { id: string; name: string; hours: number; color: string; image: string; next: { name: string; minHours: number } | null; progress: number } | null;
+  achievements: number;
+  achievementsTotal?: number;
+  profileUrl: string;
+}
+
+const hexToInt = (hex: string) => (/^#[0-9a-f]{6}$/i.test(hex) ? parseInt(hex.slice(1), 16) : COLORS.info);
+const bar10 = (p: number) => {
+  const n = Math.max(0, Math.min(10, Math.round(p * 10)));
+  return '▰'.repeat(n) + '▱'.repeat(10 - n);
+};
+const hoursText = (h: number) => (Number.isInteger(h) ? `${h}` : h.toFixed(1)).replace('.', ',');
+
+/** the player's card: Discord name and picture on top, the rank emblem as the thumbnail, link buttons below */
+function cardReply(
+  user: { displayAvatarURL: (o?: { size?: number }) => string },
+  displayName: string,
+  p: ProfileData,
+  opts: { title: string; description?: string; color?: number },
+) {
+  const base = /^https?:\/\//.test(p.profileUrl) ? p.profileUrl.replace(/\/#\/profile\/?$/, '') : '';
+  const color = opts.color ?? (p.rank ? hexToInt(p.rank.color) : COLORS.info);
+  const e = new EmbedBuilder()
+    .setColor(color)
+    .setAuthor({ name: displayName.slice(0, 120), iconURL: user.displayAvatarURL({ size: 64 }) })
+    .setTitle(opts.title.slice(0, 250));
+  if (opts.description) e.setDescription(opts.description.slice(0, 3000));
+  if (base && p.rank?.image) e.setThumbnail(`${base}${p.rank.image}`);
+  const fields: { name: string; value: string; inline?: boolean }[] = [];
+  fields.push({ name: '🎮 Игровой ник', value: p.gameNick ? `\`${p.gameNick}\`` : 'не задан', inline: true });
+  if (p.rank) {
+    fields.push({ name: '🩸 Ранг V Rising', value: `**${p.rank.name}**`, inline: true });
+    fields.push({ name: '⏱️ Часов в игре', value: hoursText(p.rank.hours), inline: true });
+    if (p.rank.next) {
+      const left = Math.max(0, p.rank.next.minHours - p.rank.hours);
+      fields.push({ name: `Следующий ранг: ${p.rank.next.name}`, value: `${bar10(p.rank.progress)}  ещё **${hoursText(left)} ч**` });
+    } else {
+      fields.push({ name: 'Вершина лестницы', value: 'Вы достигли высшего ранга.' });
+    }
+  } else if (p.gameNick) {
+    fields.push({ name: '🩸 Ранг V Rising', value: 'появится после первой игры на сервере', inline: true });
+  }
+  fields.push({ name: '🏆 Достижений', value: p.achievementsTotal ? `${p.achievements} из ${p.achievementsTotal}` : String(p.achievements), inline: true });
+  e.addFields(fields);
+  e.setFooter({ text: 'CoreGSM · статистика копится с первого входа на сервер' });
+
+  const components = [];
+  if (base) {
+    components.push(
+      new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('👤 Профиль').setURL(`${base}/#/profile`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('🏆 Достижения').setURL(`${base}/#/profile/player`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📊 Серверы').setURL(`${base}/#/servers`),
+      ),
+    );
+  }
+  return { embeds: [e], components };
 }
 
 async function backendJson<T>(path: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
@@ -9435,7 +9527,7 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
   } catch {
     return; // the interaction expired
   }
-  const reply = async (p: ReturnType<typeof replyEmbed>) => {
+  const reply = async (p: ReturnType<typeof replyEmbed> | ReturnType<typeof cardReply>) => {
     try {
       await i.editReply(p);
     } catch (e) {
@@ -9445,6 +9537,12 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
   const user = i.user;
   const displayName = (user.globalName || user.username || '').trim();
   const who = { discordId: user.id, displayName, avatarHash: user.avatar ?? null };
+  const loadCard = async (): Promise<ProfileData | null> => {
+    const q = new URLSearchParams({ discordId: user.id, displayName });
+    if (user.avatar) q.set('avatarHash', user.avatar);
+    const r = await backendJson<ProfileData>(`/internal/discord/profile?${q.toString()}`);
+    return r.data && r.data.found ? r.data : null;
+  };
   const friendly = () => reply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad));
   try {
     if (name === 'register') {
@@ -9461,10 +9559,24 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
       const url = data.profileUrl;
       const link = url ? `\n\n[Открыть профиль в панели](${url})` : '';
       switch (data.status) {
-        case 'created':
+        case 'created': {
+          const card = await loadCard();
+          if (card) {
+            return void (await reply(cardReply(user, displayName, card, {
+              title: '🩸 Добро пожаловать!',
+              description: `Аккаунт создан. Логин в панели: **${data.username}**.\nВходите кнопкой «Войти через Discord»: пароль не нужен.`,
+              color: COLORS.ok,
+            })));
+          }
           return void (await reply(replyEmbed('Аккаунт создан', `Логин в панели: **${data.username}**.\nВходите кнопкой «Войти через Discord»: пароль не нужен.${link}`, COLORS.ok, url)));
-        case 'exists':
+        }
+        case 'exists': {
+          const card = await loadCard();
+          if (card) {
+            return void (await reply(cardReply(user, displayName, card, { title: 'Аккаунт уже есть', description: `${data.message ?? ''}`.trim(), color: COLORS.ok })));
+          }
           return void (await reply(replyEmbed('Аккаунт уже есть', `${data.message ?? ''}\nЛогин в панели: **${data.username}**.${link}`, COLORS.ok, url)));
+        }
         case 'pending':
           return void (await reply(replyEmbed('Заявка отправлена', data.message ?? 'Дождитесь одобрения администратора.', COLORS.warn)));
         case 'disabled':
@@ -9482,32 +9594,20 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
         body: JSON.stringify({ ...who, gameNick: i.options.getString('nick', true) }),
       });
       if (!data) return void (await friendly());
-      if (data.status === 'ok') return void (await reply(replyEmbed('Ник сохранён', `Игровой ник: **${data.gameNick ?? ''}**. Статистика считается по нему.`, COLORS.ok)));
+      if (data.status === 'ok') {
+        const card = await loadCard();
+        if (card) return void (await reply(cardReply(user, displayName, card, { title: 'Игровой ник сохранён', description: `Онлайн, ранг и достижения на серверах V Rising теперь считаются по нику **${data.gameNick ?? card.gameNick}**.`, color: COLORS.ok })));
+        return void (await reply(replyEmbed('Ник сохранён', `Игровой ник: **${data.gameNick ?? ''}**. Статистика считается по нему.`, COLORS.ok)));
+      }
       if (data.status === 'notfound') return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));
       if (data.status === 'conflict') return void (await reply(replyEmbed('Ник занят', 'Этот игровой ник уже занят другим аккаунтом.', COLORS.bad)));
       return void (await reply(replyEmbed('Проверьте ник', 'Игровой ник: от 2 до 40 символов.', COLORS.warn)));
     }
-    const q = new URLSearchParams({ discordId: user.id, displayName });
-    if (user.avatar) q.set('avatarHash', user.avatar);
-    const { data } = await backendJson<{
-      found: boolean;
-      username: string;
-      displayName: string;
-      gameNick: string;
-      rank: { name: string; hours: number } | null;
-      achievements: number;
-      profileUrl: string;
-    }>(`/internal/discord/profile?${q.toString()}`);
-    if (!data) return void (await friendly());
-    if (!data.found) return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));
-    const lines = [
-      `Имя в панели: **${data.username}**`,
-      `Игровой ник: **${data.gameNick || 'не задан'}**`,
-      data.rank ? `Ранг V Rising: **${data.rank.name}** (${data.rank.hours} ч)` : 'Ранг V Rising: появится после игры на сервере',
-      `Достижений: **${data.achievements}**`,
-    ];
-    if (data.profileUrl && /^https?:\/\//.test(data.profileUrl)) lines.push(`\n[Открыть профиль в панели](${data.profileUrl})`);
-    await reply(replyEmbed(data.displayName || data.username, lines.join('\n'), COLORS.info, data.profileUrl));
+    const card = await loadCard();
+    if (!card) {
+      return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник_в_игре`.', COLORS.warn)));
+    }
+    await reply(cardReply(user, displayName, card, { title: `Профиль: ${card.username}` }));
   } catch (e) {
     log('command failed:', (e as Error).message);
     await friendly();

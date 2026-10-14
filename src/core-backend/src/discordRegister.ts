@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { db } from './db.js';
 import { cleanGameNick, sanitizeLogin, uniqueLogin } from './discordNames.js';
 import { achievementsOf, logAccount, vrAchievementsOf, vrHoursOf } from './profile.js';
-import { rankForHours } from './ranks.js';
+import { rankForHours, nextRank, rankProgress } from './ranks.js';
 
 const ATTEMPTS = 5;
 const WINDOW_MS = 3600_000;
@@ -156,13 +156,37 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
       if (name) refresh(u.id, name, /^[a-z0-9_]{1,64}$/i.test(String(req.query.avatarHash ?? '')) ? String(req.query.avatarHash) : null);
       const p = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined;
       const gameNick = p?.game_nick ?? '';
-      let rank: { name: string; hours: number } | null = null;
+      let rank: {
+        id: string; name: string; hours: number; color: string; image: string;
+        next: { name: string; minHours: number } | null; progress: number;
+      } | null = null;
       if (gameNick) {
         const { hours } = vrHoursOf(u.id, gameNick);
-        rank = { name: rankForHours(hours).name, hours: Math.round(hours * 10) / 10 };
+        const r = rankForHours(hours);
+        const nx = nextRank(hours);
+        rank = {
+          id: r.id,
+          name: r.name,
+          hours: Math.round(hours * 10) / 10,
+          color: r.color,
+          image: r.image,
+          next: nx ? { name: nx.name, minHours: nx.minHours } : null,
+          progress: rankProgress(hours),
+        };
       }
-      const earned = achievementsOf(u.id).filter((a) => a.earned).length + vrAchievementsOf(u.id).filter((a) => a.earned).length;
-      res.json({ found: true, status: u.status, username: u.username, displayName: name || u.discord_name || u.username, gameNick, rank, achievements: earned, profileUrl: profileUrl() });
+      const all = [...achievementsOf(u.id), ...vrAchievementsOf(u.id)];
+      const earned = all.filter((a) => a.earned).length;
+      res.json({
+        found: true,
+        status: u.status,
+        username: u.username,
+        displayName: name || u.discord_name || u.username,
+        gameNick,
+        rank,
+        achievements: earned,
+        achievementsTotal: all.length,
+        profileUrl: profileUrl(),
+      });;
     }),
   );
 }

@@ -432,9 +432,9 @@ function clientIdFromToken(token: string | null): string | null {
 
 /** slash commands of the bot (the bot registers the same set; shown in the panel) */
 const BOT_COMMANDS = [
-  { name: '/register', description: 'Создать аккаунт в панели; параметры: nick (игровой ник), agree (согласие с правилами)' },
-  { name: '/nick', description: 'Сменить игровой ник для статистики' },
-  { name: '/profile', description: 'Ваш профиль: ник, ранг V Rising, достижения, ссылка на панель' },
+  { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
+  { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
+  { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
 ];
 
 function invitePayload() {
