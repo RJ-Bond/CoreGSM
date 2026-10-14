@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e1bb833d041c"
+COREGSM_BUILD="1d81c193623a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4526,6 +4526,23 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
 interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+
+// who signs a news item: the Discord display name exactly as it is written there (case included) and the Discord
+// picture when the account is linked, otherwise the site login and the uploaded picture (as an absolute address,
+// Discord has to fetch it)
+app.get('/api/me/author', auth, (req: AuthedRequest, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+  const base = publicBase();
+  if (u.discord_id && u.discord_name) {
+    const hash = u.discord_avatar;
+    const icon = hash
+      ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${hash}.${hash.startsWith('a_') ? 'gif' : 'png'}?size=128`
+      : null;
+    return res.json({ name: u.discord_name, iconUrl: icon, source: 'discord' });
+  }
+  const custom = customAvatarUrl(u.id);
+  res.json({ name: u.username, iconUrl: custom && base ? `${base}${custom}` : null, source: 'site' });
+});
 
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
   if (req.user!.role === 'admin') rememberAdminBase(req);
@@ -22106,6 +22123,9 @@ export interface PublicNews {
   payload: NewsPayload;
   sentAt: number | null;
 }
+
+/** who signs a news item (the Discord display name 1:1 and picture when linked, else the site login and picture) */
+export interface NewsAuthor { name: string; iconUrl: string | null; source: 'discord' | 'site' }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/appearance.ts" << '__COREGSM_EOF__'
@@ -36613,7 +36633,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/NewsEditor.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  api, ApiError, type DiscordGuild, type NewsAutosave, type NewsItem, type NewsPayload, type NewsSettings, type NewsTestResult, type NewsTestStatus, type NewsVariable, type Server,
+  api, ApiError, type DiscordGuild, type NewsAuthor, type NewsAutosave, type NewsItem, type NewsPayload, type NewsSettings, type NewsTestResult, type NewsTestStatus, type NewsVariable, type Server,
 } from '../api';
 import { confirmDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
@@ -36685,6 +36705,7 @@ const PART_ID: Record<PreviewPart['part'], string> = {
 // ---------- the editor ----------
 export default function NewsEditor({ id, template }: { id: number | null; template?: string }) {
   const [d, setD] = useState<Draft | null>(null);
+  const [author, setAuthor] = useState<NewsAuthor | null>(null);
   const [item, setItem] = useState<NewsItem | null>(null);
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [servers, setServers] = useState<Server[] | null>(null);
@@ -36730,6 +36751,15 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           const tpl = TEMPLATES.find((x) => x.id === template);
           const b = blank(s?.channelId ?? '');
           draft = tpl ? applyTpl(b, tpl.apply) : b;
+          // the author is the person who writes: Discord nick and picture when linked, else the site profile
+          try {
+            const a = await api<NewsAuthor>('/me/author');
+            if (dead) return;
+            setAuthor(a);
+            if (!draft.embeds[0]!.authorName) draft = { ...draft, embeds: draft.embeds.map((x, i) => (i === 0 ? { ...x, authorName: a.name, authorIcon: a.iconUrl ?? '' } : x)) };
+          } catch {
+            /* the author stays empty */
+          }
         }
         baseline.current = payloadKey(toPayload(draft));
         setD(draft);
@@ -36818,6 +36848,15 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const set = (patch: Partial<Draft>) => setD((cur) => (cur ? { ...cur, ...patch } : cur));
   const cur = Math.min(active, d.embeds.length - 1);
   const e = d.embeds[cur];
+  const useProfileAuthor = async () => {
+    try {
+      const a = author ?? (await api<NewsAuthor>('/me/author'));
+      setAuthor(a);
+      setE({ authorName: a.name, authorIcon: a.iconUrl ?? '' });
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
   const setE = (patch: Partial<EmbedDraft>) => setD((c) => (c ? { ...c, embeds: c.embeds.map((x, i) => (i === cur ? { ...x, ...patch } : x)) } : c));
   const isSent = item?.status === 'sent' || item?.status === 'edit_queued';
   const total = totalLength(d);
@@ -37119,6 +37158,10 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <details className="rounded-2xl border-2 border-line px-4 py-2.5" open={moreOpen || !!(e.authorName || e.thumbnail || e.imageUrl || e.imageUpload)} onToggle={(ev) => setMoreOpen(ev.currentTarget.open)}>
               <summary className="cursor-pointer select-none font-extrabold text-link">Автор, миниатюра и большая картинка</summary>
               <div className="mt-3 space-y-3.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void useProfileAuthor()}>Из профиля{author?.source === 'discord' ? ' (Discord)' : ''}</button>
+                  <span className="text-sm font-semibold text-mute">Ник и фото берутся из Discord, если он привязан, иначе из профиля на сайте; регистр ника как в Discord.</span>
+                </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block"><span className="label">Автор (имя)</span><input id="news-author" className="input" value={e.authorName} onChange={(ev) => setE({ authorName: ev.target.value })} placeholder="Администрация" /></label>
                   <label className="block"><span className="label">Аватар автора (ссылка)</span><input className="input" value={e.authorIcon} onChange={(ev) => setE({ authorIcon: ev.target.value.trim() })} placeholder="https://…" /></label>

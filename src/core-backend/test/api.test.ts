@@ -166,3 +166,22 @@ describe('news mentions', () => {
     assert.equal(r.payload.mention, 'none');
   });
 });
+
+describe('news author', () => {
+  let api: Api;
+  let token = '';
+  before(async () => { api = await startBackend(); token = await setupAdmin(api); });
+  after(async () => { await api.stop(); });
+
+  it('signs with the site login when Discord is not linked', async () => {
+    const r = await api.call('GET', '/api/me/author', { token });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.name, 'admin');
+    assert.equal(r.body.source, 'site');
+    assert.equal(r.body.iconUrl, null);
+  });
+
+  it('needs a signed-in user', async () => {
+    assert.equal((await api.call('GET', '/api/me/author')).status, 401);
+  });
+});
