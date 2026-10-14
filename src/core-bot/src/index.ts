@@ -9,6 +9,7 @@ const LOGIN_RETRY_MS = 60_000;
 // The gateway socket is created inside discord.js, so the proxy hook must be installed before it is loaded.
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
+let warmTimer: ReturnType<typeof setInterval> | undefined;
 patchGatewayAgent(() => gatewayAgent);
 const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
@@ -182,6 +183,10 @@ async function publishGuilds(): Promise<void> {
 }
 
 async function stopClient(): Promise<void> {
+  if (warmTimer) {
+    clearInterval(warmTimer);
+    warmTimer = undefined;
+  }
   if (!client) return;
   const c = client;
   client = null;
@@ -471,6 +476,11 @@ async function applyConfig(): Promise<void> {
     lastGuildsJson = '';
     void publishGuilds().catch(() => undefined);
   };
+  // a warm connection to Discord: a tiny request every 25 s keeps the (proxied) HTTPS connection open, so that the
+  // acknowledgement of a slash command does not pay for a new TCP + proxy + TLS handshake
+  if (warmTimer) clearInterval(warmTimer);
+  warmTimer = setInterval(() => { void c.rest.get('/gateway').catch(() => undefined); }, 25_000);
+  warmTimer.unref?.();
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
