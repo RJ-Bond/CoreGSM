@@ -322,10 +322,16 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
   if (!i.isChatInputCommand()) return;
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
+  // Discord wants an answer within 3 seconds: acknowledge first, do the work after, and log how long it took
+  const t0 = Date.now();
+  const age = t0 - i.createdTimestamp;
   try {
     await i.deferReply({ flags: EPHEMERAL });
-  } catch {
-    return; // the interaction expired
+    log(`/${name} from ${i.user.id}: received ${age} ms after Discord sent it, acknowledged in ${Date.now() - t0} ms`);
+  } catch (e) {
+    // the interaction expired (the bot was too slow or restarting) or Discord refused: the player sees «Приложение не отвечает»
+    log(`/${name} from ${i.user.id}: could not acknowledge (${age} ms old):`, (e as Error).message);
+    return;
   }
   const reply = async (p: ReturnType<typeof replyEmbed> | ReturnType<typeof cardReply>) => {
     try {
