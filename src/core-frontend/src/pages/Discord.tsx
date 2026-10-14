@@ -150,6 +150,15 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </Strip>
 
+      {settings?.discordTokenSet && bot?.state === 'online' && bot.guildCount === 0 && (
+        <Notice
+          tone="warn"
+          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">Пригласить бота<span aria-hidden>↗</span></a> : undefined}
+        >
+          Бот в сети, но не добавлен ни на один сервер Discord (его могли исключить). Сообщения не публикуются, команды не работают. Пригласите бота заново по ссылке.
+        </Notice>
+      )}
+
       {settings?.discordTokenSet && bot?.state === 'online' && (
         <div className="panel space-y-2 p-5">
           <h2 className="text-lg font-black">Команды бота</h2>
