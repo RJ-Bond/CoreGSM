@@ -857,6 +857,23 @@ app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
 interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
 const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 
+// who signs a news item: the Discord display name exactly as it is written there (case included) and the Discord
+// picture when the account is linked, otherwise the site login and the uploaded picture (as an absolute address,
+// Discord has to fetch it)
+app.get('/api/me/author', auth, (req: AuthedRequest, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+  const base = publicBase();
+  if (u.discord_id && u.discord_name) {
+    const hash = u.discord_avatar;
+    const icon = hash
+      ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${hash}.${hash.startsWith('a_') ? 'gif' : 'png'}?size=128`
+      : null;
+    return res.json({ name: u.discord_name, iconUrl: icon, source: 'discord' });
+  }
+  const custom = customAvatarUrl(u.id);
+  res.json({ name: u.username, iconUrl: custom && base ? `${base}${custom}` : null, source: 'site' });
+});
+
 app.get('/api/me', auth, (req: AuthedRequest, res) => {
   if (req.user!.role === 'admin') rememberAdminBase(req);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;

@@ -585,3 +585,6 @@ export interface PublicNews {
   payload: NewsPayload;
   sentAt: number | null;
 }
+
+/** who signs a news item (the Discord display name 1:1 and picture when linked, else the site login and picture) */
+export interface NewsAuthor { name: string; iconUrl: string | null; source: 'discord' | 'site' }
