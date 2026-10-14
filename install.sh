@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e46910445d02"
+COREGSM_BUILD="75a3a2d9608b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -9559,6 +9559,14 @@ async function applyConfig(): Promise<void> {
     ...(proxy ? { rest: { agent: proxy.rest } } : {}),
   });
   c.on('error', (e) => log('client error', e));
+  // added to / kicked from a Discord server: tell the panel at once instead of waiting for the next tick
+  const guildsChanged = () => {
+    lastGuildsAt = 0;
+    lastGuildsJson = '';
+    void publishGuilds().catch(() => undefined);
+  };
+  c.on('guildCreate', guildsChanged);
+  c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
     void handleInteraction(i).catch((e) => log('interaction failed:', (e as Error).message));
   });
@@ -46964,6 +46972,15 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         {settings?.discordTokenSet && bot?.state === 'error' && bot.error && <p className="w-full text-sm font-bold text-bad">{bot.error}</p>}
       </Strip>
 
+      {settings?.discordTokenSet && bot?.state === 'online' && bot.guildCount === 0 && (
+        <Notice
+          tone="warn"
+          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">Пригласить бота<span aria-hidden>↗</span></a> : undefined}
+        >
+          Бот в сети, но не добавлен ни на один сервер Discord (его могли исключить). Сообщения не публикуются, команды не работают. Пригласите бота заново по ссылке.
+        </Notice>
+      )}
+
       {settings?.discordTokenSet && bot?.state === 'online' && (
         <div className="panel space-y-2 p-5">
           <h2 className="text-lg font-black">Команды бота</h2>
@@ -50823,7 +50840,10 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
   if (!status) return <span className="pill pill-mute">ПРОВЕРКА</span>;
   switch (status.state) {
-    case 'online': return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
+    case 'online':
+      // logged in to Discord, but it is on no server (kicked or never invited): nothing can be posted
+      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">НЕТ НА СЕРВЕРАХ{status.tag ? ` · ${status.tag}` : ''}</span>;
+      return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
     case 'connecting': return <span className="pill pill-warn">ПОДКЛЮЧАЕТСЯ</span>;
     case 'error': return <span className="pill pill-bad">ОШИБКА</span>;
     default: return <span className="pill pill-mute">ОЖИДАНИЕ</span>;

@@ -383,6 +383,14 @@ async function applyConfig(): Promise<void> {
     ...(proxy ? { rest: { agent: proxy.rest } } : {}),
   });
   c.on('error', (e) => log('client error', e));
+  // added to / kicked from a Discord server: tell the panel at once instead of waiting for the next tick
+  const guildsChanged = () => {
+    lastGuildsAt = 0;
+    lastGuildsJson = '';
+    void publishGuilds().catch(() => undefined);
+  };
+  c.on('guildCreate', guildsChanged);
+  c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
     void handleInteraction(i).catch((e) => log('interaction failed:', (e as Error).message));
   });

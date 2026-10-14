@@ -16,7 +16,10 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
   if (!status) return <span className="pill pill-mute">ПРОВЕРКА</span>;
   switch (status.state) {
-    case 'online': return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
+    case 'online':
+      // logged in to Discord, but it is on no server (kicked or never invited): nothing can be posted
+      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">НЕТ НА СЕРВЕРАХ{status.tag ? ` · ${status.tag}` : ''}</span>;
+      return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
     case 'connecting': return <span className="pill pill-warn">ПОДКЛЮЧАЕТСЯ</span>;
     case 'error': return <span className="pill pill-bad">ОШИБКА</span>;
     default: return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
