@@ -5,20 +5,20 @@ import { VR_RANKS, nextRank, rankById, rankForHours, rankProgress } from '../src
 describe('V Rising rank ladder', () => {
   it('picks the rank at the thresholds', () => {
     expect(rankForHours(0).id).toBe('awakened');
-    expect(rankForHours(4.9).id).toBe('awakened');
-    expect(rankForHours(5).id).toBe('wanderer');
-    expect(rankForHours(100).id).toBe('baron');
+    expect(rankForHours(9.9).id).toBe('awakened');
+    expect(rankForHours(10).id).toBe('wanderer');
+    expect(rankForHours(150).id).toBe('baron');
     expect(rankForHours(10_000).id).toBe('progenitor');
   });
   it('next rank and progress', () => {
     expect(nextRank(0)?.id).toBe('wanderer');
-    expect(nextRank(800)).toBeNull();
-    expect(rankProgress(2.5)).toBe(0.5);
-    expect(rankProgress(35)).toBe(0.5);
-    expect(rankProgress(801)).toBe(1);
+    expect(nextRank(1270)).toBeNull();
+    expect(rankProgress(5)).toBe(0.5);
+    expect(rankProgress(50)).toBe(0.5);
+    expect(rankProgress(1300)).toBe(1);
   });
   it('looks ranks up by id', () => {
-    expect(rankById('lord')?.minHours).toBe(200);
+    expect(rankById('lord')?.minHours).toBe(310);
     expect(rankById('nope')).toBeUndefined();
     expect(rankById(undefined)).toBeUndefined();
   });

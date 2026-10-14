@@ -93,6 +93,8 @@ export function notificationText(kind: SubKind, name: string, address: string, p
 
 const tracks = new Map<number, Track>();
 let canDm: () => boolean = () => true;
+/** may a Discord DM be queued now (the bot is online) */
+export const dmAvailable = (): boolean => canDm();
 
 /** Notifies the subscribers of one event; returns how many users were notified. */
 export function notifySubscribers(serverId: number, kind: SubKind, obs: Observation, now = Date.now()): number {

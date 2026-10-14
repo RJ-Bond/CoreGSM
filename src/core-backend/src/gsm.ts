@@ -1,6 +1,7 @@
 import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
 import { onPollResult } from './subscriptions.js';
+import { onSessionsOpened } from './nickOnboarding.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
 import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
@@ -113,7 +114,8 @@ export function syncPlayersNow(serverId: number, names: string[], online: boolea
  * Player visit log: a session opens when a name appears in the poll and closes when it disappears
  * (or when the server goes offline). Names are compared case-insensitively; empty and duplicate names are ignored.
  */
-export function syncPlayerSessions(serverId: number, names: string[], online: boolean, now: number): void {
+export function syncPlayerSessions(serverId: number, names: string[], online: boolean, now: number): string[] {
+  const opened: string[] = [];
   db.transaction(() => {
     const open = db.prepare('SELECT id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL').all(serverId) as { id: number; name: string }[];
     const close = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
@@ -134,8 +136,13 @@ export function syncPlayerSessions(serverId: number, names: string[], online: bo
       else stillOpen.add(k);
     }
     const ins = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at) VALUES (?, ?, ?)');
-    for (const [k, n] of current) if (!stillOpen.has(k)) ins.run(serverId, n, now);
+    for (const [k, n] of current) {
+      if (stillOpen.has(k)) continue;
+      ins.run(serverId, n, now);
+      opened.push(n);
+    }
   })();
+  return opened;
 }
 
 /**
@@ -217,7 +224,8 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   }
   try {
     syncPlayersNow(s.id, r.playerNames, d.online, ts);
-    syncPlayerSessions(s.id, r.playerNames, d.online, ts);
+    const opened = syncPlayerSessions(s.id, r.playerNames, d.online, ts);
+    onSessionsOpened(s.id, opened, ts);
     if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
     else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {

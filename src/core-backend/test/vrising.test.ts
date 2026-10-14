@@ -9,26 +9,26 @@ const H = 3600_000;
 
 describe('rank ladder (pure)', () => {
   it('has the eight ranks in order', () => {
-    assert.deepEqual(VR_RANKS.map((r) => r.minHours), [0, 5, 20, 50, 100, 200, 400, 800]);
+    assert.deepEqual(VR_RANKS.map((r) => r.minHours), [0, 10, 30, 70, 150, 310, 630, 1270]);
     assert.equal(VR_RANKS[0].id, 'awakened');
     assert.equal(VR_RANKS[7].id, 'progenitor');
   });
   it('picks the rank by hours at the boundaries', () => {
     assert.equal(rankForHours(0).id, 'awakened');
-    assert.equal(rankForHours(4.99).id, 'awakened');
-    assert.equal(rankForHours(5).id, 'wanderer');
-    assert.equal(rankForHours(19.9).id, 'wanderer');
-    assert.equal(rankForHours(20).id, 'hunter');
-    assert.equal(rankForHours(799).id, 'elder');
+    assert.equal(rankForHours(9.99).id, 'awakened');
+    assert.equal(rankForHours(10).id, 'wanderer');
+    assert.equal(rankForHours(29.9).id, 'wanderer');
+    assert.equal(rankForHours(30).id, 'hunter');
+    assert.equal(rankForHours(1269).id, 'elder');
     assert.equal(rankForHours(5000).id, 'progenitor');
   });
   it('next rank and progress', () => {
     assert.equal(nextRank(0)?.id, 'wanderer');
-    assert.equal(nextRank(800), null);
+    assert.equal(nextRank(1270), null);
     assert.equal(rankProgress(0), 0);
-    assert.equal(rankProgress(2.5), 0.5);
-    assert.equal(rankProgress(35), 0.5);
-    assert.equal(rankProgress(900), 1);
+    assert.equal(rankProgress(5), 0.5);
+    assert.equal(rankProgress(50), 0.5);
+    assert.equal(rankProgress(2000), 1);
   });
 });
 
@@ -114,7 +114,7 @@ describe('V Rising over the API', () => {
     assert.ok(r.body.hours === 18.5, String(r.body.hours));
     assert.equal(r.body.rank.id, 'wanderer');
     assert.equal(r.body.next.id, 'hunter');
-    assert.ok(r.body.progress > 0.8 && r.body.progress < 0.95);
+    assert.ok(r.body.progress > 0.4 && r.body.progress < 0.45, String(r.body.progress)); // (18.5 - 10) / 20
     for (const k of ['id', 'name', 'minHours', 'color', 'image']) assert.ok(k in r.body.rank, k);
 
     const pub = await api.call('GET', '/api/u/admin');
@@ -144,11 +144,11 @@ describe('V Rising over the API', () => {
     assert.equal(m.get('vr-castle-warden').earned, false);
     const r = await api.call('GET', '/api/me/rank', { token });
     assert.equal(r.body.hours, 27);
-    assert.equal(r.body.rank.id, 'hunter');
+    assert.equal(r.body.rank.id, 'wanderer');
     // sessions pruned: the rank stays
     db.prepare("DELETE FROM player_sessions WHERE lower(name) = 'grinder'").run();
     const r2 = await api.call('GET', '/api/me/rank', { token });
-    assert.equal(r2.body.rank.id, 'hunter');
+    assert.equal(r2.body.rank.id, 'wanderer');
     assert.equal(r2.body.hours, 27);
   });
 });

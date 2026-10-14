@@ -33,6 +33,7 @@ export function JournalIcon({ kind, size = 18 }: { kind: string; size?: number }
     case 'prefs_changed': return <Icon size={size}><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /></Icon>;
     case 'profile_changed': return <Icon size={size}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></Icon>;
     case 'register_discord': return <Icon size={size}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0M19 3v4M17 5h4" /></Icon>;
+    case 'nick_seen': return <Icon size={size}><circle cx="11" cy="11" r="7" /><path d="M21 21l-5-5M8 11l2 2 4-4" /></Icon>;
     default: return <Icon size={size}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Icon>;
   }
 }

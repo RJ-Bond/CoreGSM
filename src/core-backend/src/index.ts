@@ -23,6 +23,7 @@ import { registerGames } from './games.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel, vrRankIdFor } from './profile.js';
 import { registerDiscordRegistration } from './discordRegister.js';
+import { registerNickStatus } from './nickOnboarding.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
@@ -1771,6 +1772,7 @@ registerProfile({
   },
 });
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
+registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });

@@ -313,6 +313,10 @@ const ru = {
   'pf.journal.k.prefs_changed': 'Изменены язык и регион',
   'pf.journal.k.profile_changed': 'Изменён профиль игрока',
   'pf.journal.k.register_discord': 'Регистрация через Discord',
+  'pf.journal.k.nick_seen': 'Ник найден на сервере',
+  'pf.nick.unseen': 'Ник ещё не найден на серверах. Проверьте написание — он должен совпадать с игровым.',
+  'pf.nick.similar': 'Возможно, вы имели в виду:',
+  'pf.nick.seen': 'Ник найден: последний раз {when}',
 
   // ---- public profile ----
   'pub.missingTitle': 'Профиль не найден',

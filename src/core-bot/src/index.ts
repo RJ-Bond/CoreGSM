@@ -203,14 +203,14 @@ const COMMANDS = [
     name: 'register',
     description: 'Зарегистрироваться на сайте через ваш Discord: пароль не нужен',
     options: [
-      { type: 3, name: 'nick', description: 'Ваш ник В ИГРЕ (V Rising), точно как в игре: по нему считаются часы и ранг', required: true, min_length: 2, max_length: 40 },
+      { type: 3, name: 'nick', description: 'Ваш ник В ИГРЕ (V Rising), точно как в игре: по нему считаются часы и ранг', required: true, min_length: 2, max_length: 40, autocomplete: true },
       { type: 5, name: 'agree', description: 'Поставьте True, если согласны с правилами сообщества (нужно, если правила есть)', required: false },
     ],
   },
   {
     name: 'nick',
     description: 'Сменить игровой ник, по которому считается статистика',
-    options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40 }],
+    options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40, autocomplete: true }],
   },
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
 ];
@@ -256,6 +256,8 @@ interface ProfileData {
   rank: { id: string; name: string; hours: number; color: string; image: string; next: { name: string; minHours: number } | null; progress: number } | null;
   achievements: number;
   achievementsTotal?: number;
+  nickSeen?: boolean;
+  lastSeenAt?: number | null;
   profileUrl: string;
 }
 
@@ -271,7 +273,7 @@ function cardReply(
   user: { displayAvatarURL: (o?: { size?: number }) => string },
   displayName: string,
   p: ProfileData,
-  opts: { title: string; description?: string; color?: number },
+  opts: { title: string; description?: string; color?: number; onboarding?: boolean },
 ) {
   const base = /^https?:\/\//.test(p.profileUrl) ? p.profileUrl.replace(/\/#\/profile\/?$/, '') : '';
   const color = opts.color ?? (p.rank ? hexToInt(p.rank.color) : COLORS.info);
@@ -296,6 +298,19 @@ function cardReply(
     fields.push({ name: '🩸 Ранг V Rising', value: 'появится после первой игры на сервере', inline: true });
   }
   fields.push({ name: '🏆 Достижений', value: p.achievementsTotal ? `${p.achievements} из ${p.achievementsTotal}` : String(p.achievements), inline: true });
+  if (p.gameNick) {
+    const seenLine = p.nickSeen
+      ? `✅ Ник найден на сервере: последний раз ${p.lastSeenAt ? `<t:${Math.floor(p.lastSeenAt / 1000)}:R>` : 'недавно'}`
+      : `⏳ Ждём ваш первый заход под ником \`${p.gameNick}\``;
+    if (opts.onboarding) {
+      const steps = p.nickSeen
+        ? `${seenLine}\nЧасы, ранг и достижения уже считаются. Если ник неверный, исправьте его командой \`/nick\`.`
+        : `Зайдите на сервер V Rising под ником \`${p.gameNick}\`. Как только панель увидит игрока, часы, ранг и достижения начнут считаться.\nЕсли ник указан неверно, исправьте его командой \`/nick\`.`;
+      fields.push({ name: '👣 Что дальше', value: steps.slice(0, 1000) });
+    } else {
+      fields.push({ name: '📡 Связь с сервером', value: seenLine });
+    }
+  }
   e.addFields(fields);
   e.setFooter({ text: 'CoreGSM · статистика копится с первого входа на сервер' });
 
@@ -323,7 +338,28 @@ async function backendJson<T>(path: string, init?: RequestInit): Promise<{ ok: b
   return { ok: r.ok, status: r.status, data };
 }
 
+/** Autocomplete of the in-game nick: up to 25 names seen on the servers. Must answer within 3 s and never throws. */
+async function handleAutocomplete(i: import('discord.js').AutocompleteInteraction): Promise<void> {
+  let names: string[] = [];
+  try {
+    if ((i.commandName === 'register' || i.commandName === 'nick') && i.options.getFocused(true).name === 'nick') {
+      const q = new URLSearchParams({ q: String(i.options.getFocused()).slice(0, 100), discordId: i.user.id });
+      const r = await backend(`/internal/discord/nick-suggest?${q.toString()}`, { signal: AbortSignal.timeout(2000) });
+      const d = (await r.json()) as { names?: unknown };
+      if (Array.isArray(d.names)) names = d.names.filter((n): n is string => typeof n === 'string' && n.length > 0 && n.length <= 100).slice(0, 25);
+    }
+  } catch {
+    names = [];
+  }
+  try {
+    await i.respond(names.map((n) => ({ name: n, value: n })));
+  } catch (e) {
+    log('autocomplete failed:', (e as Error).message);
+  }
+}
+
 async function handleInteraction(i: import('discord.js').Interaction): Promise<void> {
+  if (i.isAutocomplete()) return handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
@@ -375,6 +411,7 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
           if (card) {
             return void (await reply(cardReply(user, displayName, card, {
               title: '🩸 Добро пожаловать!',
+              onboarding: true,
               description: `Аккаунт создан. Логин в панели: **${data.username}**.\nВходите кнопкой «Войти через Discord»: пароль не нужен.`,
               color: COLORS.ok,
             })));
@@ -384,7 +421,7 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
         case 'exists': {
           const card = await loadCard();
           if (card) {
-            return void (await reply(cardReply(user, displayName, card, { title: 'Аккаунт уже есть', description: `${data.message ?? ''}`.trim(), color: COLORS.ok })));
+            return void (await reply(cardReply(user, displayName, card, { title: 'Аккаунт уже есть', description: `${data.message ?? ''}`.trim(), color: COLORS.ok, onboarding: true })));
           }
           return void (await reply(replyEmbed('Аккаунт уже есть', `${data.message ?? ''}\nЛогин в панели: **${data.username}**.${link}`, COLORS.ok, url)));
         }
@@ -407,7 +444,7 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
       if (!data) return void (await friendly());
       if (data.status === 'ok') {
         const card = await loadCard();
-        if (card) return void (await reply(cardReply(user, displayName, card, { title: 'Игровой ник сохранён', description: `Онлайн, ранг и достижения на серверах V Rising теперь считаются по нику **${data.gameNick ?? card.gameNick}**.`, color: COLORS.ok })));
+        if (card) return void (await reply(cardReply(user, displayName, card, { title: 'Игровой ник сохранён', description: `Онлайн, ранг и достижения на серверах V Rising теперь считаются по нику **${data.gameNick ?? card.gameNick}**.`, color: COLORS.ok, onboarding: true })));
         return void (await reply(replyEmbed('Ник сохранён', `Игровой ник: **${data.gameNick ?? ''}**. Статистика считается по нему.`, COLORS.ok)));
       }
       if (data.status === 'notfound') return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));

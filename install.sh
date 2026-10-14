@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a26df8240b47"
+COREGSM_BUILD="886fc9901308"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -2681,6 +2681,7 @@ import { z } from 'zod';
 import { db } from './db.js';
 import { cleanGameNick, sanitizeLogin, uniqueLogin } from './discordNames.js';
 import { achievementsOf, logAccount, vrAchievementsOf, vrHoursOf } from './profile.js';
+import { checkNickNow, nickSeenOf, nickSuggestions } from './nickOnboarding.js';
 import { rankForHours, nextRank, rankProgress } from './ranks.js';
 
 const ATTEMPTS = 5;
@@ -2725,13 +2726,15 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
   const byDiscord = (id: string) => db.prepare('SELECT id, username, status, discord_id, discord_name FROM users WHERE discord_id = ?').get(id) as UserRow | undefined;
   const nickOwner = (nick: string, exceptUser: number) =>
     db.prepare('SELECT user_id FROM user_player WHERE ulower(game_nick) = ulower(?) AND user_id != ?').get(nick, exceptUser) as { user_id: number } | undefined;
-  const setNick = (userId: number, nick: string) =>
+  const setNick = (userId: number, nick: string) => {
     db
       .prepare(
         `INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, '', 0)
          ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick`,
       )
       .run(userId, nick);
+    checkNickNow(userId, nick);
+  };
   const refresh = (id: number, name: string, avatar: string | null) =>
     db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(name, avatar, id);
 
@@ -2817,13 +2820,19 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
     }),
   );
 
+  // autocomplete of the nick option: must answer within Discord's 3 s, never fails
+  app.get('/internal/discord/nick-suggest', internal, (req, res) => {
+    const names = nickSuggestions(String(req.query.q ?? ''), String(req.query.discordId ?? ''));
+    res.json({ names: names.filter((n) => n.length <= 100).slice(0, 25) });
+  });
+
   app.get(
     '/internal/discord/profile',
     internal,
     wrap((req, res) => {
       const id = String(req.query.discordId ?? '');
       const u = idSchema.safeParse(id).success ? byDiscord(id) : undefined;
-      if (!u) return res.json({ found: false, username: '', displayName: '', gameNick: '', rank: null, achievements: 0, profileUrl: profileUrl() });
+      if (!u) return res.json({ found: false, username: '', displayName: '', gameNick: '', rank: null, achievements: 0, profileUrl: profileUrl(), nickSeen: false, lastSeenAt: null });
       const name = String(req.query.displayName ?? '').trim().slice(0, 100);
       if (name) refresh(u.id, name, /^[a-z0-9_]{1,64}$/i.test(String(req.query.avatarHash ?? '')) ? String(req.query.avatarHash) : null);
       const p = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined;
@@ -2846,6 +2855,7 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
           progress: rankProgress(hours),
         };
       }
+      const seen = nickSeenOf(gameNick);
       const all = [...achievementsOf(u.id), ...vrAchievementsOf(u.id)];
       const earned = all.filter((a) => a.earned).length;
       res.json({
@@ -2854,6 +2864,8 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
         username: u.username,
         displayName: name || u.discord_name || u.username,
         gameNick,
+        nickSeen: seen.seen,
+        lastSeenAt: seen.lastSeenAt,
         rank,
         achievements: earned,
         achievementsTotal: all.length,
@@ -3369,6 +3381,7 @@ __COREGSM_EOF__
 import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
 import { onPollResult } from './subscriptions.js';
+import { onSessionsOpened } from './nickOnboarding.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
 import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
@@ -3481,7 +3494,8 @@ export function syncPlayersNow(serverId: number, names: string[], online: boolea
  * Player visit log: a session opens when a name appears in the poll and closes when it disappears
  * (or when the server goes offline). Names are compared case-insensitively; empty and duplicate names are ignored.
  */
-export function syncPlayerSessions(serverId: number, names: string[], online: boolean, now: number): void {
+export function syncPlayerSessions(serverId: number, names: string[], online: boolean, now: number): string[] {
+  const opened: string[] = [];
   db.transaction(() => {
     const open = db.prepare('SELECT id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL').all(serverId) as { id: number; name: string }[];
     const close = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
@@ -3502,8 +3516,13 @@ export function syncPlayerSessions(serverId: number, names: string[], online: bo
       else stillOpen.add(k);
     }
     const ins = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at) VALUES (?, ?, ?)');
-    for (const [k, n] of current) if (!stillOpen.has(k)) ins.run(serverId, n, now);
+    for (const [k, n] of current) {
+      if (stillOpen.has(k)) continue;
+      ins.run(serverId, n, now);
+      opened.push(n);
+    }
   })();
+  return opened;
 }
 
 /**
@@ -3585,7 +3604,8 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   }
   try {
     syncPlayersNow(s.id, r.playerNames, d.online, ts);
-    syncPlayerSessions(s.id, r.playerNames, d.online, ts);
+    const opened = syncPlayerSessions(s.id, r.playerNames, d.online, ts);
+    onSessionsOpened(s.id, opened, ts);
     if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
     else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {
@@ -3927,6 +3947,7 @@ import { registerGames } from './games.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel, vrRankIdFor } from './profile.js';
 import { registerDiscordRegistration } from './discordRegister.js';
+import { registerNickStatus } from './nickOnboarding.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
@@ -5675,6 +5696,7 @@ registerProfile({
   },
 });
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
+registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin });
 registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
@@ -6989,6 +7011,238 @@ export function registerNews(deps: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/nickMatch.ts" << '__COREGSM_EOF__'
+/** Pure helpers for matching an in-game nick against names seen on the servers. */
+
+/** Levenshtein distance; gives up early (returns max + 1) when it certainly exceeds `max`. */
+export function levenshtein(a: string, b: string, max = Infinity): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1));
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** distinct (case-insensitive) non-empty names, order kept, first spelling wins */
+export function distinctNames(names: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of names) {
+    const n = String(raw ?? '').trim();
+    const k = n.toLowerCase();
+    if (!n || seen.has(k)) continue;
+    seen.add(k);
+    out.push(n);
+  }
+  return out;
+}
+
+/** Autocomplete: names that start with the typed text first, then names that contain it; source order kept inside each group. */
+export function suggestNames(query: string, candidates: string[], limit = 25): string[] {
+  const q = query.trim().toLowerCase();
+  const names = distinctNames(candidates).filter((n) => n.length <= 100);
+  if (!q) return names.slice(0, limit);
+  const starts: string[] = [];
+  const contains: string[] = [];
+  for (const n of names) {
+    const l = n.toLowerCase();
+    if (l.startsWith(q)) starts.push(n);
+    else if (l.includes(q)) contains.push(n);
+  }
+  return [...starts, ...contains].slice(0, limit);
+}
+
+/** Names that look like a mistyped `nick`: one contains the other (3+ letters) or the edit distance is at most 2. Closest first; the nick itself is excluded. */
+export function similarNames(nick: string, candidates: string[], limit = 5): string[] {
+  const t = nick.trim().toLowerCase();
+  if (!t) return [];
+  const scored: { n: string; d: number }[] = [];
+  for (const n of distinctNames(candidates)) {
+    const l = n.toLowerCase();
+    if (l === t) continue;
+    const d = levenshtein(t, l, 2);
+    const sub = Math.min(l.length, t.length) >= 3 && (l.includes(t) || t.includes(l));
+    if (d <= 2 || sub) scored.push({ n, d: Math.min(d, 3) });
+  }
+  scored.sort((x, y) => x.d - y.d);
+  return scored.slice(0, limit).map((s) => s.n);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/nickOnboarding.ts" << '__COREGSM_EOF__'
+/**
+ * Onboarding of the in-game nick: is the nick of an account seen on the servers, who looks like it, autocomplete
+ * suggestions for the Discord commands and the one-time "we saw you" notice.
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { db, EFFECTIVE_NAME } from './db.js';
+import { enqueueDelivery } from './deliveries.js';
+import { dmAvailable } from './subscriptions.js';
+import { distinctNames, similarNames, suggestNames } from './nickMatch.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS nick_seen (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  server_id INTEGER
+);
+`);
+
+const DAY = 86400_000;
+
+// ---------- seen state ----------
+export interface NickSeen {
+  seen: boolean;
+  /** ms; now while the player is online */
+  lastSeenAt: number | null;
+}
+
+/** Sessions of all games whose name equals the nick (case-insensitive). */
+export function nickSeenOf(nick: string, now = Date.now()): NickSeen {
+  if (!nick) return { seen: false, lastSeenAt: null };
+  const r = db
+    .prepare('SELECT MAX(CASE WHEN left_at IS NULL THEN ? ELSE MAX(left_at, joined_at) END) AS t FROM player_sessions WHERE ulower(name) = ulower(?)')
+    .get(now, nick) as { t: number | null };
+  return r.t == null ? { seen: false, lastSeenAt: null } : { seen: true, lastSeenAt: r.t };
+}
+
+// ---------- candidate names (cached) ----------
+const CACHE_MS = 15_000;
+let cache: { at: number; names: string[] } | null = null;
+let nickMap = new Map<string, number>();
+let mapAt = 0;
+const MAP_TTL = 60_000;
+
+/** online names on vrising servers, other online names, then recently seen ones (14 days), distinct */
+export function candidateNames(now = Date.now()): string[] {
+  if (cache && now - cache.at < CACHE_MS) return cache.names;
+  const online = db
+    .prepare(
+      `SELECT pn.name AS name, CASE WHEN s.game = 'vrising' THEN 0 ELSE 1 END AS g FROM player_now pn
+         LEFT JOIN servers s ON s.id = pn.server_id ORDER BY g, pn.since DESC LIMIT 1000`,
+    )
+    .all() as { name: string }[];
+  const recent = db
+    .prepare('SELECT name, MAX(joined_at) AS m FROM player_sessions WHERE joined_at >= ? GROUP BY name ORDER BY m DESC LIMIT 2000')
+    .all(now - 14 * DAY) as { name: string }[];
+  const names = distinctNames([...online, ...recent].map((r) => r.name));
+  cache = { at: now, names };
+  return names;
+}
+/** forget the cached candidate list and the nick map (tests, nick changes) */
+export const resetNickCaches = (): void => {
+  cache = null;
+  mapAt = 0;
+};
+
+/** lowercased nicks used by accounts other than `exceptUserId` */
+function takenByOthers(exceptUserId: number): Set<string> {
+  const rows = db.prepare("SELECT game_nick FROM user_player WHERE game_nick != '' AND user_id != ?").all(exceptUserId) as { game_nick: string }[];
+  return new Set(rows.map((r) => r.game_nick.toLowerCase()));
+}
+
+/** Autocomplete for /register and /nick (the player's own current nick is allowed). Never throws. */
+export function nickSuggestions(query: string, discordId: string, limit = 25): string[] {
+  try {
+    const u = /^\d{15,25}$/.test(discordId)
+      ? (db.prepare('SELECT id FROM users WHERE discord_id = ?').get(discordId) as { id: number } | undefined)
+      : undefined;
+    const taken = takenByOthers(u?.id ?? 0);
+    const free = candidateNames().filter((n) => !taken.has(n.toLowerCase()));
+    return suggestNames(query.slice(0, 100), free, limit);
+  } catch (e) {
+    console.error('nick-suggest failed', (e as Error).message);
+    return [];
+  }
+}
+
+// ---------- first seen ----------
+/** lower(game_nick) -> user_id for active accounts not marked yet; refreshed every 60 s or after a nick change */
+function unmarkedNicks(now: number): Map<string, number> {
+  if (mapAt > 0 && now - mapAt < MAP_TTL) return nickMap;
+  const rows = db
+    .prepare(
+      `SELECT up.user_id AS id, up.game_nick AS nick FROM user_player up JOIN users u ON u.id = up.user_id AND u.status = 'active'
+       WHERE up.game_nick != '' AND NOT EXISTS (SELECT 1 FROM nick_seen ns WHERE ns.user_id = up.user_id)`,
+    )
+    .all() as { id: number; nick: string }[];
+  nickMap = new Map(rows.map((r) => [r.nick.toLowerCase(), r.id]));
+  mapAt = now;
+  return nickMap;
+}
+
+function markSeen(userId: number, serverId: number, now: number): void {
+  const ins = db.prepare('INSERT OR IGNORE INTO nick_seen (user_id, ts, server_id) VALUES (?, ?, ?)').run(userId, now, serverId);
+  if (!ins.changes) return;
+  for (const [k, id] of nickMap) if (id === userId) nickMap.delete(k);
+  const srv = db.prepare(`SELECT ${EFFECTIVE_NAME} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(serverId) as { n: string } | undefined;
+  const text = `Мы увидели вас на сервере «${srv?.n ?? 'сервер'}»: статистика, ранг и достижения теперь считаются`;
+  db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, ?, ?)').run(userId, now, 'nick_seen', serverId, text);
+  db.prepare("INSERT INTO account_events (user_id, ts, kind, ip, ua, detail) VALUES (?, ?, 'nick_seen', '', '', ?)").run(userId, now, (srv?.n ?? '').slice(0, 200));
+  const u = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(userId) as { discord_id: string | null } | undefined;
+  if (u?.discord_id && dmAvailable()) {
+    enqueueDelivery({ kind: 'dm', refId: null, target: u.discord_id, payload: { content: `👣 ${text}`, summary: text.slice(0, 120) } });
+  }
+}
+
+/** Poller hook: sessions that were just opened. Cheap: one map lookup per name. Never throws. */
+export function onSessionsOpened(serverId: number, names: string[], now = Date.now()): void {
+  try {
+    if (!names.length) return;
+    const map = unmarkedNicks(now);
+    if (!map.size) return;
+    for (const n of names) {
+      const id = map.get(n.toLowerCase());
+      if (id !== undefined) markSeen(id, serverId, now);
+    }
+  } catch (e) {
+    console.error('nick-seen failed', (e as Error).message);
+  }
+}
+
+/** A nick was just set: when the player is online right now they are marked at once. Never throws. */
+export function checkNickNow(userId: number, nick: string, now = Date.now()): void {
+  try {
+    resetNickCaches();
+    if (!nick || db.prepare('SELECT 1 FROM nick_seen WHERE user_id = ?').get(userId)) return;
+    const u = db.prepare("SELECT 1 FROM users WHERE id = ? AND status = 'active'").get(userId);
+    if (!u) return;
+    const s = db.prepare('SELECT server_id FROM player_sessions WHERE left_at IS NULL AND ulower(name) = ulower(?) LIMIT 1').get(nick) as { server_id: number } | undefined;
+    if (s) markSeen(userId, s.server_id, now);
+  } catch (e) {
+    console.error('nick check failed', (e as Error).message);
+  }
+}
+
+// ---------- panel ----------
+export function nickStatusOf(userId: number): { nick: string; seen: boolean; lastSeenAt: number | null; similar: string[] } {
+  const row = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(userId) as { game_nick: string } | undefined;
+  const nick = row?.game_nick ?? '';
+  if (!nick) return { nick, seen: false, lastSeenAt: null, similar: [] };
+  const s = nickSeenOf(nick);
+  if (s.seen) return { nick, seen: true, lastSeenAt: s.lastSeenAt, similar: [] };
+  const taken = takenByOthers(userId);
+  const similar = similarNames(nick, candidateNames().filter((n) => !taken.has(n.toLowerCase())), 5);
+  return { nick, seen: false, lastSeenAt: null, similar };
+}
+
+export function registerNickStatus(deps: { app: Express; auth: RequestHandler; userId: (req: Request) => number }): void {
+  deps.app.get('/api/me/nick-status', deps.auth, (req, res) => res.json(nickStatusOf(deps.userId(req))));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/ops.ts" << '__COREGSM_EOF__'
 /**
  * Operations for administrators: action log, bulk actions on Discord bindings,
@@ -7557,7 +7811,7 @@ import path from 'node:path';
 import skia from 'skia-canvas';
 import { z } from 'zod';
 import { DATA_DIR, db, EFFECTIVE_NAME } from './db.js';
-import { nextRank, rankForHours, rankProgress } from './ranks.js';
+import { nextRank, rankForHours, rankProgress, VR_RANKS } from './ranks.js';
 
 const { Canvas, loadImage } = skia;
 
@@ -7569,6 +7823,8 @@ export function uaLabel(ua: string | undefined): string {
   const os = /Windows/.test(s) ? 'Windows' : /Android/.test(s) ? 'Android' : /iPhone|iPad|iOS/.test(s) ? 'iOS' : /Mac OS X|Macintosh/.test(s) ? 'macOS' : /Linux/.test(s) ? 'Linux' : '';
   return os ? `${browser} · ${os}` : browser;
 }
+
+import { checkNickNow } from './nickOnboarding.js';
 
 export type AccountEventKind =
   | 'login'
@@ -7583,7 +7839,8 @@ export type AccountEventKind =
   | 'sessions_revoked'
   | 'prefs_changed'
   | 'profile_changed'
-  | 'register_discord';
+  | 'register_discord'
+  | 'nick_seen';
 
 /** Records an event in the user's own journal. Never throws. */
 export function logAccount(req: Request, userId: number, kind: AccountEventKind, detail = ''): void {
@@ -8053,7 +8310,7 @@ export function vrAchievementsOf(userId: number): VrAchievement[] {
     return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null, game: 'vrising', image: `/vrising/achievements/${id}.png` };
   };
   const loyal = share >= 0.8 && hours >= 20;
-  const crowned = rankHours >= 800;
+  const crowned = rankHours >= VR_RANKS[VR_RANKS.length - 1]!.minHours;
 
   return [
     mk('vr-first-bite', 'Первый укус', 'Проведите первую сессию на сервере V Rising', 'star', Math.min(count, 1), 1, firstAt),
@@ -8119,6 +8376,7 @@ const EVENT_TEXT: Record<string, string> = {
   prefs_changed: 'Изменены настройки интерфейса',
   profile_changed: 'Изменён игровой профиль',
   register_discord: 'Регистрация через Discord',
+  nick_seen: 'Ник найден на сервере',
 };
 
 // ---------- routes ----------
@@ -8177,6 +8435,7 @@ export function registerProfile(deps: {
        ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile`,
     ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0);
     if (JSON.stringify(cur) !== JSON.stringify(next)) logAccount(req, userId(req), 'profile_changed');
+    if (next.gameNick !== cur.gameNick) checkNickNow(userId(req), next.gameNick);
     res.json(next);
   });
 
@@ -8384,13 +8643,13 @@ export interface VrRank {
 
 export const VR_RANKS: readonly VrRank[] = [
   { id: 'awakened', name: 'Пробуждённый', minHours: 0, color: '#9ca3af', image: '/vrising/ranks/rank-1-awakened.png' },
-  { id: 'wanderer', name: 'Ночной скиталец', minHours: 5, color: '#9b1c31', image: '/vrising/ranks/rank-2-wanderer.png' },
-  { id: 'hunter', name: 'Охотник на кровь', minHours: 20, color: '#dc2626', image: '/vrising/ranks/rank-3-hunter.png' },
-  { id: 'warden', name: 'Страж замка', minHours: 50, color: '#9f1239', image: '/vrising/ranks/rank-4-warden.png' },
-  { id: 'baron', name: 'Барон тьмы', minHours: 100, color: '#7c3aed', image: '/vrising/ranks/rank-5-baron.png' },
-  { id: 'lord', name: 'Кровавый лорд', minHours: 200, color: '#a855f7', image: '/vrising/ranks/rank-6-lord.png' },
-  { id: 'elder', name: 'Древний', minHours: 400, color: '#d4af37', image: '/vrising/ranks/rank-7-elder.png' },
-  { id: 'progenitor', name: 'Первородный', minHours: 800, color: '#f5b01e', image: '/vrising/ranks/rank-8-progenitor.png' },
+  { id: 'wanderer', name: 'Ночной скиталец', minHours: 10, color: '#9b1c31', image: '/vrising/ranks/rank-2-wanderer.png' },
+  { id: 'hunter', name: 'Охотник на кровь', minHours: 30, color: '#dc2626', image: '/vrising/ranks/rank-3-hunter.png' },
+  { id: 'warden', name: 'Страж замка', minHours: 70, color: '#9f1239', image: '/vrising/ranks/rank-4-warden.png' },
+  { id: 'baron', name: 'Барон тьмы', minHours: 150, color: '#7c3aed', image: '/vrising/ranks/rank-5-baron.png' },
+  { id: 'lord', name: 'Кровавый лорд', minHours: 310, color: '#a855f7', image: '/vrising/ranks/rank-6-lord.png' },
+  { id: 'elder', name: 'Древний', minHours: 630, color: '#d4af37', image: '/vrising/ranks/rank-7-elder.png' },
+  { id: 'progenitor', name: 'Первородный', minHours: 1270, color: '#f5b01e', image: '/vrising/ranks/rank-8-progenitor.png' },
 ];
 
 export function rankForHours(hours: number): VrRank {
@@ -9031,6 +9290,8 @@ export function notificationText(kind: SubKind, name: string, address: string, p
 
 const tracks = new Map<number, Track>();
 let canDm: () => boolean = () => true;
+/** may a Discord DM be queued now (the bot is online) */
+export const dmAvailable = (): boolean => canDm();
 
 /** Notifies the subscribers of one event; returns how many users were notified. */
 export function notifySubscribers(serverId: number, kind: SubKind, obs: Observation, now = Date.now()): number {
@@ -9403,14 +9664,14 @@ const COMMANDS = [
     name: 'register',
     description: 'Зарегистрироваться на сайте через ваш Discord: пароль не нужен',
     options: [
-      { type: 3, name: 'nick', description: 'Ваш ник В ИГРЕ (V Rising), точно как в игре: по нему считаются часы и ранг', required: true, min_length: 2, max_length: 40 },
+      { type: 3, name: 'nick', description: 'Ваш ник В ИГРЕ (V Rising), точно как в игре: по нему считаются часы и ранг', required: true, min_length: 2, max_length: 40, autocomplete: true },
       { type: 5, name: 'agree', description: 'Поставьте True, если согласны с правилами сообщества (нужно, если правила есть)', required: false },
     ],
   },
   {
     name: 'nick',
     description: 'Сменить игровой ник, по которому считается статистика',
-    options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40 }],
+    options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40, autocomplete: true }],
   },
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
 ];
@@ -9456,6 +9717,8 @@ interface ProfileData {
   rank: { id: string; name: string; hours: number; color: string; image: string; next: { name: string; minHours: number } | null; progress: number } | null;
   achievements: number;
   achievementsTotal?: number;
+  nickSeen?: boolean;
+  lastSeenAt?: number | null;
   profileUrl: string;
 }
 
@@ -9471,7 +9734,7 @@ function cardReply(
   user: { displayAvatarURL: (o?: { size?: number }) => string },
   displayName: string,
   p: ProfileData,
-  opts: { title: string; description?: string; color?: number },
+  opts: { title: string; description?: string; color?: number; onboarding?: boolean },
 ) {
   const base = /^https?:\/\//.test(p.profileUrl) ? p.profileUrl.replace(/\/#\/profile\/?$/, '') : '';
   const color = opts.color ?? (p.rank ? hexToInt(p.rank.color) : COLORS.info);
@@ -9496,6 +9759,19 @@ function cardReply(
     fields.push({ name: '🩸 Ранг V Rising', value: 'появится после первой игры на сервере', inline: true });
   }
   fields.push({ name: '🏆 Достижений', value: p.achievementsTotal ? `${p.achievements} из ${p.achievementsTotal}` : String(p.achievements), inline: true });
+  if (p.gameNick) {
+    const seenLine = p.nickSeen
+      ? `✅ Ник найден на сервере: последний раз ${p.lastSeenAt ? `<t:${Math.floor(p.lastSeenAt / 1000)}:R>` : 'недавно'}`
+      : `⏳ Ждём ваш первый заход под ником \`${p.gameNick}\``;
+    if (opts.onboarding) {
+      const steps = p.nickSeen
+        ? `${seenLine}\nЧасы, ранг и достижения уже считаются. Если ник неверный, исправьте его командой \`/nick\`.`
+        : `Зайдите на сервер V Rising под ником \`${p.gameNick}\`. Как только панель увидит игрока, часы, ранг и достижения начнут считаться.\nЕсли ник указан неверно, исправьте его командой \`/nick\`.`;
+      fields.push({ name: '👣 Что дальше', value: steps.slice(0, 1000) });
+    } else {
+      fields.push({ name: '📡 Связь с сервером', value: seenLine });
+    }
+  }
   e.addFields(fields);
   e.setFooter({ text: 'CoreGSM · статистика копится с первого входа на сервер' });
 
@@ -9523,7 +9799,28 @@ async function backendJson<T>(path: string, init?: RequestInit): Promise<{ ok: b
   return { ok: r.ok, status: r.status, data };
 }
 
+/** Autocomplete of the in-game nick: up to 25 names seen on the servers. Must answer within 3 s and never throws. */
+async function handleAutocomplete(i: import('discord.js').AutocompleteInteraction): Promise<void> {
+  let names: string[] = [];
+  try {
+    if ((i.commandName === 'register' || i.commandName === 'nick') && i.options.getFocused(true).name === 'nick') {
+      const q = new URLSearchParams({ q: String(i.options.getFocused()).slice(0, 100), discordId: i.user.id });
+      const r = await backend(`/internal/discord/nick-suggest?${q.toString()}`, { signal: AbortSignal.timeout(2000) });
+      const d = (await r.json()) as { names?: unknown };
+      if (Array.isArray(d.names)) names = d.names.filter((n): n is string => typeof n === 'string' && n.length > 0 && n.length <= 100).slice(0, 25);
+    }
+  } catch {
+    names = [];
+  }
+  try {
+    await i.respond(names.map((n) => ({ name: n, value: n })));
+  } catch (e) {
+    log('autocomplete failed:', (e as Error).message);
+  }
+}
+
 async function handleInteraction(i: import('discord.js').Interaction): Promise<void> {
+  if (i.isAutocomplete()) return handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
@@ -9575,6 +9872,7 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
           if (card) {
             return void (await reply(cardReply(user, displayName, card, {
               title: '🩸 Добро пожаловать!',
+              onboarding: true,
               description: `Аккаунт создан. Логин в панели: **${data.username}**.\nВходите кнопкой «Войти через Discord»: пароль не нужен.`,
               color: COLORS.ok,
             })));
@@ -9584,7 +9882,7 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
         case 'exists': {
           const card = await loadCard();
           if (card) {
-            return void (await reply(cardReply(user, displayName, card, { title: 'Аккаунт уже есть', description: `${data.message ?? ''}`.trim(), color: COLORS.ok })));
+            return void (await reply(cardReply(user, displayName, card, { title: 'Аккаунт уже есть', description: `${data.message ?? ''}`.trim(), color: COLORS.ok, onboarding: true })));
           }
           return void (await reply(replyEmbed('Аккаунт уже есть', `${data.message ?? ''}\nЛогин в панели: **${data.username}**.${link}`, COLORS.ok, url)));
         }
@@ -9607,7 +9905,7 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
       if (!data) return void (await friendly());
       if (data.status === 'ok') {
         const card = await loadCard();
-        if (card) return void (await reply(cardReply(user, displayName, card, { title: 'Игровой ник сохранён', description: `Онлайн, ранг и достижения на серверах V Rising теперь считаются по нику **${data.gameNick ?? card.gameNick}**.`, color: COLORS.ok })));
+        if (card) return void (await reply(cardReply(user, displayName, card, { title: 'Игровой ник сохранён', description: `Онлайн, ранг и достижения на серверах V Rising теперь считаются по нику **${data.gameNick ?? card.gameNick}**.`, color: COLORS.ok, onboarding: true })));
         return void (await reply(replyEmbed('Ник сохранён', `Игровой ник: **${data.gameNick ?? ''}**. Статистика считается по нему.`, COLORS.ok)));
       }
       if (data.status === 'notfound') return void (await reply(replyEmbed('Аккаунта нет', 'Сначала зарегистрируйтесь: `/register nick:ваш_ник`.', COLORS.warn)));
@@ -33424,6 +33722,14 @@ export interface Prefs {
   dateFormat: 'dmy' | 'mdy' | 'iso';
 }
 
+/** GET /me/nick-status */
+export interface NickStatus {
+  nick: string;
+  seen: boolean;
+  lastSeenAt: number | null;
+  similar: string[];
+}
+
 /** GET/PUT /me/player */
 export interface PlayerProfile {
   gameNick: string;
@@ -33488,7 +33794,7 @@ export interface ActivityItem {
 
 export type JournalKind =
   | 'login' | 'login_failed' | 'password_changed' | 'email_changed' | 'discord_linked' | 'discord_unlinked'
-  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed' | 'register_discord';
+  | 'avatar_changed' | 'banner_changed' | 'sessions_revoked' | 'prefs_changed' | 'profile_changed' | 'register_discord' | 'nick_seen';
 
 /** GET /me/journal */
 export interface JournalItem {
@@ -38279,7 +38585,7 @@ const FILTERS: { id: Filter; label: TKey; kinds: string[] | null }[] = [
   { id: 'all', label: 'pf.journal.f.all', kinds: null },
   { id: 'logins', label: 'pf.journal.f.logins', kinds: ['login', 'login_new_device', 'login_failed', 'sessions_revoked'] },
   { id: 'secrets', label: 'pf.journal.f.secrets', kinds: ['password_changed', 'email_changed'] },
-  { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked', 'register_discord'] },
+  { id: 'links', label: 'pf.journal.f.links', kinds: ['discord_linked', 'discord_unlinked', 'register_discord', 'nick_seen'] },
 ];
 
 const KIND_LABEL: Record<string, TKey> = {
@@ -38296,6 +38602,7 @@ const KIND_LABEL: Record<string, TKey> = {
   prefs_changed: 'pf.journal.k.prefs_changed',
   profile_changed: 'pf.journal.k.profile_changed',
   register_discord: 'pf.journal.k.register_discord',
+  nick_seen: 'pf.journal.k.nick_seen',
 };
 
 /** «Журнал аккаунта»: a timeline of the account's own events and the «Выйти на всех устройствах» button */
@@ -38605,10 +38912,10 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/PlayerCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, type PlayerProfile } from '../../api';
+import { api, type NickStatus, type PlayerProfile } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { Button, CopyButton, ErrorLine, Section, Switch, TextField, toast } from '../../ui';
+import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast } from '../../ui';
 import { isObject, useFetched } from './useFetched';
 
 const NICK_MAX = 32;
@@ -38621,6 +38928,7 @@ export const publicLink = (username: string) => `${window.location.origin}${wind
 export function PlayerCard() {
   const { me } = useAuth();
   const { data, reload } = useFetched<PlayerProfile>('/me/player', isObject);
+  const status = useFetched<NickStatus>('/me/nick-status', isObject);
   const [nick, setNick] = useState('');
   const [bio, setBio] = useState('');
   const [pub, setPub] = useState(false);
@@ -38646,6 +38954,7 @@ export function PlayerCard() {
       await api('/me/player', 'PUT', { gameNick: nick.trim(), bio: bio.trim(), publicProfile: pub });
       toast(t('pf.player.saved'));
       reload();
+      status.reload();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -38661,6 +38970,25 @@ export function PlayerCard() {
         ) : (
           <>
             <TextField id="pl-nick" label={t('pf.player.nick')} value={nick} onChange={setNick} maxLength={NICK_MAX} autoComplete="off" placeholder={t('pf.player.nickPh')} hint={t('pf.player.nickHint')} />
+            {!!data?.gameNick && status.data && status.data.nick === data.gameNick && (
+              status.data.seen ? (
+                <p className="text-sm font-bold text-ok" role="status">
+                  {t('pf.nick.seen', { when: status.data.lastSeenAt ? ago(status.data.lastSeenAt) : '–' })}
+                </p>
+              ) : (
+                <div className="space-y-2 rounded-xl bg-warnbg px-3 py-2" role="status">
+                  <p className="text-sm font-bold text-warn">{t('pf.nick.unseen')}</p>
+                  {status.data.similar.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-mute">{t('pf.nick.similar')}</span>
+                      {status.data.similar.slice(0, 5).map((s) => (
+                        <button key={s} type="button" className="btn btn-soft btn-xs" onClick={() => setNick(s.slice(0, NICK_MAX))}>{s}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            )}
             <TextField
               id="pl-bio"
               label={t('pf.player.bio')}
@@ -39133,6 +39461,7 @@ export function JournalIcon({ kind, size = 18 }: { kind: string; size?: number }
     case 'prefs_changed': return <Icon size={size}><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /></Icon>;
     case 'profile_changed': return <Icon size={size}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></Icon>;
     case 'register_discord': return <Icon size={size}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0M19 3v4M17 5h4" /></Icon>;
+    case 'nick_seen': return <Icon size={size}><circle cx="11" cy="11" r="7" /><path d="M21 21l-5-5M8 11l2 2 4-4" /></Icon>;
     default: return <Icon size={size}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Icon>;
   }
 }
@@ -44576,6 +44905,10 @@ const en: Record<keyof typeof ru, string> = {
   'pf.journal.k.prefs_changed': 'Language and region changed',
   'pf.journal.k.profile_changed': 'Player profile changed',
   'pf.journal.k.register_discord': 'Registered via Discord',
+  'pf.journal.k.nick_seen': 'Nick found on a server',
+  'pf.nick.unseen': 'The nick has not been found on the servers yet. Check the spelling: it must match the in-game name.',
+  'pf.nick.similar': 'Did you mean:',
+  'pf.nick.seen': 'Nick found: last seen {when}',
 
   // ---- public profile ----
   'pub.missingTitle': 'Profile not found',
@@ -45187,6 +45520,10 @@ const ru = {
   'pf.journal.k.prefs_changed': 'Изменены язык и регион',
   'pf.journal.k.profile_changed': 'Изменён профиль игрока',
   'pf.journal.k.register_discord': 'Регистрация через Discord',
+  'pf.journal.k.nick_seen': 'Ник найден на сервере',
+  'pf.nick.unseen': 'Ник ещё не найден на серверах. Проверьте написание — он должен совпадать с игровым.',
+  'pf.nick.similar': 'Возможно, вы имели в виду:',
+  'pf.nick.seen': 'Ник найден: последний раз {when}',
 
   // ---- public profile ----
   'pub.missingTitle': 'Профиль не найден',
@@ -55669,13 +56006,13 @@ export interface VrRank {
 
 export const VR_RANKS: readonly VrRank[] = [
   { id: 'awakened', name: 'Пробуждённый', minHours: 0, color: '#9ca3af', image: '/vrising/ranks/rank-1-awakened.png' },
-  { id: 'wanderer', name: 'Ночной скиталец', minHours: 5, color: '#9b1c31', image: '/vrising/ranks/rank-2-wanderer.png' },
-  { id: 'hunter', name: 'Охотник на кровь', minHours: 20, color: '#dc2626', image: '/vrising/ranks/rank-3-hunter.png' },
-  { id: 'warden', name: 'Страж замка', minHours: 50, color: '#9f1239', image: '/vrising/ranks/rank-4-warden.png' },
-  { id: 'baron', name: 'Барон тьмы', minHours: 100, color: '#7c3aed', image: '/vrising/ranks/rank-5-baron.png' },
-  { id: 'lord', name: 'Кровавый лорд', minHours: 200, color: '#a855f7', image: '/vrising/ranks/rank-6-lord.png' },
-  { id: 'elder', name: 'Древний', minHours: 400, color: '#d4af37', image: '/vrising/ranks/rank-7-elder.png' },
-  { id: 'progenitor', name: 'Первородный', minHours: 800, color: '#f5b01e', image: '/vrising/ranks/rank-8-progenitor.png' },
+  { id: 'wanderer', name: 'Ночной скиталец', minHours: 10, color: '#9b1c31', image: '/vrising/ranks/rank-2-wanderer.png' },
+  { id: 'hunter', name: 'Охотник на кровь', minHours: 30, color: '#dc2626', image: '/vrising/ranks/rank-3-hunter.png' },
+  { id: 'warden', name: 'Страж замка', minHours: 70, color: '#9f1239', image: '/vrising/ranks/rank-4-warden.png' },
+  { id: 'baron', name: 'Барон тьмы', minHours: 150, color: '#7c3aed', image: '/vrising/ranks/rank-5-baron.png' },
+  { id: 'lord', name: 'Кровавый лорд', minHours: 310, color: '#a855f7', image: '/vrising/ranks/rank-6-lord.png' },
+  { id: 'elder', name: 'Древний', minHours: 630, color: '#d4af37', image: '/vrising/ranks/rank-7-elder.png' },
+  { id: 'progenitor', name: 'Первородный', minHours: 1270, color: '#f5b01e', image: '/vrising/ranks/rank-8-progenitor.png' },
 ];
 
 export function rankForHours(hours: number): VrRank {
