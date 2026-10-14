@@ -4,6 +4,8 @@ import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
 import { plural, toast } from '../../ui';
 import { sortPlayers, type PlayerSort } from './serverLogic';
+import { rankById } from '../../vrisingRanks';
+import { RankEmblem, rankName } from '../profile/VrRank';
 import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow, useStickyTop } from './helpers';
 
 function Avatar({ name, size = 36 }: { name: string; size?: number }) {
@@ -18,7 +20,7 @@ function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   );
 }
 
-interface Row { key: string; name: string; since: number | null }
+interface Row { key: string; name: string; since: number | null; rankId?: string }
 
 const clock = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const joinedAt = (ts: number, now: number) => {
@@ -45,7 +47,7 @@ export default function PlayersList({
   const total = list.length || names.length;
   const hiddenCount = Math.max(0, players - total);
   const rows = useMemo(() => {
-    let r: Row[] = list.map((p, i) => ({ key: `${p.name}-${p.since}-${i}`, name: p.name || 'Без имени', since: p.since as number | null }));
+    let r: Row[] = list.map((p, i) => ({ key: `${p.name}-${p.since}-${i}`, name: p.name || 'Без имени', since: p.since as number | null, rankId: p.rankId }));
     if (!r.length) r = names.map((n, i) => ({ key: `${n}-${i}`, name: n || 'Без имени', since: null }));
     const q = query.trim().toLowerCase();
     if (q) r = r.filter((p) => p.name.toLowerCase().includes(q));
@@ -115,6 +117,7 @@ export default function PlayersList({
         <ul className="divide-y divide-line">
           {shown.map((p) => {
             const dur = p.since != null ? now - p.since : null;
+            const rank = rankById(p.rankId);
             const expandable = !limit;
             const isOpen = expandable && open === p.key;
             const inner = (
@@ -122,11 +125,17 @@ export default function PlayersList({
                 <Avatar name={p.name} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-bold" title={p.name}>{p.name}</span>
-                  {dur != null && (
+                  {(dur != null || rank) && (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
-                      {dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-[11px]">новичок</span>}
-                      {dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-[11px]">ветеран</span>}
+                      {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-[11px]">новичок</span>}
+                      {rank && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-extrabold" style={{ color: rank.color }} title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
+                          <RankEmblem rank={rank} size={20} />
+                          {rankName(rank)}
+                        </span>
+                      )}
+                      {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-[11px]">ветеран</span>}
                     </span>
                   )}
                 </span>

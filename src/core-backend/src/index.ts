@@ -21,7 +21,7 @@ import { registerDeliveries } from './deliveries.js';
 import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
 import { registerGames } from './games.js';
 import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
-import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel } from './profile.js';
+import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel, vrRankIdFor } from './profile.js';
 import { coverUrl, registerCovers, removeCover } from './covers.js';
 import { discordFetch } from './proxyFetch.js';
 import { countryLabel, countryOf } from './geo.js';
@@ -1251,7 +1251,8 @@ app.get('/api/servers/:id/details', viewer, (req, res) => {
   }
   events.sort((a, b) => b.ts - a.ts);
 
-  const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => ({ name: p.name, since: p.since }));
+  const isVr = server.game === 'vrising';
+  const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => (isVr ? { name: p.name, since: p.since, rankId: vrRankIdFor(p.name) } : { name: p.name, since: p.since }));
 
   // additive: when the server was added and (admins only) where its Discord message lives
   const createdAt = (db.prepare('SELECT created_at FROM servers WHERE id = ?').get(id) as { created_at: number } | undefined)?.created_at || null;

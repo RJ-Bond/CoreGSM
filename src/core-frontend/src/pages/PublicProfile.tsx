@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, type PublicProfile } from '../api';
 import { useAuth } from '../auth';
 import { AchievementArt } from '../components/profile/icons';
+import { RankEmblem, rankName, vrAchText } from '../components/profile/VrRank';
 import { bannerStyle } from '../components/profile/banner';
 import { fmtDuration } from '../components/profile/format';
 import { t, useI18n } from '../i18n';
@@ -71,6 +72,12 @@ export default function PublicProfilePage({ username }: { username: string }) {
             <h1 className="line-clamp-2 break-words text-2xl font-black leading-tight">{p.username}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${p.role === 'admin' ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
+              {p.rank && (
+                <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" style={{ color: p.rank.color }}>
+                  <RankEmblem rank={p.rank} size={28} />
+                  {rankName(p.rank)}
+                </span>
+              )}
               {p.gameNick && <span className="text-sm font-bold text-mute">{t('pub.nick', { nick: p.gameNick })}</span>}
               {Number.isFinite(since) && <span className="text-sm font-bold text-mute">{t('pub.since', { date: fmtDate(since) })}</span>}
             </div>
@@ -92,6 +99,19 @@ export default function PublicProfilePage({ username }: { username: string }) {
           <Tile value={s.favouriteServerName || '–'} label={t('pf.stats.favourite')} />
         </div>
       </Section>
+
+      {p.vrAchievements && p.vrAchievements.length > 0 && (
+        <Section title={t('vr.ach.title')}>
+          <ul className="flex flex-wrap gap-2">
+            {p.vrAchievements.map((a) => (
+              <li key={a.id} className="pf-ach-mini">
+                <span><img src={a.image} width={26} height={26} alt="" loading="lazy" draggable={false} style={{ width: 26, height: 26, objectFit: 'contain' }} /></span>
+                <span className="pr-1">{vrAchText(a.id, 't', a.title)}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
 
       {p.achievements && p.achievements.length > 0 && (
         <Section title={t('pf.ach.title')}>

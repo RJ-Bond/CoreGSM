@@ -10,6 +10,7 @@ import { AvatarEditor } from '../components/profile/AvatarEditor';
 import { BannerEditor } from '../components/profile/BannerEditor';
 import { bannerStyle } from '../components/profile/banner';
 import { AchievementsGrid, AchievementsPreview } from '../components/profile/Achievements';
+import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
@@ -86,6 +87,7 @@ function OverviewTab() {
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
               {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}
+              <RankHeaderBadge />
             </div>
           </div>
           <button className="btn btn-soft mt-3" onClick={logout}>{t('hdr.logout')}</button>
@@ -126,8 +128,10 @@ function PlayerTab() {
   return (
     <div className="space-y-5">
       <PlayerCard />
+      <RankCard />
       <StatsPanel />
       <AchievementsGrid />
+      <VrAchievementsGrid />
     </div>
   );
 }

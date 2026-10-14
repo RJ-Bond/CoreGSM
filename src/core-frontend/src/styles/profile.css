@@ -90,6 +90,17 @@
   background: rgb(var(--card)); color: rgb(var(--link)); overflow: visible;
 }
 
+/* ---------- V Rising rank and achievements (colour/opacity/box-shadow only) ---------- */
+.vr-rank { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 1.25rem; }
+.vr-rank-main { flex: 1 1 14rem; min-width: 0; }
+.vr-emblem { display: block; flex: none; object-fit: contain; }
+.vr-ladder { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+.vr-ladder li { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 9999px; background: rgb(var(--soft)); opacity: .4; }
+.vr-ladder li.is-got { opacity: 1; }
+.vr-ladder li.is-cur { opacity: 1; box-shadow: 0 0 0 2px var(--vr-c, rgb(var(--brand))); }
+.vr-ach-img { display: block; width: 2.75rem; height: 2.75rem; object-fit: contain; }
+@media (max-width: 639px) { .vr-ladder li { width: 2.5rem; height: 2.5rem; } }
+
 /* ---------- activity and journal timelines ---------- */
 .pf-line { list-style: none; margin: 0; padding: 0; }
 .pf-line > li { position: relative; display: flex; gap: .75rem; padding: .55rem 0; }
