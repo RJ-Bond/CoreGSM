@@ -10,7 +10,9 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
  * and a new one through a SOCKS/HTTP proxy costs a TCP + SOCKS + TLS handshake (seconds on a far proxy): that alone
  * can exceed the 3 s Discord gives a slash command to answer («Приложение не отвечает»).
  */
-const KEEP_ALIVE = { keepAliveTimeout: 120_000, keepAliveMaxTimeout: 600_000, connections: 4 };
+// Idle sockets are kept for 20 s only (and refreshed by the bot every 10 s): a longer keep-alive meant reusing sockets
+// that the proxy or Cloudflare had already closed, which fails with «other side closed».
+const KEEP_ALIVE = { keepAliveTimeout: 20_000, keepAliveMaxTimeout: 60_000, connections: 4 };
 
 export interface ProxySetup {
   /** dispatcher for Discord REST (HTTPS API) */

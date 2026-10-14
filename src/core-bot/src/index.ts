@@ -197,6 +197,22 @@ async function stopClient(): Promise<void> {
   }
 }
 
+/** a pooled connection that the proxy closed under us: the request never reached Discord, so one more try is safe */
+const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated/i;
+async function retrySocket<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const err = e as Error & { code?: string; cause?: { message?: string; code?: string } };
+      const text = `${err.message} ${err.code ?? ''} ${err.cause?.message ?? ''} ${err.cause?.code ?? ''}`;
+      if (i >= tries || !SOCKET_ERR.test(text)) throw e;
+      log(`connection to Discord was closed by the other side, retry ${i}/${tries - 1}`);
+      await new Promise((r) => setTimeout(r, 300 * i));
+    }
+  }
+}
+
 // ---------- slash commands: registration of players from Discord ----------
 const COMMANDS = [
   {
@@ -516,7 +532,7 @@ async function applyConfig(): Promise<void> {
   // a warm connection to Discord: a tiny request every 25 s keeps the (proxied) HTTPS connection open, so that the
   // acknowledgement of a slash command does not pay for a new TCP + proxy + TLS handshake
   if (warmTimer) clearInterval(warmTimer);
-  warmTimer = setInterval(() => { void c.rest.get('/gateway').catch(() => undefined); }, 25_000);
+  warmTimer = setInterval(() => { void c.rest.get('/gateway').catch(() => undefined); }, 10_000);
   warmTimer.unref?.();
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
@@ -618,22 +634,22 @@ async function buildPayload(b: Binding) {
 async function update(c: DiscordClient, b: Binding): Promise<void> {
   const built = await buildPayload(b);
 
-  const channel = await c.channels.fetch(b.channelId);
+  const channel = await retrySocket(() => c.channels.fetch(b.channelId));
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
   const payload = () => built;
 
   if (b.messageId) {
     try {
-      const msg = await channel.messages.fetch(b.messageId);
+      const msg = await retrySocket(() => channel.messages.fetch(b.messageId!));
       // attachments: [] drops a picture left over from a previous style
-      await msg.edit({ ...payload(), attachments: [] });
+      await retrySocket(() => msg.edit({ ...payload(), attachments: [] }));
       return await report(b.id, { error: null });
     } catch (e) {
       log(`binding ${b.id}: cannot edit message, posting a new one`, (e as Error).message);
     }
   }
-  const sent = await channel.send(payload());
+  const sent = await retrySocket<{ id: string }>(() => channel.send(payload()));
   await report(b.id, { messageId: sent.id, error: null });
 }
 
@@ -656,6 +672,8 @@ interface NewsPayload {
   embed?: NewsEmbed;
   /** more embeds in the same message (variables are already substituted by the panel) */
   extraEmbeds?: NewsEmbed[];
+  /** link buttons under the message (at most 3) */
+  actions?: { label: string; url: string }[];
 }
 interface NewsItem {
   id: number;
@@ -704,10 +722,18 @@ async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[]
     if (embeds.length >= 10) break;
     embeds.push(new EmbedBuilder(raw as ConstructorParameters<typeof EmbedBuilder>[0]));
   }
+  const components = (p.actions ?? []).length
+    ? [
+        new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(
+          (p.actions ?? []).slice(0, 3).map((a) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(a.label.slice(0, 80)).setURL(a.url)),
+        ),
+      ]
+    : [];
   return {
     content: content || undefined,
     embeds,
     files,
+    components,
     allowedMentions: { parse: (p.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
   };
 }
@@ -728,7 +754,7 @@ async function processNews(): Promise<void> {
   const items = (await res.json()) as NewsItem[];
   for (const it of items) {
     try {
-      const channel = await c.channels.fetch(it.channelId);
+      const channel = await retrySocket(() => c.channels.fetch(it.channelId));
       if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
       if (it.action === 'delete') {
@@ -744,12 +770,12 @@ async function processNews(): Promise<void> {
 
       const msg = await buildNews(it.payload, it.statusEmbeds ?? []);
       if (it.action === 'edit' && it.messageId) {
-        const m = await channel.messages.fetch(it.messageId);
-        await m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, attachments: [], allowedMentions: msg.allowedMentions });
+        const m = await retrySocket(() => channel.messages.fetch(it.messageId!));
+        await retrySocket(() => m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, components: msg.components, attachments: [], allowedMentions: msg.allowedMentions }));
         await reportNews(it.id, { status: 'sent', messageId: it.messageId });
         log(`news ${it.id}: message edited`);
       } else {
-        const sent = await channel.send(msg);
+        const sent = await retrySocket<{ id: string }>(() => channel.send(msg));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
         log(`news ${it.id}: posted`);
       }

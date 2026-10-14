@@ -47,6 +47,7 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/news\/(\d+)\/duplicate$/, label: 'Создана копия новости', pre: (id) => `#${id}` },
   { m: 'PATCH', re: /^\/api\/news\/(\d+)\/schedule$/, label: 'Изменено время публикации новости', pre: (id) => `#${id}` },
   { m: 'POST', re: /^\/api\/news\/(\d+)\/versions\/\d+\/restore$/, label: 'Новость восстановлена из версии', pre: (id) => `#${id}` },
+  { m: 'PATCH', re: /^\/api\/news\/(\d+)\/pin$/, label: 'Изменено закрепление новости', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${r.body?.pinned ? 'закреплена' : 'откреплена'}` },
   { m: 'POST', re: /^\/api\/news\/test$/, label: 'Тестовая отправка новости', detail: (r) => s(r.body?.payload?.embed?.title) || s(r.body?.payload?.content, 60) },
   { m: 'PUT', re: /^\/api\/news\/settings$/, label: 'Изменён канал новостей' },
   { m: 'PUT', re: /^\/api\/users\/(\d+)$/, label: 'Изменена роль пользователя', pre: userName, detail: (r, p) => `${p ?? ''} → ${s(r.body?.role, 10)}` },

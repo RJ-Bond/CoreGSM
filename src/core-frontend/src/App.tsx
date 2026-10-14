@@ -442,7 +442,7 @@ export default function App() {
 
         <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
           {page === 'servers' && <ServersPage sub={sub} />}
-          {page === 'news' && <NewsFeed />}
+          {page === 'news' && <NewsFeed sub={sub} />}
           {page === 'status' && <StatusPage />}
           {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
           {page === 'profile' && <ProfilePage />}

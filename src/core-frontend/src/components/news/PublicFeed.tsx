@@ -1,161 +1,185 @@
-import { useState, type CSSProperties } from 'react';
-import type { PublicNews } from '../../api';
+import type { CSSProperties } from 'react';
+import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
+import { useI18n, t } from '../../i18n';
 import { fmtDate } from '../../ui';
-import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
+import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
+import {
+  categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isPinned, newsImage, plainExcerpt,
+} from './newsLogic';
 
-/** the news text uses the panel's own colours (light and dark), not Discord's */
-const PANEL_THEME: DTheme = {
-  name: 'light',
-  outer: 'transparent',
-  embed: 'transparent',
-  embedBorder: 'transparent',
-  text: 'rgb(var(--ink))',
-  title: 'rgb(var(--ink))',
-  muted: 'rgb(var(--mute))',
-  link: 'rgb(var(--link))',
-  code: 'rgb(var(--soft))',
-  quote: 'rgb(var(--line))',
-  spoilerHide: 'rgb(var(--soft))',
-  spoilerShow: 'rgb(var(--soft))',
-  mentionBg: 'rgb(var(--soft))',
-  mentionFg: 'rgb(var(--link))',
-  chipBg: 'rgb(var(--soft))',
-};
+export { PANEL_THEME } from './NewsParts';
 
-interface Card {
+export interface Card {
   id: number;
   title: string;
   text: string;
   author: { name: string; icon?: string } | null;
+  role: 'admin' | 'moderator' | 'player' | null;
   image: string | null;
   link: string | null;
   accent: string;
   at: number | null;
   fields: { name: string; value: string }[];
+  category: NewsCategory;
+  pinned: boolean;
+  gallery: string[];
+  countdownAt: number | null;
+  countdownLabel: string;
+  changes: NewsChange[];
+  actions: NewsAction[];
+  statusIds: number[];
+  game: string;
+  reactions: NewsReaction[];
 }
 
 const hex = (n: number | undefined) => `#${(n ?? 0x5b4fe0).toString(16).padStart(6, '0')}`;
 
-function cardOf(n: PublicNews): Card {
-  const e = n.payload.embed;
-  const img = e?.image?.upload ? `/api/news/images/${e.image.upload}` : e?.image?.url || e?.thumbnailUrl || null;
+export function cardOf(n: PublicNews): Card {
+  const p = n.payload ?? { content: '', mention: 'none' as const };
+  const e = p.embed;
   const url = e?.url && /^https?:\/\//i.test(e.url) ? e.url : null;
+  const at = typeof p.countdownAt === 'number' && Number.isFinite(p.countdownAt) && p.countdownAt > 0 ? p.countdownAt : null;
   return {
     id: n.id,
-    title: e?.title || n.title || 'Новость',
-    text: (e?.description || n.payload.content || '').trim(),
+    title: e?.title || n.title || t('nw.untitled'),
+    text: (e?.description || p.content || '').trim(),
     author: e?.author?.name ? { name: e.author.name, icon: e.author.iconUrl } : null,
-    image: img,
+    role: n.authorRole ?? null,
+    image: newsImage(p),
     link: url,
     accent: hex(e?.color),
     at: n.sentAt,
     fields: (e?.fields ?? []).filter((f) => f.name && f.value).map((f) => ({ name: f.name, value: f.value })),
+    category: categoryOf(n),
+    pinned: isPinned(n),
+    gallery: galleryUrls(p.gallery),
+    countdownAt: at,
+    countdownLabel: p.countdownLabel ?? '',
+    changes: Array.isArray(p.changes) ? p.changes : [],
+    actions: Array.isArray(p.actions) ? p.actions : [],
+    statusIds: Array.isArray(p.statusServerIds) ? p.statusServerIds : [],
+    game: typeof p.game === 'string' ? p.game : '',
+    reactions: Array.isArray(n.reactions) ? n.reactions : [],
   };
 }
 
-function Author({ a }: { a: NonNullable<Card['author']> }) {
-  return (
-    <span className="nf-author">
-      {a.icon && /^https?:\/\//i.test(a.icon) ? (
-        <img src={a.icon} alt="" width={22} height={22} loading="lazy" />
-      ) : (
-        <span className="nf-ava" aria-hidden>{a.name.slice(0, 1).toUpperCase()}</span>
-      )}
-      {a.name}
-    </span>
-  );
+/** background of a cover: the picture, else the default cover (game artwork or a gradient) */
+export function coverStyle(c: Card, servers: Server[] | null | undefined, small = false): CSSProperties {
+  if (c.image) return { backgroundImage: `url("${c.image}")` };
+  return { background: defaultCoverBackground({ game: c.game, statusServerIds: c.statusIds, servers, category: c.category }, small) };
 }
 
-function Body({ c }: { c: Card }) {
+/** big cover with the title over a bottom gradient; used by the feed hero and by the news page */
+export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean }) {
   return (
-    <ThemeCtx.Provider value={PANEL_THEME}>
-      <div className="nf-body">
-        {c.text && <DiscordMd text={c.text} />}
-        {c.fields.length > 0 && (
-          <dl className="nf-fields">
-            {c.fields.map((f, i) => (
-              <div key={i}>
-                <dt>{f.name}</dt>
-                <dd><DiscordMd text={f.value} /></dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </div>
-    </ThemeCtx.Provider>
-  );
-}
-
-const coverStyle = (c: Card): CSSProperties =>
-  c.image
-    ? { backgroundImage: `url("${c.image}")` }
-    : { backgroundImage: `linear-gradient(135deg, ${c.accent}33, ${c.accent}14 55%, rgb(var(--soft)))` };
-
-/** the latest news large (hero), the rest as a list with previews; light, no chat-client chrome */
-export function PublicFeed({ items }: { items: PublicNews[] }) {
-  const cards = [...items].sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0)).map(cardOf);
-  const [open, setOpen] = useState<Set<number>>(new Set());
-  const toggle = (id: number) =>
-    setOpen((s) => {
-      const n = new Set(s);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  if (cards.length === 0) return null;
-  const [hero, ...rest] = cards;
-  const h = hero!;
-  const heroOpen = open.has(h.id);
-
-  return (
-    <div className="nf">
-      <article className="nf-hero" style={{ ['--nf-accent' as string]: h.accent }}>
-        {h.image && <div className="nf-hero-img" style={coverStyle(h)} role="img" aria-label={h.title} />}
-        <div className="nf-hero-in">
-          <div className="nf-meta">
-            {h.at && <span className="nf-date">{fmtDate(h.at)}</span>}
-            {h.author && <Author a={h.author} />}
-          </div>
-          <h2 className="nf-title">{h.title}</h2>
-          <div className={`nf-text ${heroOpen ? '' : 'is-clamped'}`}><Body c={h} /></div>
-          <div className="nf-actions">
-            {(h.text.length > 220 || h.fields.length > 0) && (
-              <button type="button" className="btn btn-soft" aria-expanded={heroOpen} onClick={() => toggle(h.id)}>
-                {heroOpen ? 'Свернуть' : 'Читать полностью'}
-              </button>
-            )}
-            {h.link && <a className="btn" href={h.link} target="_blank" rel="noopener noreferrer">Открыть ссылку →</a>}
-          </div>
+    <div className={`nw-cover ${tall ? 'is-tall' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
+      <div className="nw-cover-bg" style={coverStyle(c, servers)} aria-hidden />
+      <div className="nw-cover-shade" aria-hidden />
+      <div className="nw-cover-in">
+        <div className="nw-cover-chips">
+          {c.pinned && <PinChip />}
+          <CategoryChip category={c.category} />
+          {c.at && <span className="nw-chip nw-chip-date">{fmtDate(c.at)}</span>}
         </div>
-      </article>
-
-      {rest.length > 0 && <h3 className="nf-more">Ранее</h3>}
-      <div className="nf-list">
-        {rest.map((c) => {
-          const isOpen = open.has(c.id);
-          return (
-            <article key={c.id} className="nf-item" style={{ ['--nf-accent' as string]: c.accent }}>
-              <div className="nf-thumb" style={coverStyle(c)} aria-hidden />
-              <div className="nf-item-in">
-                <div className="nf-meta">
-                  {c.at && <span className="nf-date">{fmtDate(c.at)}</span>}
-                  {c.author && <Author a={c.author} />}
-                </div>
-                <h3 className="nf-item-title">{c.title}</h3>
-                <div className={`nf-text ${isOpen ? '' : 'is-clamped-2'}`}><Body c={c} /></div>
-                <div className="nf-actions">
-                  {(c.text.length > 120 || c.fields.length > 0) && (
-                    <button type="button" className="btn-link btn-xs" aria-expanded={isOpen} onClick={() => toggle(c.id)}>
-                      {isOpen ? 'Свернуть' : 'Читать'}
-                    </button>
-                  )}
-                  {c.link && <a className="btn-link btn-xs" href={c.link} target="_blank" rel="noopener noreferrer">Открыть ссылку →</a>}
-                </div>
-              </div>
-            </article>
-          );
-        })}
+        <H className="nw-cover-title">{href ? <a href={href}>{c.title}</a> : c.title}</H>
       </div>
+    </div>
+  );
+}
+
+function monthFormatter(lang: 'ru' | 'en') {
+  const f = new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ru-RU', { month: 'long', year: 'numeric' });
+  return (y: number, m: number) => {
+    const s = f.format(new Date(y, m, 1)).replace(/\s*г\.$/, '');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+}
+
+function Thumbs({ c, href }: { c: Card; href: string }) {
+  if (c.gallery.length === 0) return null;
+  const shown = c.gallery.slice(0, 4);
+  const more = c.gallery.length - shown.length;
+  return (
+    <a className="nw-strip" href={href} aria-label={t('nw.gallery')}>
+      {shown.map((u, i) => <img key={u + i} src={u} alt="" loading="lazy" decoding="async" />)}
+      {more > 0 && <span className="nw-strip-more">+{more}</span>}
+    </a>
+  );
+}
+
+function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+  const href = `#/news/${c.id}`;
+  return (
+    <article className="nf-hero nw-hero" style={{ ['--nf-accent' as string]: c.accent }}>
+      <NewsCover c={c} servers={servers} href={href} />
+      <div className="nf-hero-in">
+        {(c.author || c.countdownAt) && (
+          <div className="nf-meta">
+            {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
+          </div>
+        )}
+        {(c.text || c.fields.length > 0) && <div className="nf-text is-clamped"><NewsText text={c.text} fields={c.fields} /></div>}
+        <Thumbs c={c} href={href} />
+        <div className="nf-actions">
+          <a className="btn" href={href}>{t('nw.read')}</a>
+          {c.link && <a className="btn btn-soft" href={c.link} target="_blank" rel="noopener noreferrer">{t('nw.openLink')}</a>}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+  const href = `#/news/${c.id}`;
+  return (
+    <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
+      <a className="nf-thumb nw-thumb" href={href} style={coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1} />
+      <div className="nf-item-in">
+        <div className="nw-chips">
+          {c.pinned && <PinChip />}
+          <CategoryChip category={c.category} />
+          {c.at && <span className="nw-date">{fmtDate(c.at)}</span>}
+        </div>
+        <h3 className="nf-item-title"><a href={href}>{c.title}</a></h3>
+        {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
+        <div className="nf-actions">
+          {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * The feed column: the first item large, then pinned ones, then the rest grouped by month.
+ * `items` must already be ordered (pinned first, newest first) and filtered.
+ */
+export function PublicFeed({ items, servers, flat = false }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean }) {
+  const { lang } = useI18n();
+  if (items.length === 0) return null;
+  const cards = items.map(cardOf);
+  const [hero, ...rest] = cards;
+  const pinned = rest.filter((c) => c.pinned);
+  const normal = rest.filter((c) => !c.pinned);
+  const groups = flat ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
+
+  return (
+    <div className="nf nw-feed">
+      <Hero c={hero!} servers={servers} />
+      {pinned.length > 0 && (
+        <section className="nw-group">
+          <h3 className="nf-more">{t('nw.pinned')}</h3>
+          <div className="nf-list">{pinned.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+        </section>
+      )}
+      {groups.map((g) => (
+        <section key={g.key} className="nw-group">
+          <h3 className="nf-more">{g.label || t('nw.earlier')}</h3>
+          <div className="nf-list">{g.items.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+        </section>
+      ))}
     </div>
   );
 }

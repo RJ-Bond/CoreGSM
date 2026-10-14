@@ -1,4 +1,5 @@
-import { getToken, type NewsEmbed, type NewsPayload } from '../../api';
+import { getToken, type NewsCategory, type NewsChangeKind, type NewsEmbed, type NewsPayload } from '../../api';
+import { isHttpsUrl, isChangeKind, normCategory } from './newsLogic';
 import { GAMES } from '../../games';
 
 // ---------- limits (Discord) ----------
@@ -14,6 +15,12 @@ export const LIMITS = {
   total: 6000,
   embeds: 10,
   statusServers: 5,
+  gallery: 6,
+  changes: 20,
+  changeText: 200,
+  actions: 3,
+  actionLabel: 40,
+  countdownLabel: 60,
 } as const;
 
 // ---------- draft <-> payload ----------
@@ -41,7 +48,21 @@ export interface Draft {
   /** the first one is `payload.embed`, the others `payload.extraEmbeds` */
   embeds: EmbedDraft[];
   statusServerIds: number[];
+  // site-only fields (the Discord message ignores them)
+  category: NewsCategory;
+  pinned: boolean;
+  game: string;
+  gallery: GalleryRow[];
+  changes: ChangeRow[];
+  /** value of a datetime-local input ('' = no countdown) */
+  countdownAt: string;
+  countdownLabel: string;
+  actions: ActionRow[];
 }
+
+export interface GalleryRow { k: string; url: string; upload: string }
+export interface ChangeRow { k: string; kind: NewsChangeKind; text: string }
+export interface ActionRow { k: string; label: string; url: string }
 
 let keySeq = 0;
 export const newKey = () => `f${Date.now().toString(36)}${(keySeq++).toString(36)}`;
@@ -51,7 +72,11 @@ export const blankEmbed = (): EmbedDraft => ({
   thumbnail: '', imageUrl: '', imageUpload: '', fields: [], footer: '', timestamp: false,
 });
 
-export const blank = (channelId: string): Draft => ({ channelId, content: '', mention: 'none', embeds: [blankEmbed()], statusServerIds: [] });
+export const blankSite = (): Pick<Draft, 'category' | 'pinned' | 'game' | 'gallery' | 'changes' | 'countdownAt' | 'countdownLabel' | 'actions'> => ({
+  category: 'announcement', pinned: false, game: '', gallery: [], changes: [], countdownAt: '', countdownLabel: '', actions: [],
+});
+
+export const blank = (channelId: string): Draft => ({ channelId, content: '', mention: 'none', embeds: [blankEmbed()], statusServerIds: [], ...blankSite() });
 
 function embedToPayload(d: EmbedDraft): NewsEmbed {
   return {
@@ -72,6 +97,20 @@ export function toPayload(d: Draft): NewsPayload {
   const p: NewsPayload = { content: d.content, mention: d.mention, embed: embedToPayload(d.embeds[0] ?? blankEmbed()) };
   if (d.embeds.length > 1) p.extraEmbeds = d.embeds.slice(1).map(embedToPayload);
   if (d.statusServerIds.length) p.statusServerIds = d.statusServerIds;
+  if (d.category !== 'announcement') p.category = d.category;
+  if (d.pinned) p.pinned = true;
+  if (d.game) p.game = d.game;
+  const gallery = d.gallery.filter((g) => g.upload || g.url.trim()).slice(0, LIMITS.gallery).map((g) => (g.upload ? { upload: g.upload } : { url: g.url.trim() }));
+  if (gallery.length) p.gallery = gallery;
+  const changes = d.changes.filter((c) => c.text.trim()).slice(0, LIMITS.changes).map((c) => ({ kind: c.kind, text: c.text.trim() }));
+  if (changes.length) p.changes = changes;
+  const at = d.countdownAt ? new Date(d.countdownAt).getTime() : NaN;
+  if (Number.isFinite(at)) {
+    p.countdownAt = at;
+    if (d.countdownLabel.trim()) p.countdownLabel = d.countdownLabel.trim();
+  }
+  const actions = d.actions.filter((a) => a.label.trim() && a.url.trim()).slice(0, LIMITS.actions).map((a) => ({ label: a.label.trim(), url: a.url.trim() }));
+  if (actions.length) p.actions = actions;
   return p;
 }
 
@@ -100,6 +139,14 @@ export function fromPayload(p: NewsPayload, channelId: string): Draft {
     mention: p.mention ?? 'none',
     embeds: [embedFromPayload(p.embed), ...(p.extraEmbeds ?? []).map((e) => embedFromPayload(e))].slice(0, LIMITS.embeds),
     statusServerIds: (p.statusServerIds ?? []).slice(0, LIMITS.statusServers),
+    category: normCategory(p.category),
+    pinned: !!p.pinned,
+    game: typeof p.game === 'string' ? p.game : '',
+    gallery: (Array.isArray(p.gallery) ? p.gallery : []).slice(0, LIMITS.gallery).map((g) => ({ k: newKey(), url: g?.url ?? '', upload: g?.upload ?? '' })),
+    changes: (Array.isArray(p.changes) ? p.changes : []).slice(0, LIMITS.changes).map((c) => ({ k: newKey(), kind: isChangeKind(c?.kind) ? c.kind : 'change', text: c?.text ?? '' })),
+    countdownAt: typeof p.countdownAt === 'number' && Number.isFinite(p.countdownAt) && p.countdownAt > 0 ? toLocalInput(p.countdownAt) : '',
+    countdownLabel: p.countdownLabel ?? '',
+    actions: (Array.isArray(p.actions) ? p.actions : []).slice(0, LIMITS.actions).map((a) => ({ k: newKey(), label: a?.label ?? '', url: a?.url ?? '' })),
   };
 }
 
@@ -134,7 +181,7 @@ export const TEMPLATES: { id: string; label: string; apply: TemplateApply }[] = 
 export function applyTemplate(d: Draft, t: TemplateApply): Draft {
   const { mention, fields, ...rest } = t;
   const e: EmbedDraft = { ...blankEmbed(), ...rest, fields: (fields ?? []).map((f) => ({ ...f, k: newKey() })) };
-  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e] };
+  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e], category: d.category, pinned: d.pinned, game: d.game, gallery: d.gallery, changes: d.changes, countdownAt: d.countdownAt, countdownLabel: d.countdownLabel, actions: d.actions };
 }
 
 // ---------- message types: colour + icon + title prefix ----------
@@ -279,6 +326,10 @@ export function runChecks(d: Draft): Check[] {
   } else if (d.mention === 'here' || /@here/.test(d.content)) {
     out.push({ level: 'warn', text: 'Сообщение упомянет @here: уведомление получат все, кто сейчас онлайн.' });
   }
+
+  const badAction = d.actions.filter((a) => (a.label.trim() || a.url.trim()) && !(a.label.trim() && isHttpsUrl(a.url))).length;
+  if (badAction) out.push({ level: 'warn', text: `Кнопок на сайте с пустой подписью или ссылкой не по https://: ${badAction}. Они не будут показаны.` });
+  if (d.countdownAt && new Date(d.countdownAt).getTime() < Date.now()) out.push({ level: 'warn', text: 'Время отсчёта уже прошло: на сайте будет «Началось».' });
 
   const httpImg: string[] = [];
   d.embeds.forEach((e) => {

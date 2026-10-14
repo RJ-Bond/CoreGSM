@@ -12,9 +12,12 @@ import { LimitsPanel } from '../components/news/LimitsPanel';
 import { Counter, MarkdownField } from '../components/news/MarkdownField';
 import {
   LIMITS, PALETTE, PRESETS, TEMPLATES, applyPreset, applyTemplate as applyTpl, blank, blankEmbed, embedHasContent, fromPayload, gameColors, hex, parseHex, payloadKey, presetOf,
-  sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type VarServer,
+  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
+import { PublicFeed } from '../components/news/PublicFeed';
+import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isChangeKind, isHttpsUrl } from '../components/news/newsLogic';
+import { GAMES } from '../games';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
 import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast } from '../ui';
@@ -92,6 +95,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [pickTest, setPickTest] = useState(false);
   const [restore, setRestore] = useState<{ payload: NewsPayload; channelId?: string; ts?: number } | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [pvTab, setPvTab] = useState<'discord' | 'site'>('discord');
 
   const baseline = useRef('');
   const autosaveOff = useRef(false);
@@ -559,12 +563,105 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </Section>
           )}
 
+          <Section title="На сайте" hint="Эти поля видны только на странице новостей панели; в Discord они не попадают.">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Рубрика">
+                <select id="news-category" className="input" value={d.category} onChange={(ev) => set({ category: ev.target.value as Draft['category'] })}>
+                  {NEWS_CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_LABEL_RU[c]}</option>)}
+                </select>
+              </Field>
+              <Field label="Игра (для обложки по умолчанию)">
+                <select id="news-game" className="input" value={d.game} onChange={(ev) => set({ game: ev.target.value })}>
+                  <option value="">нет</option>
+                  {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
+                </select>
+              </Field>
+            </div>
+            <label className="flex items-center gap-3 text-sm font-bold text-mute">
+              <Switch checked={d.pinned} onChange={(on) => set({ pinned: on })} /> Закрепить вверху ленты
+            </label>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Отсчёт времени</span>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input id="news-cd-at" type="datetime-local" className="input" aria-label="Когда" value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
+                <input id="news-cd-label" className="input" aria-label="Подпись отсчёта" maxLength={LIMITS.countdownLabel} placeholder="Вайп" value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
+              </div>
+              <p className="text-xs font-semibold text-mute">На сайте: «Вайп через 2 д 4 ч 10 мин», после времени «Началось». {d.countdownAt && <button type="button" className="btn-link" onClick={() => set({ countdownAt: '', countdownLabel: '' })}>Убрать отсчёт</button>}</p>
+            </div>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
+              {d.gallery.map((g, i) => (
+                <ImageDrop
+                  key={g.k}
+                  id={'news-gal-' + i}
+                  label={'Картинка ' + (i + 1)}
+                  url={g.url}
+                  upload={g.upload}
+                  allowUpload
+                  minWidth={400}
+                  onUrl={(v) => set({ gallery: d.gallery.map((x) => (x.k === g.k ? { ...x, url: v, upload: v ? '' : x.upload } : x)) })}
+                  onUpload={(n) => set({ gallery: n ? d.gallery.map((x) => (x.k === g.k ? { ...x, upload: n, url: '' } : x)) : d.gallery.filter((x) => x.k !== g.k) })}
+                />
+              ))}
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.gallery.length >= LIMITS.gallery} onClick={() => set({ gallery: [...d.gallery, { k: newKey(), url: '', upload: '' }] })}>+ Добавить картинку</button>
+            </div>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
+              {d.changes.map((c, i) => (
+                <div key={c.k} className="nw-edit-row">
+                  <select aria-label={'Тип изменения ' + (i + 1)} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
+                    {CHANGE_ORDER.map((k) => <option key={k} value={k}>{CHANGE_LABEL_RU[k]}</option>)}
+                  </select>
+                  <input aria-label={'Текст изменения ' + (i + 1)} className="input" maxLength={LIMITS.changeText} value={c.text} placeholder="Что именно" onChange={(ev) => set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, text: ev.target.value } : x)) })} />
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ changes: d.changes.filter((x) => x.k !== c.k) })}>Убрать</button>
+                </div>
+              ))}
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.changes.length >= LIMITS.changes} onClick={() => set({ changes: [...d.changes, { k: newKey(), kind: 'add', text: '' }] })}>+ Добавить пункт</button>
+            </div>
+
+            <div className="space-y-2">
+              <span className="label !mb-0">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
+              {d.actions.map((a, i) => {
+                const bad = !!a.url.trim() && !isHttpsUrl(a.url);
+                return (
+                  <div key={a.k} className="space-y-1">
+                    <div className="nw-edit-row">
+                      <input aria-label={'Подпись кнопки ' + (i + 1)} className="input" maxLength={LIMITS.actionLabel} value={a.label} placeholder="Подробнее" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, label: ev.target.value } : x)) })} />
+                      <input aria-label={'Ссылка кнопки ' + (i + 1)} aria-invalid={bad} className="input" value={a.url} placeholder="https://…" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, url: ev.target.value.trim() } : x)) })} />
+                      <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ actions: d.actions.filter((x) => x.k !== a.k) })}>Убрать</button>
+                    </div>
+                    {bad && <p className="text-sm font-bold text-bad" role="alert">Ссылка должна начинаться с https://</p>}
+                  </div>
+                );
+              })}
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.actions.length >= LIMITS.actions} onClick={() => set({ actions: [...d.actions, { k: newKey(), label: '', url: '' }] })}>+ Добавить кнопку</button>
+            </div>
+          </Section>
+
           {id && <HistoryPanel id={id} locked={item?.status === 'sending' || item?.status === 'queued'} onRestored={(it) => { setItem(it); const nd = fromPayload(it.payload, it.channelId); baseline.current = payloadKey(toPayload(nd)); setD(nd); setActive(0); }} />}
         </div>
 
         <aside className="space-y-4 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:space-y-4 lg:overflow-y-auto lg:overscroll-contain">
           <div className={mobileTab === 'editor' ? 'hidden space-y-4 lg:block' : 'space-y-4'}>
-            <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
+            <div className="seg" role="group" aria-label="Вид предпросмотра">
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>В Discord</button>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>Как будет на сайте</button>
+            </div>
+            {pvTab === 'discord' ? (
+              <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
+            ) : (
+              <div className="panel p-3">
+                <PublicFeed
+                  flat
+                  servers={servers}
+                  items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
+                />
+                {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">Начните писать: здесь появится карточка новости.</p>}
+              </div>
+            )}
             {hasLive && <p className="px-1 text-xs font-semibold text-mute">Карточки серверов показаны образцом: настоящие данные появятся при отправке.</p>}
             <LimitsPanel d={d} active={cur} />
           </div>
