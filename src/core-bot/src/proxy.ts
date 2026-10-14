@@ -5,14 +5,6 @@ import { socksDispatcher } from 'fetch-socks';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-/**
- * Keep the HTTPS connection to Discord open between requests. undici closes an idle connection after 4 s by default,
- * and a new one through a SOCKS/HTTP proxy costs a TCP + SOCKS + TLS handshake (seconds on a far proxy): that alone
- * can exceed the 3 s Discord gives a slash command to answer («Приложение не отвечает»).
- */
-// Idle sockets are kept for 20 s only (and refreshed by the bot every 10 s): a longer keep-alive meant reusing sockets
-// that the proxy or Cloudflare had already closed, which fails with «other side closed».
-const KEEP_ALIVE = { keepAliveTimeout: 20_000, keepAliveMaxTimeout: 60_000, connections: 4 };
 
 export interface ProxySetup {
   /** dispatcher for Discord REST (HTTPS API) */
@@ -56,7 +48,6 @@ export function parseProxy(raw: string): ProxySetup | null {
             port,
             ...(user ? { userId: user, password: pass } : {}),
           },
-          KEEP_ALIVE,
         ) as unknown as Dispatcher,
         ws: new SocksProxyAgent(`socks5h://${auth}${u.hostname}:${port}`) as unknown as Agent,
         label,
@@ -65,7 +56,7 @@ export function parseProxy(raw: string): ProxySetup | null {
     case 'http:':
     case 'https:':
       return {
-        rest: new ProxyAgent({ uri: u.toString(), ...KEEP_ALIVE }),
+        rest: new ProxyAgent(u.toString()),
         ws: new HttpsProxyAgent(u.toString()) as unknown as Agent,
         label,
       };

@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2fdb3f0a98fc"
+COREGSM_BUILD="f512d6c60107"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -9651,7 +9651,6 @@ const LOGIN_RETRY_MS = 60_000;
 // The gateway socket is created inside discord.js, so the proxy hook must be installed before it is loaded.
 // The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
 let gatewayAgent: Agent | undefined;
-let warmTimer: ReturnType<typeof setInterval> | undefined;
 patchGatewayAgent(() => gatewayAgent);
 const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
 type DiscordClient = InstanceType<typeof Client>;
@@ -9825,10 +9824,6 @@ async function publishGuilds(): Promise<void> {
 }
 
 async function stopClient(): Promise<void> {
-  if (warmTimer) {
-    clearInterval(warmTimer);
-    warmTimer = undefined;
-  }
   if (!client) return;
   const c = client;
   client = null;
@@ -9839,8 +9834,11 @@ async function stopClient(): Promise<void> {
   }
 }
 
+/** Discord drops a second create-message with the same nonce (within a few minutes): retries are safe */
+const newNonce = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.slice(0, 25);
+
 /** a pooled connection that the proxy closed under us: the request never reached Discord, so one more try is safe */
-const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated/i;
+const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated|operation was aborted|AbortError|timed out|ETIMEDOUT/i;
 async function retrySocket<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   for (let i = 1; ; i++) {
     try {
@@ -9849,7 +9847,7 @@ async function retrySocket<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
       const err = e as Error & { code?: string; cause?: { message?: string; code?: string } };
       const text = `${err.message} ${err.code ?? ''} ${err.cause?.message ?? ''} ${err.cause?.code ?? ''}`;
       if (i >= tries || !SOCKET_ERR.test(text)) throw e;
-      log(`connection to Discord was closed by the other side, retry ${i}/${tries - 1}`);
+      log(`connection to Discord failed (${err.message}), retry ${i}/${tries - 1}`);
       await new Promise((r) => setTimeout(r, 300 * i));
     }
   }
@@ -10162,7 +10160,7 @@ async function applyConfig(): Promise<void> {
 
   const c = new Client({
     intents: [GatewayIntentBits.Guilds],
-    ...(proxy ? { rest: { agent: proxy.rest } } : {}),
+    rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
   });
   c.on('error', (e) => log('client error', e));
   // added to / kicked from a Discord server: tell the panel at once instead of waiting for the next tick
@@ -10171,11 +10169,6 @@ async function applyConfig(): Promise<void> {
     lastGuildsJson = '';
     void publishGuilds().catch(() => undefined);
   };
-  // a warm connection to Discord: a tiny request every 25 s keeps the (proxied) HTTPS connection open, so that the
-  // acknowledgement of a slash command does not pay for a new TCP + proxy + TLS handshake
-  if (warmTimer) clearInterval(warmTimer);
-  warmTimer = setInterval(() => { void c.rest.get('/gateway').catch(() => undefined); }, 10_000);
-  warmTimer.unref?.();
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
@@ -10291,7 +10284,8 @@ async function update(c: DiscordClient, b: Binding): Promise<void> {
       log(`binding ${b.id}: cannot edit message, posting a new one`, (e as Error).message);
     }
   }
-  const sent = await retrySocket<{ id: string }>(() => channel.send(payload()));
+  const nonce = newNonce();
+  const sent = await retrySocket<{ id: string }>(() => channel.send({ ...payload(), nonce, enforceNonce: true }));
   await report(b.id, { messageId: sent.id, error: null });
 }
 
@@ -10417,7 +10411,8 @@ async function processNews(): Promise<void> {
         await reportNews(it.id, { status: 'sent', messageId: it.messageId });
         log(`news ${it.id}: message edited`);
       } else {
-        const sent = await retrySocket<{ id: string }>(() => channel.send(msg));
+        const nonce = newNonce();
+        const sent = await retrySocket<{ id: string }>(() => channel.send({ ...msg, nonce, enforceNonce: true }));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
         log(`news ${it.id}: posted`);
       }
@@ -10529,14 +10524,6 @@ import { socksDispatcher } from 'fetch-socks';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-/**
- * Keep the HTTPS connection to Discord open between requests. undici closes an idle connection after 4 s by default,
- * and a new one through a SOCKS/HTTP proxy costs a TCP + SOCKS + TLS handshake (seconds on a far proxy): that alone
- * can exceed the 3 s Discord gives a slash command to answer («Приложение не отвечает»).
- */
-// Idle sockets are kept for 20 s only (and refreshed by the bot every 10 s): a longer keep-alive meant reusing sockets
-// that the proxy or Cloudflare had already closed, which fails with «other side closed».
-const KEEP_ALIVE = { keepAliveTimeout: 20_000, keepAliveMaxTimeout: 60_000, connections: 4 };
 
 export interface ProxySetup {
   /** dispatcher for Discord REST (HTTPS API) */
@@ -10580,7 +10567,6 @@ export function parseProxy(raw: string): ProxySetup | null {
             port,
             ...(user ? { userId: user, password: pass } : {}),
           },
-          KEEP_ALIVE,
         ) as unknown as Dispatcher,
         ws: new SocksProxyAgent(`socks5h://${auth}${u.hostname}:${port}`) as unknown as Agent,
         label,
@@ -10589,7 +10575,7 @@ export function parseProxy(raw: string): ProxySetup | null {
     case 'http:':
     case 'https:':
       return {
-        rest: new ProxyAgent({ uri: u.toString(), ...KEEP_ALIVE }),
+        rest: new ProxyAgent(u.toString()),
         ws: new HttpsProxyAgent(u.toString()) as unknown as Agent,
         label,
       };
