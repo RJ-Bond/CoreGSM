@@ -311,7 +311,7 @@ try {
     for (const r of rows) if (isSecretKey(r.key) && r.value !== '' && !isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
   })();
 } catch (e) {
-  // no key at all: index.ts stops with a clear message right after the imports
+  // no key at all: config.ts stops with a clear message when it loads
   console.error('secrets migration skipped:', (e as Error).message);
 }
 if (restoredNow) {

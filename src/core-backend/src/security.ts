@@ -124,7 +124,7 @@ export function windowLimiter(max: number, windowMs: number, message = 'Слиш
   };
 }
 
-// per-address lockout after repeated failed logins across different usernames (the per-account lockout is in index.ts)
+// per-address lockout after repeated failed logins across different usernames (the per-account lockout is in auth.ts)
 const IP_LOCK_AFTER = 6;
 const IP_LOCK_MIN_NAMES = 3;
 const ipFails = new Map<string, { n: number; names: Set<string>; until: number; last: number; level: number }>();

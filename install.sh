@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9228d31e48eb"
+COREGSM_BUILD="a570e12dc42c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4319,6 +4319,157 @@ export function registerAlerts(deps: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/auth.ts" << '__COREGSM_EOF__'
+/** Sessions, roles and the access middleware; login rate limits and lockout. */
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
+import type { NextFunction, Request, Response } from 'express';
+import { INTERNAL_TOKEN, JWT_SECRET } from './config.js';
+import { db, getSetting } from './db.js';
+import { safeEqual } from './http.js';
+import { uaLabel } from './profile.js';
+import { readCookie, SESSION_COOKIE } from './security.js';
+
+// a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
+export const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(8).toString('hex'), 12);
+
+// ---------- auth ----------
+export type Role = 'admin' | 'moderator' | 'player';
+export interface AuthedRequest extends Request {
+  user?: { id: number; username: string; role: Role; sid?: string };
+}
+
+/** The signed-in user (checked against the database, so a deleted or demoted account loses access at once). */
+export function userFromToken(token: string): { id: number; username: string; role: Role; sid: string } | null {
+  if (!token) return null;
+  try {
+    const p = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub: string; sid?: string };
+    // a token without a session id predates sessions: sign in again
+    if (!p.sid) return null;
+    const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
+    if (!u) return null;
+    // an ended session (revoked from the profile) stops working at once
+    if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
+    const now = Date.now();
+    if (now - (lastSeen.get(p.sid) ?? 0) > 60_000) {
+      lastSeen.set(p.sid, now);
+      db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
+    }
+    return { ...u, sid: p.sid };
+  } catch {
+    return null;
+  }
+}
+export const lastSeen = new Map<string, number>();
+
+/** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
+export function loadUser(req: Request) {
+  const h = req.headers.authorization ?? '';
+  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readCookie(req, SESSION_COOKIE));
+}
+
+/** Starts a session and returns the signed token for it. */
+export function issueToken(u: { id: number; username: string }, req: Request): string {
+  const sid = crypto.randomBytes(12).toString('hex');
+  const now = Date.now();
+  db.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, ip, ua) VALUES (?, ?, ?, ?, ?, ?)').run(sid, u.id, now, now, (req.ip ?? '').slice(0, 64), uaLabel(req.headers['user-agent']));
+  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d', algorithm: 'HS256' });
+}
+setInterval(() => db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - 8 * 24 * 3600 * 1000), 3600_000).unref();
+
+export const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
+export const isStaff = (req: Request) => {
+  const r = (req as AuthedRequest).user?.role;
+  return r === 'admin' || r === 'moderator';
+};
+export const flag = (key: string, fallback: boolean) => {
+  const v = getSetting(key);
+  return v === null ? fallback : v === '1';
+};
+export const publicPanel = () => flag('public_panel', true);
+export const registrationOpen = () => flag('registration_open', true);
+
+/** any signed-in user */
+export function auth(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  req.user = u;
+  next();
+}
+/** administrators only */
+export function admin(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  if (u.role !== 'admin') return void res.status(403).json({ error: 'Это действие доступно только администратору' });
+  req.user = u;
+  next();
+}
+/** administrators and moderators (news and the Discord channel list) */
+export function staff(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+  if (u.role !== 'admin' && u.role !== 'moderator') return void res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
+  req.user = u;
+  next();
+}
+/** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
+export function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
+  const u = loadUser(req);
+  if (u) req.user = u;
+  if (!u && !publicPanel()) return void res.status(401).json({ error: 'Требуется вход' });
+  next();
+}
+
+export const LOCK_AFTER = 5;
+export const fails = new Map<string, { n: number; until: number }>();
+setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
+
+/** a lighter per-address limit for public lookups: `max` requests per minute */
+export function rateLimit(max: number) {
+  const hits = new Map<string, { n: number; reset: number }>();
+  setInterval(() => { for (const [k, v] of hits) if (v.reset < Date.now()) hits.delete(k); }, 60_000).unref();
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = req.ip ?? 'x';
+    const now = Date.now();
+    const h = hits.get(key);
+    if (!h || h.reset <= now) hits.set(key, { n: 1, reset: now + 60_000 });
+    else if (++h.n > max) {
+      const retryAfter = Math.max(1, Math.ceil((h.reset - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.', retryAfter });
+    }
+    next();
+  };
+}
+
+export const attempts = new Map<string, { n: number; reset: number }>();
+export function loginLimiter(req: Request, res: Response, next: NextFunction) {
+  const key = req.ip ?? 'x';
+  const now = Date.now();
+  const a = attempts.get(key);
+  if (a && a.reset > now && a.n >= 10) {
+    const retryAfter = Math.max(1, Math.ceil((a.reset - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.', retryAfter });
+    return;
+  }
+  if (!a || a.reset <= now) attempts.set(key, { n: 1, reset: now + 10 * 60 * 1000 });
+  else a.n++;
+  next();
+}
+
+// ---------- the signed-in user: profile, password, sessions, Discord account ----------
+export interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
+export const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+
+// ---------- internal (bot only, not exposed by nginx) ----------
+export function internal(req: Request, res: Response, next: NextFunction) {
+  if (safeEqual(String(req.headers['x-internal-token'] ?? ''), INTERNAL_TOKEN)) return next();
+  res.status(403).json({ error: 'forbidden' });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/avatars.ts" << '__COREGSM_EOF__'
 /**
  * User avatars uploaded in the profile. The picture is cropped to a square and stored as a 256 px PNG
@@ -5075,6 +5226,87 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/botState.ts" << '__COREGSM_EOF__'
+/** What the bot reports about itself: connection state and the Discord servers and channels it can post in. */
+import { getSetting } from './db.js';
+
+export interface BotStatus {
+  state: 'idle' | 'connecting' | 'online' | 'error';
+  tag: string | null;
+  clientId: string | null;
+  error: string | null;
+  commands: number | null;
+  updatedAt: number;
+}
+
+// guilds and text channels the bot can post in (reported by the bot, used for the channel picker)
+export interface BotGuild {
+  id: string;
+  name: string;
+  /** text channels the bot can see but not write to */
+  hidden?: number;
+  channels: { id: string; name: string; missing?: string[] }[];
+}
+
+// persisted, so a backend restart does not leave the channel picker empty until the bot reports again
+function loadGuilds(): BotGuild[] {
+  try {
+    const v = JSON.parse(getSetting('bot_guilds') ?? '[]');
+    return Array.isArray(v) ? (v as BotGuild[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** replaced as a whole by the bot's reports (POST /internal/bot-status, /internal/bot-guilds) */
+export const bot: { status: BotStatus; guilds: BotGuild[] } = {
+  status: { state: 'idle', tag: null, clientId: null, error: null, commands: null, updatedAt: 0 },
+  guilds: loadGuilds(),
+};
+
+export function channelInfo(channelId: string): { channelName: string | null; guildName: string | null; guildId: string | null } {
+  for (const g of bot.guilds) {
+    const c = g.channels.find((x) => x.id === channelId);
+    if (c) return { channelName: c.name, guildName: g.name, guildId: g.id };
+  }
+  return { channelName: null, guildName: null, guildId: null };
+}
+
+// View Channel + Send Messages + Embed Links + Attach Files
+const BOT_PERMISSIONS = 52224;
+
+/** The first segment of a bot token is the base64 of the bot user id (= application id). */
+export function clientIdFromToken(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const id = Buffer.from(token.split('.')[0], 'base64').toString('utf8');
+    return /^\d{15,25}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** the application id: from the running bot, else from the saved token */
+export const botClientId = () => bot.status.clientId ?? clientIdFromToken(getSetting('discord_token'));
+
+/** slash commands of the bot (the bot registers the same set; shown in the panel) */
+export const BOT_COMMANDS = [
+  { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
+  { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
+  { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
+];
+
+export function invitePayload() {
+  const clientId = botClientId();
+  return {
+    clientId,
+    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot%20applications.commands&permissions=${BOT_PERMISSIONS}` : null,
+  };
+}
+
+export const discordLoginReady = () => !!getSetting('discord_client_secret') && !!botClientId();
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/card.ts" << '__COREGSM_EOF__'
 import skia from 'skia-canvas';
 import { db, type ServerRow, type StatusRow } from './db.js';
@@ -5399,6 +5631,28 @@ export async function renderGameIcon(game: string): Promise<Buffer> {
   iconCache.set(game, buf);
   return buf;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/config.ts" << '__COREGSM_EOF__'
+/** Settings from the environment, checked at start: the process stops when a required secret is missing. */
+import crypto from 'node:crypto';
+
+export const PORT = Number(process.env.PORT ?? 3000);
+export const JWT_SECRET = process.env.JWT_SECRET ?? '';
+export const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN ?? '';
+export const POLL_MS = Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000;
+// one-time code that protects the first-run setup wizard from strangers who find the panel first
+export const SETUP_TOKEN = process.env.SETUP_TOKEN || crypto.randomBytes(8).toString('hex');
+
+if (JWT_SECRET.length < 32) {
+  console.error('JWT_SECRET must be set and at least 32 characters long (generate one with: openssl rand -hex 32)');
+  process.exit(1);
+}
+if (INTERNAL_TOKEN.length < 16) {
+  console.error('INTERNAL_TOKEN must be set (min 16 chars)');
+  process.exit(1);
+}
+export const APP_VERSION = process.env.APP_VERSION ?? '';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/covers.ts" << '__COREGSM_EOF__'
@@ -5807,7 +6061,7 @@ try {
     for (const r of rows) if (isSecretKey(r.key) && r.value !== '' && !isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
   })();
 } catch (e) {
-  // no key at all: index.ts stops with a clear message right after the imports
+  // no key at all: config.ts stops with a clear message when it loads
   console.error('secrets migration skipped:', (e as Error).message);
 }
 if (restoredNow) {
@@ -7463,126 +7717,64 @@ export function registerHealth({ app, admin, bot }: { app: Express; admin: Reque
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
-  cat > "$APP_DIR/core-backend/src/index.ts" << '__COREGSM_EOF__'
-import express, { type NextFunction, type Request, type Response } from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
+  cat > "$APP_DIR/core-backend/src/http.ts" << '__COREGSM_EOF__'
+/** Small helpers for Express handlers. */
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { z } from 'zod';
-import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
-import { queryServer, refreshServer, startPoller, stopPoller } from './gsm.js';
-import { installShutdown, onShutdown } from './shutdown.js';
-import { isKnownGame, renderCard, renderGameIcon } from './card.js';
-import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
-import { gameLabel } from './games.js';
-import { buildEmbed } from './embed.js';
-import { registerNews } from './news.js';
-import { installAudit, registerOps } from './ops.js';
-import { registerAlerts } from './alerts.js';
-import { maintenanceFor, occurrencesBetween, registerMaintenance, type WindowRow } from './maintenance.js';
-import { registerHealth } from './health.js';
-import { registerOverview } from './overview.js';
-import { registerDeliveries } from './deliveries.js';
-import { registerSubscriptions, unreadNotifications } from './subscriptions.js';
-import { registerGames } from './games.js';
-import { customAvatarUrl, registerAvatars, removeAvatar } from './avatars.js';
-import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf, registerProfile, removeBanner, uaLabel, vrRankIdFor } from './profile.js';
-import { registerDiscordRegistration } from './discordRegister.js';
-import { registerNickStatus } from './nickOnboarding.js';
-import { coverUrl, registerCovers, removeCover } from './covers.js';
-import { discordFetch } from './proxyFetch.js';
-import { countryLabel, countryOf } from './geo.js';
-import {
-  clearSessionCookie,
-  csrfGuard,
-  emailChanged,
-  ipLockRemaining,
-  ipLoginFailed,
-  noteLogin,
-  readCookie,
-  recentNewDevice,
-  registerSecurity,
-  securityHeaders,
-  SESSION_COOKIE,
-  setSessionCookie,
-  windowLimiter,
-} from './security.js';
+import type { NextFunction, Request, Response } from 'express';
 
-const PORT = Number(process.env.PORT ?? 3000);
-const JWT_SECRET = process.env.JWT_SECRET ?? '';
-const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN ?? '';
-const POLL_MS = Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000;
-// one-time code that protects the first-run setup wizard from strangers who find the panel first
-const SETUP_TOKEN = process.env.SETUP_TOKEN || crypto.randomBytes(8).toString('hex');
-
-if (JWT_SECRET.length < 32) {
-  console.error('JWT_SECRET must be set and at least 32 characters long (generate one with: openssl rand -hex 32)');
-  process.exit(1);
-}
-if (INTERNAL_TOKEN.length < 16) {
-  console.error('INTERNAL_TOKEN must be set (min 16 chars)');
-  process.exit(1);
-}
-// a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
-const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(8).toString('hex'), 12);
-
-const needsSetup = () => !db.prepare('SELECT 1 FROM users LIMIT 1').get();
-
-const safeEqual = (a: string, b: string): boolean => {
+export const safeEqual = (a: string, b: string): boolean => {
   const x = Buffer.from(a);
   const y = Buffer.from(b);
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
+export const wrap =
+  (fn: (req: Request, res: Response) => unknown) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res)).catch(next);
+  };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/index.ts" << '__COREGSM_EOF__'
+import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
+import { registerAlerts } from './alerts.js';
+import { admin, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
+import { customAvatarUrl, registerAvatars } from './avatars.js';
+import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
+import { bot, channelInfo } from './botState.js';
+import { APP_VERSION, POLL_MS, PORT, SETUP_TOKEN } from './config.js';
+import { registerCovers } from './covers.js';
+import { db, getSetting, setSetting } from './db.js';
+import { registerDeliveries } from './deliveries.js';
+import { registerDiscordRegistration } from './discordRegister.js';
+import { registerGames } from './games.js';
+import { startPoller, stopPoller } from './gsm.js';
+import { registerHealth } from './health.js';
+import { wrap } from './http.js';
+import { registerMaintenance } from './maintenance.js';
+import { registerNews } from './news.js';
+import { registerNickStatus } from './nickOnboarding.js';
+import { installAudit, registerOps } from './ops.js';
+import { registerOverview } from './overview.js';
+import { logAccount, registerProfile } from './profile.js';
+import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
+import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverData.js';
+import { installShutdown, onShutdown } from './shutdown.js';
+import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
+import { registerSubscriptions } from './subscriptions.js';
+import { router as accountRouter } from './routes/account.js';
+import { router as settingsRouter } from './routes/settings.js';
+import { router as updatesRouter } from './routes/updates.js';
+import { router as usersRouter } from './routes/users.js';
+import { router as discordLoginRouter } from './routes/discordLogin.js';
+import { router as serversRouter } from './routes/servers.js';
+import { router as bindingsRouter } from './routes/bindings.js';
+import { router as internalRouter } from './routes/internal.js';
+
 // optional first-start defaults from .env (the panel settings take over afterwards)
 if (getSetting('discord_token') === null && process.env.DISCORD_TOKEN) setSetting('discord_token', process.env.DISCORD_TOKEN);
 if (getSetting('proxy_url') === null && process.env.PROXY_URL) setSetting('proxy_url', process.env.PROXY_URL);
-
-const PROXY_RE = /^(socks5h?|http|https):\/\/([^@/\s]+@)?[^@/:\s]+:\d{1,5}\/?$/;
-const maskProxy = (u: string) => u.replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:***@');
-
-type ProxyType = 'socks5' | 'http';
-
-/**
- * Accepts what proxy sellers usually hand out and turns it into a URL:
- *   socks5://user:pass@host:port   (kept as is)
- *   host:port:user:pass            (the password may contain ":")
- *   user:pass@host:port
- *   host:port
- * The scheme comes from `type` when the text has none. Credentials are percent-encoded.
- */
-function normalizeProxy(raw: string, type: ProxyType): string {
-  const v = raw.trim();
-  if (!v || /^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return v;
-  let host = '';
-  let port = '';
-  let user: string | undefined;
-  let pass: string | undefined;
-  const at = v.lastIndexOf('@');
-  // "host:port:user:pass" is recognised first: the password itself may contain "@" or ":"
-  if (/^[^@:\s]+:\d{1,5}:[^\s]+$/.test(v)) {
-    const p = v.split(':');
-    [host, port, user] = p;
-    pass = p.slice(3).join(':');
-  } else if (at > 0) {
-    const cred = v.slice(0, at);
-    const ci = cred.indexOf(':');
-    user = ci < 0 ? cred : cred.slice(0, ci);
-    pass = ci < 0 ? undefined : cred.slice(ci + 1);
-    [host, port] = v.slice(at + 1).split(':');
-  } else {
-    const p = v.split(':');
-    if (p.length === 2) [host, port] = p;
-    else if (p.length >= 4) {
-      [host, port, user] = p;
-      pass = p.slice(3).join(':');
-    } else return v;
-  }
-  const auth = user ? `${encodeURIComponent(user)}${pass !== undefined ? ':' + encodeURIComponent(pass) : ''}@` : '';
-  return `${type}://${auth}${host}:${port}`;
-}
 
 const app = express();
 // One trusted proxy hop (the nginx container): req.ip / req.secure come from the X-Forwarded-For / X-Forwarded-Proto it
@@ -7598,1600 +7790,19 @@ app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 installAudit(app);
 
-const wrap =
-  (fn: (req: Request, res: Response) => unknown) =>
-  (req: Request, res: Response, next: NextFunction) => {
-    Promise.resolve(fn(req, res)).catch(next);
-  };
-
-// ---------- auth ----------
-type Role = 'admin' | 'moderator' | 'player';
-interface AuthedRequest extends Request {
-  user?: { id: number; username: string; role: Role; sid?: string };
-}
-
-/** The signed-in user (checked against the database, so a deleted or demoted account loses access at once). */
-function userFromToken(token: string): { id: number; username: string; role: Role; sid: string } | null {
-  if (!token) return null;
-  try {
-    const p = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub: string; sid?: string };
-    // a token without a session id predates sessions: sign in again
-    if (!p.sid) return null;
-    const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
-    if (!u) return null;
-    // an ended session (revoked from the profile) stops working at once
-    if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
-    const now = Date.now();
-    if (now - (lastSeen.get(p.sid) ?? 0) > 60_000) {
-      lastSeen.set(p.sid, now);
-      db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
-    }
-    return { ...u, sid: p.sid };
-  } catch {
-    return null;
-  }
-}
-const lastSeen = new Map<string, number>();
-
-/** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
-function loadUser(req: Request) {
-  const h = req.headers.authorization ?? '';
-  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readCookie(req, SESSION_COOKIE));
-}
-
-/** Starts a session and returns the signed token for it. */
-function issueToken(u: { id: number; username: string }, req: Request): string {
-  const sid = crypto.randomBytes(12).toString('hex');
-  const now = Date.now();
-  db.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, ip, ua) VALUES (?, ?, ?, ?, ?, ?)').run(sid, u.id, now, now, (req.ip ?? '').slice(0, 64), uaLabel(req.headers['user-agent']));
-  return jwt.sign({ username: u.username, sid }, JWT_SECRET, { subject: String(u.id), expiresIn: '7d', algorithm: 'HS256' });
-}
-setInterval(() => db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - 8 * 24 * 3600 * 1000), 3600_000).unref();
-
-const isAdmin = (req: Request) => (req as AuthedRequest).user?.role === 'admin';
-const isStaff = (req: Request) => {
-  const r = (req as AuthedRequest).user?.role;
-  return r === 'admin' || r === 'moderator';
-};
-const flag = (key: string, fallback: boolean) => {
-  const v = getSetting(key);
-  return v === null ? fallback : v === '1';
-};
-const publicPanel = () => flag('public_panel', true);
-const registrationOpen = () => flag('registration_open', true);
-
-/** any signed-in user */
-function auth(req: AuthedRequest, res: Response, next: NextFunction) {
-  const u = loadUser(req);
-  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
-  req.user = u;
-  next();
-}
-/** administrators only */
-function admin(req: AuthedRequest, res: Response, next: NextFunction) {
-  const u = loadUser(req);
-  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
-  if (u.role !== 'admin') return void res.status(403).json({ error: 'Это действие доступно только администратору' });
-  req.user = u;
-  next();
-}
-/** administrators and moderators (news and the Discord channel list) */
-function staff(req: AuthedRequest, res: Response, next: NextFunction) {
-  const u = loadUser(req);
-  if (!u) return void res.status(401).json({ error: 'Требуется вход' });
-  if (u.role !== 'admin' && u.role !== 'moderator') return void res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
-  req.user = u;
-  next();
-}
-/** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
-function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
-  const u = loadUser(req);
-  if (u) req.user = u;
-  if (!u && !publicPanel()) return void res.status(401).json({ error: 'Требуется вход' });
-  next();
-}
-
-const LOCK_AFTER = 5;
-const fails = new Map<string, { n: number; until: number }>();
-setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
-
-/** a lighter per-address limit for public lookups: `max` requests per minute */
-function rateLimit(max: number) {
-  const hits = new Map<string, { n: number; reset: number }>();
-  setInterval(() => { for (const [k, v] of hits) if (v.reset < Date.now()) hits.delete(k); }, 60_000).unref();
-  return (req: Request, res: Response, next: NextFunction) => {
-    const key = req.ip ?? 'x';
-    const now = Date.now();
-    const h = hits.get(key);
-    if (!h || h.reset <= now) hits.set(key, { n: 1, reset: now + 60_000 });
-    else if (++h.n > max) {
-      const retryAfter = Math.max(1, Math.ceil((h.reset - now) / 1000));
-      res.setHeader('Retry-After', String(retryAfter));
-      return void res.status(429).json({ error: 'Слишком много запросов. Подождите минуту.', retryAfter });
-    }
-    next();
-  };
-}
-
-const attempts = new Map<string, { n: number; reset: number }>();
-function loginLimiter(req: Request, res: Response, next: NextFunction) {
-  const key = req.ip ?? 'x';
-  const now = Date.now();
-  const a = attempts.get(key);
-  if (a && a.reset > now && a.n >= 10) {
-    const retryAfter = Math.max(1, Math.ceil((a.reset - now) / 1000));
-    res.setHeader('Retry-After', String(retryAfter));
-    res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.', retryAfter });
-    return;
-  }
-  if (!a || a.reset <= now) attempts.set(key, { n: 1, reset: now + 10 * 60 * 1000 });
-  else a.n++;
-  next();
-}
-
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post(
-  '/api/auth/login',
-  loginLimiter,
-  wrap(async (req, res) => {
-    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
-    if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
-    // progressive lockout of the whole address after failures across several logins
-    const ipWait = ipLockRemaining(req.ip);
-    if (ipWait > 0) {
-      res.setHeader('Retry-After', String(ipWait));
-      return res.status(429).json({ error: `Слишком много неудачных попыток входа с этого адреса. Повторите через ${ipWait} с.`, retryAfter: ipWait });
-    }
-    // lock out after repeated wrong passwords for the same login from the same address
-    const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
-    const lock = fails.get(key);
-    if (lock && lock.until > Date.now()) {
-      const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
-      res.setHeader('Retry-After', String(retryAfter));
-      return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
-    }
-    const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
-      | { id: number; username: string; password_hash: string; role: Role; status: string }
-      | undefined;
-    const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
-    if (!u || !ok) {
-      const f = fails.get(key) ?? { n: 0, until: 0 };
-      f.n++;
-      if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
-      fails.set(key, f);
-      ipLoginFailed(req.ip, body.data.username);
-      if (u) logAccount(req, u.id, 'login_failed');
-      const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
-      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
-    }
-    fails.delete(key);
-    if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
-    attempts.delete(req.ip ?? 'x');
-    logAccount(req, u.id, 'login');
-    noteLogin(req, u.id, brand().name);
-    const token = issueToken(u, req);
-    setSessionCookie(req, res, token);
-    res.json({ token, username: u.username, role: u.role });
-  }),
-);
-
-// ---------- first-run setup wizard ----------
-app.get('/api/setup/status', (_req, res) => {
-  res.json({ needed: needsSetup() });
-});
-
-const setupSchema = z.object({
-  code: z.string().min(1).max(64),
-  // letters (any alphabet), digits, _ . - and single spaces between words; 3-32 characters
-  username: z
-    .string()
-    .trim()
-    .regex(/^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
-  password: z.string().min(10, 'Пароль должен быть не короче 10 символов').max(256),
-  discordToken: z.string().trim().max(200).optional(),
-  proxyUrl: z.string().trim().max(300).optional(),
-  proxyType: z.enum(['socks5', 'http']).optional(),
-});
-
-const PROXY_HELP = 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port';
-
-app.post(
-  '/api/setup',
-  loginLimiter,
-  wrap(async (req, res) => {
-    if (!needsSetup()) return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
-    const b = setupSchema.safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
-    if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
-    const proxyUrl = normalizeProxy(b.data.proxyUrl ?? '', b.data.proxyType ?? 'socks5');
-    if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
-
-    const hash = await bcrypt.hash(b.data.password, 12);
-    let userId = 0;
-    try {
-      db.transaction(() => {
-        // re-check inside the transaction so two concurrent requests cannot both create an admin
-        if (!needsSetup()) throw new Error('already-setup');
-        userId = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
-        if (b.data.discordToken) setSetting('discord_token', b.data.discordToken);
-        if (proxyUrl) setSetting('proxy_url', proxyUrl);
-      })();
-    } catch {
-      return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
-    }
-    attempts.delete(req.ip ?? 'x');
-    console.log(`setup completed, admin "${b.data.username}" created`);
-    const token = issueToken({ id: userId, username: b.data.username }, req);
-    setSessionCookie(req, res, token);
-    noteLogin(req, userId, brand().name);
-    res.status(201).json({ token, username: b.data.username, role: 'admin' });
-  }),
-);
-
-// ---------- bot settings (token, proxy) ----------
-function settingsPayload(req?: Request) {
-  const tok = getSetting('discord_token');
-  const proxy = getSetting('proxy_url');
-  return {
-    discordTokenSet: !!tok,
-    discordTokenHint: tok ? `…${tok.slice(-4)}` : null,
-    proxyUrl: proxy ? maskProxy(proxy) : null,
-    discordSecretSet: !!getSetting('discord_client_secret'),
-    discordClientId: botStatus.clientId ?? clientIdFromToken(tok),
-    discordRedirect: req ? `${publicBase() ?? baseOf(req)}/api/auth/discord/callback` : '',
-  };
-}
-
-app.get('/api/settings', admin, (req, res) => {
-  res.json(settingsPayload(req));
-});
-
-// undefined = keep, empty string = clear
-const settingsSchema = z.object({
-  discordToken: z.string().trim().max(200).optional(),
-  proxyUrl: z.string().trim().max(300).optional(),
-  proxyType: z.enum(['socks5', 'http']).optional(),
-  discordClientSecret: z.string().trim().max(200).optional(),
-});
-
-app.put('/api/settings', admin, (req, res) => {
-  const b = settingsSchema.safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
-  const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
-  if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
-  if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
-  if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
-  if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);
-  res.json(settingsPayload(req));
-});
-
-let botStatus: {
-  state: 'idle' | 'connecting' | 'online' | 'error';
-  tag: string | null;
-  clientId: string | null;
-  error: string | null;
-  commands: number | null;
-  updatedAt: number;
-} = {
-  state: 'idle',
-  tag: null,
-  clientId: null,
-  error: null,
-  commands: null,
-  updatedAt: 0,
-};
-
-// View Channel + Send Messages + Embed Links + Attach Files
-const BOT_PERMISSIONS = 52224;
-
-/** The first segment of a bot token is the base64 of the bot user id (= application id). */
-function clientIdFromToken(token: string | null): string | null {
-  if (!token) return null;
-  try {
-    const id = Buffer.from(token.split('.')[0], 'base64').toString('utf8');
-    return /^\d{15,25}$/.test(id) ? id : null;
-  } catch {
-    return null;
-  }
-}
-
-/** slash commands of the bot (the bot registers the same set; shown in the panel) */
-const BOT_COMMANDS = [
-  { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
-  { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
-  { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
-];
-
-function invitePayload() {
-  const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
-  return {
-    clientId,
-    inviteUrl: clientId ? `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot%20applications.commands&permissions=${BOT_PERMISSIONS}` : null,
-  };
-}
-
-app.get('/api/bot/status', admin, (_req, res) => {
-  // a bot that stopped reporting is considered offline
-  const stale = Date.now() - botStatus.updatedAt > 45_000;
-  const base = stale ? { ...botStatus, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : botStatus;
-  res.json({ ...base, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: botGuilds.length, channelCount: botGuilds.reduce((n, g) => n + g.channels.length, 0) });
-});
-
-// ---------- updates ----------
-// The container never touches Docker or the host. "Update" drops a request file into UPDATE_DIR (a bind mount);
-// a root systemd path unit on the host notices it and runs `coregsm-update`, which reports progress in status.json.
-const UPDATE_DIR = process.env.UPDATE_DIR ?? '';
-const APP_VERSION = process.env.APP_VERSION ?? '';
-const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main';
-
-let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
-
-/** raw.githubusercontent.com is cached for minutes after a push; the GitHub API returns the file as it is now. */
-function repoApiUrl(file: string): string | null {
-  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
-  return m ? `https://api.github.com/repos/${m[1]}/${m[2]}/contents/${file}?ref=${m[3]}` : null;
-}
-
-async function fetchRepoText(file: string): Promise<string> {
-  const api = repoApiUrl(file);
-  if (api) {
-    try {
-      const r = await fetch(api, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github.raw+json', 'User-Agent': 'CoreGSM' } });
-      if (r.ok) return await r.text();
-    } catch {
-      /* rate limit or no route: fall back to the plain file below */
-    }
-  }
-  const res = await fetch(`${UPDATE_BASE}/${file}?t=${Date.now()}`, { signal: AbortSignal.timeout(8000), headers: { 'cache-control': 'no-cache' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
-}
-
-async function checkRemote(force = false): Promise<void> {
-  if (!force && Date.now() - remote.at < 5 * 60_000) return;
-  try {
-    const m = /^build=([a-f0-9]{6,64})$/m.exec(await fetchRepoText('version.txt'));
-    if (!m) throw new Error('некорректный version.txt');
-    remote = { build: m[1], error: null, at: Date.now() };
-  } catch (e) {
-    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now() };
-  }
-}
-
-function updateFile(name: string): string {
-  return path.join(UPDATE_DIR, name);
-}
-
-function updatePayload() {
-  // progress: 0..100 written by the manager/installer while an update runs (absent in older managers)
-  let job: { state: string; message: string; time: number; rollback_available?: boolean; progress?: number } | null = null;
-  try {
-    job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
-  } catch {
-    /* no update has run yet */
-  }
-  const dirOk = !!UPDATE_DIR && fs.existsSync(UPDATE_DIR);
-  return {
-    current: APP_VERSION || null,
-    latest: remote.build,
-    available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build),
-    checkedAt: remote.at || null,
-    error: remote.error,
-    canApply: dirOk,
-    pending: dirOk && fs.existsSync(updateFile('request')),
-    // the host manager keeps the previous version and says so in status.json
-    canRollback: dirOk && job?.rollback_available === true,
-    job,
-  };
-}
-
-// ---- changelog: the last commits of the repository the panel updates from
-const GITHUB_API = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '');
-interface ChangelogItem { sha: string; title: string; date: number | null; url: string }
-let changelog: { at: number; items: ChangelogItem[]; error: string | null } | null = null;
-
-function commitsUrl(): string | null {
-  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
-  return m ? `${GITHUB_API}/repos/${m[1]}/${m[2]}/commits?per_page=15&sha=${encodeURIComponent(m[3])}` : null;
-}
-
-/** first line of the message without "Co-Authored-By" trailers */
-const commitTitle = (msg: string): string =>
-  msg
-    .split(/\r?\n/)
-    .filter((l) => !/^co-authored-by:/i.test(l.trim()))[0]
-    ?.trim()
-    .slice(0, 200) ?? '';
-
-async function loadChangelog(): Promise<{ items: ChangelogItem[]; error?: string }> {
-  if (changelog && Date.now() - changelog.at < (changelog.error ? 60_000 : 10 * 60_000)) {
-    return changelog.error ? { items: changelog.items, error: changelog.error } : { items: changelog.items };
-  }
-  const url = commitsUrl();
-  try {
-    if (!url) throw new Error('адрес репозитория обновлений не распознан');
-    const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'CoreGSM' } });
-    if (!r.ok) throw new Error(`GitHub ответил HTTP ${r.status}`);
-    const list = (await r.json()) as { sha?: string; html_url?: string; commit?: { message?: string; committer?: { date?: string }; author?: { date?: string } } }[];
-    if (!Array.isArray(list)) throw new Error('неожиданный ответ GitHub');
-    const items = list.slice(0, 15).map((c) => {
-      const d = Date.parse(c.commit?.committer?.date ?? c.commit?.author?.date ?? '');
-      return { sha: String(c.sha ?? ''), title: commitTitle(String(c.commit?.message ?? '')), date: Number.isNaN(d) ? null : d, url: String(c.html_url ?? '') };
-    });
-    changelog = { at: Date.now(), items, error: null };
-    return { items };
-  } catch (e) {
-    const error = `Не удалось получить список изменений: ${(e as Error).message}`;
-    changelog = { at: Date.now(), items: changelog?.items ?? [], error };
-    return { items: changelog.items, error };
-  }
-}
-
-app.get(
-  '/api/update/changelog',
-  admin,
-  wrap(async (_req, res) => {
-    res.json(await loadChangelog());
-  }),
-);
-
-app.get(
-  '/api/update/status',
-  admin,
-  wrap(async (_req, res) => {
-    await checkRemote();
-    res.json(updatePayload());
-  }),
-);
-
-app.post(
-  '/api/update/check',
-  admin,
-  wrap(async (_req, res) => {
-    await checkRemote(true);
-    res.json(updatePayload());
-  }),
-);
-
-app.post('/api/update/apply', admin, (_req, res) => {
-  const state = updatePayload();
-  if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm update' });
-  if (state.job?.state === 'running') return res.status(409).json({ error: 'Обновление уже выполняется' });
-  try {
-    fs.writeFileSync(updateFile('request'), String(Date.now()));
-  } catch {
-    return res.status(500).json({ error: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)' });
-  }
-  console.log('update requested from the panel');
-  res.status(202).json(updatePayload());
-});
-
-// same request file, different word: the host manager reads it and restores the previous version
-app.post('/api/update/rollback', admin, (_req, res) => {
-  const state = updatePayload();
-  if (!state.canApply) return res.status(503).json({ error: 'Откат из панели не настроен на сервере. Выполните: sudo coregsm rollback' });
-  if (state.job?.state === 'running') return res.status(409).json({ error: 'Сейчас выполняется обновление или откат' });
-  if (!state.canRollback) return res.status(409).json({ error: 'Откат недоступен: предыдущая версия не сохранена' });
-  if (state.pending) return res.status(409).json({ error: 'Запрос уже ожидает выполнения' });
-  try {
-    fs.writeFileSync(updateFile('request'), 'rollback');
-  } catch {
-    return res.status(500).json({ error: 'Не удалось создать запрос на откат (нет прав на папку /app/update)' });
-  }
-  console.log('rollback requested from the panel');
-  res.status(202).json(updatePayload());
-});
-
-// ---------- access: who may look at the panel, who may register ----------
-// The public https address of the panel (Discord needs it to load embed images). Trusted sources only, in this order:
-// PUBLIC_URL, https://DOMAIN, and the address an administrator opened the panel at (saved from an authenticated request).
-// A guest's Host header is never stored: it would let anyone point the embeds at their own server.
-const isRealDomain = (d: string) => /^[a-z0-9.-]+$/i.test(d) && d.includes('.') && !/^[\d.]+$/.test(d) && d.toLowerCase() !== 'localhost';
-function publicBase(): string | null {
-  const env = (process.env.PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
-  if (/^https?:\/\/[^\s/]+$/i.test(env)) return env;
-  const d = (process.env.DOMAIN ?? '').trim();
-  if (isRealDomain(d)) return `https://${d}`;
-  return getSetting('public_base') || null;
-}
-/** called only for requests that carry a valid administrator token */
-function rememberAdminBase(req: Request) {
-  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim().split(':')[0];
-  if (!isRealDomain(host)) return;
-  const base = `https://${host}`;
-  if (getSetting('public_base') !== base) setSetting('public_base', base);
-}
-
-const registrationMode = (): 'open' | 'approval' => (getSetting('registration_mode') === 'approval' ? 'approval' : 'open');
-const rulesText = () => getSetting('rules_text') ?? '';
-const discordLoginReady = () => !!getSetting('discord_client_secret') && !!(botStatus.clientId ?? clientIdFromToken(getSetting('discord_token')));
-const accessPayload = () => ({
-  publicPanel: publicPanel(),
-  registration: registrationOpen(),
-  registrationMode: registrationMode(),
-  rules: rulesText(),
-  discordLogin: discordLoginReady(),
-  brand: brand(),
-});
-
-app.get('/api/access', (_req, res) => {
-  res.json(accessPayload());
-});
-app.put('/api/access', admin, (req, res) => {
-  const b = z
-    .object({
-      publicPanel: z.boolean().optional(),
-      registration: z.boolean().optional(),
-      registrationMode: z.enum(['open', 'approval']).optional(),
-      rules: z.string().max(5000).optional(),
-    })
-    .safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
-  if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
-  if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
-  if (b.data.registrationMode !== undefined) setSetting('registration_mode', b.data.registrationMode);
-  if (b.data.rules !== undefined) setSetting('rules_text', b.data.rules.trim());
-  res.json(accessPayload());
-});
-
-// ---------- branding: community name, accent colour and logo ----------
-const LOGO_PATH = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'brand-logo');
-const LOGO_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
-const logoFile = () => Object.values(LOGO_TYPES).map((e) => `${LOGO_PATH}.${e}`).find((f) => fs.existsSync(f)) ?? null;
-const brand = () => ({
-  name: getSetting('brand_name') || 'CoreGSM',
-  color: getSetting('brand_color') || '#4f46e5',
-  color2: getSetting('brand_color2') || '',
-  preset: getSetting('brand_preset') || '',
-  hasLogo: !!logoFile(),
-  logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
-});
-
-app.put('/api/branding', admin, (req, res) => {
-  const b = z
-    .object({
-      name: z.string().trim().min(1).max(32),
-      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-      color2: z.string().regex(/^(#[0-9a-fA-F]{6})?$/).optional(),
-      preset: z.string().trim().max(24).optional(),
-    })
-    .safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'Название до 32 символов, цвет в виде #RRGGBB' });
-  setSetting('brand_name', b.data.name);
-  setSetting('brand_color', b.data.color.toLowerCase());
-  setSetting('brand_color2', (b.data.color2 ?? '').toLowerCase());
-  setSetting('brand_preset', b.data.preset ?? '');
-  res.json(brand());
-});
-app.put(
-  '/api/branding/logo',
-  admin,
-  express.raw({ type: Object.keys(LOGO_TYPES), limit: '3mb' }),
-  (req, res) => {
-    const ext = LOGO_TYPES[String(req.headers['content-type'] ?? '').split(';')[0]];
-    if (!ext || !Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 3 МБ' });
-    const old = logoFile();
-    if (old) fs.rmSync(old, { force: true });
-    fs.writeFileSync(`${LOGO_PATH}.${ext}`, req.body);
-    res.json(brand());
-  },
-);
-app.delete('/api/branding/logo', admin, (_req, res) => {
-  const old = logoFile();
-  if (old) fs.rmSync(old, { force: true });
-  res.json(brand());
-});
-app.get('/api/branding/logo', (_req, res) => {
-  const f = logoFile();
-  if (!f) return res.status(404).end();
-  res.set('Cache-Control', 'public, max-age=300').type(path.extname(f).slice(1)).send(fs.readFileSync(f));
-});
-// web app manifest (install the panel to the phone's home screen)
-app.get('/api/manifest.json', (_req, res) => {
-  const b = brand();
-  const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
-  res.type('application/manifest+json').json({
-    name: b.name,
-    short_name: b.name.slice(0, 12),
-    start_url: '/',
-    display: 'standalone',
-    background_color: '#f4f5f7',
-    theme_color: b.color,
-    icons: [
-      { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: b.hasLogo ? icon : '/logo-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      // the maskable icon has a full-bleed background and a safe zone (Android adaptive icons)
-      { src: '/logo-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-    ],
-  });
-});
-
-
-// ---------- registration of players ----------
-const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
-
-app.get('/api/auth/check', rateLimit(30), (req, res) => {
-  const name = String(req.query.username ?? '').trim();
-  const valid = USERNAME_RE.test(name);
-  const available = valid && !db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase());
-  res.json({ valid, available });
-});
-
-app.post(
-  '/api/auth/register',
-  windowLimiter(20, 3600_000, 'Слишком много регистраций с этого адреса. Попробуйте позже.'),
-  loginLimiter,
-  wrap(async (req, res) => {
-    if (needsSetup()) return res.status(409).json({ error: 'Панель ещё не настроена: сначала создайте администратора' });
-    if (!registrationOpen()) return res.status(403).json({ error: 'Регистрация закрыта администратором' });
-    const b = z
-      .object({
-        username: z.string().trim().regex(USERNAME_RE, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
-        password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256),
-        acceptRules: z.boolean().optional(),
-      })
-      .safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
-    if (rulesText() && !b.data.acceptRules) return res.status(400).json({ error: 'Нужно согласиться с правилами сообщества' });
-    if (db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(b.data.username.toLowerCase())) {
-      return res.status(409).json({ error: 'Этот логин уже занят' });
-    }
-    const hash = await bcrypt.hash(b.data.password, 12);
-    const pending = registrationMode() === 'approval';
-    try {
-      const id = Number(
-        db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
-      );
-      if (pending) return res.status(202).json({ pending: true });
-      const token = issueToken({ id, username: b.data.username }, req);
-      setSessionCookie(req, res, token);
-      noteLogin(req, id, brand().name);
-      res.status(201).json({ token, username: b.data.username, role: 'player' });
-    } catch {
-      res.status(409).json({ error: 'Этот логин уже занят' });
-    }
-  }),
-);
-
-// ---------- user management (administrators) ----------
-const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
-
-app.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
-    id: number;
-    username: string;
-    role: Role;
-    created_at: number | null;
-    status: string;
-    discord_name: string | null;
-  }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
-});
-
-app.post('/api/users/:id/approve', admin, (req, res) => {
-  const r = db.prepare("UPDATE users SET status = 'active' WHERE id = ? AND status = 'pending'").run(Number(req.params.id));
-  if (!r.changes) return res.status(404).json({ error: 'Заявка не найдена' });
-  res.json({ ok: true });
-});
-
-app.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
-  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']) }).safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
-  const id = Number(req.params.id);
-  const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
-  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
-  if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
-  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
-  res.json({ ok: true });
-});
-
-app.put(
-  '/api/users/:id/password',
-  admin,
-  wrap(async (req, res) => {
-    const b = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Пароль должен быть не короче 8 символов' });
-    const id = Number(req.params.id);
-    const r = db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), id);
-    if (!r.changes) return res.status(404).json({ error: 'Пользователь не найден' });
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
-    logAccount(req, id, 'password_changed', 'сброшен администратором');
-    res.json({ ok: true });
-  }),
-);
-
-app.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
-  const id = Number(req.params.id);
-  if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
-  const u = db.prepare('SELECT role, status FROM users WHERE id = ?').get(id) as { role: Role; status: string } | undefined;
-  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
-  if (u.role === 'admin' && u.status === 'active' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
-  db.prepare('DELETE FROM users WHERE id = ?').run(id);
-  removeAvatar(id);
-  removeBanner(id);
-  res.json({ ok: true });
-});
-
-// ---------- favourites (any signed-in user) ----------
-app.get('/api/favorites', auth, (req: AuthedRequest, res) => {
-  const rows = db.prepare('SELECT server_id FROM favorites WHERE user_id = ?').all(req.user!.id) as { server_id: number }[];
-  res.json(rows.map((r) => r.server_id));
-});
-app.put('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
-  const sid = Number(req.params.id);
-  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(sid)) return res.status(404).json({ error: 'Сервер не найден' });
-  db.prepare('INSERT OR IGNORE INTO favorites (user_id, server_id) VALUES (?, ?)').run(req.user!.id, sid);
-  res.json({ ok: true });
-});
-app.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
-  db.prepare('DELETE FROM favorites WHERE user_id = ? AND server_id = ?').run(req.user!.id, Number(req.params.id));
-  res.json({ ok: true });
-});
-
-// ---------- the signed-in user: profile, password, sessions, Discord account ----------
-interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
-const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
-
-// who signs a news item: the Discord display name exactly as it is written there (case included) and the Discord
-// picture when the account is linked, otherwise the site login and the uploaded picture (as an absolute address,
-// Discord has to fetch it)
-app.get('/api/me/author', auth, (req: AuthedRequest, res) => {
-  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
-  const base = publicBase();
-  if (u.discord_id && u.discord_name) {
-    const hash = u.discord_avatar;
-    const icon = hash
-      ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${hash}.${hash.startsWith('a_') ? 'gif' : 'png'}?size=128`
-      : null;
-    return res.json({ name: u.discord_name, iconUrl: icon, source: 'discord' });
-  }
-  const custom = customAvatarUrl(u.id);
-  res.json({ name: u.username, iconUrl: custom && base ? `${base}${custom}` : null, source: 'site' });
-});
-
-app.get('/api/me', auth, (req: AuthedRequest, res) => {
-  if (req.user!.role === 'admin') rememberAdminBase(req);
-  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
-  // an uploaded picture wins over the Discord avatar
-  const custom = customAvatarUrl(u.id);
-  res.json({
-    username: u.username,
-    role: u.role,
-    avatarUrl: custom ?? avatarUrl(u),
-    avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
-    discordName: u.discord_name,
-    hasPassword: !u.no_password,
-    email: u.email ?? null,
-    emailVerified: !!u.email && !!u.email_verified,
-    newDevice: recentNewDevice(u.id),
-    prefs: prefsOf(u.id),
-    bannerUrl: bannerUrlOf(u.id),
-    bannerPreset: bannerPresetOf(u.id),
-    unreadNotifications: unreadNotifications(u.id),
-  });
-});
-
-// e-mail of the account (a recovery and notification address); changing it asks for the current password
-app.put(
-  '/api/me/email',
-  auth,
-  wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ email: z.string().trim().max(254), current: z.string().optional() }).safeParse(req.body);
-    if (!body.success) return res.status(400).json({ error: 'Проверьте адрес' });
-    const email = body.data.email.toLowerCase();
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return res.status(400).json({ error: 'Некорректный адрес электронной почты' });
-    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
-    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
-      return res.status(403).json({ error: 'Введите текущий пароль, чтобы изменить почту' });
-    }
-    if (email) {
-      const taken = db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(email, req.user!.id);
-      if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
-    }
-    db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
-    if ((u.email ?? '') !== email) {
-      emailChanged(u.id);
-      logAccount(req, u.id, 'email_changed');
-    }
-    res.json({ ok: true, email: email || null });
-  }),
-);
-
-app.post(
-  '/api/auth/password',
-  auth,
-  wrap(async (req: AuthedRequest, res) => {
-    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256), confirm: z.string().optional() }).safeParse(req.body);
-    if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
-    if (body.data.confirm !== undefined && body.data.confirm !== body.data.next) return res.status(400).json({ error: 'Пароли не совпадают' });
-    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
-    // an account created through Discord has no password yet: no current one to check
-    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
-      return res.status(403).json({ error: 'Текущий пароль неверен' });
-    }
-    db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(bcrypt.hashSync(body.data.next, 12), req.user!.id);
-    // other devices have to sign in again with the new password
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
-    logAccount(req, req.user!.id, 'password_changed');
-    res.json({ ok: true });
-  }),
-);
-
-app.get('/api/sessions', auth, (req: AuthedRequest, res) => {
-  const cur = (req.user as { sid?: string }).sid;
-  const rows = db.prepare('SELECT id, created_at, last_seen, ip, ua FROM sessions WHERE user_id = ? ORDER BY last_seen DESC').all(req.user!.id) as {
-    id: string;
-    created_at: number;
-    last_seen: number;
-    ip: string;
-    ua: string;
-  }[];
-  res.json(rows.map((s) => ({ id: s.id, createdAt: s.created_at, lastSeen: s.last_seen, ip: s.ip, ua: s.ua, current: s.id === cur })));
-});
-app.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
-  const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
-  if (r.changes) logAccount(req, req.user!.id, 'sessions_revoked', `завершено: ${r.changes}`);
-  res.json({ ok: true, revoked: r.changes });
-});
-// logout: ends the session this very token belongs to
-app.delete('/api/sessions/current', auth, (req: AuthedRequest, res) => {
-  db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(req.user!.sid ?? '', req.user!.id);
-  clearSessionCookie(req, res);
-  res.json({ ok: true });
-});
-app.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
-  const r = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user!.id);
-  if (!r.changes) return res.status(404).json({ error: 'Сеанс не найден' });
-  logAccount(req, req.user!.id, 'sessions_revoked', 'завершён один сеанс');
-  res.json({ ok: true });
-});
-
-app.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
-  const u = db.prepare('SELECT no_password FROM users WHERE id = ?').get(req.user!.id) as { no_password: number };
-  if (u.no_password) return res.status(409).json({ error: 'Сначала задайте пароль в профиле: иначе войти будет нечем' });
-  db.prepare('UPDATE users SET discord_id = NULL, discord_name = NULL, discord_avatar = NULL WHERE id = ?').run(req.user!.id);
-  logAccount(req, req.user!.id, 'discord_unlinked');
-  res.json({ ok: true });
-});
-
-// ---------- sign in with Discord (OAuth2, identify scope) ----------
-const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
-const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
-const redirectUri = (req: Request) => `${publicBase() ?? baseOf(req)}/api/auth/discord/callback`;
-const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
-const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
-
-app.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
-  const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
-  if (!clientId || !getSetting('discord_client_secret')) return failTo(res, 'Вход через Discord не настроен администратором');
-  const mode = req.query.mode === 'link' ? 'link' : 'login';
-  let userId = 0;
-  if (mode === 'link') {
-    // the session cookie travels with this top-level navigation; ?t= stays for older clients
-    const u = userFromToken(String(req.query.t ?? '')) ?? loadUser(req);
-    if (!u) return failTo(res, 'Сначала войдите в панель, затем привяжите Discord');
-    userId = u.id;
-  }
-  for (const [k, v] of oauthStates) if (v.exp < Date.now()) oauthStates.delete(k);
-  // bounded memory: the oldest pending sign-ins are dropped first
-  while (oauthStates.size >= 1000) oauthStates.delete(oauthStates.keys().next().value as string);
-  const state = crypto.randomBytes(16).toString('hex');
-  oauthStates.set(state, { mode, userId, exp: Date.now() + 10 * 60_000 });
-  const q = new URLSearchParams({ client_id: clientId, response_type: 'code', scope: 'identify', redirect_uri: redirectUri(req), state, prompt: 'none' });
-  res.redirect(302, `https://discord.com/oauth2/authorize?${q.toString()}`);
-});
-
-app.get(
-  '/api/auth/discord/callback',
-  wrap(async (req, res) => {
-    const st = oauthStates.get(String(req.query.state ?? ''));
-    oauthStates.delete(String(req.query.state ?? ''));
-    if (!st || st.exp < Date.now()) return failTo(res, 'Сессия входа через Discord устарела, попробуйте ещё раз');
-    if (req.query.error || !req.query.code) return failTo(res, 'Вход через Discord отменён');
-    const clientId = botStatus.clientId ?? clientIdFromToken(getSetting('discord_token'));
-    const secret = getSetting('discord_client_secret');
-    if (!clientId || !secret) return failTo(res, 'Вход через Discord не настроен администратором');
-
-    let me: { id: string; username: string; global_name?: string | null; avatar?: string | null };
-    try {
-      const tr = await discordFetch('https://discord.com/api/v10/oauth2/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ client_id: clientId, client_secret: secret, grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri(req) }),
-      });
-      if (!tr.ok) return failTo(res, 'Discord отклонил вход. Проверьте Client Secret и Redirect URI в настройках');
-      const tok = (await tr.json()) as { access_token: string };
-      const mr = await discordFetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` } });
-      if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
-      me = (await mr.json()) as typeof me;
-    } catch (e) {
-      console.error('discord oauth request failed:', (e as Error).message);
-      return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
-    }
-    const dname = me.global_name || me.username;
-    const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
-
-    if (st.mode === 'link') {
-      if (owner && owner.id !== st.userId) return toHash(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
-      db.prepare('UPDATE users SET discord_id = ?, discord_name = ?, discord_avatar = ? WHERE id = ?').run(me.id, dname, me.avatar ?? null, st.userId);
-      logAccount(req, st.userId, 'discord_linked', dname);
-      return toHash(res, 'profile');
-    }
-
-    if (owner) {
-      db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
-      if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
-      logAccount(req, owner.id, 'login', 'Discord');
-      noteLogin(req, owner.id, brand().name);
-      const tok = issueToken(owner, req);
-      setSessionCookie(req, res, tok);
-      return toHash(res, `auth/${tok}`);
-    }
-
-    // first sign-in with this Discord account: register it (when registration is open)
-    if (!registrationOpen()) return failTo(res, 'Регистрация закрыта администратором');
-    let base = dname.replace(/[^\p{L}\p{N}_.\- ]/gu, '').replace(/ +/g, ' ').trim().slice(0, 28);
-    if (base.length < 3) base = `player${me.id.slice(-4)}`;
-    let name = base;
-    for (let i = 2; db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase()); i++) name = `${base.slice(0, 28)} ${i}`.slice(0, 32);
-    const pending = registrationMode() === 'approval';
-    const id = Number(
-      db
-        .prepare("INSERT INTO users (username, password_hash, role, created_at, status, discord_id, discord_name, discord_avatar, no_password) VALUES (?, ?, 'player', ?, ?, ?, ?, ?, 1)")
-        .run(name, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), pending ? 'pending' : 'active', me.id, dname, me.avatar ?? null).lastInsertRowid,
-    );
-    if (pending) return failTo(res, 'Заявка отправлена. Дождитесь одобрения администратора');
-    const tok = issueToken({ id, username: name }, req);
-    setSessionCookie(req, res, tok);
-    noteLogin(req, id, brand().name);
-    toHash(res, `auth/${tok}`);
-  }),
-);
-
-// ---------- servers ----------
-const serverSchema = z.object({
-  // optional: when empty the title is taken from the game server's own reply
-  name: z.string().trim().max(64).optional(),
-  game: z.string().trim().min(1).max(32).regex(/^[a-z0-9_]+$/i),
-  host: z.string().trim().min(1).max(255).regex(/^[a-z0-9.\-:]+$/i),
-  port: z.number().int().min(1).max(65535),
-  queryPort: z.number().int().min(1).max(65535).nullable().optional(),
-  // what people see instead of host:port, e.g. a public IP or domain (the panel still queries `host`)
-  displayAddress: z
-    .string()
-    .trim()
-    .max(100)
-    .regex(/^[^\s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
-    .optional(),
-  // two-letter country code shown in the Discord message; empty = detect from the address
-  country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
-});
-
-/** What a non-admin may see: the display address, never the internal host/port used for querying. */
-function publicServer<T extends { host: string; port: number; queryPort: number | null; customName: string }>(s: T): T {
-  return { ...s, host: '', port: 0, queryPort: null, customName: '' };
-}
-
-type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
-
-function serialize(r: ServerJoin) {
-  return {
-    id: r.id,
-    // shown title: custom name > name reported by the server > host:port
-    name: r.name || r.query_name || r.display_address || `${r.host}:${r.port}`,
-    customName: r.name,
-    nameAuto: !r.name,
-    game: r.game,
-    host: r.host,
-    port: r.port,
-    queryPort: r.query_port,
-    displayAddress: r.display_address,
-    country: r.country ?? '',
-    coverUrl: coverUrl(r.id),
-    // the address shown in the panel and on cards
-    address: r.display_address || `${r.host}:${r.port}`,
-    hasStatus: r.has_status != null,
-    online: !!r.online,
-    players: r.players ?? 0,
-    maxPlayers: r.max_players ?? 0,
-    map: r.map ?? null,
-    version: r.version ?? null,
-    ping: r.ping ?? null,
-    playerNames: r.player_names ? (JSON.parse(r.player_names) as string[]) : [],
-    error: r.error ?? null,
-    updatedAt: r.updated_at ?? null,
-    // running maintenance window for this server (alerts are muted, downtime is not counted) or null
-    maintenance: maintenanceFor(r.id),
-  };
-}
-
-const SELECT_SERVERS = `
-SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, st.player_names, st.error,
-       st.updated_at, st.server_id AS has_status, st.name AS query_name
-FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
-
-function getServer(id: number) {
-  const row = db.prepare(`${SELECT_SERVERS} WHERE s.id = ?`).get(id) as ServerJoin | undefined;
-  return row ? serialize(row) : null;
-}
-
-app.get('/api/servers', viewer, (req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
-  const list = rows.map(serialize);
-  res.json(isAdmin(req) ? list : list.map(publicServer));
-});
-
-app.post(
-  '/api/servers',
-  admin,
-  wrap(async (req, res) => {
-    const b = serverSchema.safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
-    const info = db
-      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), Date.now());
-    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
-    await refreshServer(row);
-    res.status(201).json(getServer(row.id));
-  }),
-);
-
-app.put(
-  '/api/servers/:id',
-  admin,
-  wrap(async (req, res) => {
-    const id = Number(req.params.id);
-    const b = serverSchema.safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
-    const r = db
-      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=? WHERE id=?')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), id);
-    if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
-    await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
-    res.json(getServer(id));
-  }),
-);
-
-app.delete('/api/servers/:id', admin, (req, res) => {
-  const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
-  if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
-  removeCover(Number(req.params.id));
-  res.json({ ok: true });
-});
-
-// try a server without saving it: used by the "Проверить" button in the add/edit form
-app.post(
-  '/api/servers/test',
-  admin,
-  wrap(async (req, res) => {
-    const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
-    const r = await queryServer({
-      id: 0,
-      name: '',
-      display_address: '',
-      country: '',
-      game: b.data.game,
-      host: b.data.host,
-      port: b.data.port,
-      query_port: b.data.queryPort ?? null,
-      created_at: 0,
-    });
-    res.json(r);
-  }),
-);
-
-// everything the server page needs: chart points, uptime, peak, outage log
-app.get('/api/servers/:id/details', viewer, (req, res) => {
-  const id = Number(req.params.id);
-  const server = getServer(id);
-  if (!server) return res.status(404).json({ error: 'Сервер не найден' });
-  // up to 30 days may be asked for; samples are kept for 7 days, so the chart simply shows what exists
-  const hours = Math.min(720, Math.max(1, Number(req.query.hours ?? 24)));
-  const since = Date.now() - hours * 3600 * 1000;
-  const bucketMs = Math.max(30_000, Math.ceil((hours * 3600 * 1000) / 180));
-
-  const points = db
-    .prepare(
-      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online,
-              CAST(ROUND(AVG(CASE WHEN online = 1 THEN ping END)) AS INTEGER) AS ping
-       FROM history WHERE server_id = ? AND ts > ?
-       GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
-    )
-    .all(id, since, bucketMs);
-  const agg = db
-    .prepare(
-      `SELECT COUNT(*) AS samples, AVG(CASE WHEN unconfirmed = 0 AND maint = 0 THEN online END) * 100 AS uptime,
-              AVG(CASE WHEN online = 1 THEN players END) AS avg_players
-       FROM history WHERE server_id = ? AND ts > ?`,
-    )
-    .get(id, since) as { samples: number; uptime: number | null; avg_players: number | null };
-  const peak = db
-    .prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1')
-    .get(id, since) as { players: number; ts: number } | undefined;
-  const events = (
-    db
-      .prepare(
-        `SELECT ts, online FROM (
-           SELECT ts, online, LAG(online) OVER (ORDER BY ts) AS prev FROM history WHERE server_id = ? AND ts > ?
-         ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
-      )
-      .all(id, since) as { ts: number; online: number }[]
-  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance', players: null as number | null }));
-  // the busiest moment of the period is shown in the event feed as well
-  if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
-  // planned maintenance (windows of this server and of all servers) starting in the period
-  for (const w of db.prepare('SELECT * FROM maintenance_windows WHERE server_id IS NULL OR server_id = ?').all(id) as WindowRow[]) {
-    for (const o of occurrencesBetween(w, since, Date.now())) events.push({ ts: o.start, type: 'maintenance', players: null });
-  }
-  events.sort((a, b) => b.ts - a.ts);
-
-  const isVr = server.game === 'vrising';
-  const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => (isVr ? { name: p.name, since: p.since, rankId: vrRankIdFor(p.name) } : { name: p.name, since: p.since }));
-
-  // additive: when the server was added and (admins only) where its Discord message lives
-  const createdAt = (db.prepare('SELECT created_at FROM servers WHERE id = ?').get(id) as { created_at: number } | undefined)?.created_at || null;
-  const discord = isAdmin(req)
-    ? (db.prepare('SELECT * FROM bindings WHERE server_id = ? ORDER BY id').all(id) as BindingRow[]).map((b) => {
-        const c = channelInfo(b.channel_id);
-        return { channelId: b.channel_id, channelName: c.channelName, guildName: c.guildName, guildId: c.guildId, messageId: b.message_id, enabled: !!b.enabled };
-      })
-    : [];
-
-  res.json({
-    server: { ...(isAdmin(req) ? server : publicServer(server)), countryCode: server.country || countryOf(id, server.host) || '' },
-    hours,
-    createdAt,
-    discord,
-    playersNow,
-    points,
-    stats: {
-      samples: agg.samples,
-      uptimePct: agg.uptime == null ? null : Math.round(agg.uptime * 10) / 10,
-      avgPlayers: agg.avg_players == null ? null : Math.round(agg.avg_players * 10) / 10,
-      peakPlayers: peak?.players ?? null,
-      peakAt: peak?.ts ?? null,
-    },
-    events,
-  });
-});
-
-app.post(
-  '/api/servers/:id/refresh',
-  admin,
-  wrap(async (req, res) => {
-    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
-    if (!row) return res.status(404).json({ error: 'Сервер не найден' });
-    await refreshServer(row);
-    res.json(getServer(row.id));
-  }),
-);
-
-app.get('/api/servers/:id/history', viewer, (req, res) => {
-  const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
-  const rows = db
-    .prepare('SELECT ts, online, players FROM history WHERE server_id = ? AND ts > ? ORDER BY ts')
-    .all(Number(req.params.id), Date.now() - hours * 3600 * 1000);
-  res.json(rows);
-});
-
-// public PNG card (shared links, link previews). A private panel hides it unless the request carries a session token (?t=).
-app.get(
-  '/api/card/:id(\\d+).png',
-  wrap(async (req, res) => {
-    if (!publicPanel() && !userFromToken(String(req.query.t ?? '')) && !loadUser(req)) return res.status(404).json({ error: 'Сервер не найден' });
-    const buf = await renderCard(Number(req.params.id));
-    if (!buf) return res.status(404).json({ error: 'Сервер не найден' });
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
-  }),
-);
-
-/** bump when the game icon artwork changes: Discord caches embed images by URL */
-const GAME_ICON_VERSION = 3;
-
-// game pictogram for embeds (public: Discord fetches it); unknown ids get the generic icon
-app.get(
-  '/api/game-icon/:game.png',
-  wrap(async (req, res) => {
-    const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(isKnownGame(game) ? game : ''));
-  }),
-);
-
-// ---------- public server page: a link that looks good when pasted into Discord/Telegram ----------
-const esc = (v: unknown) =>
-  String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-app.get('/s/:id(\\d+)', (req, res) => {
-  res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
-  const gone = () =>
-    void res
-      .status(404)
-      .type('html')
-      .send('<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Не найдено</title></head><body style="font-family:sans-serif;padding:2rem"><h1>Страница недоступна</h1><p><a href="/">На главную</a></p></body></html>');
-  if (!publicPanel()) return gone();
-  const id = Number(req.params.id);
-  const sv = getServer(id);
-  if (!sv) return gone();
-  const base = publicBase() ?? baseOf(req);
-  const b = brand();
-  // never the internal host:port; when the server has no title the game name stands in
-  const title = sv.name === `${sv.host}:${sv.port}` ? gameLabel(sv.game) : sv.name;
-  const parts: string[] = [];
-  if (!sv.hasStatus) parts.push('Состояние неизвестно');
-  else if (!sv.online) parts.push('Сервер недоступен');
-  else {
-    parts.push(`Онлайн: ${sv.players}${sv.maxPlayers ? `/${sv.maxPlayers}` : ''}`);
-    if (sv.map) parts.push(`Карта: ${sv.map}`);
-  }
-  parts.push(`Игра: ${gameLabel(sv.game)}`);
-  const desc = parts.join(' · ');
-  const target = `/#/servers/${id}`;
-  const url = `${base}/s/${id}`;
-  const image = `${base}/api/card/${id}.png`;
-  res.type('html').send(`<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} · ${esc(b.name)}</title>
-<meta name="description" content="${esc(desc)}">
-<meta name="theme-color" content="${esc(b.color)}">
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="${esc(b.name)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(desc)}">
-<meta property="og:image" content="${esc(image)}">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="480">
-<meta property="og:url" content="${esc(url)}">
-<meta property="og:locale" content="ru_RU">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="${esc(title)}">
-<meta name="twitter:description" content="${esc(desc)}">
-<meta name="twitter:image" content="${esc(image)}">
-<meta http-equiv="refresh" content="0;url=${esc(target)}">
-<script>location.replace(${JSON.stringify(target).replace(/</g, '\\u003c')});</script>
-</head>
-<body>
-<p><a href="${esc(target)}">${esc(title)}</a></p>
-</body>
-</html>`);
-});
-
-// ---------- status page data ----------
-app.get('/api/status', viewer, (req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
-  const list = rows.map(serialize);
-  const servers = isAdmin(req) ? list : list.map(publicServer);
-  const now = Date.now();
-  const days: string[] = [];
-  for (let i = 29; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
-  const daily = new Map<string, { up: number; total: number }>();
-  for (const r of db.prepare('SELECT server_id, day, up, total FROM uptime_daily WHERE day >= ?').all(days[0]) as { server_id: number; day: string; up: number; total: number }[]) {
-    daily.set(`${r.server_id}|${r.day}`, r);
-  }
-  const pings = new Map<number, number>();
-  for (const r of db.prepare('SELECT server_id, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY server_id').all(now - 24 * 3600_000) as { server_id: number; a: number }[]) {
-    pings.set(r.server_id, Math.round(r.a));
-  }
-  const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
-  const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
-  res.json({
-    updatedAt: last ?? now,
-    servers: servers.map((sv) => {
-      let up = 0;
-      let total = 0;
-      const dd = days.map((day) => {
-        const r = daily.get(`${sv.id}|${day}`);
-        if (r) {
-          up += r.up;
-          total += r.total;
-        }
-        return { day, pct: r ? pct(r.up, r.total) : null };
-      });
-      return {
-        id: sv.id,
-        name: sv.name,
-        game: sv.game,
-        address: sv.address,
-        coverUrl: sv.coverUrl,
-        online: sv.online,
-        players: sv.players,
-        maxPlayers: sv.maxPlayers,
-        uptime30: pct(up, total),
-        days: dd,
-        avgPing: pings.get(sv.id) ?? null,
-      };
-    }),
-  });
-});
-
-// ---------- discord bindings ----------
-const bindingSchema = z.object({
-  serverId: z.number().int(),
-  // more servers in the same message (Discord allows up to 10 embeds in one message)
-  extraServerIds: z.array(z.number().int()).max(9).optional(),
-  channelId: z.string().regex(/^\d{15,25}$/, 'ID канала — число из 15–25 цифр'),
-  intervalSec: z.number().int().min(30).max(3600).default(60),
-  enabled: z.boolean().default(true),
-  // omitted on update = keep the current style
-  style: z.enum(['embed', 'card', 'both']).optional(),
-});
-
-// guilds and text channels the bot can post in (reported by the bot, used for the channel picker)
-interface BotGuild {
-  id: string;
-  name: string;
-  /** text channels the bot can see but not write to */
-  hidden?: number;
-  channels: { id: string; name: string; missing?: string[] }[];
-}
-// persisted, so a backend restart does not leave the channel picker empty until the bot reports again
-function loadGuilds(): BotGuild[] {
-  try {
-    const v = JSON.parse(getSetting('bot_guilds') ?? '[]');
-    return Array.isArray(v) ? (v as BotGuild[]) : [];
-  } catch {
-    return [];
-  }
-}
-let botGuilds: BotGuild[] = loadGuilds();
-
-function channelInfo(channelId: string): { channelName: string | null; guildName: string | null; guildId: string | null } {
-  for (const g of botGuilds) {
-    const c = g.channels.find((x) => x.id === channelId);
-    if (c) return { channelName: c.name, guildName: g.name, guildId: g.id };
-  }
-  return { channelName: null, guildName: null, guildId: null };
-}
-
-app.get('/api/discord/channels', staff, (_req, res) => {
-  res.json(botGuilds);
-});
-
-/** the extra servers of a binding (ids that still exist, without the main one and without duplicates) */
-function extraIds(b: BindingRow): number[] {
-  try {
-    const raw = JSON.parse(b.extra_ids || '[]') as unknown;
-    if (!Array.isArray(raw)) return [];
-    const seen = new Set<number>([b.server_id]);
-    const out: number[] = [];
-    for (const v of raw) {
-      const n = Number(v);
-      if (!Number.isInteger(n) || seen.has(n)) continue;
-      if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)) continue;
-      seen.add(n);
-      out.push(n);
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-const cleanExtra = (main: number, ids: number[] | undefined): number[] =>
-  [...new Set(ids ?? [])].filter((n) => n !== main && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)).slice(0, 9);
-
-const serializeBinding = (b: BindingRow) => ({
-  channelName: channelInfo(b.channel_id).channelName,
-  guildName: channelInfo(b.channel_id).guildName,
-  id: b.id,
-  serverId: b.server_id,
-  // every server shown in the message: the main one first
-  serverIds: [b.server_id, ...extraIds(b)],
-  channelId: b.channel_id,
-  messageId: b.message_id,
-  intervalSec: b.interval_sec,
-  enabled: !!b.enabled,
-  lastUpdate: b.last_update,
-  lastError: b.last_error,
-  style: b.style,
-});
-
-// The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
-const playersShown = () => {
-  const n = Number(getSetting('embed_players_shown'));
-  return Number.isFinite(n) && getSetting('embed_players_shown') !== '' ? Math.min(20, Math.max(0, Math.round(n))) : 5;
-};
-
-function embedFor(serverId: number, intervalSec: number) {
-  const server = getServer(serverId);
-  if (!server) return null;
-  // longest in the game first: the list shows who has been there the longest
-  try {
-    const since = new Map((db.prepare('SELECT name, since FROM player_now WHERE server_id = ?').all(serverId) as { name: string; since: number }[]).map((p) => [p.name.toLowerCase(), p.since]));
-    if (since.size > 0 && Array.isArray(server.playerNames)) {
-      server.playerNames = [...server.playerNames].sort((a, b) => (since.get(a.toLowerCase()) ?? Infinity) - (since.get(b.toLowerCase()) ?? Infinity));
-    }
-  } catch {
-    /* the order is a nicety */
-  }
-  const up = db
-    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ? AND unconfirmed = 0 AND maint = 0')
-    .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
-  const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
-  const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
-}
-
-const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
-
-app.get('/api/settings/embed', admin, (_req, res) => {
-  res.json({ playersShown: playersShown() });
-});
-app.put('/api/settings/embed', admin, (req, res) => {
-  const b = z.object({ playersShown: z.number().int().min(0).max(20) }).safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'Число ников: от 0 до 20' });
-  setSetting('embed_players_shown', String(b.data.playersShown));
-  res.json({ playersShown: b.data.playersShown });
-});
-
-app.get('/api/servers/:id/embed', admin, (req, res) => {
-  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
-  if (!e) return res.status(404).json({ error: 'Сервер не найден' });
-  res.json(e);
-});
-
-app.get('/api/bindings', admin, (_req, res) => {
-  res.json((db.prepare('SELECT * FROM bindings ORDER BY id').all() as BindingRow[]).map(serializeBinding));
-});
-
-app.post('/api/bindings', admin, (req, res) => {
-  const b = bindingSchema.safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
-  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(b.data.serverId)) {
-    return res.status(400).json({ error: 'Сервер не найден' });
-  }
-  const info = db
-    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, extra_ids) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed', JSON.stringify(cleanExtra(b.data.serverId, b.data.extraServerIds)));
-  res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
-});
-
-app.put('/api/bindings/:id', admin, (req, res) => {
-  const b = bindingSchema.safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
-  const id = Number(req.params.id);
-  const old = db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow | undefined;
-  if (!old) return res.status(404).json({ error: 'Не найдено' });
-  // moving to another channel/server means a new message must be posted
-  const resetMsg = old.channel_id !== b.data.channelId || old.server_id !== b.data.serverId;
-  // omitted = keep the current extra servers (a pause/resume from the list does not send them)
-  const extra = b.data.extraServerIds === undefined ? extraIds(old) : cleanExtra(b.data.serverId, b.data.extraServerIds);
-  db.prepare(
-    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, extra_ids=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
-  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, JSON.stringify(extra), resetMsg ? 1 : 0, id);
-  res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
-});
-
-app.delete('/api/bindings/:id', admin, (req, res) => {
-  const r = db.prepare('DELETE FROM bindings WHERE id = ?').run(Number(req.params.id));
-  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
-  res.json({ ok: true });
-});
-
-// ---------- internal (bot only, not exposed by nginx) ----------
-function internal(req: Request, res: Response, next: NextFunction) {
-  if (safeEqual(String(req.headers['x-internal-token'] ?? ''), INTERNAL_TOKEN)) return next();
-  res.status(403).json({ error: 'forbidden' });
-}
-
-app.get('/internal/servers/:id/embed', internal, (req, res) => {
-  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
-  if (!e) return res.status(404).json({ error: 'not found' });
-  res.json(e);
-});
-
-// the same PNG card, for the bot (works while the panel is private)
-app.get(
-  '/internal/card/:id(\\d+).png',
-  internal,
-  wrap(async (req, res) => {
-    const buf = await renderCard(Number(req.params.id));
-    if (!buf) return res.status(404).json({ error: 'not found' });
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
-  }),
-);
-
-// "Refresh" button on the Discord message: query the game server right now
-app.post(
-  '/internal/servers/:id/refresh',
-  internal,
-  wrap(async (req, res) => {
-    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
-    if (!row) return res.status(404).json({ error: 'not found' });
-    await refreshServer(row);
-    res.json({ ok: true });
-  }),
-);
-
-app.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
-});
-
-app.post('/internal/bot-guilds', internal, (req, res) => {
-  const b = z
-    .array(
-      z.object({
-        id: z.string().max(30),
-        name: z.string().max(120),
-        hidden: z.number().int().min(0).optional(),
-        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
-      }),
-    )
-    .max(60)
-    .safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'bad body' });
-  botGuilds = b.data;
-  setSetting('bot_guilds', JSON.stringify(b.data));
-  res.json({ ok: true });
-});
-
-app.post('/internal/bot-status', internal, (req, res) => {
-  const b = z
-    .object({
-      state: z.enum(['idle', 'connecting', 'online', 'error']),
-      tag: z.string().max(100).nullable().optional(),
-      clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
-      error: z.string().max(300).nullable().optional(),
-      commands: z.number().int().min(0).max(200).nullable().optional(),
-    })
-    .safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'bad body' });
-  botStatus = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, commands: b.data.commands ?? null, updatedAt: Date.now() };
-  res.json({ ok: true });
-});
-
-app.get('/internal/bindings', internal, (_req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.enabled = 1`,
-    )
-    .all() as (BindingRow & { server_name: string })[];
-  res.json(rows.map((r) => ({ ...serializeBinding(r), serverName: r.server_name })));
-});
-
-const bindingForBot = (id: number) => {
-  const r = db
-    .prepare(`SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.id = ?`)
-    .get(id) as (BindingRow & { server_name: string }) | undefined;
-  return r ? { ...serializeBinding(r), serverName: r.server_name } : null;
-};
-
-// one binding, enabled or not (the buttons on the Discord message work for paused ones too)
-app.get('/internal/bindings/:id', internal, (req, res) => {
-  const b = bindingForBot(Number(req.params.id));
-  if (!b) return res.status(404).json({ error: 'not found' });
-  res.json(b);
-});
-for (const [action, enabled] of [['pause', 0], ['resume', 1]] as const) {
-  app.post(`/internal/bindings/:id/${action}`, internal, (req, res) => {
-    const id = Number(req.params.id);
-    const r = db.prepare('UPDATE bindings SET enabled = ? WHERE id = ?').run(enabled, id);
-    if (!r.changes) return res.status(404).json({ error: 'not found' });
-    res.json({ ok: true, binding: bindingForBot(id) });
-  });
-}
-
-app.patch('/internal/bindings/:id', internal, (req, res) => {
-  const b = z
-    .object({ messageId: z.string().nullable().optional(), error: z.string().max(300).nullable().optional() })
-    .safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'bad body' });
-  const id = Number(req.params.id);
-  if (b.data.messageId !== undefined) db.prepare('UPDATE bindings SET message_id = ? WHERE id = ?').run(b.data.messageId, id);
-  db.prepare('UPDATE bindings SET last_update = ?, last_error = ? WHERE id = ?').run(Date.now(), b.data.error ?? null, id);
-  res.json({ ok: true });
-});
+// the order matters only where paths overlap; it is the order the routes had in one file
+app.use(accountRouter);
+app.use(settingsRouter);
+app.use(updatesRouter);
+app.use(usersRouter);
+app.use(discordLoginRouter);
+app.use(serversRouter);
+app.use(bindingsRouter);
+app.use(internalRouter);
 
 registerNews({
   app,
@@ -9226,7 +7837,7 @@ registerSecurity({
   brandName: () => brand().name,
 });
 registerDeliveries({ app, admin, internal });
-registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => botStatus.state === 'online' });
+registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => bot.status.state === 'online' });
 registerGames(app);
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
@@ -9242,10 +7853,10 @@ registerProfile({
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin });
-registerOps({ app, admin, getBot: () => botStatus, guildCount: () => botGuilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
+registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 registerMaintenance({ app, admin, viewer });
-registerHealth({ app, admin, bot: () => botStatus });
+registerHealth({ app, admin, bot: () => bot.status });
 registerOverview({ app, viewer });
 
 // ---------- errors ----------
@@ -12351,6 +10962,56 @@ export async function discordFetch(url: string, init: { method?: string; headers
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/proxyInput.ts" << '__COREGSM_EOF__'
+/** The proxy address an administrator types in: normalised to a URL and validated. */
+
+export const PROXY_RE = /^(socks5h?|http|https):\/\/([^@/\s]+@)?[^@/:\s]+:\d{1,5}\/?$/;
+export const maskProxy = (u: string) => u.replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:***@');
+
+export type ProxyType = 'socks5' | 'http';
+
+/**
+ * Accepts what proxy sellers usually hand out and turns it into a URL:
+ *   socks5://user:pass@host:port   (kept as is)
+ *   host:port:user:pass            (the password may contain ":")
+ *   user:pass@host:port
+ *   host:port
+ * The scheme comes from `type` when the text has none. Credentials are percent-encoded.
+ */
+export function normalizeProxy(raw: string, type: ProxyType): string {
+  const v = raw.trim();
+  if (!v || /^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return v;
+  let host = '';
+  let port = '';
+  let user: string | undefined;
+  let pass: string | undefined;
+  const at = v.lastIndexOf('@');
+  // "host:port:user:pass" is recognised first: the password itself may contain "@" or ":"
+  if (/^[^@:\s]+:\d{1,5}:[^\s]+$/.test(v)) {
+    const p = v.split(':');
+    [host, port, user] = p;
+    pass = p.slice(3).join(':');
+  } else if (at > 0) {
+    const cred = v.slice(0, at);
+    const ci = cred.indexOf(':');
+    user = ci < 0 ? cred : cred.slice(0, ci);
+    pass = ci < 0 ? undefined : cred.slice(ci + 1);
+    [host, port] = v.slice(at + 1).split(':');
+  } else {
+    const p = v.split(':');
+    if (p.length === 2) [host, port] = p;
+    else if (p.length >= 4) {
+      [host, port, user] = p;
+      pass = p.slice(3).join(':');
+    } else return v;
+  }
+  const auth = user ? `${encodeURIComponent(user)}${pass !== undefined ? ':' + encodeURIComponent(pass) : ''}@` : '';
+  return `${type}://${auth}${host}:${port}`;
+}
+
+export const PROXY_HELP = 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port';
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/ranks.ts" << '__COREGSM_EOF__'
 /**
  * V Rising rank ladder. Hours of play on servers whose game id is `vrising`.
@@ -12396,6 +11057,1352 @@ export function rankProgress(hours: number): number {
 export function rankById(id: string): VrRank | undefined {
   return VR_RANKS.find((x) => x.id === id);
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/account.ts" << '__COREGSM_EOF__'
+/** Sign-in, first-run setup, registration and the signed-in user (profile, password, sessions, favourites). */
+import express from 'express';
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { attempts, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, fails, issueToken, LOCK_AFTER, loginLimiter, rateLimit, registrationOpen, type Role, type UserFull } from '../auth.js';
+import { customAvatarUrl } from '../avatars.js';
+import { SETUP_TOKEN } from '../config.js';
+import { db, setSetting } from '../db.js';
+import { safeEqual, wrap } from '../http.js';
+import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile.js';
+import { normalizeProxy, PROXY_HELP, PROXY_RE } from '../proxyInput.js';
+import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security.js';
+import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../site.js';
+import { unreadNotifications } from '../subscriptions.js';
+
+export const router = express.Router();
+
+router.post(
+  '/api/auth/login',
+  loginLimiter,
+  wrap(async (req, res) => {
+    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
+    // progressive lockout of the whole address after failures across several logins
+    const ipWait = ipLockRemaining(req.ip);
+    if (ipWait > 0) {
+      res.setHeader('Retry-After', String(ipWait));
+      return res.status(429).json({ error: `Слишком много неудачных попыток входа с этого адреса. Повторите через ${ipWait} с.`, retryAfter: ipWait });
+    }
+    // lock out after repeated wrong passwords for the same login from the same address
+    const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
+    const lock = fails.get(key);
+    if (lock && lock.until > Date.now()) {
+      const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
+    }
+    const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
+      | { id: number; username: string; password_hash: string; role: Role; status: string }
+      | undefined;
+    const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
+    if (!u || !ok) {
+      const f = fails.get(key) ?? { n: 0, until: 0 };
+      f.n++;
+      if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
+      fails.set(key, f);
+      ipLoginFailed(req.ip, body.data.username);
+      if (u) logAccount(req, u.id, 'login_failed');
+      const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
+      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
+    }
+    fails.delete(key);
+    if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
+    attempts.delete(req.ip ?? 'x');
+    logAccount(req, u.id, 'login');
+    noteLogin(req, u.id, brand().name);
+    const token = issueToken(u, req);
+    setSessionCookie(req, res, token);
+    res.json({ token, username: u.username, role: u.role });
+  }),
+);
+
+// ---------- first-run setup wizard ----------
+router.get('/api/setup/status', (_req, res) => {
+  res.json({ needed: needsSetup() });
+});
+
+const setupSchema = z.object({
+  code: z.string().min(1).max(64),
+  // letters (any alphabet), digits, _ . - and single spaces between words; 3-32 characters
+  username: z
+    .string()
+    .trim()
+    .regex(/^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
+  password: z.string().min(10, 'Пароль должен быть не короче 10 символов').max(256),
+  discordToken: z.string().trim().max(200).optional(),
+  proxyUrl: z.string().trim().max(300).optional(),
+  proxyType: z.enum(['socks5', 'http']).optional(),
+});
+
+router.post(
+  '/api/setup',
+  loginLimiter,
+  wrap(async (req, res) => {
+    if (!needsSetup()) return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
+    const b = setupSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
+    if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
+    const proxyUrl = normalizeProxy(b.data.proxyUrl ?? '', b.data.proxyType ?? 'socks5');
+    if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
+
+    const hash = await bcrypt.hash(b.data.password, 12);
+    let userId = 0;
+    try {
+      db.transaction(() => {
+        // re-check inside the transaction so two concurrent requests cannot both create an admin
+        if (!needsSetup()) throw new Error('already-setup');
+        userId = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)").run(b.data.username, hash, Date.now()).lastInsertRowid);
+        if (b.data.discordToken) setSetting('discord_token', b.data.discordToken);
+        if (proxyUrl) setSetting('proxy_url', proxyUrl);
+      })();
+    } catch {
+      return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
+    }
+    attempts.delete(req.ip ?? 'x');
+    console.log(`setup completed, admin "${b.data.username}" created`);
+    const token = issueToken({ id: userId, username: b.data.username }, req);
+    setSessionCookie(req, res, token);
+    noteLogin(req, userId, brand().name);
+    res.status(201).json({ token, username: b.data.username, role: 'admin' });
+  }),
+);
+
+// ---------- registration of players ----------
+const USERNAME_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
+
+router.get('/api/auth/check', rateLimit(30), (req, res) => {
+  const name = String(req.query.username ?? '').trim();
+  const valid = USERNAME_RE.test(name);
+  const available = valid && !db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase());
+  res.json({ valid, available });
+});
+
+router.post(
+  '/api/auth/register',
+  windowLimiter(20, 3600_000, 'Слишком много регистраций с этого адреса. Попробуйте позже.'),
+  loginLimiter,
+  wrap(async (req, res) => {
+    if (needsSetup()) return res.status(409).json({ error: 'Панель ещё не настроена: сначала создайте администратора' });
+    if (!registrationOpen()) return res.status(403).json({ error: 'Регистрация закрыта администратором' });
+    const b = z
+      .object({
+        username: z.string().trim().regex(USERNAME_RE, 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'),
+        password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256),
+        acceptRules: z.boolean().optional(),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
+    if (rulesText() && !b.data.acceptRules) return res.status(400).json({ error: 'Нужно согласиться с правилами сообщества' });
+    if (db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(b.data.username.toLowerCase())) {
+      return res.status(409).json({ error: 'Этот логин уже занят' });
+    }
+    const hash = await bcrypt.hash(b.data.password, 12);
+    const pending = registrationMode() === 'approval';
+    try {
+      const id = Number(
+        db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
+      );
+      if (pending) return res.status(202).json({ pending: true });
+      const token = issueToken({ id, username: b.data.username }, req);
+      setSessionCookie(req, res, token);
+      noteLogin(req, id, brand().name);
+      res.status(201).json({ token, username: b.data.username, role: 'player' });
+    } catch {
+      res.status(409).json({ error: 'Этот логин уже занят' });
+    }
+  }),
+);
+
+// ---------- favourites (any signed-in user) ----------
+router.get('/api/favorites', auth, (req: AuthedRequest, res) => {
+  const rows = db.prepare('SELECT server_id FROM favorites WHERE user_id = ?').all(req.user!.id) as { server_id: number }[];
+  res.json(rows.map((r) => r.server_id));
+});
+router.put('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
+  const sid = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(sid)) return res.status(404).json({ error: 'Сервер не найден' });
+  db.prepare('INSERT OR IGNORE INTO favorites (user_id, server_id) VALUES (?, ?)').run(req.user!.id, sid);
+  res.json({ ok: true });
+});
+router.delete('/api/favorites/:id', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM favorites WHERE user_id = ? AND server_id = ?').run(req.user!.id, Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// who signs a news item: the Discord display name exactly as it is written there (case included) and the Discord
+// picture when the account is linked, otherwise the site login and the uploaded picture (as an absolute address,
+// Discord has to fetch it)
+router.get('/api/me/author', auth, (req: AuthedRequest, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+  const base = publicBase();
+  if (u.discord_id && u.discord_name) {
+    const hash = u.discord_avatar;
+    const icon = hash
+      ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${hash}.${hash.startsWith('a_') ? 'gif' : 'png'}?size=128`
+      : null;
+    return res.json({ name: u.discord_name, iconUrl: icon, source: 'discord' });
+  }
+  const custom = customAvatarUrl(u.id);
+  res.json({ name: u.username, iconUrl: custom && base ? `${base}${custom}` : null, source: 'site' });
+});
+
+router.get('/api/me', auth, (req: AuthedRequest, res) => {
+  if (req.user!.role === 'admin') rememberAdminBase(req);
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+  // an uploaded picture wins over the Discord avatar
+  const custom = customAvatarUrl(u.id);
+  res.json({
+    username: u.username,
+    role: u.role,
+    avatarUrl: custom ?? avatarUrl(u),
+    avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
+    discordName: u.discord_name,
+    hasPassword: !u.no_password,
+    email: u.email ?? null,
+    emailVerified: !!u.email && !!u.email_verified,
+    newDevice: recentNewDevice(u.id),
+    prefs: prefsOf(u.id),
+    bannerUrl: bannerUrlOf(u.id),
+    bannerPreset: bannerPresetOf(u.id),
+    unreadNotifications: unreadNotifications(u.id),
+  });
+});
+
+// e-mail of the account (a recovery and notification address); changing it asks for the current password
+router.put(
+  '/api/me/email',
+  auth,
+  wrap(async (req: AuthedRequest, res) => {
+    const body = z.object({ email: z.string().trim().max(254), current: z.string().optional() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Проверьте адрес' });
+    const email = body.data.email.toLowerCase();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return res.status(400).json({ error: 'Некорректный адрес электронной почты' });
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
+      return res.status(403).json({ error: 'Введите текущий пароль, чтобы изменить почту' });
+    }
+    if (email) {
+      const taken = db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(email, req.user!.id);
+      if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
+    }
+    db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
+    if ((u.email ?? '') !== email) {
+      emailChanged(u.id);
+      logAccount(req, u.id, 'email_changed');
+    }
+    res.json({ ok: true, email: email || null });
+  }),
+);
+
+router.post(
+  '/api/auth/password',
+  auth,
+  wrap(async (req: AuthedRequest, res) => {
+    const body = z.object({ current: z.string().optional(), next: z.string().min(8).max(256), confirm: z.string().optional() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
+    if (body.data.confirm !== undefined && body.data.confirm !== body.data.next) return res.status(400).json({ error: 'Пароли не совпадают' });
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    // an account created through Discord has no password yet: no current one to check
+    if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
+      return res.status(403).json({ error: 'Текущий пароль неверен' });
+    }
+    db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(bcrypt.hashSync(body.data.next, 12), req.user!.id);
+    // other devices have to sign in again with the new password
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
+    logAccount(req, req.user!.id, 'password_changed');
+    res.json({ ok: true });
+  }),
+);
+
+router.get('/api/sessions', auth, (req: AuthedRequest, res) => {
+  const cur = (req.user as { sid?: string }).sid;
+  const rows = db.prepare('SELECT id, created_at, last_seen, ip, ua FROM sessions WHERE user_id = ? ORDER BY last_seen DESC').all(req.user!.id) as {
+    id: string;
+    created_at: number;
+    last_seen: number;
+    ip: string;
+    ua: string;
+  }[];
+  res.json(rows.map((s) => ({ id: s.id, createdAt: s.created_at, lastSeen: s.last_seen, ip: s.ip, ua: s.ua, current: s.id === cur })));
+});
+router.post('/api/sessions/revoke-others', auth, (req: AuthedRequest, res) => {
+  const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
+  if (r.changes) logAccount(req, req.user!.id, 'sessions_revoked', `завершено: ${r.changes}`);
+  res.json({ ok: true, revoked: r.changes });
+});
+// logout: ends the session this very token belongs to
+router.delete('/api/sessions/current', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(req.user!.sid ?? '', req.user!.id);
+  clearSessionCookie(req, res);
+  res.json({ ok: true });
+});
+router.delete('/api/sessions/:id', auth, (req: AuthedRequest, res) => {
+  const r = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user!.id);
+  if (!r.changes) return res.status(404).json({ error: 'Сеанс не найден' });
+  logAccount(req, req.user!.id, 'sessions_revoked', 'завершён один сеанс');
+  res.json({ ok: true });
+});
+
+router.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
+  const u = db.prepare('SELECT no_password FROM users WHERE id = ?').get(req.user!.id) as { no_password: number };
+  if (u.no_password) return res.status(409).json({ error: 'Сначала задайте пароль в профиле: иначе войти будет нечем' });
+  db.prepare('UPDATE users SET discord_id = NULL, discord_name = NULL, discord_avatar = NULL WHERE id = ?').run(req.user!.id);
+  logAccount(req, req.user!.id, 'discord_unlinked');
+  res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/bindings.ts" << '__COREGSM_EOF__'
+/** Discord bindings: which server is posted to which channel, the channel list and the embed preview. */
+import express from 'express';
+import { z } from 'zod';
+import { admin, staff } from '../auth.js';
+import { bot } from '../botState.js';
+import { type BindingRow, db, setSetting } from '../db.js';
+import { cleanExtra, embedFor, extraIds, intervalParam, playersShown, serializeBinding } from '../serverData.js';
+
+export const router = express.Router();
+
+// ---------- discord bindings ----------
+const bindingSchema = z.object({
+  serverId: z.number().int(),
+  // more servers in the same message (Discord allows up to 10 embeds in one message)
+  extraServerIds: z.array(z.number().int()).max(9).optional(),
+  channelId: z.string().regex(/^\d{15,25}$/, 'ID канала — число из 15–25 цифр'),
+  intervalSec: z.number().int().min(30).max(3600).default(60),
+  enabled: z.boolean().default(true),
+  // omitted on update = keep the current style
+  style: z.enum(['embed', 'card', 'both']).optional(),
+});
+
+router.get('/api/discord/channels', staff, (_req, res) => {
+  res.json(bot.guilds);
+});
+
+router.get('/api/settings/embed', admin, (_req, res) => {
+  res.json({ playersShown: playersShown() });
+});
+router.put('/api/settings/embed', admin, (req, res) => {
+  const b = z.object({ playersShown: z.number().int().min(0).max(20) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Число ников: от 0 до 20' });
+  setSetting('embed_players_shown', String(b.data.playersShown));
+  res.json({ playersShown: b.data.playersShown });
+});
+
+router.get('/api/servers/:id/embed', admin, (req, res) => {
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  if (!e) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json(e);
+});
+
+router.get('/api/bindings', admin, (_req, res) => {
+  res.json((db.prepare('SELECT * FROM bindings ORDER BY id').all() as BindingRow[]).map(serializeBinding));
+});
+
+router.post('/api/bindings', admin, (req, res) => {
+  const b = bindingSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(b.data.serverId)) {
+    return res.status(400).json({ error: 'Сервер не найден' });
+  }
+  const info = db
+    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, extra_ids) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed', JSON.stringify(cleanExtra(b.data.serverId, b.data.extraServerIds)));
+  res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
+});
+
+router.put('/api/bindings/:id', admin, (req, res) => {
+  const b = bindingSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Неверные данные' });
+  const id = Number(req.params.id);
+  const old = db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow | undefined;
+  if (!old) return res.status(404).json({ error: 'Не найдено' });
+  // moving to another channel/server means a new message must be posted
+  const resetMsg = old.channel_id !== b.data.channelId || old.server_id !== b.data.serverId;
+  // omitted = keep the current extra servers (a pause/resume from the list does not send them)
+  const extra = b.data.extraServerIds === undefined ? extraIds(old) : cleanExtra(b.data.serverId, b.data.extraServerIds);
+  db.prepare(
+    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, extra_ids=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
+  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, JSON.stringify(extra), resetMsg ? 1 : 0, id);
+  res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
+});
+
+router.delete('/api/bindings/:id', admin, (req, res) => {
+  const r = db.prepare('DELETE FROM bindings WHERE id = ?').run(Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/discordLogin.ts" << '__COREGSM_EOF__'
+/** Sign in with Discord (OAuth2, identify scope): login, linking and registration of new players. */
+import express from 'express';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import type { Request, Response } from 'express';
+import { issueToken, loadUser, rateLimit, registrationOpen, userFromToken } from '../auth.js';
+import { bot, clientIdFromToken } from '../botState.js';
+import { db, getSetting } from '../db.js';
+import { wrap } from '../http.js';
+import { logAccount } from '../profile.js';
+import { discordFetch } from '../proxyFetch.js';
+import { noteLogin, setSessionCookie } from '../security.js';
+import { baseOf, brand, publicBase, registrationMode } from '../site.js';
+
+export const router = express.Router();
+
+// ---------- sign in with Discord (OAuth2, identify scope) ----------
+const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
+const redirectUri = (req: Request) => `${publicBase() ?? baseOf(req)}/api/auth/discord/callback`;
+const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
+const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
+
+router.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
+  const clientId = bot.status.clientId ?? clientIdFromToken(getSetting('discord_token'));
+  if (!clientId || !getSetting('discord_client_secret')) return failTo(res, 'Вход через Discord не настроен администратором');
+  const mode = req.query.mode === 'link' ? 'link' : 'login';
+  let userId = 0;
+  if (mode === 'link') {
+    // the session cookie travels with this top-level navigation; ?t= stays for older clients
+    const u = userFromToken(String(req.query.t ?? '')) ?? loadUser(req);
+    if (!u) return failTo(res, 'Сначала войдите в панель, затем привяжите Discord');
+    userId = u.id;
+  }
+  for (const [k, v] of oauthStates) if (v.exp < Date.now()) oauthStates.delete(k);
+  // bounded memory: the oldest pending sign-ins are dropped first
+  while (oauthStates.size >= 1000) oauthStates.delete(oauthStates.keys().next().value as string);
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, { mode, userId, exp: Date.now() + 10 * 60_000 });
+  const q = new URLSearchParams({ client_id: clientId, response_type: 'code', scope: 'identify', redirect_uri: redirectUri(req), state, prompt: 'none' });
+  res.redirect(302, `https://discord.com/oauth2/authorize?${q.toString()}`);
+});
+
+router.get(
+  '/api/auth/discord/callback',
+  wrap(async (req, res) => {
+    const st = oauthStates.get(String(req.query.state ?? ''));
+    oauthStates.delete(String(req.query.state ?? ''));
+    if (!st || st.exp < Date.now()) return failTo(res, 'Сессия входа через Discord устарела, попробуйте ещё раз');
+    if (req.query.error || !req.query.code) return failTo(res, 'Вход через Discord отменён');
+    const clientId = bot.status.clientId ?? clientIdFromToken(getSetting('discord_token'));
+    const secret = getSetting('discord_client_secret');
+    if (!clientId || !secret) return failTo(res, 'Вход через Discord не настроен администратором');
+
+    let me: { id: string; username: string; global_name?: string | null; avatar?: string | null };
+    try {
+      const tr = await discordFetch('https://discord.com/api/v10/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: clientId, client_secret: secret, grant_type: 'authorization_code', code: String(req.query.code), redirect_uri: redirectUri(req) }),
+      });
+      if (!tr.ok) return failTo(res, 'Discord отклонил вход. Проверьте Client Secret и Redirect URI в настройках');
+      const tok = (await tr.json()) as { access_token: string };
+      const mr = await discordFetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tok.access_token}` } });
+      if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
+      me = (await mr.json()) as typeof me;
+    } catch (e) {
+      console.error('discord oauth request failed:', (e as Error).message);
+      return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
+    }
+    const dname = me.global_name || me.username;
+    const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
+
+    if (st.mode === 'link') {
+      if (owner && owner.id !== st.userId) return toHash(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
+      db.prepare('UPDATE users SET discord_id = ?, discord_name = ?, discord_avatar = ? WHERE id = ?').run(me.id, dname, me.avatar ?? null, st.userId);
+      logAccount(req, st.userId, 'discord_linked', dname);
+      return toHash(res, 'profile');
+    }
+
+    if (owner) {
+      db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
+      if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
+      logAccount(req, owner.id, 'login', 'Discord');
+      noteLogin(req, owner.id, brand().name);
+      const tok = issueToken(owner, req);
+      setSessionCookie(req, res, tok);
+      return toHash(res, `auth/${tok}`);
+    }
+
+    // first sign-in with this Discord account: register it (when registration is open)
+    if (!registrationOpen()) return failTo(res, 'Регистрация закрыта администратором');
+    let base = dname.replace(/[^\p{L}\p{N}_.\- ]/gu, '').replace(/ +/g, ' ').trim().slice(0, 28);
+    if (base.length < 3) base = `player${me.id.slice(-4)}`;
+    let name = base;
+    for (let i = 2; db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(name.toLowerCase()); i++) name = `${base.slice(0, 28)} ${i}`.slice(0, 32);
+    const pending = registrationMode() === 'approval';
+    const id = Number(
+      db
+        .prepare("INSERT INTO users (username, password_hash, role, created_at, status, discord_id, discord_name, discord_avatar, no_password) VALUES (?, ?, 'player', ?, ?, ?, ?, ?, 1)")
+        .run(name, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), pending ? 'pending' : 'active', me.id, dname, me.avatar ?? null).lastInsertRowid,
+    );
+    if (pending) return failTo(res, 'Заявка отправлена. Дождитесь одобрения администратора');
+    const tok = issueToken({ id, username: name }, req);
+    setSessionCookie(req, res, tok);
+    noteLogin(req, id, brand().name);
+    toHash(res, `auth/${tok}`);
+  }),
+);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/internal.ts" << '__COREGSM_EOF__'
+/** Internal API of the bot (not exposed by nginx): configuration, status reports, bindings, embeds, cards. */
+import express from 'express';
+import { z } from 'zod';
+import { internal } from '../auth.js';
+import { bot } from '../botState.js';
+import { renderCard } from '../card.js';
+import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
+import { refreshServer } from '../gsm.js';
+import { wrap } from '../http.js';
+import { embedFor, intervalParam, serializeBinding } from '../serverData.js';
+
+export const router = express.Router();
+
+router.get('/internal/servers/:id/embed', internal, (req, res) => {
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  if (!e) return res.status(404).json({ error: 'not found' });
+  res.json(e);
+});
+
+// the same PNG card, for the bot (works while the panel is private)
+router.get(
+  '/internal/card/:id(\\d+).png',
+  internal,
+  wrap(async (req, res) => {
+    const buf = await renderCard(Number(req.params.id));
+    if (!buf) return res.status(404).json({ error: 'not found' });
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
+  }),
+);
+
+// "Refresh" button on the Discord message: query the game server right now
+router.post(
+  '/internal/servers/:id/refresh',
+  internal,
+  wrap(async (req, res) => {
+    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
+    if (!row) return res.status(404).json({ error: 'not found' });
+    await refreshServer(row);
+    res.json({ ok: true });
+  }),
+);
+
+router.get('/internal/config', internal, (_req, res) => {
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
+});
+
+router.post('/internal/bot-guilds', internal, (req, res) => {
+  const b = z
+    .array(
+      z.object({
+        id: z.string().max(30),
+        name: z.string().max(120),
+        hidden: z.number().int().min(0).optional(),
+        channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
+      }),
+    )
+    .max(60)
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'bad body' });
+  bot.guilds = b.data;
+  setSetting('bot_guilds', JSON.stringify(b.data));
+  res.json({ ok: true });
+});
+
+router.post('/internal/bot-status', internal, (req, res) => {
+  const b = z
+    .object({
+      state: z.enum(['idle', 'connecting', 'online', 'error']),
+      tag: z.string().max(100).nullable().optional(),
+      clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
+      error: z.string().max(300).nullable().optional(),
+      commands: z.number().int().min(0).max(200).nullable().optional(),
+    })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'bad body' });
+  bot.status = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, commands: b.data.commands ?? null, updatedAt: Date.now() };
+  res.json({ ok: true });
+});
+
+router.get('/internal/bindings', internal, (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.enabled = 1`,
+    )
+    .all() as (BindingRow & { server_name: string })[];
+  res.json(rows.map((r) => ({ ...serializeBinding(r), serverName: r.server_name })));
+});
+
+const bindingForBot = (id: number) => {
+  const r = db
+    .prepare(`SELECT b.*, ${EFFECTIVE_NAME} AS server_name FROM bindings b JOIN servers s ON s.id = b.server_id LEFT JOIN status st ON st.server_id = s.id WHERE b.id = ?`)
+    .get(id) as (BindingRow & { server_name: string }) | undefined;
+  return r ? { ...serializeBinding(r), serverName: r.server_name } : null;
+};
+
+// one binding, enabled or not (the buttons on the Discord message work for paused ones too)
+router.get('/internal/bindings/:id', internal, (req, res) => {
+  const b = bindingForBot(Number(req.params.id));
+  if (!b) return res.status(404).json({ error: 'not found' });
+  res.json(b);
+});
+for (const [action, enabled] of [['pause', 0], ['resume', 1]] as const) {
+  router.post(`/internal/bindings/:id/${action}`, internal, (req, res) => {
+    const id = Number(req.params.id);
+    const r = db.prepare('UPDATE bindings SET enabled = ? WHERE id = ?').run(enabled, id);
+    if (!r.changes) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true, binding: bindingForBot(id) });
+  });
+}
+
+router.patch('/internal/bindings/:id', internal, (req, res) => {
+  const b = z
+    .object({ messageId: z.string().nullable().optional(), error: z.string().max(300).nullable().optional() })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'bad body' });
+  const id = Number(req.params.id);
+  if (b.data.messageId !== undefined) db.prepare('UPDATE bindings SET message_id = ? WHERE id = ?').run(b.data.messageId, id);
+  db.prepare('UPDATE bindings SET last_update = ?, last_error = ? WHERE id = ?').run(Date.now(), b.data.error ?? null, id);
+  res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/servers.ts" << '__COREGSM_EOF__'
+/** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
+import express from 'express';
+import { z } from 'zod';
+import { admin, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
+import { channelInfo } from '../botState.js';
+import { isKnownGame, renderCard, renderGameIcon } from '../card.js';
+import { removeCover } from '../covers.js';
+import { type BindingRow, db, type ServerRow } from '../db.js';
+import { gameLabel } from '../games.js';
+import { countryOf } from '../geo.js';
+import { queryServer, refreshServer } from '../gsm.js';
+import { wrap } from '../http.js';
+import { occurrencesBetween, type WindowRow } from '../maintenance.js';
+import { vrRankIdFor } from '../profile.js';
+import { getServer, publicServer, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
+import { baseOf, brand, publicBase } from '../site.js';
+
+export const router = express.Router();
+
+// ---------- servers ----------
+const serverSchema = z.object({
+  // optional: when empty the title is taken from the game server's own reply
+  name: z.string().trim().max(64).optional(),
+  game: z.string().trim().min(1).max(32).regex(/^[a-z0-9_]+$/i),
+  host: z.string().trim().min(1).max(255).regex(/^[a-z0-9.\-:]+$/i),
+  port: z.number().int().min(1).max(65535),
+  queryPort: z.number().int().min(1).max(65535).nullable().optional(),
+  // what people see instead of host:port, e.g. a public IP or domain (the panel still queries `host`)
+  displayAddress: z
+    .string()
+    .trim()
+    .max(100)
+    .regex(/^[^\s<>"']*$/, 'Адрес для отображения не должен содержать пробелов и кавычек')
+    .optional(),
+  // two-letter country code shown in the Discord message; empty = detect from the address
+  country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
+});
+
+router.get('/api/servers', viewer, (req, res) => {
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const list = rows.map(serialize);
+  res.json(isAdmin(req) ? list : list.map(publicServer));
+});
+
+router.post(
+  '/api/servers',
+  admin,
+  wrap(async (req, res) => {
+    const b = serverSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+    const info = db
+      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), Date.now());
+    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
+    await refreshServer(row);
+    res.status(201).json(getServer(row.id));
+  }),
+);
+
+router.put(
+  '/api/servers/:id',
+  admin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const b = serverSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+    const r = db
+      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=? WHERE id=?')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), id);
+    if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
+    await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
+    res.json(getServer(id));
+  }),
+);
+
+router.delete('/api/servers/:id', admin, (req, res) => {
+  const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
+  removeCover(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// try a server without saving it: used by the "Проверить" button in the add/edit form
+router.post(
+  '/api/servers/test',
+  admin,
+  wrap(async (req, res) => {
+    const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
+    const r = await queryServer({
+      id: 0,
+      name: '',
+      display_address: '',
+      country: '',
+      game: b.data.game,
+      host: b.data.host,
+      port: b.data.port,
+      query_port: b.data.queryPort ?? null,
+      created_at: 0,
+    });
+    res.json(r);
+  }),
+);
+
+// everything the server page needs: chart points, uptime, peak, outage log
+router.get('/api/servers/:id/details', viewer, (req, res) => {
+  const id = Number(req.params.id);
+  const server = getServer(id);
+  if (!server) return res.status(404).json({ error: 'Сервер не найден' });
+  // up to 30 days may be asked for; samples are kept for 7 days, so the chart simply shows what exists
+  const hours = Math.min(720, Math.max(1, Number(req.query.hours ?? 24)));
+  const since = Date.now() - hours * 3600 * 1000;
+  const bucketMs = Math.max(30_000, Math.ceil((hours * 3600 * 1000) / 180));
+
+  const points = db
+    .prepare(
+      `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online,
+              CAST(ROUND(AVG(CASE WHEN online = 1 THEN ping END)) AS INTEGER) AS ping
+       FROM history WHERE server_id = ? AND ts > ?
+       GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
+    )
+    .all(id, since, bucketMs);
+  const agg = db
+    .prepare(
+      `SELECT COUNT(*) AS samples, AVG(CASE WHEN unconfirmed = 0 AND maint = 0 THEN online END) * 100 AS uptime,
+              AVG(CASE WHEN online = 1 THEN players END) AS avg_players
+       FROM history WHERE server_id = ? AND ts > ?`,
+    )
+    .get(id, since) as { samples: number; uptime: number | null; avg_players: number | null };
+  const peak = db
+    .prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1')
+    .get(id, since) as { players: number; ts: number } | undefined;
+  const events = (
+    db
+      .prepare(
+        `SELECT ts, online FROM (
+           SELECT ts, online, LAG(online) OVER (ORDER BY ts) AS prev FROM history WHERE server_id = ? AND ts > ?
+         ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
+      )
+      .all(id, since) as { ts: number; online: number }[]
+  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance', players: null as number | null }));
+  // the busiest moment of the period is shown in the event feed as well
+  if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
+  // planned maintenance (windows of this server and of all servers) starting in the period
+  for (const w of db.prepare('SELECT * FROM maintenance_windows WHERE server_id IS NULL OR server_id = ?').all(id) as WindowRow[]) {
+    for (const o of occurrencesBetween(w, since, Date.now())) events.push({ ts: o.start, type: 'maintenance', players: null });
+  }
+  events.sort((a, b) => b.ts - a.ts);
+
+  const isVr = server.game === 'vrising';
+  const playersNow = (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]).map((p) => (isVr ? { name: p.name, since: p.since, rankId: vrRankIdFor(p.name) } : { name: p.name, since: p.since }));
+
+  // additive: when the server was added and (admins only) where its Discord message lives
+  const createdAt = (db.prepare('SELECT created_at FROM servers WHERE id = ?').get(id) as { created_at: number } | undefined)?.created_at || null;
+  const discord = isAdmin(req)
+    ? (db.prepare('SELECT * FROM bindings WHERE server_id = ? ORDER BY id').all(id) as BindingRow[]).map((b) => {
+        const c = channelInfo(b.channel_id);
+        return { channelId: b.channel_id, channelName: c.channelName, guildName: c.guildName, guildId: c.guildId, messageId: b.message_id, enabled: !!b.enabled };
+      })
+    : [];
+
+  res.json({
+    server: { ...(isAdmin(req) ? server : publicServer(server)), countryCode: server.country || countryOf(id, server.host) || '' },
+    hours,
+    createdAt,
+    discord,
+    playersNow,
+    points,
+    stats: {
+      samples: agg.samples,
+      uptimePct: agg.uptime == null ? null : Math.round(agg.uptime * 10) / 10,
+      avgPlayers: agg.avg_players == null ? null : Math.round(agg.avg_players * 10) / 10,
+      peakPlayers: peak?.players ?? null,
+      peakAt: peak?.ts ?? null,
+    },
+    events,
+  });
+});
+
+router.post(
+  '/api/servers/:id/refresh',
+  admin,
+  wrap(async (req, res) => {
+    const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
+    if (!row) return res.status(404).json({ error: 'Сервер не найден' });
+    await refreshServer(row);
+    res.json(getServer(row.id));
+  }),
+);
+
+router.get('/api/servers/:id/history', viewer, (req, res) => {
+  const hours = Math.min(168, Math.max(1, Number(req.query.hours ?? 24)));
+  const rows = db
+    .prepare('SELECT ts, online, players FROM history WHERE server_id = ? AND ts > ? ORDER BY ts')
+    .all(Number(req.params.id), Date.now() - hours * 3600 * 1000);
+  res.json(rows);
+});
+
+// public PNG card (shared links, link previews). A private panel hides it unless the request carries a session token (?t=).
+router.get(
+  '/api/card/:id(\\d+).png',
+  wrap(async (req, res) => {
+    if (!publicPanel() && !userFromToken(String(req.query.t ?? '')) && !loadUser(req)) return res.status(404).json({ error: 'Сервер не найден' });
+    const buf = await renderCard(Number(req.params.id));
+    if (!buf) return res.status(404).json({ error: 'Сервер не найден' });
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
+  }),
+);
+
+// game pictogram for embeds (public: Discord fetches it); unknown ids get the generic icon
+router.get(
+  '/api/game-icon/:game.png',
+  wrap(async (req, res) => {
+    const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(isKnownGame(game) ? game : ''));
+  }),
+);
+
+// ---------- public server page: a link that looks good when pasted into Discord/Telegram ----------
+const esc = (v: unknown) =>
+  String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+router.get('/s/:id(\\d+)', (req, res) => {
+  res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
+  const gone = () =>
+    void res
+      .status(404)
+      .type('html')
+      .send('<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Не найдено</title></head><body style="font-family:sans-serif;padding:2rem"><h1>Страница недоступна</h1><p><a href="/">На главную</a></p></body></html>');
+  if (!publicPanel()) return gone();
+  const id = Number(req.params.id);
+  const sv = getServer(id);
+  if (!sv) return gone();
+  const base = publicBase() ?? baseOf(req);
+  const b = brand();
+  // never the internal host:port; when the server has no title the game name stands in
+  const title = sv.name === `${sv.host}:${sv.port}` ? gameLabel(sv.game) : sv.name;
+  const parts: string[] = [];
+  if (!sv.hasStatus) parts.push('Состояние неизвестно');
+  else if (!sv.online) parts.push('Сервер недоступен');
+  else {
+    parts.push(`Онлайн: ${sv.players}${sv.maxPlayers ? `/${sv.maxPlayers}` : ''}`);
+    if (sv.map) parts.push(`Карта: ${sv.map}`);
+  }
+  parts.push(`Игра: ${gameLabel(sv.game)}`);
+  const desc = parts.join(' · ');
+  const target = `/#/servers/${id}`;
+  const url = `${base}/s/${id}`;
+  const image = `${base}/api/card/${id}.png`;
+  res.type('html').send(`<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · ${esc(b.name)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta name="theme-color" content="${esc(b.color)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${esc(b.name)}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="480">
+<meta property="og:url" content="${esc(url)}">
+<meta property="og:locale" content="ru_RU">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(desc)}">
+<meta name="twitter:image" content="${esc(image)}">
+<meta http-equiv="refresh" content="0;url=${esc(target)}">
+<script>location.replace(${JSON.stringify(target).replace(/</g, '\\u003c')});</script>
+</head>
+<body>
+<p><a href="${esc(target)}">${esc(title)}</a></p>
+</body>
+</html>`);
+});
+
+// ---------- status page data ----------
+router.get('/api/status', viewer, (req, res) => {
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const list = rows.map(serialize);
+  const servers = isAdmin(req) ? list : list.map(publicServer);
+  const now = Date.now();
+  const days: string[] = [];
+  for (let i = 29; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
+  const daily = new Map<string, { up: number; total: number }>();
+  for (const r of db.prepare('SELECT server_id, day, up, total FROM uptime_daily WHERE day >= ?').all(days[0]) as { server_id: number; day: string; up: number; total: number }[]) {
+    daily.set(`${r.server_id}|${r.day}`, r);
+  }
+  const pings = new Map<number, number>();
+  for (const r of db.prepare('SELECT server_id, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY server_id').all(now - 24 * 3600_000) as { server_id: number; a: number }[]) {
+    pings.set(r.server_id, Math.round(r.a));
+  }
+  const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
+  const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+  res.json({
+    updatedAt: last ?? now,
+    servers: servers.map((sv) => {
+      let up = 0;
+      let total = 0;
+      const dd = days.map((day) => {
+        const r = daily.get(`${sv.id}|${day}`);
+        if (r) {
+          up += r.up;
+          total += r.total;
+        }
+        return { day, pct: r ? pct(r.up, r.total) : null };
+      });
+      return {
+        id: sv.id,
+        name: sv.name,
+        game: sv.game,
+        address: sv.address,
+        coverUrl: sv.coverUrl,
+        online: sv.online,
+        players: sv.players,
+        maxPlayers: sv.maxPlayers,
+        uptime30: pct(up, total),
+        days: dd,
+        avgPing: pings.get(sv.id) ?? null,
+      };
+    }),
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/settings.ts" << '__COREGSM_EOF__'
+/** Administrator settings: bot token and proxy, bot status, access, branding, web app manifest. */
+import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Request } from 'express';
+import { z } from 'zod';
+import { admin, publicPanel, registrationOpen } from '../auth.js';
+import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
+import { getSetting, setSetting } from '../db.js';
+import { maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE } from '../proxyInput.js';
+import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
+
+export const router = express.Router();
+
+// ---------- bot settings (token, proxy) ----------
+function settingsPayload(req?: Request) {
+  const tok = getSetting('discord_token');
+  const proxy = getSetting('proxy_url');
+  return {
+    discordTokenSet: !!tok,
+    discordTokenHint: tok ? `…${tok.slice(-4)}` : null,
+    proxyUrl: proxy ? maskProxy(proxy) : null,
+    discordSecretSet: !!getSetting('discord_client_secret'),
+    discordClientId: bot.status.clientId ?? clientIdFromToken(tok),
+    discordRedirect: req ? `${publicBase() ?? baseOf(req)}/api/auth/discord/callback` : '',
+  };
+}
+
+router.get('/api/settings', admin, (req, res) => {
+  res.json(settingsPayload(req));
+});
+
+// undefined = keep, empty string = clear
+const settingsSchema = z.object({
+  discordToken: z.string().trim().max(200).optional(),
+  proxyUrl: z.string().trim().max(300).optional(),
+  proxyType: z.enum(['socks5', 'http']).optional(),
+  discordClientSecret: z.string().trim().max(200).optional(),
+});
+
+router.put('/api/settings', admin, (req, res) => {
+  const b = settingsSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
+  if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
+  if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
+  if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
+  if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);
+  res.json(settingsPayload(req));
+});
+
+router.get('/api/bot/status', admin, (_req, res) => {
+  // a bot that stopped reporting is considered offline
+  const stale = Date.now() - bot.status.updatedAt > 45_000;
+  const base = stale ? { ...bot.status, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : bot.status;
+  res.json({ ...base, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: bot.guilds.length, channelCount: bot.guilds.reduce((n, g) => n + g.channels.length, 0) });
+});
+
+const accessPayload = () => ({
+  publicPanel: publicPanel(),
+  registration: registrationOpen(),
+  registrationMode: registrationMode(),
+  rules: rulesText(),
+  discordLogin: discordLoginReady(),
+  brand: brand(),
+});
+
+router.get('/api/access', (_req, res) => {
+  res.json(accessPayload());
+});
+router.put('/api/access', admin, (req, res) => {
+  const b = z
+    .object({
+      publicPanel: z.boolean().optional(),
+      registration: z.boolean().optional(),
+      registrationMode: z.enum(['open', 'approval']).optional(),
+      rules: z.string().max(5000).optional(),
+    })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
+  if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
+  if (b.data.registrationMode !== undefined) setSetting('registration_mode', b.data.registrationMode);
+  if (b.data.rules !== undefined) setSetting('rules_text', b.data.rules.trim());
+  res.json(accessPayload());
+});
+
+router.put('/api/branding', admin, (req, res) => {
+  const b = z
+    .object({
+      name: z.string().trim().min(1).max(32),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+      color2: z.string().regex(/^(#[0-9a-fA-F]{6})?$/).optional(),
+      preset: z.string().trim().max(24).optional(),
+    })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Название до 32 символов, цвет в виде #RRGGBB' });
+  setSetting('brand_name', b.data.name);
+  setSetting('brand_color', b.data.color.toLowerCase());
+  setSetting('brand_color2', (b.data.color2 ?? '').toLowerCase());
+  setSetting('brand_preset', b.data.preset ?? '');
+  res.json(brand());
+});
+router.put(
+  '/api/branding/logo',
+  admin,
+  express.raw({ type: Object.keys(LOGO_TYPES), limit: '3mb' }),
+  (req, res) => {
+    const ext = LOGO_TYPES[String(req.headers['content-type'] ?? '').split(';')[0]];
+    if (!ext || !Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 3 МБ' });
+    const old = logoFile();
+    if (old) fs.rmSync(old, { force: true });
+    fs.writeFileSync(`${LOGO_PATH}.${ext}`, req.body);
+    res.json(brand());
+  },
+);
+router.delete('/api/branding/logo', admin, (_req, res) => {
+  const old = logoFile();
+  if (old) fs.rmSync(old, { force: true });
+  res.json(brand());
+});
+router.get('/api/branding/logo', (_req, res) => {
+  const f = logoFile();
+  if (!f) return res.status(404).end();
+  res.set('Cache-Control', 'public, max-age=300').type(path.extname(f).slice(1)).send(fs.readFileSync(f));
+});
+// web app manifest (install the panel to the phone's home screen)
+router.get('/api/manifest.json', (_req, res) => {
+  const b = brand();
+  const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
+  res.type('application/manifest+json').json({
+    name: b.name,
+    short_name: b.name.slice(0, 12),
+    start_url: '/',
+    display: 'standalone',
+    background_color: '#f4f5f7',
+    theme_color: b.color,
+    icons: [
+      { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: b.hasLogo ? icon : '/logo-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      // the maskable icon has a full-bleed background and a safe zone (Android adaptive icons)
+      { src: '/logo-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    ],
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/updates.ts" << '__COREGSM_EOF__'
+/** Updates of the panel: version check, changelog and requests to the host updater. */
+import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { admin } from '../auth.js';
+import { APP_VERSION } from '../config.js';
+import { wrap } from '../http.js';
+
+export const router = express.Router();
+
+// ---------- updates ----------
+// The container never touches Docker or the host. "Update" drops a request file into UPDATE_DIR (a bind mount);
+// a root systemd path unit on the host notices it and runs `coregsm-update`, which reports progress in status.json.
+const UPDATE_DIR = process.env.UPDATE_DIR ?? '';
+const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main';
+
+let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
+
+/** raw.githubusercontent.com is cached for minutes after a push; the GitHub API returns the file as it is now. */
+function repoApiUrl(file: string): string | null {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
+  return m ? `https://api.github.com/repos/${m[1]}/${m[2]}/contents/${file}?ref=${m[3]}` : null;
+}
+
+async function fetchRepoText(file: string): Promise<string> {
+  const api = repoApiUrl(file);
+  if (api) {
+    try {
+      const r = await fetch(api, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github.raw+json', 'User-Agent': 'CoreGSM' } });
+      if (r.ok) return await r.text();
+    } catch {
+      /* rate limit or no route: fall back to the plain file below */
+    }
+  }
+  const res = await fetch(`${UPDATE_BASE}/${file}?t=${Date.now()}`, { signal: AbortSignal.timeout(8000), headers: { 'cache-control': 'no-cache' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+async function checkRemote(force = false): Promise<void> {
+  if (!force && Date.now() - remote.at < 5 * 60_000) return;
+  try {
+    const m = /^build=([a-f0-9]{6,64})$/m.exec(await fetchRepoText('version.txt'));
+    if (!m) throw new Error('некорректный version.txt');
+    remote = { build: m[1], error: null, at: Date.now() };
+  } catch (e) {
+    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now() };
+  }
+}
+
+function updateFile(name: string): string {
+  return path.join(UPDATE_DIR, name);
+}
+
+function updatePayload() {
+  // progress: 0..100 written by the manager/installer while an update runs (absent in older managers)
+  let job: { state: string; message: string; time: number; rollback_available?: boolean; progress?: number } | null = null;
+  try {
+    job = JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
+  } catch {
+    /* no update has run yet */
+  }
+  const dirOk = !!UPDATE_DIR && fs.existsSync(UPDATE_DIR);
+  return {
+    current: APP_VERSION || null,
+    latest: remote.build,
+    available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build),
+    checkedAt: remote.at || null,
+    error: remote.error,
+    canApply: dirOk,
+    pending: dirOk && fs.existsSync(updateFile('request')),
+    // the host manager keeps the previous version and says so in status.json
+    canRollback: dirOk && job?.rollback_available === true,
+    job,
+  };
+}
+
+// ---- changelog: the last commits of the repository the panel updates from
+const GITHUB_API = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '');
+interface ChangelogItem { sha: string; title: string; date: number | null; url: string }
+let changelog: { at: number; items: ChangelogItem[]; error: string | null } | null = null;
+
+function commitsUrl(): string | null {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
+  return m ? `${GITHUB_API}/repos/${m[1]}/${m[2]}/commits?per_page=15&sha=${encodeURIComponent(m[3])}` : null;
+}
+
+/** first line of the message without "Co-Authored-By" trailers */
+const commitTitle = (msg: string): string =>
+  msg
+    .split(/\r?\n/)
+    .filter((l) => !/^co-authored-by:/i.test(l.trim()))[0]
+    ?.trim()
+    .slice(0, 200) ?? '';
+
+async function loadChangelog(): Promise<{ items: ChangelogItem[]; error?: string }> {
+  if (changelog && Date.now() - changelog.at < (changelog.error ? 60_000 : 10 * 60_000)) {
+    return changelog.error ? { items: changelog.items, error: changelog.error } : { items: changelog.items };
+  }
+  const url = commitsUrl();
+  try {
+    if (!url) throw new Error('адрес репозитория обновлений не распознан');
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'CoreGSM' } });
+    if (!r.ok) throw new Error(`GitHub ответил HTTP ${r.status}`);
+    const list = (await r.json()) as { sha?: string; html_url?: string; commit?: { message?: string; committer?: { date?: string }; author?: { date?: string } } }[];
+    if (!Array.isArray(list)) throw new Error('неожиданный ответ GitHub');
+    const items = list.slice(0, 15).map((c) => {
+      const d = Date.parse(c.commit?.committer?.date ?? c.commit?.author?.date ?? '');
+      return { sha: String(c.sha ?? ''), title: commitTitle(String(c.commit?.message ?? '')), date: Number.isNaN(d) ? null : d, url: String(c.html_url ?? '') };
+    });
+    changelog = { at: Date.now(), items, error: null };
+    return { items };
+  } catch (e) {
+    const error = `Не удалось получить список изменений: ${(e as Error).message}`;
+    changelog = { at: Date.now(), items: changelog?.items ?? [], error };
+    return { items: changelog.items, error };
+  }
+}
+
+router.get(
+  '/api/update/changelog',
+  admin,
+  wrap(async (_req, res) => {
+    res.json(await loadChangelog());
+  }),
+);
+
+router.get(
+  '/api/update/status',
+  admin,
+  wrap(async (_req, res) => {
+    await checkRemote();
+    res.json(updatePayload());
+  }),
+);
+
+router.post(
+  '/api/update/check',
+  admin,
+  wrap(async (_req, res) => {
+    await checkRemote(true);
+    res.json(updatePayload());
+  }),
+);
+
+router.post('/api/update/apply', admin, (_req, res) => {
+  const state = updatePayload();
+  if (!state.canApply) return res.status(503).json({ error: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm update' });
+  if (state.job?.state === 'running') return res.status(409).json({ error: 'Обновление уже выполняется' });
+  try {
+    fs.writeFileSync(updateFile('request'), String(Date.now()));
+  } catch {
+    return res.status(500).json({ error: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)' });
+  }
+  console.log('update requested from the panel');
+  res.status(202).json(updatePayload());
+});
+
+// same request file, different word: the host manager reads it and restores the previous version
+router.post('/api/update/rollback', admin, (_req, res) => {
+  const state = updatePayload();
+  if (!state.canApply) return res.status(503).json({ error: 'Откат из панели не настроен на сервере. Выполните: sudo coregsm rollback' });
+  if (state.job?.state === 'running') return res.status(409).json({ error: 'Сейчас выполняется обновление или откат' });
+  if (!state.canRollback) return res.status(409).json({ error: 'Откат недоступен: предыдущая версия не сохранена' });
+  if (state.pending) return res.status(409).json({ error: 'Запрос уже ожидает выполнения' });
+  try {
+    fs.writeFileSync(updateFile('request'), 'rollback');
+  } catch {
+    return res.status(500).json({ error: 'Не удалось создать запрос на откат (нет прав на папку /app/update)' });
+  }
+  console.log('rollback requested from the panel');
+  res.status(202).json(updatePayload());
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/users.ts" << '__COREGSM_EOF__'
+/** User management (administrators). */
+import express from 'express';
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { admin, type AuthedRequest, type Role } from '../auth.js';
+import { removeAvatar } from '../avatars.js';
+import { db } from '../db.js';
+import { wrap } from '../http.js';
+import { logAccount, removeBanner } from '../profile.js';
+
+export const router = express.Router();
+
+// ---------- user management (administrators) ----------
+const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
+
+router.get('/api/users', admin, (_req, res) => {
+  const rows = db.prepare('SELECT id, username, role, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+    id: number;
+    username: string;
+    role: Role;
+    created_at: number | null;
+    status: string;
+    discord_name: string | null;
+  }[];
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
+});
+
+router.post('/api/users/:id/approve', admin, (req, res) => {
+  const r = db.prepare("UPDATE users SET status = 'active' WHERE id = ? AND status = 'pending'").run(Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Заявка не найдена' });
+  res.json({ ok: true });
+});
+
+router.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
+  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
+  const id = Number(req.params.id);
+  const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
+  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
+  res.json({ ok: true });
+});
+
+router.put(
+  '/api/users/:id/password',
+  admin,
+  wrap(async (req, res) => {
+    const b = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Пароль должен быть не короче 8 символов' });
+    const id = Number(req.params.id);
+    const r = db.prepare('UPDATE users SET password_hash = ?, no_password = 0 WHERE id = ?').run(await bcrypt.hash(b.data.password, 12), id);
+    if (!r.changes) return res.status(404).json({ error: 'Пользователь не найден' });
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+    logAccount(req, id, 'password_changed', 'сброшен администратором');
+    res.json({ ok: true });
+  }),
+);
+
+router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
+  const u = db.prepare('SELECT role, status FROM users WHERE id = ?').get(id) as { role: Role; status: string } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin' && u.status === 'active' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  removeAvatar(id);
+  removeBanner(id);
+  res.json({ ok: true });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/secrets.ts" << '__COREGSM_EOF__'
@@ -12605,7 +12612,7 @@ export function windowLimiter(max: number, windowMs: number, message = 'Слиш
   };
 }
 
-// per-address lockout after repeated failed logins across different usernames (the per-account lockout is in index.ts)
+// per-address lockout after repeated failed logins across different usernames (the per-account lockout is in auth.ts)
 const IP_LOCK_AFTER = 6;
 const IP_LOCK_MIN_NAMES = 3;
 const ipFails = new Map<string, { n: number; names: Set<string>; until: number; last: number; level: number }>();
@@ -12917,6 +12924,136 @@ export function registerSecurity(d: SecurityDeps): void {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/serverData.ts" << '__COREGSM_EOF__'
+/** Servers as the API returns them, and the Discord embed built from a server and its history. */
+import { channelInfo } from './botState.js';
+import { APP_VERSION } from './config.js';
+import { coverUrl } from './covers.js';
+import { type BindingRow, db, getSetting, type ServerRow, type StatusRow } from './db.js';
+import { buildEmbed } from './embed.js';
+import { countryLabel, countryOf } from './geo.js';
+import { maintenanceFor } from './maintenance.js';
+import { brand, logoFile, publicBase } from './site.js';
+
+/** What a non-admin may see: the display address, never the internal host/port used for querying. */
+export function publicServer<T extends { host: string; port: number; queryPort: number | null; customName: string }>(s: T): T {
+  return { ...s, host: '', port: 0, queryPort: null, customName: '' };
+}
+
+export type ServerJoin = ServerRow & Partial<Omit<StatusRow, 'server_id' | 'name'>> & { has_status: number | null; query_name: string | null };
+
+export function serialize(r: ServerJoin) {
+  return {
+    id: r.id,
+    // shown title: custom name > name reported by the server > host:port
+    name: r.name || r.query_name || r.display_address || `${r.host}:${r.port}`,
+    customName: r.name,
+    nameAuto: !r.name,
+    game: r.game,
+    host: r.host,
+    port: r.port,
+    queryPort: r.query_port,
+    displayAddress: r.display_address,
+    country: r.country ?? '',
+    coverUrl: coverUrl(r.id),
+    // the address shown in the panel and on cards
+    address: r.display_address || `${r.host}:${r.port}`,
+    hasStatus: r.has_status != null,
+    online: !!r.online,
+    players: r.players ?? 0,
+    maxPlayers: r.max_players ?? 0,
+    map: r.map ?? null,
+    version: r.version ?? null,
+    ping: r.ping ?? null,
+    playerNames: r.player_names ? (JSON.parse(r.player_names) as string[]) : [],
+    error: r.error ?? null,
+    updatedAt: r.updated_at ?? null,
+    // running maintenance window for this server (alerts are muted, downtime is not counted) or null
+    maintenance: maintenanceFor(r.id),
+  };
+}
+
+export const SELECT_SERVERS = `
+SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, st.player_names, st.error,
+       st.updated_at, st.server_id AS has_status, st.name AS query_name
+FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
+
+export function getServer(id: number) {
+  const row = db.prepare(`${SELECT_SERVERS} WHERE s.id = ?`).get(id) as ServerJoin | undefined;
+  return row ? serialize(row) : null;
+}
+
+/** bump when the game icon artwork changes: Discord caches embed images by URL */
+export const GAME_ICON_VERSION = 3;
+
+/** the extra servers of a binding (ids that still exist, without the main one and without duplicates) */
+export function extraIds(b: BindingRow): number[] {
+  try {
+    const raw = JSON.parse(b.extra_ids || '[]') as unknown;
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<number>([b.server_id]);
+    const out: number[] = [];
+    for (const v of raw) {
+      const n = Number(v);
+      if (!Number.isInteger(n) || seen.has(n)) continue;
+      if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)) continue;
+      seen.add(n);
+      out.push(n);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export const cleanExtra = (main: number, ids: number[] | undefined): number[] =>
+  [...new Set(ids ?? [])].filter((n) => n !== main && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(n)).slice(0, 9);
+
+export const serializeBinding = (b: BindingRow) => ({
+  channelName: channelInfo(b.channel_id).channelName,
+  guildName: channelInfo(b.channel_id).guildName,
+  id: b.id,
+  serverId: b.server_id,
+  // every server shown in the message: the main one first
+  serverIds: [b.server_id, ...extraIds(b)],
+  channelId: b.channel_id,
+  messageId: b.message_id,
+  intervalSec: b.interval_sec,
+  enabled: !!b.enabled,
+  lastUpdate: b.last_update,
+  lastError: b.last_error,
+  style: b.style,
+});
+
+// The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
+export const playersShown = () => {
+  const n = Number(getSetting('embed_players_shown'));
+  return Number.isFinite(n) && getSetting('embed_players_shown') !== '' ? Math.min(20, Math.max(0, Math.round(n))) : 5;
+};
+
+export function embedFor(serverId: number, intervalSec: number) {
+  const server = getServer(serverId);
+  if (!server) return null;
+  // longest in the game first: the list shows who has been there the longest
+  try {
+    const since = new Map((db.prepare('SELECT name, since FROM player_now WHERE server_id = ?').all(serverId) as { name: string; since: number }[]).map((p) => [p.name.toLowerCase(), p.since]));
+    if (since.size > 0 && Array.isArray(server.playerNames)) {
+      server.playerNames = [...server.playerNames].sort((a, b) => (since.get(a.toLowerCase()) ?? Infinity) - (since.get(b.toLowerCase()) ?? Infinity));
+    }
+  } catch {
+    /* the order is a nicety */
+  }
+  const up = db
+    .prepare('SELECT AVG(online) * 100 AS u FROM history WHERE server_id = ? AND ts > ? AND unconfirmed = 0 AND maint = 0')
+    .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
+  const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
+  const base = publicBase();
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+}
+
+export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/shutdown.ts" << '__COREGSM_EOF__'
 /**
  * Graceful shutdown on SIGTERM/SIGINT (docker stop, compose restart, an update): stop accepting connections,
@@ -12978,6 +13115,54 @@ export async function shutdown(server: Server, signal: string): Promise<void> {
 export function installShutdown(server: Server): void {
   for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => void shutdown(server, sig));
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/site.ts" << '__COREGSM_EOF__'
+/** The panel as a site: public address, access settings, branding. */
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Request } from 'express';
+import { db, getSetting, setSetting } from './db.js';
+
+export const needsSetup = () => !db.prepare('SELECT 1 FROM users LIMIT 1').get();
+
+// ---------- access: who may look at the panel, who may register ----------
+// The public https address of the panel (Discord needs it to load embed images). Trusted sources only, in this order:
+// PUBLIC_URL, https://DOMAIN, and the address an administrator opened the panel at (saved from an authenticated request).
+// A guest's Host header is never stored: it would let anyone point the embeds at their own server.
+export const isRealDomain = (d: string) => /^[a-z0-9.-]+$/i.test(d) && d.includes('.') && !/^[\d.]+$/.test(d) && d.toLowerCase() !== 'localhost';
+export function publicBase(): string | null {
+  const env = (process.env.PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\/[^\s/]+$/i.test(env)) return env;
+  const d = (process.env.DOMAIN ?? '').trim();
+  if (isRealDomain(d)) return `https://${d}`;
+  return getSetting('public_base') || null;
+}
+/** called only for requests that carry a valid administrator token */
+export function rememberAdminBase(req: Request) {
+  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim().split(':')[0];
+  if (!isRealDomain(host)) return;
+  const base = `https://${host}`;
+  if (getSetting('public_base') !== base) setSetting('public_base', base);
+}
+
+export const registrationMode = (): 'open' | 'approval' => (getSetting('registration_mode') === 'approval' ? 'approval' : 'open');
+export const rulesText = () => getSetting('rules_text') ?? '';
+
+// ---------- branding: community name, accent colour and logo ----------
+export const LOGO_PATH = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'brand-logo');
+export const LOGO_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+export const logoFile = () => Object.values(LOGO_TYPES).map((e) => `${LOGO_PATH}.${e}`).find((f) => fs.existsSync(f)) ?? null;
+export const brand = () => ({
+  name: getSetting('brand_name') || 'CoreGSM',
+  color: getSetting('brand_color') || '#4f46e5',
+  color2: getSetting('brand_color2') || '',
+  preset: getSetting('brand_preset') || '',
+  hasLogo: !!logoFile(),
+  logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
+});
+
+export const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/subscriptions.ts" << '__COREGSM_EOF__'
@@ -60682,183 +60867,18 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { onAccentChange, paintBrand } from '../accent';
-import { parseHex } from '../colors';
-import { AccentPicker } from '../components/AccentPicker';
-import { api, getToken, type Access, type BotStatus, type Changelog, type SettingsInfo, type UpdateInfo, type UserRow } from '../api';
-import { confirmDialog, promptDialog } from '../confirm';
-import { useAuth } from '../auth';
-import { Switch as ToggleSwitch } from '../components/Switch';
-import { AdminPage, CopyButton, ErrorLine, Field, FieldError, GoLink, IconArrowUp, IconCheck, IconKey, IconSettings, IconTrash, IconUsers, Logo, InviteButton, PageHead, ProxyField, SaveBadge, Section, Spinner, TextField, ago, plural, toast, useAutosave, usePoll, type ProxyType } from '../ui';
 import BackupsCard from './Backups';
 import SmtpCard from '../components/SmtpCard';
-import { SETTINGS_TABS } from './adminNav';
 import PollSettingsCard from '../components/PollSettingsCard';
-
-export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
-  if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
-  if (!status) return <span className="pill pill-mute">ПРОВЕРКА</span>;
-  switch (status.state) {
-    case 'online':
-      // logged in to Discord, but it is on no server (kicked or never invited): nothing can be posted
-      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">НЕТ НА СЕРВЕРАХ{status.tag ? ` · ${status.tag}` : ''}</span>;
-      return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
-    case 'connecting': return <span className="pill pill-warn">ПОДКЛЮЧАЕТСЯ</span>;
-    case 'error': return <span className="pill pill-bad">ОШИБКА</span>;
-    default: return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
-  }
-}
-
-/** готовые темы: основной цвет и конец градиента */
-const THEME_PRESETS = [
-  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
-  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
-  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
-  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
-  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
-  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
-] as const;
-
-/** название, цвет и логотип сообщества: изменения сохраняются сами */
-function BrandCard() {
-  const { access, reload } = useAuth();
-  const b = access.brand;
-  const [name, setName] = useState(b.name);
-  const [color, setColor] = useState(b.color);
-  const [color2, setColor2] = useState(b.color2 ?? '');
-  const [preset, setPreset] = useState(b.preset ?? '');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const swatches = ['#4f46e5', '#7c3aed', '#db2777', '#e11d48', '#ea580c', '#16a34a', '#0891b2', '#2563eb'];
-  const savedRef = useRef(b);
-  savedRef.current = b;
-
-  const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
-  const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
-
-  // live preview of the chosen colours across the whole panel (a game accent chosen in «Внешний вид» still wins, see accent.ts)
-  useEffect(() => {
-    paintBrand(color, color2 || undefined);
-    const root = document.documentElement;
-    const mo = new MutationObserver(() => paintBrand(color, color2 || undefined));
-    mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
-    const off = onAccentChange(() => paintBrand(color, color2 || undefined));
-    return () => {
-      mo.disconnect();
-      off();
-      paintBrand(savedRef.current.color, savedRef.current.color2 || undefined);
-    };
-  }, [color, color2]);
-
-  // name and colours are saved as you go: on a pause, on leaving the name field, on picking a colour
-  const form = { name, color, color2, preset };
-  const savedForm = { name: b.name, color: b.color, color2: b.color2 ?? '', preset: b.preset ?? '' };
-  const nameError = !name.trim() ? 'Введите название сообщества' : name.trim().length > 32 ? 'Не длиннее 32 символов' : '';
-  const colorError = parseHex(color) ? '' : 'Цвет должен быть в формате #RRGGBB';
-  const auto = useAutosave({
-    value: form,
-    saved: savedForm,
-    delay: 800,
-    validate: (f) => (!f.name.trim() ? 'Введите название сообщества' : f.name.trim().length > 32 ? 'Не длиннее 32 символов' : parseHex(f.color) ? null : 'Цвет должен быть в формате #RRGGBB'),
-    save: async (f) => {
-      await api('/branding', 'PUT', { name: f.name.trim(), color: f.color, color2: f.color2, preset: f.preset });
-      await reload();
-    },
-  });
-
-  const upload = async (file: File) => {
-    setBusy(true);
-    setError('');
-    try {
-      const r = await fetch('/api/branding/logo', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
-      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить');
-      toast('Логотип обновлён');
-      await reload();
-    } catch (x) {
-      setError((x as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
-
-  return (
-    <Section
-      title="Оформление"
-      description="Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord. Изменения сохраняются сами."
-      actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
-      data-tour="brand"
-    >
-      <TextField
-        id="brand-name"
-        label="Название"
-        value={name}
-        maxLength={32}
-        onChange={setName}
-        error={nameError && name !== b.name ? nameError : undefined}
-        onBlur={auto.flush}
-        hint={`${name.trim().length} / 32`}
-      />
-      <div>
-        <span className="label">Тема</span>
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-          {THEME_PRESETS.map((p) => {
-            const on = preset === p.id;
-            return (
-              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`rounded-ui-lg border bg-card p-2 text-left ${on ? 'border-transparent ring-2 ring-ink ring-offset-2 ring-offset-card' : 'border-line hover:shadow-1'}`}>
-                <span className="block h-12 rounded-ui-md" style={{ background: `linear-gradient(135deg, ${p.c1}, ${p.c2})` }} />
-                <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <div>
-        <span className="label">Свой цвет</span>
-        <div className="flex flex-wrap items-center gap-2">
-          {swatches.map((c) => (
-            <button type="button" key={c} onClick={() => pickColor(c)} aria-label={c} aria-pressed={!preset && color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card ${!preset && color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
-          ))}
-          <input type="color" value={parseHex(color) ? color : '#4f46e5'} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-ui-sm border border-line bg-card" aria-label="Свой цвет" />
-        </div>
-        <FieldError id="brand-color-err" text={colorError} />
-      </div>
-      <div>
-        <span className="label">Как это выглядит</span>
-        <div className="flex flex-wrap items-center gap-4 rounded-ui-lg border border-line bg-soft p-4">
-          <Logo size={44} />
-          <div className="min-w-0">
-            <div className="truncate text-base font-black">{name.trim() || 'CoreGSM'}</div>
-            <div className="text-sm font-semibold text-mute">Мониторинг игровых серверов</div>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
-            <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-gradient-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
-              <IconCheck size={18} />
-            </span>
-          </div>
-        </div>
-      </div>
-      <div>
-        <span className="label">Логотип</span>
-        <div className="flex flex-wrap items-center gap-3">
-          <Logo size={48} />
-          <label className="btn btn-soft btn-sm cursor-pointer">
-            {busy ? 'Загружаю…' : 'Загрузить картинку'}
-            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
-          </label>
-          {b.hasLogo && <button type="button" className="btn btn-soft btn-sm" onClick={() => void clearLogo()}>Сбросить</button>}
-          <span className="text-sm font-semibold text-mute">PNG, JPG или WebP до 3 МБ, лучше квадрат</span>
-        </div>
-      </div>
-      <ErrorLine text={error} />
-      <div className="border-t border-line pt-4">
-        <AccentPicker />
-      </div>
-    </Section>
-  );
-}
+import type { ReactNode } from 'react';
+import { AdminPage, GoLink, IconSettings, PageHead, Section } from '../ui';
+import { SETTINGS_TABS } from './adminNav';
+import { BotCard } from './settings/BotCard';
+import { BrandCard } from './settings/BrandCard';
+import { PasswordCard } from './settings/PasswordCard';
+import { UpdateCard } from './settings/UpdateCard';
+export { BotPill } from './settings/BotCard';
+export { UsersTab } from './settings/UsersTab';
 
 // the ids stay the canonical hashes (#/admin/settings/bot|brand|security|updates); only the labels are friendlier
 const TABS = SETTINGS_TABS;
@@ -60937,657 +60957,6 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
           <BackupsCard />
         </>
       )}
-    </AdminPage>
-  );
-}
-
-function BotCard() {
-  const [info, setInfo] = useState<SettingsInfo | null>(null);
-  const [status, setStatus] = useState<BotStatus | null>(null);
-  const [token, setTokenValue] = useState('');
-  const [proxy, setProxy] = useState('');
-  const [proxyType, setProxyType] = useState<ProxyType>('socks5');
-  const [clearProxy, setClearProxy] = useState(false);
-  const [secret, setSecret] = useState('');
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  usePoll(() => {
-    api<SettingsInfo>('/settings').then(setInfo).catch(() => undefined);
-    api<BotStatus>('/bot/status').then(setStatus).catch(() => undefined);
-  }, 5_000);
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    setSaved(false);
-    try {
-      const body: { discordToken?: string; discordClientSecret?: string; proxyUrl?: string; proxyType?: ProxyType } = {};
-      if (token.trim()) body.discordToken = token.trim();
-      if (secret.trim()) body.discordClientSecret = secret.trim();
-      if (clearProxy) body.proxyUrl = '';
-      else if (proxy.trim()) { body.proxyUrl = proxy.trim(); body.proxyType = proxyType; }
-      const r = await api<SettingsInfo>('/settings', 'PUT', body);
-      setInfo(r);
-      setTokenValue('');
-      setSecret('');
-      setProxy('');
-      setClearProxy(false);
-      setSaved(true);
-      toast('Настройки сохранены');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const removeToken = async () => {
-    if (!(await confirmDialog({ title: 'Удалить токен?', text: 'Бот перестанет обновлять карточки.', confirmLabel: 'Удалить', danger: true }))) return;
-    try {
-      setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const removeSecret = async () => {
-    if (!(await confirmDialog({ title: 'Удалить Client Secret?', text: 'Вход через Discord перестанет работать.', confirmLabel: 'Удалить', danger: true }))) return;
-    try {
-      setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const tokenSet = !!info?.discordTokenSet;
-  const secretSet = !!info?.discordSecretSet;
-  // checked while typing; the message appears under the field, the button waits until it is fixed
-  const tokenWarn = token.trim() && !/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token.trim()) ? 'Похоже, это не токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Developer Portal (Bot → Reset Token).' : '';
-  const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? 'Формат: адрес:порт:логин:пароль или socks5://логин:пароль@адрес:порт' : '';
-
-  return (
-    <Section title="Бот и вход через Discord" actions={<BotPill status={status} tokenSet={tokenSet} />}>
-    <form onSubmit={save} className="space-y-3.5">
-      {tokenSet && status?.state === 'error' && status.error && (
-        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
-      )}
-
-      <div data-tour="bot-token">
-      <Field label="Токен бота">
-        <input
-          id="set-token"
-          className="input font-mono"
-          type="password"
-          value={token}
-          onChange={(e) => setTokenValue(e.target.value)}
-          autoComplete="off"
-          placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
-          aria-invalid={tokenWarn ? true : undefined}
-          aria-describedby={tokenWarn ? 'set-token-err' : undefined}
-        />
-      </Field>
-      <FieldError id="set-token-err" text={tokenWarn} />
-      </div>
-      {tokenSet && (
-        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>Удалить сохранённый токен</button>
-      )}
-
-      <Field label="Прокси (необязательно)">
-        <ProxyField
-          id="set-proxy"
-          value={clearProxy ? '' : proxy}
-          type={proxyType}
-          onChange={setProxy}
-          onType={setProxyType}
-          disabled={clearProxy}
-          placeholder={info?.proxyUrl ? `сейчас: ${info.proxyUrl}` : undefined}
-        />
-      </Field>
-      <FieldError id="set-proxy-err" text={proxyWarn} />
-      {info?.proxyUrl && (
-        <label className="flex items-center gap-2 text-sm font-bold text-mute">
-          <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearProxy} onChange={(e) => setClearProxy(e.target.checked)} />
-          Отключить прокси
-        </label>
-      )}
-      <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
-
-      <div className="space-y-3 rounded-ui-lg bg-soft p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-black">Вход через Discord</h3>
-          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? 'ВКЛЮЧЁН' : 'НЕ НАСТРОЕН'}</span>
-        </div>
-        <Field label="Client Secret">
-          <input
-            id="set-secret"
-            className="input font-mono"
-            type="password"
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            autoComplete="off"
-            placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
-          />
-        </Field>
-        {secretSet && (
-          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>Удалить Client Secret</button>
-        )}
-        {info?.discordRedirect && (
-          <div>
-            <label htmlFor="set-redirect" className="label">Redirect URI</label>
-            <div className="flex gap-2">
-              <input id="set-redirect" className="input font-mono" readOnly value={info.discordRedirect} onFocus={(e) => e.currentTarget.select()} />
-              <CopyButton text={info.discordRedirect} className="shrink-0" />
-            </div>
-          </div>
-        )}
-        <p className="text-sm font-semibold text-mute">
-          Добавьте этот адрес в Developer Portal: OAuth2 → Redirects. Client Secret скопируйте на той же странице OAuth2.
-        </p>
-      </div>
-
-      <ErrorLine text={error} />
-      {tokenSet && status?.inviteUrl && (
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
-          <InviteButton url={status.inviteUrl} />
-          <span className="text-sm font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
-        </div>
-      )}
-      {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
-      <p className="text-sm font-semibold text-mute">Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».</p>
-      <button className="btn" disabled={busy || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
-    </form>
-    </Section>
-  );
-}
-
-function PasswordCard() {
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [error, setError] = useState('');
-  const [done, setDone] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  // validated while typing (the server checks again)
-  const nextError = next && next.length < 10 ? `Ещё ${10 - next.length} ${plural(10 - next.length, ['символ', 'символа', 'символов'])}: нужно от 10` : next && next === current ? 'Новый пароль совпадает с текущим' : '';
-  const ready = !!current && next.length >= 10 && !nextError;
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!ready) return;
-    setError('');
-    setDone(false);
-    setBusy(true);
-    try {
-      await api('/auth/password', 'POST', { current, next });
-      setDone(true);
-      toast('Пароль изменён');
-      setCurrent('');
-      setNext('');
-    } catch (err) {
-      // the typed values stay in the form: nothing is lost, only the message appears
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Section title="Пароль администратора">
-      <form onSubmit={submit} className="space-y-3.5">
-        <TextField id="pw-current" label="Текущий пароль" type="password" value={current} onChange={(v) => { setCurrent(v); setError(''); }} autoComplete="current-password" />
-        <TextField id="pw-next" label="Новый пароль (от 10 символов)" type="password" value={next} onChange={setNext} autoComplete="new-password" error={nextError} />
-        <ErrorLine text={error} />
-        {done && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
-        <button className="btn" disabled={!ready || busy}>Сохранить пароль</button>
-      </form>
-    </Section>
-  );
-}
-
-const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
-
-const DISMISS_KEY = 'coregsm_dismissed_update_error';
-const readDismissed = (): number => {
-  try { return Number(localStorage.getItem(DISMISS_KEY)) || 0; } catch { return 0; }
-};
-const rememberDismissed = (t: number) => {
-  try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
-};
-
-function UpdateCard() {
-  const [info, setInfo] = useState<UpdateInfo | null>(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  // set when "Update" or "Rollback" was pressed: remembers the previous job timestamp to recognise the new result
-  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null; kind: 'update' | 'rollback' } | null>(null);
-  const [offline, setOffline] = useState(false);
-  const [log, setLog] = useState<Changelog | null>(null);
-  const [logError, setLogError] = useState('');
-
-  useEffect(() => {
-    api<Changelog>('/update/changelog')
-      .then((r) => { setLog(r); setLogError(r.error ?? ''); })
-      .catch((e: Error) => setLogError(e.message));
-  }, []);
-
-  // percent of the running job: only grows while the same job runs (never goes backwards between polls)
-  const [pct, setPct] = useState<number | null>(null);
-  const pctJob = useRef<number | null>(null);
-  const [finished, setFinished] = useState<'update' | 'rollback' | null>(null);
-  const running = !!waiting || info?.job?.state === 'running';
-
-  usePoll(() => {
-    api<UpdateInfo>('/update/status')
-      .then((r) => {
-        setOffline(false);
-        setInfo(r);
-        const j = r.job;
-        const current = !!j && (j.state === 'running' || (!!waiting && j.time !== waiting.baseTime));
-        if (j && current && typeof j.progress === 'number') {
-          const p = Math.max(0, Math.min(100, Math.round(j.progress)));
-          if (pctJob.current !== j.time) { pctJob.current = j.time; setPct(p); } else setPct((c) => Math.max(c ?? 0, p));
-        }
-        if (!waiting || !j || j.time === waiting.baseTime) return;
-        if (j.state === 'done') {
-          setFinished(waiting.kind);
-          setPct(100);
-          setWaiting(null);
-          // new frontend files are served now: reload to pick them up
-          setTimeout(() => window.location.reload(), 1500);
-        } else if (j.state === 'error') {
-          setWaiting(null);
-          setError(j.message);
-        }
-      })
-      .catch(() => {
-        // the backend restarts during an update
-        if (waiting || info?.job?.state === 'running') setOffline(true);
-      });
-  }, running && !finished ? 2_000 : 30_000);
-
-  const check = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      setInfo(await api<UpdateInfo>('/update/check', 'POST'));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const apply = async () => {
-    if (!(await confirmDialog({ title: 'Обновить панель?', text: 'Она будет недоступна 1-3 минуты, данные и настройки сохранятся.', confirmLabel: 'Обновить' }))) return;
-    setBusy(true);
-    setError('');
-    try {
-      const r = await api<UpdateInfo>('/update/apply', 'POST');
-      setInfo(r);
-      setPct(null);
-      setFinished(null);
-      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const rollback = async () => {
-    const ok = await confirmDialog({
-      title: 'Откатить к предыдущей версии?',
-      text: 'Будут восстановлены предыдущая версия панели и копия базы данных, сделанная перед последним обновлением. Всё, что изменилось после обновления (новые серверы, новости, пользователи), будет потеряно. Панель будет недоступна 1-3 минуты.',
-      confirmLabel: 'Откатить',
-      danger: true,
-    });
-    if (!ok) return;
-    setBusy(true);
-    setError('');
-    try {
-      const r = await api<UpdateInfo>('/update/rollback', 'POST');
-      setInfo(r);
-      setPct(null);
-      setFinished(null);
-      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const rollingBack = (waiting?.kind ?? finished) === 'rollback';
-  // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
-  const [dismissed, setDismissed] = useState<number>(readDismissed);
-  const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
-  const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
-
-  const state: 'running' | 'available' | 'latest' | 'unknown' = running || finished ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
-  const lastChecked = info?.checkedAt ?? null;
-
-  return (
-    <div className="space-y-5">
-      <section
-        aria-live="polite"
-        className={`relative overflow-hidden rounded-[26px] p-6 sm:p-7 ${
-          state === 'available'
-            ? 'update-hero text-white'
-            : state === 'running'
-              ? 'update-hero update-hero-run text-white'
-              : 'panel'
-        }`}
-      >
-        {(state === 'available' || state === 'running') && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
-        <div className="relative flex flex-wrap items-start gap-4">
-          <span
-            aria-hidden
-            className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${
-              state === 'available' || state === 'running' ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
-            }`}
-          >
-            {state === 'latest' ? (
-              <IconCheck size={30} />
-            ) : state === 'running' ? (
-              <Spinner className="h-7 w-7" />
-            ) : (
-              <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
-            )}
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>
-              {state === 'running' ? (rollingBack ? 'Откат к предыдущей версии' : 'Идёт обновление')
-                : state === 'available' ? 'Доступно обновление'
-                : state === 'latest' ? 'Установлена последняя версия'
-                : 'Проверка обновлений'}
-            </h2>
-            <p className={`mt-1 font-semibold ${state === 'available' || state === 'running' ? 'text-white/90' : 'text-mute'}`}>
-              {state === 'running'
-                ? (finished ? 'Готово! Панель обновится сама' : offline ? 'Панель перезапускается…' : info?.job?.state === 'running' && info.job.message ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
-                : state === 'available'
-                  ? 'Новая сборка уже в репозитории. Данные и настройки сохранятся, панель будет недоступна 1-3 минуты.'
-                  : state === 'latest'
-                    ? `Всё свежее${lastChecked ? `, проверено ${ago(lastChecked)}` : ''}.`
-                    : 'Узнаём, есть ли новая версия…'}
-            </p>
-
-            <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
-              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' || state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
-                <dt className={state === 'available' || state === 'running' ? 'text-white/85' : 'text-mute'}>Установлена</dt>
-                <dd className="font-mono">{short(info?.current ?? null)}</dd>
-              </div>
-              {state === 'available' && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
-                <dt className={state === 'available' ? 'text-mute' : state === 'running' ? 'text-white/85' : 'text-mute'}>В репозитории</dt>
-                <dd className="font-mono">{short(info?.latest ?? null)}</dd>
-              </div>
-            </dl>
-          </div>
-        </div>
-
-        {state === 'running' && (
-          <div className="relative mt-5 flex items-center gap-3">
-            <div
-              className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
-              role="progressbar"
-              aria-label={rollingBack ? 'Ход отката' : 'Ход обновления'}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={pct ?? undefined}
-            >
-              <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
-            </div>
-            {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
-            {finished && (
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
-                <IconCheck size={16} />
-              </span>
-            )}
-          </div>
-        )}
-
-        <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
-          {state === 'available' && (
-            <>
-              <button className="btn-on-grad btn-lg" onClick={apply} disabled={busy || running || !info?.canApply}>
-                {busy ? 'Отправляю…' : 'Обновить сейчас'}
-              </button>
-              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
-            </>
-          )}
-          {(state === 'latest' || state === 'unknown') && (
-            <button className="btn" onClick={check} disabled={busy || running}>{busy ? 'Проверяю…' : 'Проверить обновления'}</button>
-          )}
-          {state === 'available' && (
-            <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
-          )}
-          {info?.canRollback && state !== 'running' && (
-            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
-          )}
-        </div>
-
-        {state === 'available' && info && !info.canApply && (
-          <p className="relative mt-3 rounded-2xl bg-black/15 px-4 py-2.5 text-sm font-bold">
-            Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.
-          </p>
-        )}
-        {state !== 'available' && info && !info.canApply && state !== 'running' && (
-          <p className="relative mt-3 text-sm font-semibold text-mute">Кнопка обновления недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>
-        )}
-        {stuck && (
-          <p className="relative mt-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-            Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или {rollingBack ? 'выполните откат вручную' : <>обновите командой <span className="font-mono">sudo coregsm update</span></>}.
-          </p>
-        )}
-        {info?.error && !running && <p className="relative mt-3 text-sm font-semibold text-mute">{info.error}</p>}
-        {showOldFailure && info?.job && (
-          <div className="relative mt-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-            <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
-            <button type="button" className="btn-link btn-link-tone" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
-          </div>
-        )}
-        <div className="relative"><ErrorLine text={error} /></div>
-      </section>
-
-      <Section id="update-changes" title="Что нового" className="scroll-mt-24">
-
-        {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
-        {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
-        {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">Список изменений пуст.</p>}
-        {log && log.items.length > 0 && (
-          <ul className="divide-y divide-line">
-            {log.items.map((c) => (
-              <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
-                <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 break-words font-bold hover:text-link">{c.title}</a>
-                <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
-                <span className="text-sm font-semibold text-mute">{ago(typeof c.date === 'number' ? c.date : Date.parse(String(c.date)) || null)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
-    </div>
-  );
-}
-
-function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
-  return (
-    <label className="flex cursor-pointer items-start gap-3">
-      <ToggleSwitch className="mt-0.5" checked={on} onChange={onChange} />
-      <span>
-        <span className="block font-extrabold">{label}</span>
-        <span className="block text-sm font-semibold text-mute">{hint}</span>
-      </span>
-    </label>
-  );
-}
-
-const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
-
-export function UsersTab() {
-  const { me, reload } = useAuth();
-  const [access, setAccess] = useState<Access | null>(null);
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [error, setError] = useState('');
-  const [rules, setRules] = useState('');
-  const rulesInit = useRef(false);
-
-  const load = () => {
-    api<Access>('/access').then((a) => {
-      setAccess(a);
-      // the text is taken from the server once: a later reload must not replace what is being typed
-      if (!rulesInit.current) { rulesInit.current = true; setRules(a.rules ?? ''); }
-    }).catch((e) => setError(e.message));
-    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
-  };
-  useEffect(load, []);
-
-  const save = async (patch: Partial<Access>) => {
-    await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast('Сохранено'); }).catch((e) => setError(e.message));
-  };
-  const approve = async (u: UserRow) => {
-    await api(`/users/${u.id}/approve`, 'POST').then(() => toast(`«${u.username}» одобрен`)).catch((e) => setError(e.message));
-    load();
-  };
-  const reject = async (u: UserRow) => {
-    if (!(await confirmDialog({ title: `Отклонить заявку «${u.username}»?`, confirmLabel: 'Отклонить', danger: true }))) return;
-    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
-    load();
-  };
-  // the rules text is saved as you type (after a pause and on leaving the field); the text is never replaced under the cursor
-  const rulesAuto = useAutosave({
-    value: rules,
-    saved: access?.rules ?? '',
-    enabled: !!access,
-    delay: 1200,
-    equal: (a, b) => a.trim() === b.trim(),
-    validate: (v) => (v.length > 5000 ? 'Не больше 5000 символов' : null),
-    save: async (v) => {
-      const a = await api<Access>('/access', 'PUT', { rules: v.trim() });
-      setAccess(a);
-      void reload();
-    },
-  });
-  const setRole = async (u: UserRow, role: UserRow['role']) => {
-    await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
-    load();
-  };
-  const resetPassword = async (u: UserRow) => {
-    const pw = await promptDialog({
-      title: `Новый пароль для «${u.username}»`,
-      label: 'Новый пароль (от 8 символов)',
-      password: true,
-      confirmLabel: 'Сменить пароль',
-      validate: (v) => (v.length < 8 ? 'Минимум 8 символов' : null),
-    });
-    if (!pw) return;
-    await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
-  };
-  const remove = async (u: UserRow) => {
-    if (!(await confirmDialog({ title: `Удалить пользователя «${u.username}»?`, confirmLabel: 'Удалить', danger: true }))) return;
-    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
-    load();
-  };
-
-  const pendingUsers = users.filter((u) => u.status === 'pending');
-
-  return (
-    <AdminPage
-      head={(
-        <PageHead
-          icon={<IconUsers />}
-          title="Пользователи"
-          subtitle="Аккаунты, роли, регистрация и правила"
-          hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
-          help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
-        >
-          <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
-        </PageHead>
-      )}
-    >
-      <Section title="Кто видит панель">
-        {access && (
-          <>
-            <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
-            <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
-            <div className="pl-8">
-              <label htmlFor="reg-mode" className="label">Режим регистрации</label>
-              <select id="reg-mode" className="input !w-auto max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
-                <option value="open">Открытая: сразу</option>
-                <option value="approval">По заявке: после одобрения администратором</option>
-              </select>
-            </div>
-          </>
-        )}
-        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы и менять настройки могут администраторы.</p>
-        <div className="rounded-ui-lg bg-soft px-4 py-3 text-sm font-semibold text-mute">
-          <p><b className="text-ink">Игрок</b>: смотрит серверы и новости, ведёт свой профиль.</p>
-          <p><b className="text-ink">Модератор</b>: пишет, публикует и удаляет новости, меняет канал новостей по умолчанию. Серверы, настройки, пользователи и система ему недоступны.</p>
-          <p><b className="text-ink">Администратор</b>: полный доступ ко всему.</p>
-        </div>
-      </Section>
-
-      <Section
-        title="Правила сообщества"
-        description="Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было. Текст сохраняется сам."
-        actions={<SaveBadge status={rulesAuto.status} error={rulesAuto.error} retry={rulesAuto.retry} />}
-      >
-        <TextField
-          id="rules"
-          label="Текст правил"
-          multiline
-          rows={6}
-          maxLength={5000}
-          value={rules}
-          onChange={setRules}
-          onBlur={rulesAuto.flush}
-          error={rulesAuto.invalid ? rulesAuto.error : undefined}
-          placeholder="1. Уважайте других игроков…"
-          hint={`${rules.length} / 5000`}
-          className="min-h-32"
-        />
-      </Section>
-
-      {pendingUsers.length > 0 && (
-        <Section title="Заявки на регистрацию">
-          <ul className="divide-y divide-line">
-            {pendingUsers.map((u) => (
-              <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-                <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.discordName ? ` · Discord: ${u.discordName}` : ''}</span>
-                <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
-                <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      <Section title="Пользователи">
-        <ErrorLine text={error} />
-        <ul className="divide-y divide-line">
-          {users.map((u) => (
-            <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-              <span className="min-w-0 flex-1 truncate font-bold">
-                {u.username}{u.username === me?.username ? ' (вы)' : ''}
-                {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
-              </span>
-              {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
-              <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
-              <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
-                <option value="player">Игрок</option>
-                <option value="moderator">Модератор</option>
-                <option value="admin">Администратор</option>
-              </select>
-              <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
-              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
-            </li>
-          ))}
-        </ul>
-        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="#/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
-      </Section>
     </AdminPage>
   );
 }
@@ -62643,6 +62012,865 @@ export function writeIds(key: string, ids: string[]) {
   } catch {
     /* private mode: not remembered */
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/BotCard.tsx" << '__COREGSM_EOF__'
+/** Settings → Bot: Discord token, proxy, Discord sign-in, invite link and the bot's state. */
+import { type FormEvent, useState } from 'react';
+import { api, type BotStatus, type SettingsInfo } from '../../api';
+import { confirmDialog } from '../../confirm';
+import { CopyButton, ErrorLine, Field, FieldError, InviteButton, ProxyField, type ProxyType, Section, toast, usePoll } from '../../ui';
+
+export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
+  if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
+  if (!status) return <span className="pill pill-mute">ПРОВЕРКА</span>;
+  switch (status.state) {
+    case 'online':
+      // logged in to Discord, but it is on no server (kicked or never invited): nothing can be posted
+      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">НЕТ НА СЕРВЕРАХ{status.tag ? ` · ${status.tag}` : ''}</span>;
+      return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
+    case 'connecting': return <span className="pill pill-warn">ПОДКЛЮЧАЕТСЯ</span>;
+    case 'error': return <span className="pill pill-bad">ОШИБКА</span>;
+    default: return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
+  }
+}
+
+export function BotCard() {
+  const [info, setInfo] = useState<SettingsInfo | null>(null);
+  const [status, setStatus] = useState<BotStatus | null>(null);
+  const [token, setTokenValue] = useState('');
+  const [proxy, setProxy] = useState('');
+  const [proxyType, setProxyType] = useState<ProxyType>('socks5');
+  const [clearProxy, setClearProxy] = useState(false);
+  const [secret, setSecret] = useState('');
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  usePoll(() => {
+    api<SettingsInfo>('/settings').then(setInfo).catch(() => undefined);
+    api<BotStatus>('/bot/status').then(setStatus).catch(() => undefined);
+  }, 5_000);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    setSaved(false);
+    try {
+      const body: { discordToken?: string; discordClientSecret?: string; proxyUrl?: string; proxyType?: ProxyType } = {};
+      if (token.trim()) body.discordToken = token.trim();
+      if (secret.trim()) body.discordClientSecret = secret.trim();
+      if (clearProxy) body.proxyUrl = '';
+      else if (proxy.trim()) { body.proxyUrl = proxy.trim(); body.proxyType = proxyType; }
+      const r = await api<SettingsInfo>('/settings', 'PUT', body);
+      setInfo(r);
+      setTokenValue('');
+      setSecret('');
+      setProxy('');
+      setClearProxy(false);
+      setSaved(true);
+      toast('Настройки сохранены');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeToken = async () => {
+    if (!(await confirmDialog({ title: 'Удалить токен?', text: 'Бот перестанет обновлять карточки.', confirmLabel: 'Удалить', danger: true }))) return;
+    try {
+      setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const removeSecret = async () => {
+    if (!(await confirmDialog({ title: 'Удалить Client Secret?', text: 'Вход через Discord перестанет работать.', confirmLabel: 'Удалить', danger: true }))) return;
+    try {
+      setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const tokenSet = !!info?.discordTokenSet;
+  const secretSet = !!info?.discordSecretSet;
+  // checked while typing; the message appears under the field, the button waits until it is fixed
+  const tokenWarn = token.trim() && !/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token.trim()) ? 'Похоже, это не токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Developer Portal (Bot → Reset Token).' : '';
+  const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? 'Формат: адрес:порт:логин:пароль или socks5://логин:пароль@адрес:порт' : '';
+
+  return (
+    <Section title="Бот и вход через Discord" actions={<BotPill status={status} tokenSet={tokenSet} />}>
+    <form onSubmit={save} className="space-y-3.5">
+      {tokenSet && status?.state === 'error' && status.error && (
+        <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
+      )}
+
+      <div data-tour="bot-token">
+      <Field label="Токен бота">
+        <input
+          id="set-token"
+          className="input font-mono"
+          type="password"
+          value={token}
+          onChange={(e) => setTokenValue(e.target.value)}
+          autoComplete="off"
+          placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
+          aria-invalid={tokenWarn ? true : undefined}
+          aria-describedby={tokenWarn ? 'set-token-err' : undefined}
+        />
+      </Field>
+      <FieldError id="set-token-err" text={tokenWarn} />
+      </div>
+      {tokenSet && (
+        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>Удалить сохранённый токен</button>
+      )}
+
+      <Field label="Прокси (необязательно)">
+        <ProxyField
+          id="set-proxy"
+          value={clearProxy ? '' : proxy}
+          type={proxyType}
+          onChange={setProxy}
+          onType={setProxyType}
+          disabled={clearProxy}
+          placeholder={info?.proxyUrl ? `сейчас: ${info.proxyUrl}` : undefined}
+        />
+      </Field>
+      <FieldError id="set-proxy-err" text={proxyWarn} />
+      {info?.proxyUrl && (
+        <label className="flex items-center gap-2 text-sm font-bold text-mute">
+          <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearProxy} onChange={(e) => setClearProxy(e.target.checked)} />
+          Отключить прокси
+        </label>
+      )}
+      <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
+
+      <div className="space-y-3 rounded-ui-lg bg-soft p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-black">Вход через Discord</h3>
+          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? 'ВКЛЮЧЁН' : 'НЕ НАСТРОЕН'}</span>
+        </div>
+        <Field label="Client Secret">
+          <input
+            id="set-secret"
+            className="input font-mono"
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            autoComplete="off"
+            placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
+          />
+        </Field>
+        {secretSet && (
+          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>Удалить Client Secret</button>
+        )}
+        {info?.discordRedirect && (
+          <div>
+            <label htmlFor="set-redirect" className="label">Redirect URI</label>
+            <div className="flex gap-2">
+              <input id="set-redirect" className="input font-mono" readOnly value={info.discordRedirect} onFocus={(e) => e.currentTarget.select()} />
+              <CopyButton text={info.discordRedirect} className="shrink-0" />
+            </div>
+          </div>
+        )}
+        <p className="text-sm font-semibold text-mute">
+          Добавьте этот адрес в Developer Portal: OAuth2 → Redirects. Client Secret скопируйте на той же странице OAuth2.
+        </p>
+      </div>
+
+      <ErrorLine text={error} />
+      {tokenSet && status?.inviteUrl && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
+          <InviteButton url={status.inviteUrl} />
+          <span className="text-sm font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
+        </div>
+      )}
+      {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
+      <p className="text-sm font-semibold text-mute">Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».</p>
+      <button className="btn" disabled={busy || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
+    </form>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/BrandCard.tsx" << '__COREGSM_EOF__'
+/** Settings → Branding: community name, accent colours, theme presets and logo. */
+import { useEffect, useRef, useState } from 'react';
+import { onAccentChange, paintBrand } from '../../accent';
+import { api, getToken } from '../../api';
+import { useAuth } from '../../auth';
+import { parseHex } from '../../colors';
+import { AccentPicker } from '../../components/AccentPicker';
+import { ErrorLine, FieldError, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+
+/** готовые темы: основной цвет и конец градиента */
+const THEME_PRESETS = [
+  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
+  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
+  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
+  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
+  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
+  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
+] as const;
+
+/** название, цвет и логотип сообщества: изменения сохраняются сами */
+export function BrandCard() {
+  const { access, reload } = useAuth();
+  const b = access.brand;
+  const [name, setName] = useState(b.name);
+  const [color, setColor] = useState(b.color);
+  const [color2, setColor2] = useState(b.color2 ?? '');
+  const [preset, setPreset] = useState(b.preset ?? '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const swatches = ['#4f46e5', '#7c3aed', '#db2777', '#e11d48', '#ea580c', '#16a34a', '#0891b2', '#2563eb'];
+  const savedRef = useRef(b);
+  savedRef.current = b;
+
+  const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
+  const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
+
+  // live preview of the chosen colours across the whole panel (a game accent chosen in «Внешний вид» still wins, see accent.ts)
+  useEffect(() => {
+    paintBrand(color, color2 || undefined);
+    const root = document.documentElement;
+    const mo = new MutationObserver(() => paintBrand(color, color2 || undefined));
+    mo.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    const off = onAccentChange(() => paintBrand(color, color2 || undefined));
+    return () => {
+      mo.disconnect();
+      off();
+      paintBrand(savedRef.current.color, savedRef.current.color2 || undefined);
+    };
+  }, [color, color2]);
+
+  // name and colours are saved as you go: on a pause, on leaving the name field, on picking a colour
+  const form = { name, color, color2, preset };
+  const savedForm = { name: b.name, color: b.color, color2: b.color2 ?? '', preset: b.preset ?? '' };
+  const nameError = !name.trim() ? 'Введите название сообщества' : name.trim().length > 32 ? 'Не длиннее 32 символов' : '';
+  const colorError = parseHex(color) ? '' : 'Цвет должен быть в формате #RRGGBB';
+  const auto = useAutosave({
+    value: form,
+    saved: savedForm,
+    delay: 800,
+    validate: (f) => (!f.name.trim() ? 'Введите название сообщества' : f.name.trim().length > 32 ? 'Не длиннее 32 символов' : parseHex(f.color) ? null : 'Цвет должен быть в формате #RRGGBB'),
+    save: async (f) => {
+      await api('/branding', 'PUT', { name: f.name.trim(), color: f.color, color2: f.color2, preset: f.preset });
+      await reload();
+    },
+  });
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch('/api/branding/logo', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить');
+      toast('Логотип обновлён');
+      await reload();
+    } catch (x) {
+      setError((x as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
+
+  return (
+    <Section
+      title="Оформление"
+      description="Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord. Изменения сохраняются сами."
+      actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+      data-tour="brand"
+    >
+      <TextField
+        id="brand-name"
+        label="Название"
+        value={name}
+        maxLength={32}
+        onChange={setName}
+        error={nameError && name !== b.name ? nameError : undefined}
+        onBlur={auto.flush}
+        hint={`${name.trim().length} / 32`}
+      />
+      <div>
+        <span className="label">Тема</span>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {THEME_PRESETS.map((p) => {
+            const on = preset === p.id;
+            return (
+              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`rounded-ui-lg border bg-card p-2 text-left ${on ? 'border-transparent ring-2 ring-ink ring-offset-2 ring-offset-card' : 'border-line hover:shadow-1'}`}>
+                <span className="block h-12 rounded-ui-md" style={{ background: `linear-gradient(135deg, ${p.c1}, ${p.c2})` }} />
+                <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <span className="label">Свой цвет</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {swatches.map((c) => (
+            <button type="button" key={c} onClick={() => pickColor(c)} aria-label={c} aria-pressed={!preset && color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card ${!preset && color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
+          ))}
+          <input type="color" value={parseHex(color) ? color : '#4f46e5'} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-ui-sm border border-line bg-card" aria-label="Свой цвет" />
+        </div>
+        <FieldError id="brand-color-err" text={colorError} />
+      </div>
+      <div>
+        <span className="label">Как это выглядит</span>
+        <div className="flex flex-wrap items-center gap-4 rounded-ui-lg border border-line bg-soft p-4">
+          <Logo size={44} />
+          <div className="min-w-0">
+            <div className="truncate text-base font-black">{name.trim() || 'CoreGSM'}</div>
+            <div className="text-sm font-semibold text-mute">Мониторинг игровых серверов</div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
+            <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-gradient-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
+              <IconCheck size={18} />
+            </span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <span className="label">Логотип</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <Logo size={48} />
+          <label className="btn btn-soft btn-sm cursor-pointer">
+            {busy ? 'Загружаю…' : 'Загрузить картинку'}
+            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
+          </label>
+          {b.hasLogo && <button type="button" className="btn btn-soft btn-sm" onClick={() => void clearLogo()}>Сбросить</button>}
+          <span className="text-sm font-semibold text-mute">PNG, JPG или WebP до 3 МБ, лучше квадрат</span>
+        </div>
+      </div>
+      <ErrorLine text={error} />
+      <div className="border-t border-line pt-4">
+        <AccentPicker />
+      </div>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/PasswordCard.tsx" << '__COREGSM_EOF__'
+/** Settings → Security: the administrator's own password. */
+import { type FormEvent, useState } from 'react';
+import { api } from '../../api';
+import { ErrorLine, plural, Section, TextField, toast } from '../../ui';
+
+export function PasswordCard() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // validated while typing (the server checks again)
+  const nextError = next && next.length < 10 ? `Ещё ${10 - next.length} ${plural(10 - next.length, ['символ', 'символа', 'символов'])}: нужно от 10` : next && next === current ? 'Новый пароль совпадает с текущим' : '';
+  const ready = !!current && next.length >= 10 && !nextError;
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!ready) return;
+    setError('');
+    setDone(false);
+    setBusy(true);
+    try {
+      await api('/auth/password', 'POST', { current, next });
+      setDone(true);
+      toast('Пароль изменён');
+      setCurrent('');
+      setNext('');
+    } catch (err) {
+      // the typed values stay in the form: nothing is lost, only the message appears
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Пароль администратора">
+      <form onSubmit={submit} className="space-y-3.5">
+        <TextField id="pw-current" label="Текущий пароль" type="password" value={current} onChange={(v) => { setCurrent(v); setError(''); }} autoComplete="current-password" />
+        <TextField id="pw-next" label="Новый пароль (от 10 символов)" type="password" value={next} onChange={setNext} autoComplete="new-password" error={nextError} />
+        <ErrorLine text={error} />
+        {done && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
+        <button className="btn" disabled={!ready || busy}>Сохранить пароль</button>
+      </form>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/UpdateCard.tsx" << '__COREGSM_EOF__'
+/** Settings → Updates: version check, changelog, update and rollback through the host updater. */
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
+import { api, type Changelog, type UpdateInfo } from '../../api';
+import { confirmDialog } from '../../confirm';
+import { ago, ErrorLine, IconArrowUp, IconCheck, Section, Spinner, usePoll } from '../../ui';
+
+const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
+
+const DISMISS_KEY = 'coregsm_dismissed_update_error';
+const readDismissed = (): number => {
+  try { return Number(localStorage.getItem(DISMISS_KEY)) || 0; } catch { return 0; }
+};
+const rememberDismissed = (t: number) => {
+  try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
+};
+
+export function UpdateCard() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  // set when "Update" or "Rollback" was pressed: remembers the previous job timestamp to recognise the new result
+  const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null; kind: 'update' | 'rollback' } | null>(null);
+  const [offline, setOffline] = useState(false);
+  const [log, setLog] = useState<Changelog | null>(null);
+  const [logError, setLogError] = useState('');
+
+  useEffect(() => {
+    api<Changelog>('/update/changelog')
+      .then((r) => { setLog(r); setLogError(r.error ?? ''); })
+      .catch((e: Error) => setLogError(e.message));
+  }, []);
+
+  // percent of the running job: only grows while the same job runs (never goes backwards between polls)
+  const [pct, setPct] = useState<number | null>(null);
+  const pctJob = useRef<number | null>(null);
+  const [finished, setFinished] = useState<'update' | 'rollback' | null>(null);
+  const running = !!waiting || info?.job?.state === 'running';
+
+  usePoll(() => {
+    api<UpdateInfo>('/update/status')
+      .then((r) => {
+        setOffline(false);
+        setInfo(r);
+        const j = r.job;
+        const current = !!j && (j.state === 'running' || (!!waiting && j.time !== waiting.baseTime));
+        if (j && current && typeof j.progress === 'number') {
+          const p = Math.max(0, Math.min(100, Math.round(j.progress)));
+          if (pctJob.current !== j.time) { pctJob.current = j.time; setPct(p); } else setPct((c) => Math.max(c ?? 0, p));
+        }
+        if (!waiting || !j || j.time === waiting.baseTime) return;
+        if (j.state === 'done') {
+          setFinished(waiting.kind);
+          setPct(100);
+          setWaiting(null);
+          // new frontend files are served now: reload to pick them up
+          setTimeout(() => window.location.reload(), 1500);
+        } else if (j.state === 'error') {
+          setWaiting(null);
+          setError(j.message);
+        }
+      })
+      .catch(() => {
+        // the backend restarts during an update
+        if (waiting || info?.job?.state === 'running') setOffline(true);
+      });
+  }, running && !finished ? 2_000 : 30_000);
+
+  const check = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      setInfo(await api<UpdateInfo>('/update/check', 'POST'));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!(await confirmDialog({ title: 'Обновить панель?', text: 'Она будет недоступна 1-3 минуты, данные и настройки сохранятся.', confirmLabel: 'Обновить' }))) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<UpdateInfo>('/update/apply', 'POST');
+      setInfo(r);
+      setPct(null);
+      setFinished(null);
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rollback = async () => {
+    const ok = await confirmDialog({
+      title: 'Откатить к предыдущей версии?',
+      text: 'Будут восстановлены предыдущая версия панели и копия базы данных, сделанная перед последним обновлением. Всё, что изменилось после обновления (новые серверы, новости, пользователи), будет потеряно. Панель будет недоступна 1-3 минуты.',
+      confirmLabel: 'Откатить',
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<UpdateInfo>('/update/rollback', 'POST');
+      setInfo(r);
+      setPct(null);
+      setFinished(null);
+      setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rollingBack = (waiting?.kind ?? finished) === 'rollback';
+  // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
+  const [dismissed, setDismissed] = useState<number>(readDismissed);
+  const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
+  const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
+
+  const state: 'running' | 'available' | 'latest' | 'unknown' = running || finished ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
+  const lastChecked = info?.checkedAt ?? null;
+
+  return (
+    <div className="space-y-5">
+      <section
+        aria-live="polite"
+        className={`relative overflow-hidden rounded-[26px] p-6 sm:p-7 ${
+          state === 'available'
+            ? 'update-hero text-white'
+            : state === 'running'
+              ? 'update-hero update-hero-run text-white'
+              : 'panel'
+        }`}
+      >
+        {(state === 'available' || state === 'running') && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
+        <div className="relative flex flex-wrap items-start gap-4">
+          <span
+            aria-hidden
+            className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${
+              state === 'available' || state === 'running' ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
+            }`}
+          >
+            {state === 'latest' ? (
+              <IconCheck size={30} />
+            ) : state === 'running' ? (
+              <Spinner className="h-7 w-7" />
+            ) : (
+              <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
+            )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>
+              {state === 'running' ? (rollingBack ? 'Откат к предыдущей версии' : 'Идёт обновление')
+                : state === 'available' ? 'Доступно обновление'
+                : state === 'latest' ? 'Установлена последняя версия'
+                : 'Проверка обновлений'}
+            </h2>
+            <p className={`mt-1 font-semibold ${state === 'available' || state === 'running' ? 'text-white/90' : 'text-mute'}`}>
+              {state === 'running'
+                ? (finished ? 'Готово! Панель обновится сама' : offline ? 'Панель перезапускается…' : info?.job?.state === 'running' && info.job.message ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
+                : state === 'available'
+                  ? 'Новая сборка уже в репозитории. Данные и настройки сохранятся, панель будет недоступна 1-3 минуты.'
+                  : state === 'latest'
+                    ? `Всё свежее${lastChecked ? `, проверено ${ago(lastChecked)}` : ''}.`
+                    : 'Узнаём, есть ли новая версия…'}
+            </p>
+
+            <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
+              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' || state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={state === 'available' || state === 'running' ? 'text-white/85' : 'text-mute'}>Установлена</dt>
+                <dd className="font-mono">{short(info?.current ?? null)}</dd>
+              </div>
+              {state === 'available' && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
+              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={state === 'available' ? 'text-mute' : state === 'running' ? 'text-white/85' : 'text-mute'}>В репозитории</dt>
+                <dd className="font-mono">{short(info?.latest ?? null)}</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+
+        {state === 'running' && (
+          <div className="relative mt-5 flex items-center gap-3">
+            <div
+              className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
+              role="progressbar"
+              aria-label={rollingBack ? 'Ход отката' : 'Ход обновления'}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct ?? undefined}
+            >
+              <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
+            </div>
+            {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
+            {finished && (
+              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
+                <IconCheck size={16} />
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
+          {state === 'available' && (
+            <>
+              <button className="btn-on-grad btn-lg" onClick={apply} disabled={busy || running || !info?.canApply}>
+                {busy ? 'Отправляю…' : 'Обновить сейчас'}
+              </button>
+              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
+            </>
+          )}
+          {(state === 'latest' || state === 'unknown') && (
+            <button className="btn" onClick={check} disabled={busy || running}>{busy ? 'Проверяю…' : 'Проверить обновления'}</button>
+          )}
+          {state === 'available' && (
+            <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
+          )}
+          {info?.canRollback && state !== 'running' && (
+            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
+          )}
+        </div>
+
+        {state === 'available' && info && !info.canApply && (
+          <p className="relative mt-3 rounded-2xl bg-black/15 px-4 py-2.5 text-sm font-bold">
+            Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.
+          </p>
+        )}
+        {state !== 'available' && info && !info.canApply && state !== 'running' && (
+          <p className="relative mt-3 text-sm font-semibold text-mute">Кнопка обновления недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>
+        )}
+        {stuck && (
+          <p className="relative mt-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+            Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или {rollingBack ? 'выполните откат вручную' : <>обновите командой <span className="font-mono">sudo coregsm update</span></>}.
+          </p>
+        )}
+        {info?.error && !running && <p className="relative mt-3 text-sm font-semibold text-mute">{info.error}</p>}
+        {showOldFailure && info?.job && (
+          <div className="relative mt-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
+            <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
+            <button type="button" className="btn-link btn-link-tone" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+          </div>
+        )}
+        <div className="relative"><ErrorLine text={error} /></div>
+      </section>
+
+      <Section id="update-changes" title="Что нового" className="scroll-mt-24">
+
+        {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
+        {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
+        {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">Список изменений пуст.</p>}
+        {log && log.items.length > 0 && (
+          <ul className="divide-y divide-line">
+            {log.items.map((c) => (
+              <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
+                <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 break-words font-bold hover:text-link">{c.title}</a>
+                <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
+                <span className="text-sm font-semibold text-mute">{ago(typeof c.date === 'number' ? c.date : Date.parse(String(c.date)) || null)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/UsersTab.tsx" << '__COREGSM_EOF__'
+/** Users: registration and access settings, pending requests, roles and passwords. */
+import { useEffect, useRef, useState } from 'react';
+import { type Access, api, type UserRow } from '../../api';
+import { useAuth } from '../../auth';
+import { Switch as ToggleSwitch } from '../../components/Switch';
+import { confirmDialog, promptDialog } from '../../confirm';
+import { AdminPage, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+
+function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3">
+      <ToggleSwitch className="mt-0.5" checked={on} onChange={onChange} />
+      <span>
+        <span className="block font-extrabold">{label}</span>
+        <span className="block text-sm font-semibold text-mute">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
+const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
+
+export function UsersTab() {
+  const { me, reload } = useAuth();
+  const [access, setAccess] = useState<Access | null>(null);
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [error, setError] = useState('');
+  const [rules, setRules] = useState('');
+  const rulesInit = useRef(false);
+
+  const load = () => {
+    api<Access>('/access').then((a) => {
+      setAccess(a);
+      // the text is taken from the server once: a later reload must not replace what is being typed
+      if (!rulesInit.current) { rulesInit.current = true; setRules(a.rules ?? ''); }
+    }).catch((e) => setError(e.message));
+    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
+  };
+  useEffect(load, []);
+
+  const save = async (patch: Partial<Access>) => {
+    await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast('Сохранено'); }).catch((e) => setError(e.message));
+  };
+  const approve = async (u: UserRow) => {
+    await api(`/users/${u.id}/approve`, 'POST').then(() => toast(`«${u.username}» одобрен`)).catch((e) => setError(e.message));
+    load();
+  };
+  const reject = async (u: UserRow) => {
+    if (!(await confirmDialog({ title: `Отклонить заявку «${u.username}»?`, confirmLabel: 'Отклонить', danger: true }))) return;
+    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
+    load();
+  };
+  // the rules text is saved as you type (after a pause and on leaving the field); the text is never replaced under the cursor
+  const rulesAuto = useAutosave({
+    value: rules,
+    saved: access?.rules ?? '',
+    enabled: !!access,
+    delay: 1200,
+    equal: (a, b) => a.trim() === b.trim(),
+    validate: (v) => (v.length > 5000 ? 'Не больше 5000 символов' : null),
+    save: async (v) => {
+      const a = await api<Access>('/access', 'PUT', { rules: v.trim() });
+      setAccess(a);
+      void reload();
+    },
+  });
+  const setRole = async (u: UserRow, role: UserRow['role']) => {
+    await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
+    load();
+  };
+  const resetPassword = async (u: UserRow) => {
+    const pw = await promptDialog({
+      title: `Новый пароль для «${u.username}»`,
+      label: 'Новый пароль (от 8 символов)',
+      password: true,
+      confirmLabel: 'Сменить пароль',
+      validate: (v) => (v.length < 8 ? 'Минимум 8 символов' : null),
+    });
+    if (!pw) return;
+    await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
+  };
+  const remove = async (u: UserRow) => {
+    if (!(await confirmDialog({ title: `Удалить пользователя «${u.username}»?`, confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
+    load();
+  };
+
+  const pendingUsers = users.filter((u) => u.status === 'pending');
+
+  return (
+    <AdminPage
+      head={(
+        <PageHead
+          icon={<IconUsers />}
+          title="Пользователи"
+          subtitle="Аккаунты, роли, регистрация и правила"
+          hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
+          help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
+        >
+          <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
+        </PageHead>
+      )}
+    >
+      <Section title="Кто видит панель">
+        {access && (
+          <>
+            <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
+            <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
+            <div className="pl-8">
+              <label htmlFor="reg-mode" className="label">Режим регистрации</label>
+              <select id="reg-mode" className="input !w-auto max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
+                <option value="open">Открытая: сразу</option>
+                <option value="approval">По заявке: после одобрения администратором</option>
+              </select>
+            </div>
+          </>
+        )}
+        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы и менять настройки могут администраторы.</p>
+        <div className="rounded-ui-lg bg-soft px-4 py-3 text-sm font-semibold text-mute">
+          <p><b className="text-ink">Игрок</b>: смотрит серверы и новости, ведёт свой профиль.</p>
+          <p><b className="text-ink">Модератор</b>: пишет, публикует и удаляет новости, меняет канал новостей по умолчанию. Серверы, настройки, пользователи и система ему недоступны.</p>
+          <p><b className="text-ink">Администратор</b>: полный доступ ко всему.</p>
+        </div>
+      </Section>
+
+      <Section
+        title="Правила сообщества"
+        description="Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было. Текст сохраняется сам."
+        actions={<SaveBadge status={rulesAuto.status} error={rulesAuto.error} retry={rulesAuto.retry} />}
+      >
+        <TextField
+          id="rules"
+          label="Текст правил"
+          multiline
+          rows={6}
+          maxLength={5000}
+          value={rules}
+          onChange={setRules}
+          onBlur={rulesAuto.flush}
+          error={rulesAuto.invalid ? rulesAuto.error : undefined}
+          placeholder="1. Уважайте других игроков…"
+          hint={`${rules.length} / 5000`}
+          className="min-h-32"
+        />
+      </Section>
+
+      {pendingUsers.length > 0 && (
+        <Section title="Заявки на регистрацию">
+          <ul className="divide-y divide-line">
+            {pendingUsers.map((u) => (
+              <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.discordName ? ` · Discord: ${u.discordName}` : ''}</span>
+                <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
+                <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      <Section title="Пользователи">
+        <ErrorLine text={error} />
+        <ul className="divide-y divide-line">
+          {users.map((u) => (
+            <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+              <span className="min-w-0 flex-1 truncate font-bold">
+                {u.username}{u.username === me?.username ? ' (вы)' : ''}
+                {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
+              </span>
+              {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
+              <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
+              <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
+                <option value="player">Игрок</option>
+                <option value="moderator">Модератор</option>
+                <option value="admin">Администратор</option>
+              </select>
+              <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
+              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="#/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
+      </Section>
+    </AdminPage>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -64040,58 +64268,8 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
-import { forwardRef, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { revealTransition, withViewTransition } from './useMotion';
-import { useAuth } from './auth';
-import AuthShowcase from './components/AuthShowcase';
-import { getToken, type Server } from './api';
-import { promptDialog, useBackdropClose, useDialogFocus } from './confirm';
-import { GAME_IMAGE, gameAbbr, gameGradient } from './games';
-import { gameIconPath, ICON_PATHS } from './gameIcons';
-import { getPrefs, t, t as tr } from './i18n';
-import { IconAuto, IconCheck, IconClose, IconCopy, IconError, IconEye, IconEyeOff, IconInfo, IconMoon, IconOk, IconSun } from './icons';
-
 // one icon set (24 px grid, 2 px stroke, currentColor): see icons.tsx; every icon is re-exported from here
 export * from './icons';
-
-/**
- * Calls `fn` now and then every `ms` milliseconds.
- * - nothing runs while the tab is hidden; coming back to the tab refreshes at once
- * - a tick is skipped while the previous call (if it returns a promise) is still pending
- * - nothing is scheduled after unmount
- */
-export function usePoll(fn: () => unknown, ms: number) {
-  const ref = useRef(fn);
-  ref.current = fn;
-  useEffect(() => {
-    let alive = true;
-    let pending = false;
-    const run = async () => {
-      if (!alive || pending || document.hidden) return;
-      pending = true;
-      try {
-        await ref.current();
-      } catch {
-        /* the caller shows its own errors */
-      } finally {
-        pending = false;
-      }
-    };
-    void run();
-    const t = setInterval(() => void run(), ms);
-    const onVisible = () => { if (!document.hidden) void run(); };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      alive = false;
-      clearInterval(t);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [ms]);
-}
-
-/** a server answers, but slowly (ping over 100 ms) */
-export const LAG_PING = 100;
-export const isLag = (s: Pick<Server, 'online' | 'ping'>) => s.online && s.ping != null && s.ping > LAG_PING;
 
 // shared building blocks live in their own files; pages import everything from here
 export { Button } from './components/Button';
@@ -64100,836 +64278,140 @@ export { Switch } from './components/Switch';
 export { SplitButton } from './components/SplitButton';
 export { StateView, LoadError, errorKind } from './components/StateView';
 export type { StateKind } from './components/StateView';
-import { StateView } from './components/StateView';
 export type { SplitItem } from './components/SplitButton';
 export { useFlashOnChange, useDepth, useDensity, setDensity, prefersReducedMotion } from './useMotion';
 export type { Density } from './useMotion';
+export { useAutosave } from './autosave';
+export type { SaveStatus, AutosaveOptions } from './autosave';
 
-const reducedMotion = () => typeof window !== 'undefined' && (document.documentElement.dataset.motion === 'reduce' || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+// everything else lives in src/ui/; the pages keep importing from here
+export { usePoll, LAG_PING, isLag } from './ui/poll';
+export { useTween, AnimatedNumber, Burst } from './ui/motion';
+export { parseHash, useHash } from './ui/hashRoute';
+export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
+export { ThemeToggle } from './ui/theme';
+export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';
+export type { ProxyType } from './ui/blocks';
+export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
+export { toast, dismissToast, undoable, Toaster } from './ui/toast';
+export type { ToastAction, ToastOptions } from './ui/toast';
+export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, OrDivider } from './ui/authParts';
+export { AdminPage, Section, Strip, SaveBadge, TextField } from './ui/admin';
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/admin.tsx" << '__COREGSM_EOF__'
+/** The grid of the admin pages: page root, sections, strips, autosave badge and text fields. */
+import { type ReactNode, useId } from 'react';
+import type { SaveStatus } from '../autosave';
+import { IconCheck } from '../icons';
+import { FieldError, Spinner } from './authParts';
 
-/** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
-export function useTween(value: number, ms = 600): number {
-  const [shown, setShown] = useState(value);
-  const cur = useRef(value);
-  useEffect(() => {
-    if (cur.current === value) return;
-    if (reducedMotion()) { cur.current = value; setShown(value); return; }
-    const from = cur.current;
-    const start = performance.now();
-    let raf = 0;
-    const step = (now: number) => {
-      const k = Math.min(1, (now - start) / ms);
-      const eased = 1 - Math.pow(1 - k, 3);
-      cur.current = k >= 1 ? value : Math.round(from + (value - from) * eased);
-      setShown(cur.current);
-      if (k < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [value, ms]);
-  return shown;
-}
-
-const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+// ---------- admin page grid: one rhythm for every page of the admin area ----------
 
 /**
- * Tabular number whose digits roll vertically (slot-machine style) when the value changes.
- * `pulse`: the number glows briefly; `delta`: a «+3» / «−2» chip floats above it for about two seconds.
- * The real number is in a visually hidden node, the rolling digits are decoration (aria-hidden); no layout shift.
+ * Root of an admin page: PageHead first, then sections 20 px apart. `narrow` (forms: settings, alerts) caps the
+ * content at 48rem; the PageHead always spans the full width, so titles sit at the same place on every page.
  */
-export function AnimatedNumber({ value, className = '', pulse = false, delta = false }: { value: number; className?: string; pulse?: boolean; delta?: boolean }) {
-  const [bump, setBump] = useState(false);
-  const [chip, setChip] = useState<{ n: number; k: number } | null>(null);
-  const prev = useRef(value);
-  const born = useRef(true);
-  useEffect(() => {
-    const diff = value - prev.current;
-    prev.current = value;
-    if (born.current) { born.current = false; return; }
-    if (diff === 0) return;
-    const timers: number[] = [];
-    if (pulse) {
-      setBump(true);
-      timers.push(window.setTimeout(() => setBump(false), 950));
-    }
-    if (delta) {
-      setChip({ n: diff, k: Date.now() });
-      timers.push(window.setTimeout(() => setChip(null), 2100));
-    }
-    return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [value, pulse, delta]);
-
-  const text = String(Math.round(value));
-  const chars = [...text];
+export function AdminPage({ head, narrow = false, children }: { head: ReactNode; narrow?: boolean; children: ReactNode }) {
   return (
-    <span className={`roll ${bump ? 'num-bump' : ''} ${className}`}>
-      <span className="sr-only">{text}</span>
-      <span aria-hidden>
-        {chars.map((c, i) => {
-          // keyed from the right, so a column keeps its identity when the number grows by a digit
-          const key = chars.length - i;
-          return /\d/.test(c)
-            ? (
-              <span key={key} className="roll-d">
-                <span className="roll-g">0</span>
-                <span className="roll-col" style={{ transform: `translateY(${-Number(c)}em)` }}>
-                  {DIGITS.map((d) => <span key={d}>{d}</span>)}
-                </span>
-              </span>
-            )
-            : <span key={key}>{c}</span>;
-        })}
-      </span>
-      {chip && <span key={chip.k} aria-hidden className={`delta-chip ${chip.n > 0 ? 'up' : 'down'}`}>{chip.n > 0 ? `+${chip.n}` : `−${Math.abs(chip.n)}`}</span>}
-    </span>
-  );
-}
-
-/** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
-export function parseHash(): { page: string; sub: string } {
-  const [page = '', ...rest] = window.location.hash.replace(/^#\/?/, '').split('/');
-  return { page, sub: rest.join('/') };
-}
-
-// One hashchange listener for the whole app: every subscriber is updated together, inside one view transition
-// (cross-fade with a slight slide, and the server avatar morphing from its tile to the page banner).
-type HashState = { page: string; sub: string };
-let hashNow: HashState | null = null;
-const hashListeners = new Set<(h: HashState) => void>();
-
-const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub.split('/')[0]) ? h.sub.split('/')[0] : '');
-
-/** gives the avatar of a server (tagged data-vt-avatar) the view-transition-name that pairs the old and the new page */
-const nameAvatars = (ids: string[]) => {
-  for (const id of new Set(ids.filter(Boolean))) {
-    document.querySelector<HTMLElement>(`[data-vt-avatar="${id}"]`)?.style.setProperty('view-transition-name', `server-${id}`);
-  }
-};
-const clearAvatarNames = () => {
-  document.querySelectorAll<HTMLElement>('[data-vt-avatar]').forEach((el) => el.style.removeProperty('view-transition-name'));
-};
-
-function onHashChange() {
-  const prev = hashNow ?? parseHash();
-  const next = parseHash();
-  if (prev.page === next.page && prev.sub === next.sub) return;
-  // switching tabs inside one server page ("12" -> "12/players") is not a page change: no cross-fade
-  if (prev.page === 'servers' && next.page === 'servers' && /^\d+(\/|$)/.test(next.sub) && prev.sub.split('/')[0] === next.sub.split('/')[0]) {
-    hashNow = next;
-    hashListeners.forEach((l) => l(next));
-    return;
-  }
-  // No View Transition here: the glass header and the bottom bar (backdrop-filter) were captured as separate
-  // layers and flashed as a black rectangle while switching sections. The page itself fades in via .pop / .fade-in.
-  hashNow = next;
-  hashListeners.forEach((l) => l(next));
-}
-void withViewTransition;
-void nameAvatars;
-void clearAvatarNames;
-void serverIdOf;
-
-export function useHash() {
-  const [h, setH] = useState(parseHash);
-  useEffect(() => {
-    if (hashNow === null) {
-      hashNow = parseHash();
-      window.addEventListener('hashchange', onHashChange);
-    }
-    hashListeners.add(setH);
-    // the address may have changed between the first render and now
-    const cur = parseHash();
-    setH((p) => (p.page === cur.page && p.sub === cur.sub ? p : cur));
-    return () => { hashListeners.delete(setH); };
-  }, []);
-  return h;
-}
-
-// ---------- formatting ----------
-// Dates and times honour the user's regional settings (time zone, 12/24 h, date order): see «Оформление и регион».
-export const ago = (ts: number | null) => {
-  if (!ts) return '–';
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return t('ago.s', { n: s });
-  if (s < 3600) return t('ago.m', { n: Math.floor(s / 60) });
-  if (s < 86400) return t('ago.h', { n: Math.floor(s / 3600) });
-  return t('ago.d', { n: Math.floor(s / 86400) });
-};
-
-const dtfCache = new Map<string, Intl.DateTimeFormat>();
-const zonedFormatter = (tz: string): Intl.DateTimeFormat => {
-  let f = dtfCache.get(tz);
-  if (!f) {
-    const base: Intl.DateTimeFormatOptions = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' };
-    try {
-      f = new Intl.DateTimeFormat('en-US', { ...base, timeZone: tz || undefined });
-    } catch {
-      f = new Intl.DateTimeFormat('en-US', base);
-    }
-    dtfCache.set(tz, f);
-  }
-  return f;
-};
-
-/** calendar fields of a moment in the chosen time zone */
-function zoned(ts: number) {
-  const o: Record<string, string> = {};
-  for (const p of zonedFormatter(getPrefs().timezone).formatToParts(ts)) o[p.type] = p.value;
-  return { y: o.year, m: o.month, d: o.day, h: Number(o.hour) % 24, mi: o.minute, s: o.second };
-}
-
-const fmtYmd = (y: string, m: string, d: string) => {
-  const f = getPrefs().dateFormat;
-  return f === 'iso' ? `${y}-${m}-${d}` : f === 'mdy' ? `${m}/${d}/${y}` : `${d}.${m}.${y}`;
-};
-
-const validTs = (ts: number | null | undefined): ts is number => typeof ts === 'number' && Number.isFinite(ts);
-
-/** «13.10.2026» / «10/13/2026» / «2026-10-13» */
-export const fmtDate = (ts: number) => {
-  if (!validTs(ts)) return '–';
-  const z = zoned(ts);
-  return fmtYmd(z.y, z.m, z.d);
-};
-
-/** «14:05» or «2:05 PM» */
-export const fmtTime = (ts: number, seconds = false) => {
-  if (!validTs(ts)) return '–';
-  const z = zoned(ts);
-  const sec = seconds ? `:${z.s}` : '';
-  if (getPrefs().timeFormat === '12') {
-    const h12 = z.h % 12 === 0 ? 12 : z.h % 12;
-    return `${h12}:${z.mi}${sec} ${z.h < 12 ? 'AM' : 'PM'}`;
-  }
-  return `${String(z.h).padStart(2, '0')}:${z.mi}${sec}`;
-};
-
-export const fmtDateTime = (ts: number) => (validTs(ts) ? `${fmtDate(ts)}, ${fmtTime(ts)}` : '–');
-
-/** a plain calendar day "YYYY-MM-DD" (no time zone conversion) in the chosen date format */
-export const fmtDay = (day: string) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(day);
-  return m ? fmtYmd(m[1], m[2], m[3]) : day;
-};
-
-/** plural(5, ['сервер', 'сервера', 'серверов']) -> "серверов" */
-export function plural(n: number, forms: [string, string, string]): string {
-  const m10 = n % 10;
-  const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return forms[0];
-  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return forms[1];
-  return forms[2];
-}
-
-/** a few dots flying out of the centre of the parent (the parent must be `relative`); CSS only */
-export function Burst({ count = 8, radius = 17 }: { count?: number; radius?: number }) {
-  return (
-    <span className="burst" aria-hidden style={{ '--r': `${radius}px` } as CSSProperties}>
-      {Array.from({ length: count }, (_, i) => <i key={i} style={{ '--a': `${Math.round((360 / count) * i + 15)}deg` } as CSSProperties} />)}
-    </span>
-  );
-}
-
-// ---------- theme ----------
-type Theme = 'auto' | 'light' | 'dark';
-const THEME_KEY = 'coregsm_theme';
-const readTheme = (): Theme => {
-  try {
-    const t = localStorage.getItem(THEME_KEY);
-    return t === 'light' || t === 'dark' ? t : 'auto';
-  } catch {
-    return 'auto';
-  }
-};
-function applyTheme(t: Theme) {
-  const root = document.documentElement;
-  if (t === 'auto') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', t);
-  try {
-    if (t === 'auto') localStorage.removeItem(THEME_KEY);
-    else localStorage.setItem(THEME_KEY, t);
-  } catch {
-    /* private mode: the theme just is not remembered */
-  }
-}
-
-export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(readTheme);
-  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
-  const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') };
-  return (
-    <button
-      type="button"
-      className="btn-icon"
-      title={t('theme.title', { name: label[theme] })}
-      aria-label={t('theme.aria', { name: label[theme] })}
-      onClick={(e) => {
-        const t = next[theme];
-        // the new theme grows as a circle out of the button (View Transitions); elsewhere it just switches
-        const r = e.currentTarget.getBoundingClientRect();
-        revealTransition(() => {
-          applyTheme(t);
-          setTheme(t);
-        }, r.left + r.width / 2, r.top + r.height / 2);
-      }}
-    >
-      {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconAuto />}
-    </button>
-  );
-}
-
-// ---------- building blocks ----------
-/**
- * Dialog: a bottom sheet on phones, a centred card on larger screens.
- * Focus moves inside and is trapped, Escape closes, focus returns to the opener, only a real click on the backdrop closes it.
- */
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  const box = useRef<HTMLDivElement>(null);
-  const titleId = useId();
-  // keyboards: first field; touch screens: the dialog itself (no on-screen keyboard popping up)
-  useDialogFocus(box, onClose, () =>
-    window.matchMedia?.('(pointer: coarse)').matches
-      ? box.current
-      : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
-  const bd = useBackdropClose(onClose);
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" {...bd}>
-      <div
-        ref={box}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
-      >
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
-          <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
-            <IconClose />
-          </button>
-        </div>
-        {children}
-      </div>
+    <div className="space-y-5">
+      {head}
+      <div className={`space-y-5 ${narrow ? 'max-w-3xl' : ''}`}>{children}</div>
     </div>
   );
 }
 
-export function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-/** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
-export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
-  // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className="pill-glass pill-glass-maint">Обслуживание</span> : <span className="pill pill-maint">ОБСЛУЖИВАНИЕ</span>;
-  if (glass) {
-    const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
-    const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
-    return <span className={`pill-glass pill-glass-${kind}`}>{text}</span>;
-  }
-  if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
-  if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
-  return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
-}
-
 /**
- * `glass`: translucent white square, for use on top of a game-coloured cover.
- * `vtId`: a server id; the avatar of that server morphs between the list tile and the server page (View Transitions).
+ * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
+ * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
  */
-export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: string; size?: number; glass?: boolean; vtId?: number }) {
-  const icon = gameIconPath(game);
-  const [c1, c2] = gameGradient(game);
-  return (
-    <div
-      data-vt-avatar={vtId}
-      className="grid shrink-0 place-items-center font-black text-white"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: Math.round(size * 0.3),
-        background: glass ? 'rgba(255,255,255,0.24)' : `linear-gradient(135deg, ${c1}, ${c2})`,
-        fontSize: size * 0.34,
-        boxShadow: glass ? 'inset 0 0 0 1px rgba(255,255,255,0.25)' : `0 4px 12px -4px ${c1}99`,
-      }}
-      aria-hidden
-    >
-      {GAME_IMAGE[game] ? (
-        <img src={GAME_IMAGE[game]} width={size * 0.74} height={size * 0.74} alt="" draggable={false} className="object-contain" />
-      ) : icon ? (
-        <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d={icon} />
-        </svg>
-      ) : (
-        gameAbbr(game)
-      )}
-    </div>
-  );
-}
-
-export function FillBar({ value, max, color }: { value: number; max: number; color: string }) {
-  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-  return (
-    <div className="h-3 overflow-hidden rounded-full bg-soft">
-      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
-    </div>
-  );
-}
-
-// history of a server is shared between remounts (list <-> details) for a couple of minutes
-const sparkCache = new Map<number, { at: number; pts: number[] }>();
-const SPARK_EVERY = 3 * 60_000;
-
-/**
- * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
- * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
- */
-export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
-  const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
-
-  useEffect(() => {
-    let timer = 0;
-    let ctl: AbortController | null = null;
-    let alive = true;
-
-    const load = async () => {
-      if (!alive || document.hidden) return;
-      ctl?.abort();
-      ctl = new AbortController();
-      try {
-        const token = getToken();
-        const res = await fetch(`/api/servers/${serverId}/history?hours=24`, {
-          signal: ctl.signal,
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!res.ok) return;
-        const rows = (await res.json()) as { players: number }[];
-        // downsample to at most 48 points
-        const step = Math.max(1, Math.ceil(rows.length / 48));
-        const next = rows.filter((_, i) => i % step === 0).map((r) => r.players);
-        sparkCache.set(serverId, { at: Date.now(), pts: next });
-        if (alive) setPts(next);
-      } catch {
-        /* aborted or offline: keep what we have */
-      }
-    };
-    const schedule = (delay: number) => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(async () => {
-        await load();
-        if (alive) schedule(SPARK_EVERY);
-      }, delay);
-    };
-
-    const cached = sparkCache.get(serverId);
-    const age = cached ? Date.now() - cached.at : Infinity;
-    // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
-    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : variant === 'hero' ? 0 : 150 + Math.random() * 2500);
-
-    const onVisible = () => {
-      if (document.hidden) return;
-      const c = sparkCache.get(serverId);
-      if (!c || Date.now() - c.at >= SPARK_EVERY) schedule(100 + Math.random() * 1000);
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      ctl?.abort();
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [serverId, variant]);
-
-  if (pts.length < 2) return <div className={`${variant === 'hero' ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} rounded-2xl`} aria-hidden />;
-  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}`;
-  return variant === 'hero'
-    ? <SmoothArea values={pts} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
-    : <SmoothArea values={pts} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
-}
-
-/** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
-export function smoothPath(pts: [number, number][]): string {
-  if (pts.length === 0) return '';
-  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
-  for (let i = 1; i < pts.length; i++) {
-    const [x0, y0] = pts[i - 1];
-    const [x1, y1] = pts[i];
-    const cx = (x0 + x1) / 2;
-    d += ` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
-  }
-  return d;
-}
-
-/**
- * Smooth area chart of a player-count series: gradient fill, line, optional dashed grid and an end dot with a halo.
- * The drawing stretches (preserveAspectRatio none, non-scaling stroke); the dot is an HTML element so it stays round.
- */
-export function SmoothArea({
-  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax,
-}: {
-  values: number[]; color: string; w?: number; h?: number; grid?: boolean; dot?: boolean; strokeWidth?: number; fill?: number;
-  className?: string; label?: string; max?: number;
+export function Section({ title, description, actions, children, className = '', id, tone = 'panel', ...rest }: {
+  title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
+  tone?: 'panel' | 'soft'; 'data-tour'?: string;
 }) {
-  const gid = useId();
-  const pad = 3;
-  const max = Math.max(1, fixedMax ?? 0, ...values) * 1.12;
-  const pts: [number, number][] = values.map((v, i) => [pad + (i / Math.max(1, values.length - 1)) * (w - pad * 2), h - pad - (v / max) * (h - pad * 2)]);
-  const line = smoothPath(pts);
-  const last = pts[pts.length - 1];
+  const hid = useId();
   return (
-    <div className={`relative w-full ${className}`}>
-      <svg viewBox={`0 0 ${w} ${h}`} className="chart-reveal absolute inset-0 h-full w-full overflow-visible" preserveAspectRatio="none" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
-        <defs>
-          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor={color} stopOpacity={fill} />
-            <stop offset="1" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {grid && [1, 2, 3].map((k) => (
-          <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
-        ))}
-        <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
-        <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      </svg>
-      {dot && (
-        <span
-          aria-hidden
-          className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
-          style={{ left: `${(last[0] / w) * 100}%`, top: `${(last[1] / h) * 100}%`, background: color, boxShadow: `0 0 0 4px ${color}40` }}
-        />
+    <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
+      {(title || actions) && (
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0 flex-1 basis-56">
+            {title && <h2 id={hid} className={`${tone === 'soft' ? 'text-base' : 'text-lg'} font-black`}>{title}</h2>}
+            {description && <p className="mt-0.5 font-semibold text-mute">{description}</p>}
+          </div>
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        </div>
       )}
-    </div>
+      {children}
+    </section>
   );
+}
+
+/** a slim one-line card (channel pickers, toolbars): same panel, tighter padding */
+export function Strip({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3 ${className}`}>{children}</div>;
+}
+
+/** «Сохраняется… / Сохранено / Не сохранено»: the state of an autosaved field; `retry` shows «Повторить» after a failure */
+export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?: string; retry?: () => void }) {
+  let body: ReactNode = null;
+  if (status === 'dirty') body = <span className="text-mute">Изменено…</span>;
+  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />Сохраняется…</span>;
+  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />Сохранено</span>;
+  else if (status === 'error') {
+    body = (
+      <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
+        Не сохранено{error ? `: ${error}` : ''}
+        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>Повторить</button>}
+      </span>
+    );
+  }
+  return <span className="min-h-[1.25rem] text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
 }
 
 /**
- * Page title row: icon, title, subtitle and the page actions on the right (one primary action, the rest soft).
- * `hint`: one sentence under the title (what this page is and why); `help`: longer text behind a «Подробнее» disclosure.
+ * Label + input + message under the field. `error` (validation) is red and replaces the hint; `save` shows the
+ * autosave state on the label row. Pass the rest of the input attributes through.
  */
-export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const helpId = useId();
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3.5">
-          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
-          <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
-            {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
-          </div>
-        </div>
-        {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
-      </div>
-      {(hint || help) && (
-        <div className="hint-strip">
-          <span aria-hidden className="hint-ico">i</span>
-          <div className="min-w-0 flex-1">
-            <p>
-              {hint}
-              {help && (
-                <>
-                  {hint ? ' ' : ''}
-                  <button type="button" className="hint-more" aria-expanded={open} aria-controls={helpId} onClick={() => setOpen((v) => !v)}>
-                    {open ? 'Скрыть' : 'Подробнее'}
-                  </button>
-                </>
-              )}
-            </p>
-            {help && open && <div id={helpId} className="hint-help">{help}</div>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** a link with the arrow used for "go to that section" hints */
-export function GoLink({ href, children, className = '' }: { href: string; children: ReactNode; className?: string }) {
-  return (
-    <a href={href} className={`inline-flex items-center gap-1 font-extrabold text-link hover:underline ${className}`}>
-      {children}
-      <span aria-hidden>→</span>
-    </a>
-  );
-}
-
-/** a coloured strip with a message and an optional action (usually a GoLink) */
-export function Notice({ tone = 'warn', children, action, role }: { tone?: 'warn' | 'info' | 'bad'; children: ReactNode; action?: ReactNode; role?: 'status' | 'alert' }) {
-  const cls = tone === 'bad' ? 'bg-badbg text-bad' : tone === 'info' ? 'bg-soft text-ink' : 'bg-warnbg text-warn';
-  return (
-    <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-2xl px-4 py-2.5 text-sm font-bold ${cls}`} role={role ?? (tone === 'bad' ? 'alert' : 'status')}>
-      <span className="min-w-0 flex-1 basis-60">{children}</span>
-      {action && <span className="shrink-0 [&_a]:text-current [&_a]:underline">{action}</span>}
-    </div>
-  );
-}
-
-export function ErrorLine({ text }: { text: string }) {
-  return text ? <p className="rounded-2xl bg-badbg px-4 py-2.5 font-bold text-bad" role="alert">{text}</p> : null;
-}
-
-/** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
-export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
-  return <StateView kind="empty" title={title} text={text} art={art}>{children}</StateView>;
-}
-
-/** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
-export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
-  const [done, setDone] = useState(false);
-  const timer = useRef<number>();
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setDone(true);
-      window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => setDone(false), 1500);
-    } catch {
-      await promptDialog({ title: 'Скопируйте вручную', label: 'Текст', value: text, readOnly: true });
-    }
+export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, ...rest }: {
+  id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: ReactNode;
+  save?: { status: SaveStatus; error?: string; retry?: () => void }; className?: string; multiline?: boolean;
+  type?: string; placeholder?: string; maxLength?: number; disabled?: boolean; autoComplete?: string; rows?: number;
+  onBlur?: () => void; inputMode?: 'text' | 'url' | 'numeric'; spellCheck?: boolean;
+}) {
+  const describedBy = [error ? `${id}-err` : '', hint && !error ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
+  const common = {
+    id,
+    className: `input ${className}`,
+    value,
+    onChange: (e: { target: { value: string } }) => onChange(e.target.value),
+    'aria-invalid': error ? true : undefined,
+    'aria-describedby': describedBy,
+    ...rest,
   };
-  return (
-    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad btn-sm' : tone === 'glass' ? 'btn-glass btn-sm' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
-      <span className="copy-ico" data-done={done} aria-hidden>
-        <span className="ico-copy inline-grid"><IconCopy /></span>
-        <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M5 12.5l4.5 4.5L19 7.500" />
-        </svg>
-        {done && <Burst />}
-      </span>
-      <span aria-live="polite">{done ? 'Скопировано' : label}</span>
-    </button>
-  );
-}
-
-/** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
-export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
-  const { brand } = useAuth().access;
-  return (
-    <img
-      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
-      width={size}
-      height={size}
-      // pass alt="" when the name is written next to the logo; alone it is described by the community name
-      alt={alt ?? brand.name}
-      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
-      draggable={false}
-    />
-  );
-}
-
-export type ProxyType = 'socks5' | 'http';
-
-/** Proxy input: a type selector plus one text field that accepts host:port:login:password, user:pass@host:port or a full URL. */
-export function ProxyField({
-  id,
-  value,
-  type,
-  onChange,
-  onType,
-  placeholder,
-  disabled,
-}: {
-  id: string;
-  value: string;
-  type: ProxyType;
-  onChange: (v: string) => void;
-  onType: (t: ProxyType) => void;
-  placeholder?: string;
-  disabled?: boolean;
-}) {
   return (
     <div>
-      <div className="flex gap-2">
-        <select
-          aria-label="Тип прокси"
-          className="input !w-auto shrink-0"
-          value={type}
-          disabled={disabled}
-          onChange={(e) => onType(e.target.value as ProxyType)}
-        >
-          <option value="socks5">SOCKS5</option>
-          <option value="http">HTTP</option>
-        </select>
-        <input
-          id={id}
-          className="input font-mono"
-          value={value}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-          autoComplete="off"
-          placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
-        />
+      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3">
+        <label htmlFor={id} className="text-sm font-extrabold text-mute">{label}</label>
+        {save && <SaveBadge status={save.status} error={save.error} retry={save.retry} />}
       </div>
-      <p className="mt-1.5 text-sm font-semibold text-mute">
-        Подойдёт формат <span className="font-mono">адрес:порт:логин:пароль</span> или готовая ссылка с <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>. Если бот не подключается, смените тип.
-      </p>
+      {multiline ? <textarea {...common} /> : <input {...common} />}
+      <FieldError id={`${id}-err`} text={error} />
+      {hint && !error && <p id={`${id}-hint`} className="mt-1.5 text-sm font-semibold text-mute">{hint}</p>}
     </div>
   );
 }
-
-/** Opens Discord's own "add bot to a server" screen: the user picks the server there and confirms the permissions. */
-export function InviteButton({ url, className = '' }: { url: string | null; className?: string }) {
-  if (!url) return null;
-  return (
-    <a className={`btn ${className}`} href={url} target="_blank" rel="noreferrer">
-      Пригласить бота на сервер
-      <span aria-hidden>↗</span>
-    </a>
-  );
-}
-
-/** "CoreGSM": Core in the brand colour, GSM in the text colour. */
-export function Wordmark({ className = '' }: { className?: string }) {
-  const { name } = useAuth().access.brand;
-  if (name !== 'CoreGSM') return <span className={`font-extrabold tracking-tight text-ink ${className}`}>{name}</span>;
-  return (
-    <span className={`font-black tracking-tight text-link ${className}`}>
-      Core<span className="text-ink">GSM</span>
-    </span>
-  );
-}
-
-// ---------- toasts: short confirmations that do not interrupt ----------
-type ToastKind = 'ok' | 'err' | 'info';
-/** an action button in a toast: `onClick` (undo and the like; the toast closes after it) or `href` (a link in a new tab) */
-export interface ToastAction { label: string; onClick?: () => void; href?: string }
-export interface ToastOptions {
-  kind?: ToastKind;
-  /** how long it stays, ms (default 3.5 s; 8 s for errors and links; 6 s when there is an action button) */
-  duration?: number;
-  action?: ToastAction;
-  /** called once when the toast goes away: 'action' (its button was pressed), 'dismiss' (closed by hand), 'timeout' */
-  onClose?: (reason: 'action' | 'dismiss' | 'timeout') => void;
-}
-interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: ToastAction; duration: number; onClose?: ToastOptions['onClose'] }
-let toasts: ToastItem[] = [];
-let toastSeq = 0;
-const toastTimers = new Map<number, number>();
-const toastListeners = new Set<(t: ToastItem[]) => void>();
-const emitToasts = () => toastListeners.forEach((l) => l(toasts));
-
-const armToast = (id: number, ms: number) => {
-  window.clearTimeout(toastTimers.get(id));
-  toastTimers.set(id, window.setTimeout(() => dismissToast(id, 'timeout'), ms));
-};
-
-/**
- * Shows a toast.
- *   toast('Сохранено')                                   // green
- *   toast('Не удалось', 'err')                           // red, stays longer
- *   toast('Удалено', { action: { label: 'Отменить', onClick: undo }, duration: 6000 })
- * The old positional form toast(text, kind, ms, { label, href }) keeps working. Returns the toast id.
- */
-export function toast(text: string, kindOrOptions: ToastKind | ToastOptions = 'ok', ms?: number, action?: ToastAction): number {
-  const o: ToastOptions = typeof kindOrOptions === 'string' ? { kind: kindOrOptions, duration: ms, action } : kindOrOptions;
-  const kind = o.kind ?? 'ok';
-  const duration = o.duration ?? (kind === 'err' ? 8000 : o.action?.onClick ? 6000 : o.action ? 8000 : 3500);
-  const t: ToastItem = { id: ++toastSeq, text, kind, action: o.action, duration, onClose: o.onClose };
-  const next = [...toasts, t];
-  // the oldest ones are pushed out: they count as timed out, so a pending "delete after the undo window" still happens
-  const evicted = next.slice(0, Math.max(0, next.length - 4));
-  toasts = next.slice(-4);
-  evicted.forEach((e) => { window.clearTimeout(toastTimers.get(e.id)); toastTimers.delete(e.id); e.onClose?.('timeout'); });
-  emitToasts();
-  armToast(t.id, duration);
-  return t.id;
-}
-
-export function dismissToast(id: number, reason: 'action' | 'dismiss' | 'timeout' = 'dismiss') {
-  const t = toasts.find((x) => x.id === id);
-  if (!t || t.leaving) return;
-  window.clearTimeout(toastTimers.get(id));
-  toastTimers.delete(id);
-  // it springs out first (about 200 ms), then it is removed
-  toasts = toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
-  emitToasts();
-  t.onClose?.(reason);
-  window.setTimeout(() => {
-    toasts = toasts.filter((x) => x.id !== id);
-    emitToasts();
-  }, 200);
-}
-
-/**
- * «Удалено. Отменить»: the caller hides the item at once and passes `commit` (the real, irreversible request).
- * `commit` runs when the toast times out or is closed by hand, and also when the page is left; it does not run
- * after «Отменить», which calls `restore`. Use it only where the removal can wait a few seconds without harm.
- */
-export function undoable({ text, commit, restore, duration = 6000, label = 'Отменить' }: { text: string; commit: () => unknown; restore: () => void; duration?: number; label?: string }) {
-  let settled = false;
-  const finish = () => {
-    if (settled) return;
-    settled = true;
-    window.removeEventListener('pagehide', finish);
-    void commit();
-  };
-  window.addEventListener('pagehide', finish);
-  toast(text, {
-    duration,
-    action: { label, onClick: () => { if (settled) return; settled = true; window.removeEventListener('pagehide', finish); restore(); } },
-    onClose: (reason) => { if (reason !== 'action') finish(); },
-  });
-}
-
-/**
- * Two sibling live regions (never nested): errors are announced assertively (role=alert), the rest politely.
- * They sit above the phone navigation bar and the home-indicator safe area. A toast with an action stops its timer
- * while the pointer or the keyboard focus is on it.
- */
-export function Toaster() {
-  const [list, setList] = useState<ToastItem[]>(toasts);
-  useEffect(() => {
-    toastListeners.add(setList);
-    return () => { toastListeners.delete(setList); };
-  }, []);
-  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-raised text-ink ring-line' } as const;
-  const kindIcon = { ok: <IconOk size={18} />, err: <IconError size={18} />, info: <IconInfo size={18} /> };
-  const hold = (t: ToastItem) => { if (t.action?.onClick) window.clearTimeout(toastTimers.get(t.id)); };
-  const release = (t: ToastItem) => { if (t.action?.onClick && !t.leaving) armToast(t.id, Math.min(t.duration, 4000)); };
-  const item = (t: ToastItem) => (
-    <div
-      key={t.id}
-      onPointerEnter={() => hold(t)}
-      onPointerLeave={() => release(t)}
-      onFocusCapture={() => hold(t)}
-      onBlurCapture={() => release(t)}
-      className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
-    >
-      <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
-      <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
-      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="btn-ghost btn-tone btn-xs shrink-0">{t.action.label}</a>}
-      {t.action?.onClick && (
-        <button
-          type="button"
-          onClick={() => { t.action?.onClick?.(); dismissToast(t.id, 'action'); }}
-          className="btn-ghost btn-tone btn-xs shrink-0"
-        >
-          {t.action.label}
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={() => dismissToast(t.id, 'dismiss')}
-        className="btn-icon-ghost btn-icon-sm btn-tone shrink-0"
-        aria-label={tr('toast.close')}
-      >
-        <IconClose size={14} />
-      </button>
-    </div>
-  );
-  return (
-    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-[90] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
-      <div aria-live="polite" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind !== 'err').map(item)}</div>
-      <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
-    </div>
-  );
-}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/authParts.tsx" << '__COREGSM_EOF__'
+/** Sign-in and first-run screens: backdrop, card, password fields, Discord button. */
+import AuthShowcase from '../components/AuthShowcase';
+import { type CSSProperties, forwardRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { useAuth } from '../auth';
+import { ICON_PATHS } from '../gameIcons';
+import { t } from '../i18n';
+import { IconEye, IconEyeOff } from '../icons';
+import { Logo, Wordmark } from './blocks';
+import { ThemeToggle } from './theme';
 
 // ---------- sign-in / first-run: glow, floating pictograms, one centred card ----------
 const FLOATERS: { icon: string; x: string; y: string; s: string; r: string; d: string }[] = [
@@ -65204,6 +64686,442 @@ export function OrDivider() {
     </div>
   );
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/blocks.tsx" << '__COREGSM_EOF__'
+/** Building blocks shared by the pages: dialogs, fields, pills, avatars, notices, copy buttons, logo. */
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { useAuth } from '../auth';
+import { StateView } from '../components/StateView';
+import { promptDialog, useBackdropClose, useDialogFocus } from '../confirm';
+import { gameIconPath } from '../gameIcons';
+import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
+import { t } from '../i18n';
+import { IconClose, IconCopy } from '../icons';
+import { Burst } from './motion';
+
+// ---------- building blocks ----------
+/**
+ * Dialog: a bottom sheet on phones, a centred card on larger screens.
+ * Focus moves inside and is trapped, Escape closes, focus returns to the opener, only a real click on the backdrop closes it.
+ */
+export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  // keyboards: first field; touch screens: the dialog itself (no on-screen keyboard popping up)
+  useDialogFocus(box, onClose, () =>
+    window.matchMedia?.('(pointer: coarse)').matches
+      ? box.current
+      : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
+  const bd = useBackdropClose(onClose);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" {...bd}>
+      <div
+        ref={box}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
+            <IconClose />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block">
+      <span className="label">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
+export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
+  if (maintenance) return glass ? <span className="pill-glass pill-glass-maint">Обслуживание</span> : <span className="pill pill-maint">ОБСЛУЖИВАНИЕ</span>;
+  if (glass) {
+    const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
+    const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
+    return <span className={`pill-glass pill-glass-${kind}`}>{text}</span>;
+  }
+  if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
+  if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
+  return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
+}
+
+/**
+ * `glass`: translucent white square, for use on top of a game-coloured cover.
+ * `vtId`: a server id; the avatar of that server morphs between the list tile and the server page (View Transitions).
+ */
+export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: string; size?: number; glass?: boolean; vtId?: number }) {
+  const icon = gameIconPath(game);
+  const [c1, c2] = gameGradient(game);
+  return (
+    <div
+      data-vt-avatar={vtId}
+      className="grid shrink-0 place-items-center font-black text-white"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.3),
+        background: glass ? 'rgba(255,255,255,0.24)' : `linear-gradient(135deg, ${c1}, ${c2})`,
+        fontSize: size * 0.34,
+        boxShadow: glass ? 'inset 0 0 0 1px rgba(255,255,255,0.25)' : `0 4px 12px -4px ${c1}99`,
+      }}
+      aria-hidden
+    >
+      {GAME_IMAGE[game] ? (
+        <img src={GAME_IMAGE[game]} width={size * 0.74} height={size * 0.74} alt="" draggable={false} className="object-contain" />
+      ) : icon ? (
+        <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d={icon} />
+        </svg>
+      ) : (
+        gameAbbr(game)
+      )}
+    </div>
+  );
+}
+
+export function FillBar({ value, max, color }: { value: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div className="h-3 overflow-hidden rounded-full bg-soft">
+      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
+    </div>
+  );
+}
+
+/**
+ * Page title row: icon, title, subtitle and the page actions on the right (one primary action, the rest soft).
+ * `hint`: one sentence under the title (what this page is and why); `help`: longer text behind a «Подробнее» disclosure.
+ */
+export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const helpId = useId();
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3.5">
+          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
+            {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+          </div>
+        </div>
+        {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+      </div>
+      {(hint || help) && (
+        <div className="hint-strip">
+          <span aria-hidden className="hint-ico">i</span>
+          <div className="min-w-0 flex-1">
+            <p>
+              {hint}
+              {help && (
+                <>
+                  {hint ? ' ' : ''}
+                  <button type="button" className="hint-more" aria-expanded={open} aria-controls={helpId} onClick={() => setOpen((v) => !v)}>
+                    {open ? 'Скрыть' : 'Подробнее'}
+                  </button>
+                </>
+              )}
+            </p>
+            {help && open && <div id={helpId} className="hint-help">{help}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** a link with the arrow used for "go to that section" hints */
+export function GoLink({ href, children, className = '' }: { href: string; children: ReactNode; className?: string }) {
+  return (
+    <a href={href} className={`inline-flex items-center gap-1 font-extrabold text-link hover:underline ${className}`}>
+      {children}
+      <span aria-hidden>→</span>
+    </a>
+  );
+}
+
+/** a coloured strip with a message and an optional action (usually a GoLink) */
+export function Notice({ tone = 'warn', children, action, role }: { tone?: 'warn' | 'info' | 'bad'; children: ReactNode; action?: ReactNode; role?: 'status' | 'alert' }) {
+  const cls = tone === 'bad' ? 'bg-badbg text-bad' : tone === 'info' ? 'bg-soft text-ink' : 'bg-warnbg text-warn';
+  return (
+    <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-2xl px-4 py-2.5 text-sm font-bold ${cls}`} role={role ?? (tone === 'bad' ? 'alert' : 'status')}>
+      <span className="min-w-0 flex-1 basis-60">{children}</span>
+      {action && <span className="shrink-0 [&_a]:text-current [&_a]:underline">{action}</span>}
+    </div>
+  );
+}
+
+export function ErrorLine({ text }: { text: string }) {
+  return text ? <p className="rounded-2xl bg-badbg px-4 py-2.5 font-bold text-bad" role="alert">{text}</p> : null;
+}
+
+/** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
+export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
+  return <StateView kind="empty" title={title} text={text} art={art}>{children}</StateView>;
+}
+
+/** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
+export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
+  const [done, setDone] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setDone(false), 1500);
+    } catch {
+      await promptDialog({ title: 'Скопируйте вручную', label: 'Текст', value: text, readOnly: true });
+    }
+  };
+  return (
+    <button type="button" className={`${tone === 'grad' ? 'btn-on-grad btn-sm' : tone === 'glass' ? 'btn-glass btn-sm' : 'btn btn-soft btn-sm'} ${className}`} onClick={copy} title={label}>
+      <span className="copy-ico" data-done={done} aria-hidden>
+        <span className="ico-copy inline-grid"><IconCopy /></span>
+        <svg className="ico-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12.5l4.5 4.5L19 7.500" />
+        </svg>
+        {done && <Burst />}
+      </span>
+      <span aria-live="polite">{done ? 'Скопировано' : label}</span>
+    </button>
+  );
+}
+
+/** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
+export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
+  const { brand } = useAuth().access;
+  return (
+    <img
+      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
+      width={size}
+      height={size}
+      // pass alt="" when the name is written next to the logo; alone it is described by the community name
+      alt={alt ?? brand.name}
+      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
+      draggable={false}
+    />
+  );
+}
+
+export type ProxyType = 'socks5' | 'http';
+
+/** Proxy input: a type selector plus one text field that accepts host:port:login:password, user:pass@host:port or a full URL. */
+export function ProxyField({
+  id,
+  value,
+  type,
+  onChange,
+  onType,
+  placeholder,
+  disabled,
+}: {
+  id: string;
+  value: string;
+  type: ProxyType;
+  onChange: (v: string) => void;
+  onType: (t: ProxyType) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div>
+      <div className="flex gap-2">
+        <select
+          aria-label="Тип прокси"
+          className="input !w-auto shrink-0"
+          value={type}
+          disabled={disabled}
+          onChange={(e) => onType(e.target.value as ProxyType)}
+        >
+          <option value="socks5">SOCKS5</option>
+          <option value="http">HTTP</option>
+        </select>
+        <input
+          id={id}
+          className="input font-mono"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete="off"
+          placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
+        />
+      </div>
+      <p className="mt-1.5 text-sm font-semibold text-mute">
+        Подойдёт формат <span className="font-mono">адрес:порт:логин:пароль</span> или готовая ссылка с <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>. Если бот не подключается, смените тип.
+      </p>
+    </div>
+  );
+}
+
+/** Opens Discord's own "add bot to a server" screen: the user picks the server there and confirms the permissions. */
+export function InviteButton({ url, className = '' }: { url: string | null; className?: string }) {
+  if (!url) return null;
+  return (
+    <a className={`btn ${className}`} href={url} target="_blank" rel="noreferrer">
+      Пригласить бота на сервер
+      <span aria-hidden>↗</span>
+    </a>
+  );
+}
+
+/** "CoreGSM": Core in the brand colour, GSM in the text colour. */
+export function Wordmark({ className = '' }: { className?: string }) {
+  const { name } = useAuth().access.brand;
+  if (name !== 'CoreGSM') return <span className={`font-extrabold tracking-tight text-ink ${className}`}>{name}</span>;
+  return (
+    <span className={`font-black tracking-tight text-link ${className}`}>
+      Core<span className="text-ink">GSM</span>
+    </span>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/charts.tsx" << '__COREGSM_EOF__'
+/** Small charts: the 24 h sparkline, smooth area paths and the fleet status bar. */
+import { useEffect, useId, useState } from 'react';
+import { getToken } from '../api';
+
+// history of a server is shared between remounts (list <-> details) for a couple of minutes
+const sparkCache = new Map<number, { at: number; pts: number[] }>();
+const SPARK_EVERY = 3 * 60_000;
+
+/**
+ * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
+ * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
+ */
+export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
+  const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
+
+  useEffect(() => {
+    let timer = 0;
+    let ctl: AbortController | null = null;
+    let alive = true;
+
+    const load = async () => {
+      if (!alive || document.hidden) return;
+      ctl?.abort();
+      ctl = new AbortController();
+      try {
+        const token = getToken();
+        const res = await fetch(`/api/servers/${serverId}/history?hours=24`, {
+          signal: ctl.signal,
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) return;
+        const rows = (await res.json()) as { players: number }[];
+        // downsample to at most 48 points
+        const step = Math.max(1, Math.ceil(rows.length / 48));
+        const next = rows.filter((_, i) => i % step === 0).map((r) => r.players);
+        sparkCache.set(serverId, { at: Date.now(), pts: next });
+        if (alive) setPts(next);
+      } catch {
+        /* aborted or offline: keep what we have */
+      }
+    };
+    const schedule = (delay: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        await load();
+        if (alive) schedule(SPARK_EVERY);
+      }, delay);
+    };
+
+    const cached = sparkCache.get(serverId);
+    const age = cached ? Date.now() - cached.at : Infinity;
+    // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
+    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : variant === 'hero' ? 0 : 150 + Math.random() * 2500);
+
+    const onVisible = () => {
+      if (document.hidden) return;
+      const c = sparkCache.get(serverId);
+      if (!c || Date.now() - c.at >= SPARK_EVERY) schedule(100 + Math.random() * 1000);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      ctl?.abort();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [serverId, variant]);
+
+  if (pts.length < 2) return <div className={`${variant === 'hero' ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} rounded-2xl`} aria-hidden />;
+  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}`;
+  return variant === 'hero'
+    ? <SmoothArea values={pts} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    : <SmoothArea values={pts} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+}
+
+/** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
+export function smoothPath(pts: [number, number][]): string {
+  if (pts.length === 0) return '';
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const cx = (x0 + x1) / 2;
+    d += ` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
+  }
+  return d;
+}
+
+/**
+ * Smooth area chart of a player-count series: gradient fill, line, optional dashed grid and an end dot with a halo.
+ * The drawing stretches (preserveAspectRatio none, non-scaling stroke); the dot is an HTML element so it stays round.
+ */
+export function SmoothArea({
+  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax,
+}: {
+  values: number[]; color: string; w?: number; h?: number; grid?: boolean; dot?: boolean; strokeWidth?: number; fill?: number;
+  className?: string; label?: string; max?: number;
+}) {
+  const gid = useId();
+  const pad = 3;
+  const max = Math.max(1, fixedMax ?? 0, ...values) * 1.12;
+  const pts: [number, number][] = values.map((v, i) => [pad + (i / Math.max(1, values.length - 1)) * (w - pad * 2), h - pad - (v / max) * (h - pad * 2)]);
+  const line = smoothPath(pts);
+  const last = pts[pts.length - 1];
+  return (
+    <div className={`relative w-full ${className}`}>
+      <svg viewBox={`0 0 ${w} ${h}`} className="chart-reveal absolute inset-0 h-full w-full overflow-visible" preserveAspectRatio="none" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={color} stopOpacity={fill} />
+            <stop offset="1" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {grid && [1, 2, 3].map((k) => (
+          <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
+        ))}
+        <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
+        <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      {dot && (
+        <span
+          aria-hidden
+          className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+          style={{ left: `${(last[0] / w) * 100}%`, top: `${(last[1] / h) * 100}%`, background: color, boxShadow: `0 0 0 4px ${color}40` }}
+        />
+      )}
+    </div>
+  );
+}
 
 // ---------- fleet status: one segmented bar for online / lag / offline ----------
 export function FleetBar({ online, lag, offline }: { online: number; lag: number; offline: number }) {
@@ -65227,101 +65145,488 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
     </div>
   );
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/format.ts" << '__COREGSM_EOF__'
+/** Dates, times and plural forms in the panel's language and time zone. */
+import { getPrefs, t } from '../i18n';
 
-// ---------- admin page grid: one rhythm for every page of the admin area ----------
-export { useAutosave } from './autosave';
-export type { SaveStatus, AutosaveOptions } from './autosave';
-import type { SaveStatus } from './autosave';
+// ---------- formatting ----------
+// Dates and times honour the user's regional settings (time zone, 12/24 h, date order): see «Оформление и регион».
+export const ago = (ts: number | null) => {
+  if (!ts) return '–';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return t('ago.s', { n: s });
+  if (s < 3600) return t('ago.m', { n: Math.floor(s / 60) });
+  if (s < 86400) return t('ago.h', { n: Math.floor(s / 3600) });
+  return t('ago.d', { n: Math.floor(s / 86400) });
+};
+
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+const zonedFormatter = (tz: string): Intl.DateTimeFormat => {
+  let f = dtfCache.get(tz);
+  if (!f) {
+    const base: Intl.DateTimeFormatOptions = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' };
+    try {
+      f = new Intl.DateTimeFormat('en-US', { ...base, timeZone: tz || undefined });
+    } catch {
+      f = new Intl.DateTimeFormat('en-US', base);
+    }
+    dtfCache.set(tz, f);
+  }
+  return f;
+};
+
+/** calendar fields of a moment in the chosen time zone */
+function zoned(ts: number) {
+  const o: Record<string, string> = {};
+  for (const p of zonedFormatter(getPrefs().timezone).formatToParts(ts)) o[p.type] = p.value;
+  return { y: o.year, m: o.month, d: o.day, h: Number(o.hour) % 24, mi: o.minute, s: o.second };
+}
+
+const fmtYmd = (y: string, m: string, d: string) => {
+  const f = getPrefs().dateFormat;
+  return f === 'iso' ? `${y}-${m}-${d}` : f === 'mdy' ? `${m}/${d}/${y}` : `${d}.${m}.${y}`;
+};
+
+const validTs = (ts: number | null | undefined): ts is number => typeof ts === 'number' && Number.isFinite(ts);
+
+/** «13.10.2026» / «10/13/2026» / «2026-10-13» */
+export const fmtDate = (ts: number) => {
+  if (!validTs(ts)) return '–';
+  const z = zoned(ts);
+  return fmtYmd(z.y, z.m, z.d);
+};
+
+/** «14:05» or «2:05 PM» */
+export const fmtTime = (ts: number, seconds = false) => {
+  if (!validTs(ts)) return '–';
+  const z = zoned(ts);
+  const sec = seconds ? `:${z.s}` : '';
+  if (getPrefs().timeFormat === '12') {
+    const h12 = z.h % 12 === 0 ? 12 : z.h % 12;
+    return `${h12}:${z.mi}${sec} ${z.h < 12 ? 'AM' : 'PM'}`;
+  }
+  return `${String(z.h).padStart(2, '0')}:${z.mi}${sec}`;
+};
+
+export const fmtDateTime = (ts: number) => (validTs(ts) ? `${fmtDate(ts)}, ${fmtTime(ts)}` : '–');
+
+/** a plain calendar day "YYYY-MM-DD" (no time zone conversion) in the chosen date format */
+export const fmtDay = (day: string) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(day);
+  return m ? fmtYmd(m[1], m[2], m[3]) : day;
+};
+
+/** plural(5, ['сервер', 'сервера', 'серверов']) -> "серверов" */
+export function plural(n: number, forms: [string, string, string]): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return forms[0];
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return forms[1];
+  return forms[2];
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/hashRoute.ts" << '__COREGSM_EOF__'
+/** The current route, shared by every component that needs it. */
+import { useEffect, useState } from 'react';
+import { withViewTransition } from '../useMotion';
+
+/** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
+export function parseHash(): { page: string; sub: string } {
+  const [page = '', ...rest] = window.location.hash.replace(/^#\/?/, '').split('/');
+  return { page, sub: rest.join('/') };
+}
+
+// One hashchange listener for the whole app: every subscriber is updated together, inside one view transition
+// (cross-fade with a slight slide, and the server avatar morphing from its tile to the page banner).
+type HashState = { page: string; sub: string };
+let hashNow: HashState | null = null;
+const hashListeners = new Set<(h: HashState) => void>();
+
+const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub.split('/')[0]) ? h.sub.split('/')[0] : '');
+
+/** gives the avatar of a server (tagged data-vt-avatar) the view-transition-name that pairs the old and the new page */
+const nameAvatars = (ids: string[]) => {
+  for (const id of new Set(ids.filter(Boolean))) {
+    document.querySelector<HTMLElement>(`[data-vt-avatar="${id}"]`)?.style.setProperty('view-transition-name', `server-${id}`);
+  }
+};
+const clearAvatarNames = () => {
+  document.querySelectorAll<HTMLElement>('[data-vt-avatar]').forEach((el) => el.style.removeProperty('view-transition-name'));
+};
+
+function onHashChange() {
+  const prev = hashNow ?? parseHash();
+  const next = parseHash();
+  if (prev.page === next.page && prev.sub === next.sub) return;
+  // switching tabs inside one server page ("12" -> "12/players") is not a page change: no cross-fade
+  if (prev.page === 'servers' && next.page === 'servers' && /^\d+(\/|$)/.test(next.sub) && prev.sub.split('/')[0] === next.sub.split('/')[0]) {
+    hashNow = next;
+    hashListeners.forEach((l) => l(next));
+    return;
+  }
+  // No View Transition here: the glass header and the bottom bar (backdrop-filter) were captured as separate
+  // layers and flashed as a black rectangle while switching sections. The page itself fades in via .pop / .fade-in.
+  hashNow = next;
+  hashListeners.forEach((l) => l(next));
+}
+void withViewTransition;
+void nameAvatars;
+void clearAvatarNames;
+void serverIdOf;
+
+export function useHash() {
+  const [h, setH] = useState(parseHash);
+  useEffect(() => {
+    if (hashNow === null) {
+      hashNow = parseHash();
+      window.addEventListener('hashchange', onHashChange);
+    }
+    hashListeners.add(setH);
+    // the address may have changed between the first render and now
+    const cur = parseHash();
+    setH((p) => (p.page === cur.page && p.sub === cur.sub ? p : cur));
+    return () => { hashListeners.delete(setH); };
+  }, []);
+  return h;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/motion.tsx" << '__COREGSM_EOF__'
+/** Animated numbers and small CSS-only flourishes; all respect reduced motion. */
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
+
+const reducedMotion = () => typeof window !== 'undefined' && (document.documentElement.dataset.motion === 'reduce' || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+
+/** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
+export function useTween(value: number, ms = 600): number {
+  const [shown, setShown] = useState(value);
+  const cur = useRef(value);
+  useEffect(() => {
+    if (cur.current === value) return;
+    if (reducedMotion()) { cur.current = value; setShown(value); return; }
+    const from = cur.current;
+    const start = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const k = Math.min(1, (now - start) / ms);
+      const eased = 1 - Math.pow(1 - k, 3);
+      cur.current = k >= 1 ? value : Math.round(from + (value - from) * eased);
+      setShown(cur.current);
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value, ms]);
+  return shown;
+}
+
+const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 /**
- * Root of an admin page: PageHead first, then sections 20 px apart. `narrow` (forms: settings, alerts) caps the
- * content at 48rem; the PageHead always spans the full width, so titles sit at the same place on every page.
+ * Tabular number whose digits roll vertically (slot-machine style) when the value changes.
+ * `pulse`: the number glows briefly; `delta`: a «+3» / «−2» chip floats above it for about two seconds.
+ * The real number is in a visually hidden node, the rolling digits are decoration (aria-hidden); no layout shift.
  */
-export function AdminPage({ head, narrow = false, children }: { head: ReactNode; narrow?: boolean; children: ReactNode }) {
+export function AnimatedNumber({ value, className = '', pulse = false, delta = false }: { value: number; className?: string; pulse?: boolean; delta?: boolean }) {
+  const [bump, setBump] = useState(false);
+  const [chip, setChip] = useState<{ n: number; k: number } | null>(null);
+  const prev = useRef(value);
+  const born = useRef(true);
+  useEffect(() => {
+    const diff = value - prev.current;
+    prev.current = value;
+    if (born.current) { born.current = false; return; }
+    if (diff === 0) return;
+    const timers: number[] = [];
+    if (pulse) {
+      setBump(true);
+      timers.push(window.setTimeout(() => setBump(false), 950));
+    }
+    if (delta) {
+      setChip({ n: diff, k: Date.now() });
+      timers.push(window.setTimeout(() => setChip(null), 2100));
+    }
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [value, pulse, delta]);
+
+  const text = String(Math.round(value));
+  const chars = [...text];
   return (
-    <div className="space-y-5">
-      {head}
-      <div className={`space-y-5 ${narrow ? 'max-w-3xl' : ''}`}>{children}</div>
+    <span className={`roll ${bump ? 'num-bump' : ''} ${className}`}>
+      <span className="sr-only">{text}</span>
+      <span aria-hidden>
+        {chars.map((c, i) => {
+          // keyed from the right, so a column keeps its identity when the number grows by a digit
+          const key = chars.length - i;
+          return /\d/.test(c)
+            ? (
+              <span key={key} className="roll-d">
+                <span className="roll-g">0</span>
+                <span className="roll-col" style={{ transform: `translateY(${-Number(c)}em)` }}>
+                  {DIGITS.map((d) => <span key={d}>{d}</span>)}
+                </span>
+              </span>
+            )
+            : <span key={key}>{c}</span>;
+        })}
+      </span>
+      {chip && <span key={chip.k} aria-hidden className={`delta-chip ${chip.n > 0 ? 'up' : 'down'}`}>{chip.n > 0 ? `+${chip.n}` : `−${Math.abs(chip.n)}`}</span>}
+    </span>
+  );
+}
+
+/** a few dots flying out of the centre of the parent (the parent must be `relative`); CSS only */
+export function Burst({ count = 8, radius = 17 }: { count?: number; radius?: number }) {
+  return (
+    <span className="burst" aria-hidden style={{ '--r': `${radius}px` } as CSSProperties}>
+      {Array.from({ length: count }, (_, i) => <i key={i} style={{ '--a': `${Math.round((360 / count) * i + 15)}deg` } as CSSProperties} />)}
+    </span>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/poll.ts" << '__COREGSM_EOF__'
+/** Polling that pauses in hidden tabs, and the shared "slow server" threshold. */
+import { useEffect, useRef } from 'react';
+import type { Server } from '../api';
+
+/**
+ * Calls `fn` now and then every `ms` milliseconds.
+ * - nothing runs while the tab is hidden; coming back to the tab refreshes at once
+ * - a tick is skipped while the previous call (if it returns a promise) is still pending
+ * - nothing is scheduled after unmount
+ */
+export function usePoll(fn: () => unknown, ms: number) {
+  const ref = useRef(fn);
+  ref.current = fn;
+  useEffect(() => {
+    let alive = true;
+    let pending = false;
+    const run = async () => {
+      if (!alive || pending || document.hidden) return;
+      pending = true;
+      try {
+        await ref.current();
+      } catch {
+        /* the caller shows its own errors */
+      } finally {
+        pending = false;
+      }
+    };
+    void run();
+    const t = setInterval(() => void run(), ms);
+    const onVisible = () => { if (!document.hidden) void run(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [ms]);
+}
+
+/** a server answers, but slowly (ping over 100 ms) */
+export const LAG_PING = 100;
+export const isLag = (s: Pick<Server, 'online' | 'ping'>) => s.online && s.ping != null && s.ping > LAG_PING;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/theme.tsx" << '__COREGSM_EOF__'
+/** Light / dark / auto theme. */
+import { useState } from 'react';
+import { t } from '../i18n';
+import { IconAuto, IconMoon, IconSun } from '../icons';
+import { revealTransition } from '../useMotion';
+
+// ---------- theme ----------
+type Theme = 'auto' | 'light' | 'dark';
+const THEME_KEY = 'coregsm_theme';
+const readTheme = (): Theme => {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    return t === 'light' || t === 'dark' ? t : 'auto';
+  } catch {
+    return 'auto';
+  }
+};
+function applyTheme(t: Theme) {
+  const root = document.documentElement;
+  if (t === 'auto') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', t);
+  try {
+    if (t === 'auto') localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, t);
+  } catch {
+    /* private mode: the theme just is not remembered */
+  }
+}
+
+export function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
+  const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') };
+  return (
+    <button
+      type="button"
+      className="btn-icon"
+      title={t('theme.title', { name: label[theme] })}
+      aria-label={t('theme.aria', { name: label[theme] })}
+      onClick={(e) => {
+        const t = next[theme];
+        // the new theme grows as a circle out of the button (View Transitions); elsewhere it just switches
+        const r = e.currentTarget.getBoundingClientRect();
+        revealTransition(() => {
+          applyTheme(t);
+          setTheme(t);
+        }, r.left + r.width / 2, r.top + r.height / 2);
+      }}
+    >
+      {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconAuto />}
+    </button>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/toast.tsx" << '__COREGSM_EOF__'
+/** Toasts: short confirmations that do not interrupt, with an optional undo. */
+import { useEffect, useState } from 'react';
+import { t as tr } from '../i18n';
+import { IconClose, IconError, IconInfo, IconOk } from '../icons';
+
+// ---------- toasts: short confirmations that do not interrupt ----------
+type ToastKind = 'ok' | 'err' | 'info';
+/** an action button in a toast: `onClick` (undo and the like; the toast closes after it) or `href` (a link in a new tab) */
+export interface ToastAction { label: string; onClick?: () => void; href?: string }
+export interface ToastOptions {
+  kind?: ToastKind;
+  /** how long it stays, ms (default 3.5 s; 8 s for errors and links; 6 s when there is an action button) */
+  duration?: number;
+  action?: ToastAction;
+  /** called once when the toast goes away: 'action' (its button was pressed), 'dismiss' (closed by hand), 'timeout' */
+  onClose?: (reason: 'action' | 'dismiss' | 'timeout') => void;
+}
+interface ToastItem { id: number; text: string; kind: ToastKind; leaving?: boolean; action?: ToastAction; duration: number; onClose?: ToastOptions['onClose'] }
+let toasts: ToastItem[] = [];
+let toastSeq = 0;
+const toastTimers = new Map<number, number>();
+const toastListeners = new Set<(t: ToastItem[]) => void>();
+const emitToasts = () => toastListeners.forEach((l) => l(toasts));
+
+const armToast = (id: number, ms: number) => {
+  window.clearTimeout(toastTimers.get(id));
+  toastTimers.set(id, window.setTimeout(() => dismissToast(id, 'timeout'), ms));
+};
+
+/**
+ * Shows a toast.
+ *   toast('Сохранено')                                   // green
+ *   toast('Не удалось', 'err')                           // red, stays longer
+ *   toast('Удалено', { action: { label: 'Отменить', onClick: undo }, duration: 6000 })
+ * The old positional form toast(text, kind, ms, { label, href }) keeps working. Returns the toast id.
+ */
+export function toast(text: string, kindOrOptions: ToastKind | ToastOptions = 'ok', ms?: number, action?: ToastAction): number {
+  const o: ToastOptions = typeof kindOrOptions === 'string' ? { kind: kindOrOptions, duration: ms, action } : kindOrOptions;
+  const kind = o.kind ?? 'ok';
+  const duration = o.duration ?? (kind === 'err' ? 8000 : o.action?.onClick ? 6000 : o.action ? 8000 : 3500);
+  const t: ToastItem = { id: ++toastSeq, text, kind, action: o.action, duration, onClose: o.onClose };
+  const next = [...toasts, t];
+  // the oldest ones are pushed out: they count as timed out, so a pending "delete after the undo window" still happens
+  const evicted = next.slice(0, Math.max(0, next.length - 4));
+  toasts = next.slice(-4);
+  evicted.forEach((e) => { window.clearTimeout(toastTimers.get(e.id)); toastTimers.delete(e.id); e.onClose?.('timeout'); });
+  emitToasts();
+  armToast(t.id, duration);
+  return t.id;
+}
+
+export function dismissToast(id: number, reason: 'action' | 'dismiss' | 'timeout' = 'dismiss') {
+  const t = toasts.find((x) => x.id === id);
+  if (!t || t.leaving) return;
+  window.clearTimeout(toastTimers.get(id));
+  toastTimers.delete(id);
+  // it springs out first (about 200 ms), then it is removed
+  toasts = toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
+  emitToasts();
+  t.onClose?.(reason);
+  window.setTimeout(() => {
+    toasts = toasts.filter((x) => x.id !== id);
+    emitToasts();
+  }, 200);
+}
+
+/**
+ * «Удалено. Отменить»: the caller hides the item at once and passes `commit` (the real, irreversible request).
+ * `commit` runs when the toast times out or is closed by hand, and also when the page is left; it does not run
+ * after «Отменить», which calls `restore`. Use it only where the removal can wait a few seconds without harm.
+ */
+export function undoable({ text, commit, restore, duration = 6000, label = 'Отменить' }: { text: string; commit: () => unknown; restore: () => void; duration?: number; label?: string }) {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    window.removeEventListener('pagehide', finish);
+    void commit();
+  };
+  window.addEventListener('pagehide', finish);
+  toast(text, {
+    duration,
+    action: { label, onClick: () => { if (settled) return; settled = true; window.removeEventListener('pagehide', finish); restore(); } },
+    onClose: (reason) => { if (reason !== 'action') finish(); },
+  });
+}
+
+/**
+ * Two sibling live regions (never nested): errors are announced assertively (role=alert), the rest politely.
+ * They sit above the phone navigation bar and the home-indicator safe area. A toast with an action stops its timer
+ * while the pointer or the keyboard focus is on it.
+ */
+export function Toaster() {
+  const [list, setList] = useState<ToastItem[]>(toasts);
+  useEffect(() => {
+    toastListeners.add(setList);
+    return () => { toastListeners.delete(setList); };
+  }, []);
+  const tone = { ok: 'bg-okbg text-ok ring-ok/25', err: 'bg-badbg text-bad ring-bad/30', info: 'bg-raised text-ink ring-line' } as const;
+  const kindIcon = { ok: <IconOk size={18} />, err: <IconError size={18} />, info: <IconInfo size={18} /> };
+  const hold = (t: ToastItem) => { if (t.action?.onClick) window.clearTimeout(toastTimers.get(t.id)); };
+  const release = (t: ToastItem) => { if (t.action?.onClick && !t.leaving) armToast(t.id, Math.min(t.duration, 4000)); };
+  const item = (t: ToastItem) => (
+    <div
+      key={t.id}
+      onPointerEnter={() => hold(t)}
+      onPointerLeave={() => release(t)}
+      onFocusCapture={() => hold(t)}
+      onBlurCapture={() => release(t)}
+      className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
+    >
+      <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
+      <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
+      {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="btn-ghost btn-tone btn-xs shrink-0">{t.action.label}</a>}
+      {t.action?.onClick && (
+        <button
+          type="button"
+          onClick={() => { t.action?.onClick?.(); dismissToast(t.id, 'action'); }}
+          className="btn-ghost btn-tone btn-xs shrink-0"
+        >
+          {t.action.label}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => dismissToast(t.id, 'dismiss')}
+        className="btn-icon-ghost btn-icon-sm btn-tone shrink-0"
+        aria-label={tr('toast.close')}
+      >
+        <IconClose size={14} />
+      </button>
     </div>
   );
-}
-
-/**
- * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
- * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
- */
-export function Section({ title, description, actions, children, className = '', id, tone = 'panel', ...rest }: {
-  title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
-  tone?: 'panel' | 'soft'; 'data-tour'?: string;
-}) {
-  const hid = useId();
   return (
-    <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
-      {(title || actions) && (
-        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-          <div className="min-w-0 flex-1 basis-56">
-            {title && <h2 id={hid} className={`${tone === 'soft' ? 'text-base' : 'text-lg'} font-black`}>{title}</h2>}
-            {description && <p className="mt-0.5 font-semibold text-mute">{description}</p>}
-          </div>
-          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-        </div>
-      )}
-      {children}
-    </section>
-  );
-}
-
-/** a slim one-line card (channel pickers, toolbars): same panel, tighter padding */
-export function Strip({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`panel flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3 ${className}`}>{children}</div>;
-}
-
-/** «Сохраняется… / Сохранено / Не сохранено»: the state of an autosaved field; `retry` shows «Повторить» after a failure */
-export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?: string; retry?: () => void }) {
-  let body: ReactNode = null;
-  if (status === 'dirty') body = <span className="text-mute">Изменено…</span>;
-  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />Сохраняется…</span>;
-  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />Сохранено</span>;
-  else if (status === 'error') {
-    body = (
-      <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
-        Не сохранено{error ? `: ${error}` : ''}
-        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>Повторить</button>}
-      </span>
-    );
-  }
-  return <span className="min-h-[1.25rem] text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
-}
-
-/**
- * Label + input + message under the field. `error` (validation) is red and replaces the hint; `save` shows the
- * autosave state on the label row. Pass the rest of the input attributes through.
- */
-export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, ...rest }: {
-  id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: ReactNode;
-  save?: { status: SaveStatus; error?: string; retry?: () => void }; className?: string; multiline?: boolean;
-  type?: string; placeholder?: string; maxLength?: number; disabled?: boolean; autoComplete?: string; rows?: number;
-  onBlur?: () => void; inputMode?: 'text' | 'url' | 'numeric'; spellCheck?: boolean;
-}) {
-  const describedBy = [error ? `${id}-err` : '', hint && !error ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
-  const common = {
-    id,
-    className: `input ${className}`,
-    value,
-    onChange: (e: { target: { value: string } }) => onChange(e.target.value),
-    'aria-invalid': error ? true : undefined,
-    'aria-describedby': describedBy,
-    ...rest,
-  };
-  return (
-    <div>
-      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3">
-        <label htmlFor={id} className="text-sm font-extrabold text-mute">{label}</label>
-        {save && <SaveBadge status={save.status} error={save.error} retry={save.retry} />}
-      </div>
-      {multiline ? <textarea {...common} /> : <input {...common} />}
-      <FieldError id={`${id}-err`} text={error} />
-      {hint && !error && <p id={`${id}-hint`} className="mt-1.5 text-sm font-semibold text-mute">{hint}</p>}
+    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-[90] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+      <div aria-live="polite" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind !== 'err').map(item)}</div>
+      <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
     </div>
   );
 }
