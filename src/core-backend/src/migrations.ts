@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS health_samples (
   disk_free INTEGER
 );`),
   },
+  {
+    version: 6,
+    name: 'login_guard',
+    // counters of failed sign-ins (per account and address, per address, attempts per address): they survive a restart
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS login_guard (
+  scope TEXT NOT NULL,
+  key TEXT NOT NULL,
+  data TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, key)
+);
+CREATE INDEX IF NOT EXISTS idx_login_guard_expires ON login_guard(expires_at);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

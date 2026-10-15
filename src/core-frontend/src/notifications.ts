@@ -33,7 +33,7 @@ export function toggleKind(kinds: readonly SubKind[], kind: SubKind): SubKind[] 
 
 /** the notification links to its server page, or nowhere */
 export function notificationHref(n: Pick<NotificationItem, 'serverId'>): string | null {
-  return n.serverId != null && Number.isFinite(Number(n.serverId)) ? `#/servers/${n.serverId}` : null;
+  return n.serverId != null && Number.isFinite(Number(n.serverId)) ? `/servers/${n.serverId}` : null;
 }
 
 /** an "unavailable" answer (older backend, feature off) hides the panel instead of showing an error */

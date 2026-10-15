@@ -268,7 +268,7 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
         {!servers && ids.slice(0, 5).map((id) => <li key={id} className="skeleton nw-srv-skel" aria-hidden />)}
         {shown.map((s) => (
           <li key={s.id}>
-            <a className="nw-srv" href={`#/servers/${s.id}`}>
+            <a className="nw-srv" href={`/servers/${s.id}`}>
               <GameAvatar game={s.game} size={40} />
               <span className="nw-srv-main">
                 <span className="nw-srv-name">{s.name}</span>

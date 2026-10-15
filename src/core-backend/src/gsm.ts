@@ -267,12 +267,14 @@ let lastStats: PollStats = { at: null, durationMs: null, servers: 0, failures: 0
 export const lastPollStats = (): PollStats => ({ ...lastStats });
 
 let running = false;
+let stopping = false;
+let pollTimer: NodeJS.Timeout | undefined;
 let jitterMaxMs = 1500;
 let pollCount = 0;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function pollAll(): Promise<void> {
-  if (running) return;
+  if (running || stopping) return;
   running = true;
   try {
     const t0 = Date.now();
@@ -282,6 +284,8 @@ export async function pollAll(): Promise<void> {
     await runPool(servers, concurrency, async (s) => {
       // servers do not all start at the same instant
       if (jitterMaxMs > 0) await sleep(Math.floor(Math.random() * jitterMaxMs));
+      // shutting down: the servers not queried yet wait for the next start
+      if (stopping) return;
       try {
         const o = await refreshServer(s, { debounce: true });
         if (o && !o.polledOnline) failures++;
@@ -310,5 +314,13 @@ export async function pollAll(): Promise<void> {
 export function startPoller(intervalMs: number): void {
   jitterMaxMs = Math.min(1500, Math.max(0, Math.floor(intervalMs / 10)));
   void pollAll();
-  setInterval(() => void pollAll(), intervalMs).unref?.();
+  pollTimer = setInterval(() => void pollAll(), intervalMs);
+  pollTimer.unref();
+}
+
+/** Shutdown: no new poll cycles, the running one skips the servers it has not started and is awaited. */
+export async function stopPoller(): Promise<void> {
+  stopping = true;
+  clearInterval(pollTimer);
+  while (running) await sleep(50);
 }

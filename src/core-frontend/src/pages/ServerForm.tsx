@@ -6,6 +6,7 @@ import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
+import { errorText } from '../apiErrors';
 
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
@@ -22,7 +23,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     try {
       const r = await fetch(`/api/servers/${id}/cover`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
       const j = (await r.json().catch(() => null)) as { coverUrl?: string; error?: string } | null;
-      if (!r.ok) throw new Error(j?.error ?? 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)');
+      if (!r.ok) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)'));
       setCover(j?.coverUrl ?? null);
       onCoverChanged?.();
     } catch (e) {

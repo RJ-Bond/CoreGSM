@@ -4,7 +4,7 @@ import { api, ApiError } from '../api';
 import { t } from '../i18n';
 import { Button, ErrorLine, FieldError, useShake } from '../ui';
 
-/** #/forgot: asks for a login or e-mail; the answer is the same whether or not such an account exists */
+/** /forgot: asks for a login or e-mail; the answer is the same whether or not such an account exists */
 export default function ForgotPassword() {
   const [login, setLogin] = useState('');
   const [err, setErr] = useState('');

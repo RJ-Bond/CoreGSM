@@ -178,6 +178,24 @@ describe('lockout', () => {
     // another address is not affected
     assert.equal((await attempt('admin', '10.2.0.2', ADMIN.password)).status, 200);
   });
+
+  it('a lockout survives a restart of the backend (kept in the database)', async () => {
+    for (let i = 0; i < 5; i++) assert.equal((await attempt('admin', '10.3.0.1')).status, 401);
+    for (const name of ['alice', 'bob', 'carol', 'dave', 'erin', 'frank']) assert.equal((await attempt(name, '10.4.0.1')).status, 401);
+    await api.restart();
+    assert.equal((await attempt('admin', '10.3.0.1', ADMIN.password)).status, 429, 'account lockout lost on restart');
+    assert.equal((await attempt('admin', '10.4.0.1', ADMIN.password)).status, 429, 'address lockout lost on restart');
+    assert.equal((await attempt('admin', '10.5.0.1', ADMIN.password)).status, 200);
+  });
+
+  it('wrong passwords below the limit report the tries left; a success clears them', async () => {
+    const r1 = await attempt('admin', '10.6.0.1');
+    assert.equal(r1.status, 401);
+    assert.equal((await r1.json()).attemptsLeft, 4);
+    assert.equal((await attempt('admin', '10.6.0.1', ADMIN.password)).status, 200);
+    const r2 = await attempt('admin', '10.6.0.1');
+    assert.equal((await r2.json()).attemptsLeft, 4);
+  });
 });
 
 describe('e-mail: verification, password reset, new device', () => {

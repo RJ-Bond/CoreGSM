@@ -16,7 +16,7 @@ function confirmLink(token: string) {
   return p;
 }
 
-/** #/verify/<token>: confirms the e-mail address of the account */
+/** /verify/<token>: confirms the e-mail address of the account */
 export default function VerifyEmail({ token }: { token: string }) {
   const { me, reload } = useAuth();
   const [state, setState] = useState<'checking' | 'ok' | 'bad'>('checking');
@@ -32,7 +32,7 @@ export default function VerifyEmail({ token }: { token: string }) {
     return () => { live = false; };
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const next = me ? <a href="#/profile" className="btn w-full justify-center">{t('verify.toProfile')}</a> : <a href="#/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>;
+  const next = me ? <a href="/profile" className="btn w-full justify-center">{t('verify.toProfile')}</a> : <a href="/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>;
 
   if (state === 'checking') {
     return (

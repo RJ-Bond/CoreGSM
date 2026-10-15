@@ -9,6 +9,8 @@ const en: Record<keyof typeof ru, string> = {
   'common.remove': 'Remove',
   'common.retry': 'Retry',
   'common.save': 'Save',
+  'page.loadFailed': 'The page could not be loaded. The panel may have just been updated.',
+  'page.reload': 'Reload the page',
   'toast.close': 'Dismiss notification',
   'ago.s': '{n}s ago',
   'ago.m': '{n} min ago',

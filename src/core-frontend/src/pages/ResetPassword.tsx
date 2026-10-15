@@ -4,7 +4,7 @@ import { api, ApiError } from '../api';
 import { t } from '../i18n';
 import { Button, ErrorLine, PasswordField, PasswordStrength, useShake } from '../ui';
 
-/** #/reset/<token>: the link from the letter; sets a new password (valid 30 minutes, once) */
+/** /reset/<token>: the link from the letter; sets a new password (valid 30 minutes, once) */
 export default function ResetPassword({ token }: { token: string }) {
   const [pass, setPass] = useState('');
   const [again, setAgain] = useState('');
@@ -43,7 +43,7 @@ export default function ResetPassword({ token }: { token: string }) {
     return (
       <AuthFlow title={t('reset.doneTitle')}>
         <p className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok" role="status">{t('reset.doneText')}</p>
-        <a href="#/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>
+        <a href="/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>
       </AuthFlow>
     );
   }
@@ -52,7 +52,7 @@ export default function ResetPassword({ token }: { token: string }) {
     return (
       <AuthFlow title={t('reset.badTitle')}>
         <p className="rounded-2xl bg-badbg px-4 py-3 font-bold text-bad" role="alert">{t('reset.badText')}</p>
-        <a href="#/forgot" className="btn w-full justify-center">{t('reset.again')}</a>
+        <a href="/forgot" className="btn w-full justify-center">{t('reset.again')}</a>
       </AuthFlow>
     );
   }

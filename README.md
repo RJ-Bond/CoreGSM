@@ -9,7 +9,7 @@ Self-hosted аналог DiscordGSM. Веб-панель, где вы добав
 ![Пример карточки](docs/card-preview.png)
 
 - **Панель**: React и Tailwind, светлый дизайн Pastel Soft. Серверы, карточки, привязка каналов, смена пароля.
-- **Бэкенд**: Node.js 20, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig) (опрос серверов), SQLite, генерация PNG-карточек.
+- **Бэкенд**: Node.js 22, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig) (опрос серверов), SQLite, генерация PNG-карточек.
 - **Бот**: discord.js 14. Отправляет одно сообщение с картинкой в канал и дальше редактирует его.
 - **Nginx**: HTTPS, редирект с HTTP, Let's Encrypt с автопродлением.
 - **Прокси**: SOCKS5 и HTTP для бота и установки (см. раздел «Прокси»).
@@ -60,7 +60,7 @@ ssh root@192.168.88.152
 
 ```bash
 apt-get update && apt-get install -y curl
-curl -fsSL https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh -o install.sh
+curl -fsSL --compressed https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh -o install.sh
 bash install.sh
 ```
 
@@ -134,7 +134,7 @@ DOMAIN=gsm.my-domain.com LE_EMAIL=me@example.com bash install.sh
 **Способ A (рекомендуется): скачать с GitHub прямо на сервере.**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh -o install.sh
+curl -fsSL --compressed https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh -o install.sh
 bash install.sh
 ```
 
@@ -384,13 +384,15 @@ ssh root@192.168.88.152 "SKIP_UPDATE=1 bash install.sh"
 Запуск частей на своём компьютере без Docker:
 
 ```bash
-# бэкенд (нужен Node.js 20+ и компилятор для better-sqlite3)
-cd src/core-backend && npm install && npm run build
+# бэкенд (нужен Node.js 22+ и компилятор для better-sqlite3)
+cd src/core-backend && npm ci && npm run build
 DB_PATH=./data/dev.db JWT_SECRET=dev-secret-dev-secret INTERNAL_TOKEN=dev-token-dev-token SETUP_TOKEN=dev-code npm start   # код установки для мастера: dev-code
 
 # фронтенд (в другом терминале; /api проксируется на localhost:3000)
-cd src/core-frontend && npm install && npm run dev
+cd src/core-frontend && npm ci && npm run dev
 ```
+
+Версии зависимостей зафиксированы в `package-lock.json` каждой части, и образы собираются через `npm ci`: обновление панели ставит ровно те пакеты, что прошли CI. После правки `package.json` выполните `npm install` в этой папке и закоммитьте изменившийся `package-lock.json` вместе с пересобранным `install.sh`.
 
 ---
 

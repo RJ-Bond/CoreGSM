@@ -89,7 +89,7 @@ export function computeWizard(i: WizardInput): { steps: WizardStep[]; complete: 
 
 /** Stepper card: shown while the connection is incomplete (or when reopened by hand). */
 export function DiscordWizard({
-  input, busy, onRecheck, onCreateBinding, inviteUrl, settingsHref = '#/admin/settings/bot', onClose,
+  input, busy, onRecheck, onCreateBinding, inviteUrl, settingsHref = '/admin/settings/bot', onClose,
 }: {
   input: WizardInput;
   busy: boolean;
@@ -107,7 +107,7 @@ export function DiscordWizard({
     if (s.id === 'bot') return <a className="btn btn-soft btn-sm" href={settingsHref}>Открыть настройки бота</a>;
     if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">Открыть приглашение<span aria-hidden>↗</span></a> : null;
     if (s.id === 'channel') {
-      if (input.serverCount === 0) return <a className="btn btn-sm" href="#/admin/servers/new">Добавить сервер</a>;
+      if (input.serverCount === 0) return <a className="btn btn-sm" href="/admin/servers/new">Добавить сервер</a>;
       if (input.bindings.length === 0) return <button type="button" className="btn btn-sm" onClick={onCreateBinding}>Создать первую привязку</button>;
       return null;
     }

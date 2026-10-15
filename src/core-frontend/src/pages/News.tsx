@@ -4,10 +4,9 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
-import { NewsArticlePage, NewsListPage } from '../components/news/NewsPublicPages';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -85,7 +84,7 @@ function NewsList() {
     try {
       const created = await api<NewsItem>(`/news/${n.id}/duplicate`, 'POST');
       toast('Копия создана');
-      window.location.hash = `#/admin/news/${created.id}`;
+      navigate(`/admin/news/${created.id}`);
       return;
     } catch (e) {
       // an older backend has no duplicate route: make the copy by hand
@@ -140,7 +139,7 @@ function NewsList() {
           hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
           help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
         >
-          <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
+          <a className="btn" href="/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
         </PageHead>
       )}
     >
@@ -148,7 +147,7 @@ function NewsList() {
 
       <Strip className="!justify-start">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
-        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`#/admin/news/new/${t.id}`}>{t.label}</a>)}
+        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${t.id}`}>{t.label}</a>)}
       </Strip>
 
       <Strip>
@@ -194,7 +193,7 @@ function NewsList() {
 
       {loaded && !error && list.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
-          <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
+          <a className="btn mt-3" href="/admin/news/new">+ Написать новость</a>
         </Empty>
       )}
 
@@ -220,7 +219,7 @@ function NewsList() {
               {excerpt(n) && <p className="line-clamp-3 break-words text-sm font-semibold text-mute">{excerpt(n)}</p>}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
-                <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
+                <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>Изменить</a>
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
@@ -242,11 +241,4 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
   if (!e) return null;
   const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
   return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
-}
-
-/** read-only feed for players and guests: the list (#/news) or one news item (#/news/<id>) */
-export function NewsFeed({ sub = '' }: { sub?: string }) {
-  const id = Number(sub.split('/')[0]);
-  if (sub && Number.isInteger(id) && id > 0) return <NewsArticlePage id={id} />;
-  return <NewsListPage />;
 }

@@ -4,7 +4,7 @@ import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS } from '../pages/adminNav';
-import { GameAvatar, IconNews, IconServers, toast, useDensity } from '../ui';
+import { GameAvatar, IconNews, IconServers, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -82,26 +82,26 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         group: 'Серверы',
         label: s.name,
         hint: `${gameLabel(s.game)} · ${s.address}`,
-        href: `#/servers/${s.id}`,
+        href: `/servers/${s.id}`,
         icon: <GameAvatar game={s.game} size={32} />,
         hay: norm(`${s.name} ${gameLabel(s.game)} ${s.address}`),
       });
     }
     out.push(
-      sectionItem('p-servers', 'Серверы', 'Список серверов', '#/servers', <IconServers />),
-      sectionItem('p-news', 'Новости', 'Лента новостей', '#/news', <IconNews />),
-      sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '#/status', <IconPulse />),
+      sectionItem('p-servers', 'Серверы', 'Список серверов', '/servers', <IconServers />),
+      sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
+      sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
     );
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
-      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `#/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
+      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
       if (isAdmin) {
         ADMIN_LINKS.forEach((l, i) => out.push(sectionItem(`l-${i}`, l.label, `Админка · ${l.hint}`, l.href, l.icon(), `${l.keywords} админка`, true)));
       } else {
-        out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '#/admin/news/new', <IconNews />, 'новость объявление', true));
+        out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '/admin/news/new', <IconNews />, 'новость объявление', true));
       }
     }
-    if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
+    if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '/profile', <IconUser />));
     const compact = density === 'compact';
     out.push({
       key: 'act-density',
@@ -136,7 +136,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     if (!it) return;
     onClose();
     if (it.run) it.run();
-    else window.location.hash = it.href;
+    else navigate(it.href);
   };
 
   const onKey = (e: React.KeyboardEvent) => {

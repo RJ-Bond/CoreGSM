@@ -346,9 +346,16 @@ export async function runScheduledIfDue(now = Date.now()): Promise<BackupItem | 
   }
 }
 
+const backupTimers: NodeJS.Timeout[] = [];
 export function startBackupTimer(): void {
-  setTimeout(() => void runScheduledIfDue(), 60_000).unref();
-  setInterval(() => void runScheduledIfDue(), 3600_000).unref();
+  backupTimers.push(setTimeout(() => void runScheduledIfDue(), 60_000).unref());
+  backupTimers.push(setInterval(() => void runScheduledIfDue(), 3600_000).unref());
+}
+
+/** Shutdown: no new scheduled backups; a backup being written is finished before the database closes. */
+export async function stopBackups(): Promise<void> {
+  for (const t of backupTimers) clearTimeout(t);
+  while (busy) await new Promise((r) => setTimeout(r, 100));
 }
 
 // ---------- restoring ----------
