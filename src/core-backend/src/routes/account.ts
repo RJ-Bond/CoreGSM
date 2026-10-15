@@ -2,7 +2,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { attempts, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, fails, issueToken, LOCK_AFTER, loginLimiter, rateLimit, registrationOpen, type Role, type UserFull } from '../auth.js';
+import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
 import { db, setSetting } from '../db.js';
@@ -28,10 +28,8 @@ router.post(
       return res.status(429).json({ error: `Слишком много неудачных попыток входа с этого адреса. Повторите через ${ipWait} с.`, retryAfter: ipWait });
     }
     // lock out after repeated wrong passwords for the same login from the same address
-    const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
-    const lock = fails.get(key);
-    if (lock && lock.until > Date.now()) {
-      const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
+    const retryAfter = accountLockRemaining(req.ip, body.data.username);
+    if (retryAfter > 0) {
       res.setHeader('Retry-After', String(retryAfter));
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
@@ -40,18 +38,14 @@ router.post(
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
-      const f = fails.get(key) ?? { n: 0, until: 0 };
-      f.n++;
-      if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
-      fails.set(key, f);
+      const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
       ipLoginFailed(req.ip, body.data.username);
       if (u) logAccount(req, u.id, 'login_failed');
-      const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
-      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
+      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft });
     }
-    fails.delete(key);
+    accountLoginOk(req.ip, body.data.username);
     if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
-    attempts.delete(req.ip ?? 'x');
+    resetAttempts(req.ip);
     logAccount(req, u.id, 'login');
     noteLogin(req, u.id, brand().name);
     const token = issueToken(u, req);
@@ -102,7 +96,7 @@ router.post(
     } catch {
       return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
     }
-    attempts.delete(req.ip ?? 'x');
+    resetAttempts(req.ip);
     console.log(`setup completed, admin "${b.data.username}" created`);
     const token = issueToken({ id: userId, username: b.data.username }, req);
     setSessionCookie(req, res, token);

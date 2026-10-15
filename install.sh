@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a570e12dc42c"
+COREGSM_BUILD="f08e1bde8ac6"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4328,6 +4328,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { INTERNAL_TOKEN, JWT_SECRET } from './config.js';
 import { db, getSetting } from './db.js';
 import { safeEqual } from './http.js';
+import { guardDelete, guardGet, guardSet } from './loginGuard.js';
 import { uaLabel } from './profile.js';
 import { readCookie, SESSION_COOKIE } from './security.js';
 
@@ -4421,9 +4422,31 @@ export function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   next();
 }
 
+// ---------- lockout after wrong passwords for one login from one address (kept in SQLite, see loginGuard.ts) ----------
 export const LOCK_AFTER = 5;
-export const fails = new Map<string, { n: number; until: number }>();
-setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
+const accountKey = (ip: string | undefined, username: string) => `${ip ?? 'x'}|${username.toLowerCase()}`;
+
+/** seconds until this login may be tried again from this address (0 = not locked) */
+export function accountLockRemaining(ip: string | undefined, username: string): number {
+  const f = guardGet<{ n: number; until: number }>('account', accountKey(ip, username));
+  return f && f.until > Date.now() ? Math.ceil((f.until - Date.now()) / 1000) : 0;
+}
+
+/** counts a wrong password; returns how many tries are left before the lockout (0 = locked now) */
+export function accountLoginFailed(ip: string | undefined, username: string): number {
+  const key = accountKey(ip, username);
+  const now = Date.now();
+  const f = guardGet<{ n: number; until: number }>('account', key) ?? { n: 0, until: 0 };
+  f.n++;
+  // 30 s, 1 min, 2 min ... up to 15 minutes
+  if (f.n >= LOCK_AFTER) f.until = now + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
+  // failures below the limit are forgotten 10 minutes after the last one; a lockout is remembered for an hour
+  // after it ends, so the next one is longer
+  guardSet('account', key, f, f.until ? f.until + 3600_000 : now + 10 * 60_000);
+  return f.n >= LOCK_AFTER ? 0 : LOCK_AFTER - f.n;
+}
+
+export const accountLoginOk = (ip: string | undefined, username: string) => guardDelete('account', accountKey(ip, username));
 
 /** a lighter per-address limit for public lookups: `max` requests per minute */
 export function rateLimit(max: number) {
@@ -4443,21 +4466,22 @@ export function rateLimit(max: number) {
   };
 }
 
-export const attempts = new Map<string, { n: number; reset: number }>();
+/** sign-in, registration and setup: at most 10 attempts per address in 10 minutes (a success clears the count) */
 export function loginLimiter(req: Request, res: Response, next: NextFunction) {
   const key = req.ip ?? 'x';
   const now = Date.now();
-  const a = attempts.get(key);
+  const a = guardGet<{ n: number; reset: number }>('attempts', key);
   if (a && a.reset > now && a.n >= 10) {
     const retryAfter = Math.max(1, Math.ceil((a.reset - now) / 1000));
     res.setHeader('Retry-After', String(retryAfter));
     res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.', retryAfter });
     return;
   }
-  if (!a || a.reset <= now) attempts.set(key, { n: 1, reset: now + 10 * 60 * 1000 });
-  else a.n++;
+  const next_ = !a || a.reset <= now ? { n: 1, reset: now + 10 * 60 * 1000 } : { n: a.n + 1, reset: a.reset };
+  guardSet('attempts', key, next_, next_.reset);
   next();
 }
+export const resetAttempts = (ip: string | undefined) => guardDelete('attempts', ip ?? 'x');
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
 export interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
@@ -7884,6 +7908,42 @@ installShutdown(server);
 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/loginGuard.ts" << '__COREGSM_EOF__'
+/**
+ * Counters of failed sign-ins, kept in SQLite (table login_guard) so a restart of the backend does not reset a
+ * lockout. Each row is a small JSON document with its own expiry; expired rows read as absent and are pruned hourly.
+ */
+import { db } from './db.js';
+
+export type GuardScope = 'account' | 'ip' | 'attempts';
+
+const getStmt = db.prepare('SELECT data FROM login_guard WHERE scope = ? AND key = ? AND expires_at > ?');
+const setStmt = db.prepare(
+  'INSERT INTO login_guard (scope, key, data, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (scope, key) DO UPDATE SET data = excluded.data, expires_at = excluded.expires_at',
+);
+const delStmt = db.prepare('DELETE FROM login_guard WHERE scope = ? AND key = ?');
+
+export function guardGet<T>(scope: GuardScope, key: string): T | null {
+  const r = getStmt.get(scope, key, Date.now()) as { data: string } | undefined;
+  if (!r) return null;
+  try {
+    return JSON.parse(r.data) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function guardSet<T>(scope: GuardScope, key: string, data: T, expiresAt: number): void {
+  setStmt.run(scope, key, JSON.stringify(data), Math.round(expiresAt));
+}
+
+export function guardDelete(scope: GuardScope, key: string): void {
+  delStmt.run(scope, key);
+}
+
+setInterval(() => db.prepare('DELETE FROM login_guard WHERE expires_at <= ?').run(Date.now()), 3600_000).unref();
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/mail.ts" << '__COREGSM_EOF__'
 /**
  * Outgoing e-mail (nodemailer). SMTP settings live in the settings table: smtp_host, smtp_port, smtp_secure ('1' = TLS
@@ -8273,6 +8333,21 @@ CREATE TABLE IF NOT EXISTS health_samples (
   queue_len INTEGER NOT NULL DEFAULT 0,
   disk_free INTEGER
 );`),
+  },
+  {
+    version: 6,
+    name: 'login_guard',
+    // counters of failed sign-ins (per account and address, per address, attempts per address): they survive a restart
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS login_guard (
+  scope TEXT NOT NULL,
+  key TEXT NOT NULL,
+  data TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, key)
+);
+CREATE INDEX IF NOT EXISTS idx_login_guard_expires ON login_guard(expires_at);`),
   },
 ];
 
@@ -11064,7 +11139,7 @@ __COREGSM_EOF__
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { attempts, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, fails, issueToken, LOCK_AFTER, loginLimiter, rateLimit, registrationOpen, type Role, type UserFull } from '../auth.js';
+import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
 import { db, setSetting } from '../db.js';
@@ -11090,10 +11165,8 @@ router.post(
       return res.status(429).json({ error: `Слишком много неудачных попыток входа с этого адреса. Повторите через ${ipWait} с.`, retryAfter: ipWait });
     }
     // lock out after repeated wrong passwords for the same login from the same address
-    const key = `${req.ip ?? 'x'}|${body.data.username.toLowerCase()}`;
-    const lock = fails.get(key);
-    if (lock && lock.until > Date.now()) {
-      const retryAfter = Math.ceil((lock.until - Date.now()) / 1000);
+    const retryAfter = accountLockRemaining(req.ip, body.data.username);
+    if (retryAfter > 0) {
       res.setHeader('Retry-After', String(retryAfter));
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
@@ -11102,18 +11175,14 @@ router.post(
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
-      const f = fails.get(key) ?? { n: 0, until: 0 };
-      f.n++;
-      if (f.n >= LOCK_AFTER) f.until = Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
-      fails.set(key, f);
+      const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
       ipLoginFailed(req.ip, body.data.username);
       if (u) logAccount(req, u.id, 'login_failed');
-      const attemptsLeft = Math.max(0, LOCK_AFTER - f.n);
-      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft: f.n >= LOCK_AFTER ? 0 : attemptsLeft });
+      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft });
     }
-    fails.delete(key);
+    accountLoginOk(req.ip, body.data.username);
     if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
-    attempts.delete(req.ip ?? 'x');
+    resetAttempts(req.ip);
     logAccount(req, u.id, 'login');
     noteLogin(req, u.id, brand().name);
     const token = issueToken(u, req);
@@ -11164,7 +11233,7 @@ router.post(
     } catch {
       return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
     }
-    attempts.delete(req.ip ?? 'x');
+    resetAttempts(req.ip);
     console.log(`setup completed, admin "${b.data.username}" created`);
     const token = issueToken({ id: userId, username: b.data.username }, req);
     setSessionCookie(req, res, token);
@@ -12500,6 +12569,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { db, setSetting } from './db.js';
+import { guardGet, guardSet } from './loginGuard.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
 
@@ -12615,33 +12685,33 @@ export function windowLimiter(max: number, windowMs: number, message = 'Слиш
 // per-address lockout after repeated failed logins across different usernames (the per-account lockout is in auth.ts)
 const IP_LOCK_AFTER = 6;
 const IP_LOCK_MIN_NAMES = 3;
-const ipFails = new Map<string, { n: number; names: Set<string>; until: number; last: number; level: number }>();
-setInterval(() => {
-  for (const [k, v] of ipFails) if (v.last < Date.now() - 3600_000 && v.until < Date.now()) ipFails.delete(k);
-}, 600_000).unref();
+// kept in SQLite (loginGuard.ts): a restart does not lift a lockout
+interface IpFails { n: number; names: string[]; until: number; last: number; level: number }
 
 /** seconds until this address may try again (0 = not locked) */
 export function ipLockRemaining(ip: string | undefined): number {
-  const f = ipFails.get(ip ?? 'x');
+  const f = guardGet<IpFails>('ip', ip ?? 'x');
   return f && f.until > Date.now() ? Math.ceil((f.until - Date.now()) / 1000) : 0;
 }
 
 export function ipLoginFailed(ip: string | undefined, username: string): void {
   const key = ip ?? 'x';
   const now = Date.now();
-  let f = ipFails.get(key);
-  if (!f || f.last < now - 30 * 60_000) f = { n: 0, names: new Set(), until: 0, last: now, level: f?.level ?? 0 };
+  let f = guardGet<IpFails>('ip', key);
+  if (!f || f.last < now - 30 * 60_000) f = { n: 0, names: [], until: 0, last: now, level: f?.level ?? 0 };
   f.n++;
   f.last = now;
-  if (f.names.size < 50) f.names.add(username.toLowerCase());
-  if (f.n >= IP_LOCK_AFTER && f.names.size >= IP_LOCK_MIN_NAMES) {
+  const name = username.toLowerCase();
+  if (f.names.length < 50 && !f.names.includes(name)) f.names.push(name);
+  if (f.n >= IP_LOCK_AFTER && f.names.length >= IP_LOCK_MIN_NAMES) {
     // 1, 2, 4 ... up to 30 minutes
     f.until = now + Math.min(30 * 60_000, 60_000 * 2 ** f.level);
     f.level++;
     f.n = 0;
-    f.names.clear();
+    f.names = [];
   }
-  ipFails.set(key, f);
+  // forgotten an hour after the last failure (and never while locked)
+  guardSet('ip', key, f, Math.max(f.until, f.last + 3600_000));
 }
 
 // ---------- tokens ----------
