@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f679a7079559"
+COREGSM_BUILD="d4573ae846e0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4106,6 +4106,7 @@ import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { gameLabel } from './games.js';
 import { inMaintenance } from './maintenance.js';
 import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
+import { SMART_KINDS, smartEnabled } from './smartAlerts.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS alert_state (
@@ -4127,7 +4128,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 `);
 
-const settings = () => ({
+export const alertSettings = () => ({
   enabled: getSetting('alerts_enabled') === '1',
   channelId: getSetting('alerts_channel') ?? '',
   afterMin: Math.min(120, Math.max(1, Number(getSetting('alerts_after_min')) || 3)),
@@ -4136,18 +4137,21 @@ const settings = () => ({
 
 const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
 
-interface Payload {
+export interface Payload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
   embed: Record<string, unknown>;
 }
 
-function enqueue(kind: 'down' | 'up' | 'test', serverName: string, payload: Payload) {
-  const s = settings();
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest';
+
+export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
+  const s = alertSettings();
+  const target = channelId || s.channelId;
   const now = Date.now();
   // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
-  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
-  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target: s.channelId, payload });
+  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, target, JSON.stringify(payload), now, now);
+  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target, payload });
   db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
 }
 
@@ -4172,7 +4176,7 @@ const human = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min /
 
 /** Called after every poll of a server. */
 export function trackAlerts(serverId: number, online: boolean, error: string | null): void {
-  const s = settings();
+  const s = alertSettings();
   if (!s.enabled || !s.channelId) {
     db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
     return;
@@ -4197,7 +4201,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
       if (st.alerted) {
         const i = info();
         if (i) {
-          enqueue('up', i.n, {
+          enqueueAlert('up', i.n, {
             content: '',
             mention: 'none',
             embed: {
@@ -4223,7 +4227,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     const i = info();
     db.prepare('UPDATE alert_state SET alerted = 1 WHERE server_id = ?').run(serverId);
     if (!i) return;
-    enqueue('down', i.n, {
+    enqueueAlert('down', i.n, {
       content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
       mention: s.mention,
       embed: {
@@ -4247,7 +4251,7 @@ export function registerAlerts(deps: {
   const { app, admin, internal, channelInfo } = deps;
 
   const payload = () => {
-    const s = settings();
+    const s = alertSettings();
     const ch = s.channelId ? channelInfo(s.channelId) : { channelName: null, guildName: null };
     const recent = db.prepare('SELECT id, kind, server_name, status, error, created_at, sent_at FROM alerts ORDER BY id DESC LIMIT 30').all() as {
       id: number;
@@ -4260,6 +4264,7 @@ export function registerAlerts(deps: {
     }[];
     return {
       ...s,
+      smart: Object.fromEntries(SMART_KINDS.map((k) => [k, smartEnabled(k)])) as Record<(typeof SMART_KINDS)[number], boolean>,
       channelName: ch.channelName,
       guildName: ch.guildName,
       recent: recent.map((r) => ({ id: r.id, kind: r.kind, serverName: r.server_name, status: r.status, error: r.error, createdAt: r.created_at, sentAt: r.sent_at })),
@@ -4275,6 +4280,7 @@ export function registerAlerts(deps: {
         channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
         afterMin: z.number().int().min(1).max(120).optional(),
         mention: z.enum(['none', 'here', 'everyone']).optional(),
+        smart: z.object({ low: z.boolean().optional(), ping: z.boolean().optional(), full: z.boolean().optional() }).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
@@ -4285,13 +4291,14 @@ export function registerAlerts(deps: {
     if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
     if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
     if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
+    for (const k of SMART_KINDS) if (b.data.smart?.[k] !== undefined) setSetting(`alerts_smart_${k}`, b.data.smart[k] ? '1' : '0');
     res.json(payload());
   });
 
   app.post('/api/alerts/test', admin, (_req, res) => {
-    const s = settings();
+    const s = alertSettings();
     if (!s.channelId) return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
-    enqueue('test', 'Проверка', {
+    enqueueAlert('test', 'Проверка', {
       content: '',
       mention: 'none',
       embed: {
@@ -6434,6 +6441,353 @@ export function registerDeliveries(deps: { app: Express; admin: RequestHandler; 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/digest.ts" << '__COREGSM_EOF__'
+/**
+ * Weekly digest: once a week (the weekday and hour of the panel's time zone are set in the panel) the bot posts a
+ * summary of the last seven days to the alerts channel or a channel of its own: players, peak, hours played,
+ * availability and outages of every server, the top players, and the change against the week before. The picture
+ * is drawn here (skia, like the server cards) and served at a signed address so that Discord can fetch it even
+ * when the panel is private.
+ */
+import crypto from 'node:crypto';
+import skia from 'skia-canvas';
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { alertSettings, enqueueAlert } from './alerts.js';
+import { JWT_SECRET } from './config.js';
+import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
+import { incidentsSince } from './incidents.js';
+import { localParts } from './localTime.js';
+import { brand, publicBase } from './site.js';
+
+const { Canvas } = skia;
+const DAY = 86_400_000;
+const WEEK = 7 * DAY;
+
+export const digestSettings = () => ({
+  enabled: getSetting('digest_enabled') === '1',
+  channelId: getSetting('digest_channel') ?? '',
+  weekday: Math.min(6, Math.max(0, Number(getSetting('digest_weekday') ?? 0) || 0)), // 0 = Monday
+  hour: Math.min(23, Math.max(0, Number(getSetting('digest_hour') ?? 10) || 0)),
+  lastSent: Number(getSetting('digest_last_sent')) || 0,
+});
+
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+export interface DigestServer {
+  id: number; name: string; game: string; players: number; prevPlayers: number; peak: number; peakAt: number | null;
+  hours: number; uptime: number | null; incidents: number; downMinutes: number;
+}
+export interface Digest {
+  from: number; to: number;
+  totals: { players: number; prevPlayers: number; peak: number; peakAt: number | null; peakServer: string | null; hours: number; prevHours: number; uptime: number | null; incidents: number; newPlayers: number };
+  days: { day: string; players: number }[];
+  servers: DigestServer[];
+  top: { name: string; hours: number }[];
+}
+
+/** the summary of the seven days that end at `to` */
+export function buildDigest(to = Date.now()): Digest {
+  const from = to - WEEK;
+  const prevFrom = from - WEEK;
+  const servers = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string; game: string }[];
+  const visits = db
+    .prepare('SELECT server_id AS s, ulower(name) AS k, name, joined_at AS j, COALESCE(left_at, ?) AS l FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ?')
+    .all(to, to, prevFrom, to) as { s: number; k: string; name: string; j: number; l: number }[];
+  const firstSeen = new Map((db.prepare('SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions GROUP BY k').all() as { k: string; t: number }[]).map((r) => [r.k, r.t]));
+  const clip = (j: number, l: number, a: number, b: number) => Math.max(0, Math.min(l, b) - Math.max(j, a)) / 3600_000;
+  const incidents = incidentsSince(from, undefined, to).filter((i) => !i.planned);
+  const tzName = tz();
+
+  const perServer: DigestServer[] = servers.map((sv) => {
+    const mine = visits.filter((v) => v.s === sv.id);
+    const cur = mine.filter((v) => v.l > from);
+    const prev = mine.filter((v) => v.j < from);
+    const peak = db.prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? AND ts <= ? ORDER BY players DESC, ts DESC LIMIT 1').get(sv.id, from, to) as { players: number; ts: number } | undefined;
+    const up = db.prepare('SELECT SUM(up) AS u, SUM(total) AS t FROM uptime_daily WHERE server_id = ? AND day >= ?').get(sv.id, new Date(from).toISOString().slice(0, 10)) as { u: number | null; t: number | null };
+    const inc = incidents.filter((i) => i.serverId === sv.id);
+    return {
+      id: sv.id,
+      name: sv.name,
+      game: sv.game,
+      players: new Set(cur.map((v) => v.k)).size,
+      prevPlayers: new Set(prev.map((v) => v.k)).size,
+      peak: peak?.players ?? 0,
+      peakAt: peak?.ts ?? null,
+      hours: Math.round(cur.reduce((n, v) => n + clip(v.j, v.l, from, to), 0)),
+      uptime: up.t ? Math.round((up.u! / up.t) * 1000) / 10 : null,
+      incidents: inc.length,
+      downMinutes: inc.reduce((n, i) => n + Math.round((Math.min(i.end ?? to, to) - Math.max(i.start, from)) / 60_000), 0),
+    };
+  });
+
+  const cur = visits.filter((v) => v.l > from);
+  const prev = visits.filter((v) => v.j < from);
+  const days = Array.from({ length: 7 }, (_, i) => localParts(from + (i + 0.5) * DAY, tzName).day);
+  const byDay = new Map(days.map((d) => [d, new Set<string>()]));
+  for (const v of cur) byDay.get(localParts(Math.max(v.j, from), tzName).day)?.add(v.k);
+  const per = new Map<string, { name: string; hours: number }>();
+  for (const v of cur) {
+    const p = per.get(v.k) ?? { name: v.name, hours: 0 };
+    p.hours += clip(v.j, v.l, from, to);
+    per.set(v.k, p);
+  }
+  const best = [...perServer].sort((a, b) => b.peak - a.peak)[0];
+  const ups = perServer.map((s) => s.uptime).filter((v): v is number => v != null);
+  return {
+    from,
+    to,
+    totals: {
+      players: new Set(cur.map((v) => v.k)).size,
+      prevPlayers: new Set(prev.map((v) => v.k)).size,
+      peak: best?.peak ?? 0,
+      peakAt: best?.peakAt ?? null,
+      peakServer: best && best.peak > 0 ? best.name : null,
+      hours: Math.round(cur.reduce((n, v) => n + clip(v.j, v.l, from, to), 0)),
+      prevHours: Math.round(prev.reduce((n, v) => n + clip(v.j, v.l, prevFrom, from), 0)),
+      uptime: ups.length ? Math.round((ups.reduce((a, b) => a + b, 0) / ups.length) * 10) / 10 : null,
+      incidents: incidents.length,
+      newPlayers: new Set(cur.filter((v) => (firstSeen.get(v.k) ?? 0) > from).map((v) => v.k)).size,
+    },
+    days: days.map((day) => ({ day, players: byDay.get(day)?.size ?? 0 })),
+    servers: perServer,
+    top: [...per.values()].sort((a, b) => b.hours - a.hours).slice(0, 5).map((p) => ({ name: p.name, hours: Math.round(p.hours * 10) / 10 })),
+  };
+}
+
+const delta = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
+const deltaText = (d: number | null) => (d == null ? '' : d === 0 ? ' (как неделей раньше)' : ` (${d > 0 ? '+' : '−'}${Math.abs(d)}% к прошлой неделе)`);
+const dateRu = (t: number) => new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: tz() });
+
+// ---------- the picture ----------
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export async function renderDigest(d: Digest): Promise<Buffer> {
+  const W = 1200;
+  const H = 675;
+  const canvas = new Canvas(W, H);
+  const ctx: any = canvas.getContext('2d');
+  const b = brand();
+  const accent = /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#5a4bd1';
+
+  // background: deep night with the brand colour glowing from the top left
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#15122b');
+  bg.addColorStop(1, '#0b0a16');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(160, 40, 10, 160, 40, 700);
+  glow.addColorStop(0, `${accent}88`);
+  glow.addColorStop(1, `${accent}00`);
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 44px ${SANS}`;
+  ctx.fillText(`Неделя на ${b.name}`, 56, 92);
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.font = `600 22px ${SANS}`;
+  ctx.fillText(`${dateRu(d.from)} – ${dateRu(d.to)}`, 56, 128);
+
+  // four numbers
+  const stats: [string, string, string][] = [
+    [String(d.totals.players), 'игроков', deltaText(delta(d.totals.players, d.totals.prevPlayers)).replace(/[()]/g, '').trim()],
+    [String(d.totals.peak), 'пик онлайна', d.totals.peakServer ?? ''],
+    [d.totals.hours.toLocaleString('ru-RU'), 'часов в игре', deltaText(delta(d.totals.hours, d.totals.prevHours)).replace(/[()]/g, '').trim()],
+    [d.totals.uptime == null ? '–' : `${String(d.totals.uptime).replace('.', ',')}%`, 'доступность', d.totals.incidents ? `${d.totals.incidents} сбоев` : 'без сбоев'],
+  ];
+  stats.forEach(([v, k, hint], i) => {
+    const x = 56 + i * 276;
+    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    ctx.beginPath();
+    ctx.roundRect(x, 160, 256, 140, 22);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 52px ${SANS}`;
+    ctx.fillText(v, x + 22, 228);
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.font = `bold 20px ${SANS}`;
+    ctx.fillText(k, x + 22, 260);
+    ctx.fillStyle = hint.startsWith('−') ? '#ff8a8a' : hint.startsWith('+') ? '#7ee2a8' : 'rgba(255,255,255,.55)';
+    ctx.font = `600 15px ${SANS}`;
+    let short = hint;
+    while (short.length > 3 && ctx.measureText(short).width > 220) short = short.slice(0, -1);
+    ctx.fillText(short === hint ? short : `${short}…`, x + 22, 286);
+  });
+
+  // players per day
+  const max = Math.max(1, ...d.days.map((x) => x.players));
+  const bx = 56;
+  const by = 340;
+  const bw = 520;
+  const bh = 270;
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.font = `bold 18px ${SANS}`;
+  ctx.fillText('Игроков в день', bx, by);
+  const slot = bw / 7;
+  d.days.forEach((x, i) => {
+    const h = Math.max(4, ((bh - 70) * x.players) / max);
+    const gx = bx + i * slot + 10;
+    const gy = by + bh - 40 - h;
+    const g = ctx.createLinearGradient(0, gy, 0, gy + h);
+    g.addColorStop(0, accent);
+    g.addColorStop(1, `${accent}66`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.roundRect(gx, gy, slot - 20, h, 10);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 17px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(x.players), gx + (slot - 20) / 2, gy - 8);
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.font = `600 15px ${SANS}`;
+    const [, m, day] = x.day.split('-');
+    ctx.fillText(`${Number(day)}.${m}`, gx + (slot - 20) / 2, by + bh - 12);
+    ctx.textAlign = 'left';
+  });
+
+  // servers
+  const sx = 640;
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.font = `bold 18px ${SANS}`;
+  ctx.fillText('Серверы', sx, by);
+  d.servers.slice(0, 5).forEach((s, i) => {
+    const y = by + 22 + i * 50;
+    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    ctx.beginPath();
+    ctx.roundRect(sx, y, 504, 42, 12);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 18px ${SANS}`;
+    let name = s.name;
+    while (name.length > 3 && ctx.measureText(name).width > 250) name = name.slice(0, -1);
+    ctx.fillText(name === s.name ? name : `${name}…`, sx + 14, y + 28);
+    ctx.font = `600 16px ${SANS}`;
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fillText(`${s.players} игр.`, sx + 290, y + 28);
+    const ok = s.incidents === 0;
+    ctx.fillStyle = ok ? '#7ee2a8' : s.downMinutes >= 60 ? '#ff8a8a' : '#ffd27a';
+    ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 390, y + 28);
+  });
+  if (d.top.length) {
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.font = `600 16px ${SANS}`;
+    const line = `Больше всех играли: ${d.top.slice(0, 3).map((p) => `${p.name} (${Math.round(p.hours)} ч)`).join(', ')}`;
+    let t = line;
+    while (t.length > 10 && ctx.measureText(t).width > 504) t = t.slice(0, -1);
+    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + Math.min(5, d.servers.length) * 50 + 22);
+  }
+  return canvas.toBuffer('png');
+}
+
+// ---------- the message ----------
+const sign = (to: number) => crypto.createHmac('sha256', JWT_SECRET).update(`digest:${to}`).digest('hex').slice(0, 20);
+
+export function digestMessage(d: Digest) {
+  const base = publicBase();
+  const t = d.totals;
+  const lines = [
+    `👥 **${t.players}** ${t.players === 1 ? 'игрок' : 'игроков'}${deltaText(delta(t.players, t.prevPlayers))}, из них новых **${t.newPlayers}**`,
+    `🔥 Пик онлайна **${t.peak}**${t.peakServer ? ` на ${t.peakServer}` : ''}`,
+    `⏱️ **${t.hours.toLocaleString('ru-RU')}** часов в игре${deltaText(delta(t.hours, t.prevHours))}`,
+    `🟢 Доступность **${t.uptime == null ? '–' : `${String(t.uptime).replace('.', ',')}%`}**${t.incidents ? `, сбоев: ${t.incidents}` : ', без сбоев'}`,
+  ];
+  if (d.top.length) lines.push(`🏆 Больше всех играли: ${d.top.slice(0, 3).map((p) => `**${p.name}** (${Math.round(p.hours)} ч)`).join(', ')}`);
+  return {
+    content: '',
+    mention: 'none' as const,
+    embed: {
+      title: `📊 Неделя на ${brand().name}: ${dateRu(d.from)} – ${dateRu(d.to)}`,
+      description: lines.join('\n'),
+      color: 0x5865f2,
+      ...(base ? { url: `${base}/status`, image: { url: `${base}/api/digest/${d.to}-${sign(d.to)}.png` } } : {}),
+      footer: { text: 'CoreGSM · итоги недели' },
+      timestamp: new Date(d.to).toISOString(),
+    },
+  };
+}
+
+export function sendDigest(now = Date.now()): boolean {
+  const s = digestSettings();
+  const channel = s.channelId || alertSettings().channelId;
+  if (!channel) return false;
+  enqueueAlert('digest', 'Итоги недели', digestMessage(buildDigest(now)), channel);
+  setSetting('digest_last_sent', String(now));
+  return true;
+}
+
+/** once every 10 minutes: is it the chosen weekday and hour, and has this week's digest not gone out yet? */
+export function digestDue(now = Date.now()): boolean {
+  const s = digestSettings();
+  if (!s.enabled) return false;
+  const p = localParts(now, tz());
+  return p.dow === s.weekday && p.hour === s.hour && now - s.lastSent > 2 * DAY;
+}
+
+let timer: NodeJS.Timeout | undefined;
+export function startDigestTimer(): void {
+  timer = setInterval(() => {
+    try {
+      if (digestDue()) sendDigest();
+    } catch (e) {
+      console.error('weekly digest failed:', (e as Error).message);
+    }
+  }, 10 * 60_000);
+  timer.unref();
+}
+
+export function registerDigest({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const payload = () => ({ ...digestSettings(), preview: buildDigest() });
+
+  app.get('/api/digest', admin, (_req, res) => res.json(payload()));
+
+  app.put('/api/digest', admin, (req, res) => {
+    const b = z
+      .object({
+        enabled: z.boolean().optional(),
+        channelId: z.string().regex(/^(\d{15,25})?$/).optional(),
+        weekday: z.number().int().min(0).max(6).optional(),
+        hour: z.number().int().min(0).max(23).optional(),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (b.data.enabled && !(b.data.channelId ?? (digestSettings().channelId || alertSettings().channelId))) {
+      return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
+    }
+    if (b.data.enabled !== undefined) setSetting('digest_enabled', b.data.enabled ? '1' : '0');
+    if (b.data.channelId !== undefined) setSetting('digest_channel', b.data.channelId);
+    if (b.data.weekday !== undefined) setSetting('digest_weekday', String(b.data.weekday));
+    if (b.data.hour !== undefined) setSetting('digest_hour', String(b.data.hour));
+    res.json(payload());
+  });
+
+  app.post('/api/digest/send', admin, (_req, res) => {
+    if (!sendDigest()) return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
+    res.json(payload());
+  });
+
+  // the picture of a digest: the administrator's preview, or the signed address in the Discord message
+  app.get('/api/digest/preview.png', admin, async (_req, res, next) => {
+    try {
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).send(await renderDigest(buildDigest()));
+    } catch (e) {
+      next(e);
+    }
+  });
+  app.get('/api/digest/:to(\\d+)-:sig([0-9a-f]{20}).png', async (req, res, next) => {
+    const to = Number(req.params.to);
+    if (req.params.sig !== sign(to) || to > Date.now() + 60_000) return res.status(404).json({ error: 'Не найдено' });
+    try {
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=604800, immutable' }).send(await renderDigest(buildDigest(to)));
+    } catch (e) {
+      next(e);
+    }
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/discordNames.ts" << '__COREGSM_EOF__'
 /** Turns a Discord display name into a panel login (3-32 chars: letters, digits, _ . - and single spaces between words). */
 export const LOGIN_MIN = 3;
@@ -7418,6 +7772,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gsm.ts" << '__COREGSM_EOF__'
 import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
+import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
 import { onSessionsOpened } from './nickOnboarding.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
@@ -7651,6 +8006,8 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   }
   try {
     trackAlerts(s.id, d.online, r.error);
+    // smart alerts measure a working server; planned work is not a symptom
+    if (!maint) trackSmart(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers, ping: r.ping }, ts);
   } catch (e) {
     console.error('alerts failed', (e as Error).message);
   }
@@ -7989,6 +8346,90 @@ export const wrap =
   };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/incidents.ts" << '__COREGSM_EOF__'
+/**
+ * Incidents: the stretches of the poll history in which a server did not answer. A single failed poll that the
+ * poller has not confirmed yet (history.unconfirmed) is not an outage; a stretch inside a maintenance window
+ * (history.maint) is a planned one. Shared by the status page, the server page and the weekly digest.
+ */
+import { db } from './db.js';
+
+export interface Incident {
+  serverId: number;
+  start: number;
+  /** null while the server is still down */
+  end: number | null;
+  minutes: number;
+  /** players on the server at the last poll before it went down */
+  playersBefore: number;
+  planned: boolean;
+}
+
+export const DAY = 86_400_000;
+
+/** every incident that ended after `since` (or is still going on), oldest first */
+export function incidentsSince(since: number, serverId?: number, now = Date.now()): Incident[] {
+  const rows = db
+    .prepare(
+      `SELECT server_id AS s, ts, online, players, COALESCE(unconfirmed, 0) AS u, COALESCE(maint, 0) AS m
+       FROM history WHERE ts > ? ${serverId != null ? 'AND server_id = ?' : ''} ORDER BY server_id, ts`,
+    )
+    .all(...(serverId != null ? [since - DAY, serverId] : [since - DAY])) as { s: number; ts: number; online: number; players: number; u: number; m: number }[];
+  const out: Incident[] = [];
+  let cur: { serverId: number; start: number; playersBefore: number; planned: boolean } | null = null;
+  let lastServer = -1;
+  let lastPlayers = 0;
+  const close = (end: number | null) => {
+    if (!cur) return;
+    const stop = end ?? now;
+    if (stop > since) out.push({ ...cur, end, minutes: Math.max(1, Math.round((stop - cur.start) / 60_000)) });
+    cur = null;
+  };
+  for (const r of rows) {
+    if (r.s !== lastServer) {
+      // the previous server's history ended while it was down: still going on
+      close(null);
+      lastServer = r.s;
+      lastPlayers = 0;
+    }
+    const down = !r.online && !r.u;
+    if (down) {
+      if (!cur) cur = { serverId: r.s, start: r.ts, playersBefore: lastPlayers, planned: !!r.m };
+      else if (r.m) cur.planned = true;
+    } else {
+      if (cur) close(r.ts);
+      if (r.online) lastPlayers = r.players;
+    }
+  }
+  close(null);
+  return out;
+}
+
+/** minutes of downtime per UTC day (the days of uptime_daily), unplanned and planned apart */
+export function downtimeByDay(list: Incident[], now = Date.now()): Map<string, { down: number; planned: number; count: number }> {
+  const out = new Map<string, { down: number; planned: number; count: number }>();
+  for (const i of list) {
+    const end = i.end ?? now;
+    let t = i.start;
+    let first = true;
+    while (t < end) {
+      const dayEnd = (Math.floor(t / DAY) + 1) * DAY;
+      const stop = Math.min(end, dayEnd);
+      const key = `${i.serverId}|${new Date(t).toISOString().slice(0, 10)}`;
+      const v = out.get(key) ?? { down: 0, planned: 0, count: 0 };
+      const min = (stop - t) / 60_000;
+      if (i.planned) v.planned += min;
+      else v.down += min;
+      if (first) v.count++;
+      first = false;
+      out.set(key, v);
+      t = stop;
+    }
+  }
+  return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/index.ts" << '__COREGSM_EOF__'
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
@@ -8003,6 +8444,7 @@ import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
+import { registerDigest, startDigestTimer } from './digest.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -8085,6 +8527,7 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
+registerDigest({ app, admin });
 registerSecurity({
   app,
   admin,
@@ -8136,11 +8579,33 @@ const server = app.listen(PORT, () => {
   }
   startPoller(POLL_MS);
   startBackupTimer();
+  startDigestTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 installShutdown(server);
 
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/localTime.ts" << '__COREGSM_EOF__'
+/** Weekday, hour and day of a moment in a time zone (the panel's own, for analytics and the weekly digest). */
+
+const fmtCache = new Map<string, Intl.DateTimeFormat>();
+/** weekday (0 = Monday), hour and the day key "YYYY-MM-DD" of a moment in the panel's time zone */
+export function localParts(ts: number, tz: string): { dow: number; hour: number; day: string } {
+  let f = fmtCache.get(tz);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
+    } catch {
+      f = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
+    }
+    fmtCache.set(tz, f);
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday);
+  return { dow: Math.max(0, dow), hour: Number(p.hour) % 24, day: `${p.year}-${p.month}-${p.day}` };
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/loginGuard.ts" << '__COREGSM_EOF__'
@@ -8583,6 +9048,20 @@ CREATE TABLE IF NOT EXISTS login_guard (
   PRIMARY KEY (scope, key)
 );
 CREATE INDEX IF NOT EXISTS idx_login_guard_expires ON login_guard(expires_at);`),
+  },
+  {
+    version: 7,
+    name: 'smart_state',
+    // smart alerts: since when a condition holds (low online, high ping, almost full) and when it was last reported
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS smart_state (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  since INTEGER,
+  last_alert INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (server_id, kind)
+);`),
   },
 ];
 
@@ -11684,6 +12163,7 @@ __COREGSM_EOF__
 import express from 'express';
 import { viewer } from '../auth.js';
 import { db, getSetting } from '../db.js';
+import { localParts } from '../localTime.js';
 import { vrRankIdFor } from '../profile.js';
 
 export const router = express.Router();
@@ -11700,23 +12180,6 @@ export const SESSION_BUCKETS = [
 ] as const;
 
 const timeZone = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
-
-const fmtCache = new Map<string, Intl.DateTimeFormat>();
-/** weekday (0 = Monday), hour and the day key "YYYY-MM-DD" of a moment in the panel's time zone */
-export function localParts(ts: number, tz: string): { dow: number; hour: number; day: string } {
-  let f = fmtCache.get(tz);
-  if (!f) {
-    try {
-      f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
-    } catch {
-      f = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
-    }
-    fmtCache.set(tz, f);
-  }
-  const p = Object.fromEntries(f.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
-  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday);
-  return { dow: Math.max(0, dow), hour: Number(p.hour) % 24, day: `${p.year}-${p.month}-${p.day}` };
-}
 
 const median = (xs: number[]) => {
   if (!xs.length) return null;
@@ -12207,6 +12670,7 @@ import { queryServer, refreshServer } from '../gsm.js';
 import { wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
+import { downtimeByDay, incidentsSince } from '../incidents.js';
 import { getServer, publicServer, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
 
@@ -12521,8 +12985,28 @@ router.get('/api/status', viewer, (req, res) => {
   }
   const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
   const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+  // outages of the 30 days: minutes per day for the bars, and the list of incidents under them
+  const incidents = incidentsSince(now - 30 * 86400_000, undefined, now);
+  const downtime = downtimeByDay(incidents, now);
+  const shown = new Map(servers.map((sv) => [sv.id, sv]));
+  // response time: hourly average ping of the last 24 hours
+  const latency = new Map<number, (number | null)[]>();
+  const hourNow = Math.floor(now / 3600_000);
+  for (const r of db
+    .prepare('SELECT server_id AS id, ts / 3600000 AS h, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY id, h')
+    .all(now - 24 * 3600_000) as { id: number; h: number; a: number }[]) {
+    const arr = latency.get(r.id) ?? Array<number | null>(24).fill(null);
+    const i = 23 - (hourNow - r.h);
+    if (i >= 0 && i < 24) arr[i] = Math.round(r.a);
+    latency.set(r.id, arr);
+  }
   res.json({
     updatedAt: last ?? now,
+    incidents: incidents
+      .filter((i) => shown.has(i.serverId))
+      .reverse()
+      .slice(0, 50)
+      .map((i) => ({ ...i, serverName: shown.get(i.serverId)!.name, game: shown.get(i.serverId)!.game })),
     servers: servers.map((sv) => {
       let up = 0;
       let total = 0;
@@ -12532,7 +13016,8 @@ router.get('/api/status', viewer, (req, res) => {
           up += r.up;
           total += r.total;
         }
-        return { day, pct: r ? pct(r.up, r.total) : null };
+        const dt = downtime.get(`${sv.id}|${day}`);
+        return { day, pct: r ? pct(r.up, r.total) : null, down: dt ? Math.round(dt.down) : 0, planned: dt ? Math.round(dt.planned) : 0, incidents: dt?.count ?? 0 };
       });
       return {
         id: sv.id,
@@ -12546,6 +13031,7 @@ router.get('/api/status', viewer, (req, res) => {
         uptime30: pct(up, total),
         days: dd,
         avgPing: pings.get(sv.id) ?? null,
+        latency: latency.get(sv.id) ?? [],
       };
     }),
   });
@@ -13710,6 +14196,132 @@ export const brand = () => ({
 });
 
 export const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/smartAlerts.ts" << '__COREGSM_EOF__'
+/**
+ * Smart alerts: messages to the alerts channel about a server that answers but is not well. Each kind is switched on
+ * by itself in the panel and fires only when its condition has held for a while, then rests for a cooldown:
+ *   low   far fewer players than usual for this weekday and hour (under 30% of the average of the last four weeks,
+ *         when that average is at least 5) for 20 minutes
+ *   ping  the ping is over twice the day's average and over 150 ms for 15 minutes
+ *   full  90% of the slots or more are taken for 15 minutes
+ */
+import { alertSettings, enqueueAlert } from './alerts.js';
+import { db, EFFECTIVE_NAME, getSetting } from './db.js';
+import { gameLabel } from './games.js';
+
+export type SmartKind = 'low' | 'ping' | 'full';
+export const SMART_KINDS: SmartKind[] = ['low', 'ping', 'full'];
+
+const RULES: Record<SmartKind, { holdMin: number; cooldownH: number; color: number }> = {
+  low: { holdMin: 20, cooldownH: 6, color: 0xf5b01e },
+  ping: { holdMin: 15, cooldownH: 3, color: 0xf5b01e },
+  full: { holdMin: 15, cooldownH: 12, color: 0x5865f2 },
+};
+
+export const smartEnabled = (k: SmartKind) => getSetting(`alerts_smart_${k}`) === '1';
+
+// the usual players for an hour of the week and the day's ping are read once an hour per server
+const usualCache = new Map<string, { at: number; v: number | null }>();
+function usualPlayers(serverId: number, now: number): number | null {
+  const how = new Date(now).getUTCDay() * 24 + new Date(now).getUTCHours();
+  const key = `${serverId}|${how}`;
+  const c = usualCache.get(key);
+  if (c && now - c.at < 3600_000) return c.v;
+  const r = db
+    .prepare(
+      `SELECT AVG(players) AS a, COUNT(*) AS n FROM history
+       WHERE server_id = ? AND online = 1 AND ts > ? AND ts < ? AND CAST(strftime('%w', ts / 1000, 'unixepoch') AS INTEGER) * 24 + CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) = ?`,
+    )
+    .get(serverId, now - 28 * 86400_000, now - 86400_000, how) as { a: number | null; n: number };
+  // at least two weeks' worth of that hour, otherwise there is nothing to compare with
+  const v = r.n >= 40 && r.a != null ? r.a : null;
+  usualCache.set(key, { at: now, v });
+  return v;
+}
+const pingCache = new Map<number, { at: number; v: number | null }>();
+function usualPing(serverId: number, now: number): number | null {
+  const c = pingCache.get(serverId);
+  if (c && now - c.at < 3600_000) return c.v;
+  const r = db.prepare('SELECT AVG(ping) AS a, COUNT(*) AS n FROM history WHERE server_id = ? AND online = 1 AND ping IS NOT NULL AND ts > ?').get(serverId, now - 86400_000) as { a: number | null; n: number };
+  const v = r.n >= 20 && r.a != null ? r.a : null;
+  pingCache.set(serverId, { at: now, v });
+  return v;
+}
+
+/** whether each condition holds now, with the numbers for the message */
+export function smartConditions(
+  serverId: number,
+  s: { online: boolean; players: number; maxPlayers: number; ping: number | null },
+  now = Date.now(),
+): Record<SmartKind, { on: boolean; text: string }> {
+  const usual = s.online ? usualPlayers(serverId, now) : null;
+  const ping = s.online && s.ping != null ? usualPing(serverId, now) : null;
+  return {
+    low: {
+      on: s.online && usual != null && usual >= 5 && s.players < usual * 0.3,
+      text: `Сейчас ${s.players} ${s.players === 1 ? 'игрок' : 'игроков'}, а обычно в это время около ${Math.round(usual ?? 0)}.`,
+    },
+    ping: {
+      on: s.online && s.ping != null && ping != null && s.ping > 150 && s.ping > ping * 2,
+      text: `Пинг ${s.ping} мс, а за сутки в среднем ${Math.round(ping ?? 0)} мс.`,
+    },
+    full: {
+      on: s.online && s.maxPlayers > 0 && s.players >= s.maxPlayers * 0.9,
+      text: `Занято ${s.players} из ${s.maxPlayers} мест: новым игрокам скоро будет некуда зайти. Возможно, пора добавить слоты.`,
+    },
+  };
+}
+
+const TITLE: Record<SmartKind, (n: string) => string> = {
+  low: (n) => `📉 На ${n} необычно мало игроков`,
+  ping: (n) => `🐢 ${n}: вырос пинг`,
+  full: (n) => `🔥 ${n} почти заполнен`,
+};
+
+/** Called after every confirmed poll of a server (not during maintenance). */
+export function trackSmart(serverId: number, s: { online: boolean; players: number; maxPlayers: number; ping: number | null }, now = Date.now()): void {
+  const a = alertSettings();
+  if (!a.enabled || !a.channelId || !SMART_KINDS.some(smartEnabled)) return;
+  const cond = smartConditions(serverId, s, now);
+  const get = db.prepare('SELECT since, last_alert FROM smart_state WHERE server_id = ? AND kind = ?');
+  const put = db.prepare(
+    'INSERT INTO smart_state (server_id, kind, since, last_alert) VALUES (?, ?, ?, ?) ON CONFLICT (server_id, kind) DO UPDATE SET since = excluded.since, last_alert = excluded.last_alert',
+  );
+  for (const k of SMART_KINDS) {
+    if (!smartEnabled(k)) continue;
+    const st = (get.get(serverId, k) as { since: number | null; last_alert: number } | undefined) ?? { since: null, last_alert: 0 };
+    if (!cond[k].on) {
+      if (st.since != null) put.run(serverId, k, null, st.last_alert);
+      continue;
+    }
+    const since = st.since ?? now;
+    const rule = RULES[k];
+    if (now - since >= rule.holdMin * 60_000 && now - st.last_alert >= rule.cooldownH * 3600_000) {
+      const i = db
+        .prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.game, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`)
+        .get(serverId) as { n: string; game: string; display_address: string; host: string; port: number } | undefined;
+      if (i) {
+        enqueueAlert(k, i.n, {
+          content: '',
+          mention: 'none',
+          embed: {
+            title: TITLE[k](i.n),
+            description: `${cond[k].text}\n📍 \`${i.display_address || `${i.host}:${i.port}`}\``,
+            color: rule.color,
+            author: { name: `🎮 ${gameLabel(i.game)}` },
+            footer: { text: 'CoreGSM · умное оповещение' },
+            timestamp: new Date(now).toISOString(),
+          },
+        });
+      }
+      put.run(serverId, k, since, now);
+    } else if (st.since == null) {
+      put.run(serverId, k, since, st.last_alert);
+    }
+  }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/subscriptions.ts" << '__COREGSM_EOF__'
@@ -38803,6 +39415,22 @@ export interface StatusDay {
   day: string;
   /** null = no data */
   pct: number | null;
+  /** minutes the server was down that day (unplanned / in a maintenance window) and how many outages began */
+  down?: number;
+  planned?: number;
+  incidents?: number;
+}
+
+/** a stretch in which a server did not answer; end null = still down */
+export interface StatusIncident {
+  serverId: number;
+  serverName: string;
+  game: string;
+  start: number;
+  end: number | null;
+  minutes: number;
+  playersBefore: number;
+  planned: boolean;
 }
 
 export interface StatusServer {
@@ -38818,11 +39446,15 @@ export interface StatusServer {
   /** 30 entries, oldest first */
   days: StatusDay[];
   avgPing: number | null;
+  /** hourly average ping of the last 24 hours, oldest first (null = no answer that hour) */
+  latency?: (number | null)[];
 }
 
 export interface StatusInfo {
   updatedAt: number;
   servers: StatusServer[];
+  /** newest first, 30 days */
+  incidents?: StatusIncident[];
 }
 
 // ---------- backups ----------
@@ -40244,6 +40876,111 @@ export default function DeliveryList() {
           ))}
         </ul>
       )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DigestSection.tsx" << '__COREGSM_EOF__'
+/** Admin → Оповещения: the weekly digest (settings, the numbers of the coming digest and its picture). */
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { ChannelPicker } from './ChannelPicker';
+import { ErrorLine, Section, Switch, ago, plural, toast } from '../ui';
+
+interface DigestInfo {
+  enabled: boolean;
+  channelId: string;
+  weekday: number;
+  hour: number;
+  lastSent: number;
+  preview: {
+    totals: { players: number; prevPlayers: number; peak: number; peakServer: string | null; hours: number; prevHours: number; uptime: number | null; incidents: number; newPlayers: number };
+  };
+}
+
+const WEEKDAYS = ['понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу', 'воскресенье'];
+
+export default function DigestSection({ alertsChannel }: { alertsChannel: string }) {
+  const [info, setInfo] = useState<DigestInfo | null>(null);
+  const [error, setError] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [imgKey, setImgKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api<DigestInfo>('/digest').then(setInfo).catch((e: Error) => setError(e.message));
+  }, []);
+
+  const save = async (patch: Partial<Pick<DigestInfo, 'enabled' | 'channelId' | 'weekday' | 'hour'>>, done?: string) => {
+    await api<DigestInfo>('/digest', 'PUT', patch)
+      .then((d) => { setInfo(d); setError(''); if (done) toast(done); })
+      .catch((e: Error) => setError(e.message));
+  };
+  const sendNow = async () => {
+    setBusy(true);
+    await api<DigestInfo>('/digest/send', 'POST')
+      .then((d) => { setInfo(d); toast('Итоги недели поставлены в очередь: бот отправит их в канал'); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setBusy(false));
+  };
+
+  if (!info) return <Section title="Итоги недели">{error ? <ErrorLine text={error} /> : <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" />}</Section>;
+  const t = info.preview.totals;
+  const channel = info.channelId || alertsChannel;
+  return (
+    <Section title="Итоги недели" description="Раз в неделю бот публикует картинку с итогами: игроки, пик, часы в игре, доступность серверов и самые активные игроки.">
+      <ErrorLine text={error} />
+      <label className="flex cursor-pointer items-start gap-3">
+        <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Итоги недели включены' : 'Итоги недели выключены')} />
+        <span>
+          <span className="block font-extrabold">Публиковать итоги недели</span>
+          <span className="block text-sm font-semibold text-mute">
+            {channel ? `В ${WEEKDAYS[info.weekday]} в ${String(info.hour).padStart(2, '0')}:00` : 'Нужен канал: выберите его ниже или в настройках оповещений'}
+            {info.lastSent ? ` · последний раз ${ago(info.lastSent)}` : ''}
+          </span>
+        </span>
+      </label>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label htmlFor="digest-day" className="label">День</label>
+          <select id="digest-day" className="input" value={info.weekday} onChange={(e) => void save({ weekday: Number(e.target.value) }, 'Сохранено')}>
+            {WEEKDAYS.map((d, i) => <option key={d} value={i}>{['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][i]}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="digest-hour" className="label">Время</label>
+          <select id="digest-hour" className="input" value={info.hour} onChange={(e) => void save({ hour: Number(e.target.value) }, 'Сохранено')}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <span className="label">Канал</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="font-black">{info.channelId ? `Канал ${info.channelId}` : alertsChannel ? 'тот же, что для оповещений' : 'не выбран'}</span>
+          <button className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>Выбрать другой</button>
+          {info.channelId && <button className="btn-link text-sm" onClick={() => void save({ channelId: '' }, 'Итоги пойдут в канал оповещений')}>Как у оповещений</button>}
+        </div>
+        {picking && (
+          <div className="mt-3">
+            <ChannelPicker id="digest-channel" value={info.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }, 'Канал сохранён'); setPicking(false); } }} />
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-ui-lg bg-soft p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm font-extrabold text-mute">Так будут выглядеть итоги последних 7 дней</span>
+          <span className="flex flex-wrap gap-2">
+            <button className="btn btn-soft btn-sm" onClick={() => setImgKey((k) => k + 1)}>Обновить картинку</button>
+            <button className="btn btn-sm" disabled={busy || !channel} onClick={() => void sendNow()}>Отправить сейчас</button>
+          </span>
+        </div>
+        <img key={imgKey} src={`/api/digest/preview.png?k=${imgKey}`} alt={`Итоги недели: ${t.players} ${plural(t.players, ['игрок', 'игрока', 'игроков'])}, пик ${t.peak}, ${t.hours} часов в игре`} className="w-full rounded-ui-lg" loading="lazy" />
+      </div>
     </Section>
   );
 }
@@ -53936,6 +54673,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Alerts.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
+import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
@@ -53948,14 +54686,25 @@ interface AlertsInfo {
   guildName: string | null;
   afterMin: number;
   mention: 'none' | 'here' | 'everyone';
-  recent: { id: number; kind: 'down' | 'up' | 'test'; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
+  smart?: { low: boolean; ping: boolean; full: boolean };
+  recent: { id: number; kind: keyof typeof KIND; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
 }
 
 const KIND = {
   down: { label: 'Сервер упал', cls: 'pill-bad' },
   up: { label: 'Сервер вернулся', cls: 'pill-ok' },
   test: { label: 'Проверка', cls: 'pill-mute' },
+  low: { label: 'Мало игроков', cls: 'pill-warn' },
+  ping: { label: 'Вырос пинг', cls: 'pill-warn' },
+  full: { label: 'Почти заполнен', cls: 'pill-mute' },
+  digest: { label: 'Итоги недели', cls: 'pill-ok' },
 } as const;
+
+const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
+  { key: 'low', title: 'Необычно мало игроков', text: 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).' },
+  { key: 'ping', title: 'Вырос пинг', text: 'Пинг 15 минут выше 150 мс и вдвое выше среднего за сутки.' },
+  { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
+];
 
 /** Messages to a Discord channel when a game server stops answering and when it is back. */
 export default function AlertsPage() {
@@ -53970,7 +54719,7 @@ export default function AlertsPage() {
   };
   usePoll(load, 10_000);
 
-  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention'>>, done?: string) => {
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>>, done?: string) => {
     await api<AlertsInfo>('/alerts', 'PUT', patch)
       .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
@@ -54044,6 +54793,23 @@ export default function AlertsPage() {
           </div>
         </Section>
       )}
+
+      {info && (
+        <Section title="Умные оповещения" description="Сервер работает, но что-то не так. Каждое правило срабатывает, только если условие держится какое-то время, и потом молчит несколько часов.">
+          {SMART.map((r) => (
+            <label key={r.key} className="flex cursor-pointer items-start gap-3">
+              <Switch className="mt-0.5" checked={!!info.smart?.[r.key]} disabled={!info.enabled} onChange={(on) => void save({ smart: { ...(info.smart ?? { low: false, ping: false, full: false }), [r.key]: on } }, on ? 'Включено' : 'Выключено')} />
+              <span>
+                <span className="block font-extrabold">{r.title}</span>
+                <span className="block text-sm font-semibold text-mute">{r.text}</span>
+              </span>
+            </label>
+          ))}
+          {!info.enabled && <p className="text-sm font-semibold text-mute">Сначала включите оповещения выше.</p>}
+        </Section>
+      )}
+
+      <DigestSection alertsChannel={info?.channelId ?? ''} />
 
       <Section title="Последние оповещения">
         {!info && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />}
@@ -58808,85 +59574,198 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Status.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
-import { api, type StatusDay, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, StatusPill, ago, usePoll } from '../ui';
-
-const dayColor = (pct: number | null) =>
-  pct == null ? 'bg-line' : pct >= 99.9 ? 'bg-ok' : pct >= 95 ? 'bg-ok/60' : pct >= 80 ? 'bg-warn' : 'bg-bad';
+import { useMemo, useState } from 'react';
+import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
+import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import '../styles/status.css';
 
 const fmtDay = (day: string) => {
   const d = new Date(`${day}T12:00:00`);
-  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 };
 const fmtPct = (p: number) => `${(Math.round(p * 10) / 10).toLocaleString('ru-RU')}%`;
-const dayTitle = (d: StatusDay) => (d.pct == null ? `${fmtDay(d.day)}: нет данных` : `${fmtDay(d.day)}: ${fmtPct(d.pct)}`);
+const dur = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min / 60)} ч${min % 60 ? ` ${min % 60} мин` : ''}`);
+
+/** the colour of a day: by how long the server was down, not by a percentage that hides a 40-minute outage */
+function dayTone(d: StatusDay): 'none' | 'ok' | 'blip' | 'warn' | 'bad' | 'planned' {
+  if (d.pct == null) return 'none';
+  const down = d.down ?? 0;
+  if (down >= 60) return 'bad';
+  if (down >= 15) return 'warn';
+  if (down > 0) return 'blip';
+  if ((d.planned ?? 0) > 0) return 'planned';
+  return 'ok';
+}
+
+function dayText(d: StatusDay): string {
+  if (d.pct == null) return `${fmtDay(d.day)}: нет данных`;
+  const parts = [`${fmtDay(d.day)}: доступен ${fmtPct(d.pct)}`];
+  if (d.down) parts.push(`простой ${dur(d.down)}${d.incidents && d.incidents > 1 ? `, ${d.incidents} ${plural(d.incidents, ['сбой', 'сбоя', 'сбоев'])}` : ''}`);
+  else parts.push('без сбоев');
+  if (d.planned) parts.push(`плановые работы ${dur(d.planned)}`);
+  return parts.join(' · ');
+}
 
 function UptimeBar({ s }: { s: StatusServer }) {
-  const withData = s.days.filter((d) => d.pct != null);
-  const summary = s.uptime30 == null
-    ? 'Нет данных об аптайме за 30 дней'
-    : `Аптайм за 30 дней: ${fmtPct(s.uptime30)}; дней без данных: ${s.days.length - withData.length}`;
+  const [hover, setHover] = useState<number | null>(null);
+  const summary = s.uptime30 == null ? 'Нет данных об аптайме за 30 дней' : `Аптайм за 30 дней: ${fmtPct(s.uptime30)}`;
   return (
-    <div className="flex h-8 w-full min-w-0 gap-[2px] sm:gap-[3px]" role="img" aria-label={summary}>
-      {s.days.map((d) => (
-        <span key={d.day} title={dayTitle(d)} className={`h-full min-w-0 flex-1 rounded-[3px] ${dayColor(d.pct)}`} />
-      ))}
+    <div>
+      <div className="st-bars" role="img" aria-label={summary} onMouseLeave={() => setHover(null)}>
+        {s.days.map((d, i) => (
+          <span key={d.day} className={`st-day is-${dayTone(d)} ${hover === i ? 'is-hover' : ''}`} title={dayText(d)} onMouseEnter={() => setHover(i)} />
+        ))}
+      </div>
+      <div className="st-bars-foot">
+        <span>30 дней назад</span>
+        <span className="st-bars-read" aria-live="polite">{hover != null ? dayText(s.days[hover]) : ''}</span>
+        <span>сегодня</span>
+      </div>
+    </div>
+  );
+}
+
+/** the hourly average ping of the day */
+function Latency({ s }: { s: StatusServer }) {
+  const vals = (s.latency ?? []).filter((v): v is number => v != null);
+  if (vals.length < 2) return null;
+  let prev = vals[0];
+  const filled = (s.latency ?? []).map((v) => (v == null ? prev : (prev = v)));
+  const tone = (s.avgPing ?? 0) > 100 ? 'rgb(var(--warn))' : 'rgb(var(--link))';
+  return (
+    <div className="st-lat">
+      <div className="st-lat-k">Отклик за 24 ч</div>
+      <SmoothArea values={filled} color={tone} w={200} h={36} fill={0.2} strokeWidth={1.8} className="h-9" label={`Пинг за 24 часа: от ${Math.min(...vals)} до ${Math.max(...vals)} мс`} />
+      <div className="st-lat-v">{s.avgPing != null ? `${s.avgPing} мс` : '–'}</div>
     </div>
   );
 }
 
 function ServerRow({ s }: { s: StatusServer }) {
+  const incidents30 = s.days.reduce((n, d) => n + (d.incidents ?? 0), 0);
   return (
-    <li className="panel space-y-3 p-4 sm:p-5">
+    <li className="st-server tile tile-in">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <GameAvatar game={s.game} size={40} />
+        <GameAvatar game={s.game} size={44} />
         <div className="min-w-0 flex-1 basis-40">
-          <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} className="block break-words text-[17px] font-extrabold leading-tight hover:text-link">{s.name}</a>
           <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
         </div>
-        {s.online && <span className="text-sm font-bold tabular-nums text-mute">{s.players}/{s.maxPlayers}{s.avgPing != null ? ` · ${s.avgPing} мс` : ''}</span>}
+        {s.online && <span className="text-sm font-bold tabular-nums text-mute">{s.players}/{s.maxPlayers} игроков</span>}
         <StatusPill online={s.online} known lag={s.online && s.avgPing != null && s.avgPing > 100} />
       </div>
-      <div className="flex items-center gap-3">
-        <UptimeBar s={s} />
-        <div className="w-16 shrink-0 text-right text-sm font-black tabular-nums sm:w-20 sm:text-base">
-          {s.uptime30 == null ? <span className="text-mute">–</span> : fmtPct(s.uptime30)}
+      <div className="st-server-body">
+        <div className="min-w-0 flex-1">
+          <UptimeBar s={s} />
         </div>
-      </div>
-      <div className="flex justify-between text-xs font-semibold text-mute">
-        <span>30 дней назад</span>
-        <span>сегодня</span>
+        <div className="st-server-side">
+          <div className="st-up">
+            <div className="st-up-v">{s.uptime30 == null ? '–' : fmtPct(s.uptime30)}</div>
+            <div className="st-up-k">{incidents30 ? `${incidents30} ${plural(incidents30, ['сбой', 'сбоя', 'сбоев'])} за 30 дней` : 'без сбоев за 30 дней'}</div>
+          </div>
+          <Latency s={s} />
+        </div>
       </div>
     </li>
   );
 }
 
-function Banner({ servers }: { servers: StatusServer[] }) {
+function Banner({ data }: { data: StatusInfo }) {
+  const servers = data.servers;
   const total = servers.length;
   const up = servers.filter((s) => s.online).length;
-  const [cls, title] = up === total
-    ? ['bg-okbg text-ok', 'Все серверы работают']
+  const ongoing = (data.incidents ?? []).filter((i) => i.end == null && !i.planned).length;
+  const ups = servers.map((s) => s.uptime30).filter((v): v is number => v != null);
+  const avg = ups.length ? ups.reduce((a, b) => a + b, 0) / ups.length : null;
+  const players = servers.reduce((n, s) => n + (s.online ? s.players : 0), 0);
+  const [tone, title, text] = up === total
+    ? ['ok', 'Все серверы работают', 'Игроки могут заходить на любой сервер.']
     : up === 0
-      ? ['bg-badbg text-bad', 'Все серверы недоступны']
-      : ['bg-warnbg text-warn', 'Часть серверов недоступна'];
+      ? ['bad', 'Все серверы недоступны', 'Мы уже видим проблему: страница обновится сама, когда серверы вернутся.']
+      : ['warn', `${total - up} ${plural(total - up, ['сервер недоступен', 'сервера недоступны', 'серверов недоступны'])}`, 'Остальные работают в обычном режиме.'];
   return (
-    <div className={`flex flex-wrap items-center justify-between gap-2 rounded-3xl px-5 py-4 ${cls}`} role="status">
-      <span className="text-xl font-black">{title}</span>
-      <span className="font-bold">онлайн: {up} из {total}</span>
-    </div>
+    <section className={`st-banner is-${tone}`} role="status">
+      <span className="st-banner-dot" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <h2 className="text-2xl font-black leading-tight sm:text-3xl">{title}</h2>
+        <p className="mt-1 font-semibold opacity-85">{text}</p>
+      </div>
+      <dl className="st-banner-stats">
+        <div><dt>Онлайн</dt><dd>{up} из {total}</dd></div>
+        <div><dt>Игроков</dt><dd>{players}</dd></div>
+        <div><dt>Аптайм 30 дн</dt><dd>{avg == null ? '–' : fmtPct(avg)}</dd></div>
+        {ongoing > 0 && <div><dt>Сбоев сейчас</dt><dd>{ongoing}</dd></div>}
+      </dl>
+    </section>
+  );
+}
+
+function IncidentItem({ i }: { i: StatusIncident }) {
+  const live = i.end == null;
+  const kind = i.planned ? 'planned' : live ? 'live' : 'past';
+  return (
+    <li className={`st-inc is-${kind}`}>
+      <GameAvatar game={i.game} size={36} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-extrabold">{i.serverName}</span>
+          <span className={`st-inc-badge is-${kind}`}>{i.planned ? 'Плановые работы' : live ? 'Продолжается' : 'Решено'}</span>
+        </div>
+        <p className="text-sm font-semibold text-mute">
+          {live ? `Не отвечает ${dur(i.minutes)}, с ${fmtTime(i.start)}` : `Недоступен ${dur(i.minutes)}: ${fmtTime(i.start)} – ${fmtTime(i.end!)}`}
+          {i.playersBefore > 0 && ` · в игре было ${i.playersBefore} ${plural(i.playersBefore, ['игрок', 'игрока', 'игроков'])}`}
+        </p>
+      </div>
+      <time className="shrink-0 text-xs font-bold text-mute" dateTime={new Date(i.start).toISOString()} title={fmtDateTime(i.start)}>{ago(i.start)}</time>
+    </li>
+  );
+}
+
+/** incidents of the 30 days grouped by day, newest first */
+function Incidents({ list }: { list: StatusIncident[] }) {
+  const groups = useMemo(() => {
+    const m = new Map<string, StatusIncident[]>();
+    for (const i of list) {
+      const key = new Date(i.start).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' });
+      m.set(key, [...(m.get(key) ?? []), i]);
+    }
+    return [...m];
+  }, [list]);
+  return (
+    <section className="tile tile-in p-4 sm:p-5">
+      <h2 className="mb-3 text-lg font-extrabold">История сбоев</h2>
+      {list.length === 0 ? (
+        <div className="st-calm">
+          <span aria-hidden>✨</span>
+          <div>
+            <p className="font-extrabold">За 30 дней ни одного сбоя</p>
+            <p className="text-sm font-semibold text-mute">Все серверы отвечали на каждый опрос.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {groups.map(([day, items]) => (
+            <div key={day}>
+              <h3 className="mb-2 text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h3>
+              <ul className="space-y-2">{items.map((i) => <IncidentItem key={`${i.serverId}-${i.start}`} i={i} />)}</ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
 const LEGEND: [string, string][] = [
-  ['bg-ok', '99,9% и выше'],
-  ['bg-ok/60', 'от 95%'],
-  ['bg-warn', 'от 80%'],
-  ['bg-bad', 'ниже 80%'],
-  ['bg-line', 'нет данных'],
+  ['ok', 'без сбоев'],
+  ['blip', 'до 15 мин'],
+  ['warn', '15–60 мин'],
+  ['bad', 'больше часа'],
+  ['planned', 'плановые работы'],
+  ['none', 'нет данных'],
 ];
 
-/** Public status page: every server with its 30-day availability. */
+/** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 export default function StatusPage() {
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
@@ -58899,14 +59778,14 @@ export default function StatusPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов за последние 30 дней" />
+      <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов и история сбоев за 30 дней" />
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
         <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
-          <div className="skeleton panel h-16" />
-          <div className="skeleton panel h-32" />
-          <div className="skeleton panel h-32" />
+          <div className="skeleton panel h-28" />
+          <div className="skeleton panel h-36" />
+          <div className="skeleton panel h-36" />
         </div>
       )}
 
@@ -58916,16 +59795,17 @@ export default function StatusPage() {
 
       {data && data.servers.length > 0 && (
         <div className="fade-in space-y-5">
-          <Banner servers={data.servers} />
+          <Banner data={data} />
           <ul className="space-y-3">
             {data.servers.map((s) => <ServerRow key={s.id} s={s} />)}
           </ul>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-mute">
             {LEGEND.map(([c, t]) => (
-              <span key={t} className="inline-flex items-center gap-1.5"><span className={`inline-block h-3 w-3 rounded-[3px] ${c}`} aria-hidden />{t}</span>
+              <span key={t} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t}</span>
             ))}
             <span className="ml-auto">обновлено {ago(data.updatedAt)}</span>
           </div>
+          <Incidents list={data.incidents ?? []} />
         </div>
       )}
     </div>
@@ -61987,6 +62867,68 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-new-news-title:hover { color: rgb(var(--link)); }
 .srv-new-news-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .srv-new-link { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
+/* public status page */
+.st-banner {
+  --tone: var(--ok); --toneBg: var(--okbg);
+  position: relative; overflow: hidden; display: flex; flex-wrap: wrap; align-items: center; gap: 16px 20px;
+  border-radius: 28px; padding: 22px 24px; color: rgb(var(--tone));
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgb(var(--tone) / .16), transparent 60%),
+    rgb(var(--toneBg));
+  border: 1px solid rgb(var(--tone) / .25);
+}
+.st-banner.is-warn { --tone: var(--warn); --toneBg: var(--warnbg); }
+.st-banner.is-bad { --tone: var(--bad); --toneBg: var(--badbg); }
+.st-banner-dot { position: relative; width: 18px; height: 18px; flex: none; border-radius: 9999px; background: rgb(var(--tone)); }
+.st-banner-dot::after { content: ''; position: absolute; inset: -6px; border-radius: inherit; border: 2px solid rgb(var(--tone)); animation: st-ping 2.2s ease-out infinite; }
+@keyframes st-ping { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(1.8); opacity: 0; } }
+.st-banner-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.st-banner-stats > div { min-width: 6.5rem; border-radius: 16px; padding: 8px 14px; background: rgb(var(--card) / .7); }
+.st-banner-stats dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.st-banner-stats dd { font-size: 20px; font-weight: 800; color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
+
+.st-server { padding: 16px 18px; }
+.st-server-body { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 22px; }
+.st-server-side { display: flex; align-items: flex-start; gap: 18px; }
+@media (max-width: 767px) { .st-server-side { width: 100%; justify-content: space-between; } }
+.st-up-v { font-size: 26px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; text-align: right; }
+.st-up-k { margin-top: 4px; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); text-align: right; white-space: nowrap; }
+.st-lat { width: 11rem; }
+.st-lat-k { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.st-lat-v { margin-top: 2px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* 30 day bars */
+.st-bars { display: flex; height: 38px; gap: 3px; }
+@media (max-width: 639px) { .st-bars { gap: 2px; height: 32px; } }
+.st-day { flex: 1 1 0; min-width: 0; border-radius: 4px; background: rgb(var(--line)); transition: transform .12s ease, filter .12s ease; }
+.st-day.is-ok { background: rgb(var(--ok)); }
+.st-day.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 30%, rgb(var(--ok)) 30%); }
+.st-legend.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 45%, rgb(var(--ok)) 45%); }
+.st-day.is-warn { background: rgb(var(--warn)); }
+.st-day.is-bad { background: rgb(var(--bad)); }
+.st-day.is-planned { background: repeating-linear-gradient(135deg, rgb(var(--link)) 0 4px, rgb(var(--link) / .55) 4px 8px); }
+.st-day.is-hover { transform: scaleY(1.12); filter: brightness(1.08); }
+.st-legend { display: inline-block; width: 12px; height: 12px; flex: none; }
+.st-bars-foot { margin-top: 6px; display: flex; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+.st-bars-read { flex: 1; text-align: center; color: rgb(var(--ink)); }
+
+/* incidents */
+.st-inc { position: relative; display: flex; align-items: center; gap: 12px; border-radius: 18px; padding: 10px 12px 10px 16px; background: rgb(var(--soft)); }
+.st-inc::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 4px; border-radius: 0 4px 4px 0; background: rgb(var(--warn)); }
+.st-inc.is-live::before { background: rgb(var(--bad)); animation: st-blink 1.6s ease-in-out infinite; }
+.st-inc.is-planned::before { background: rgb(var(--link)); }
+@keyframes st-blink { 50% { opacity: .35; } }
+.st-inc-badge { border-radius: 9999px; padding: 1px 9px; font-size: 11.5px; font-weight: 800; background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.st-inc-badge.is-live { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+.st-inc-badge.is-planned { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
+.st-calm { display: flex; align-items: center; gap: 14px; border-radius: 18px; padding: 14px 16px; background: rgb(var(--okbg)); }
+.st-calm > span { font-size: 28px; }
+
+@media (prefers-reduced-motion: reduce) { .st-banner-dot::after, .st-inc.is-live::before { animation: none; } .st-day { transition: none; } }
+html[data-motion='reduce'] .st-banner-dot::after, html[data-motion='reduce'] .st-inc.is-live::before { animation: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'

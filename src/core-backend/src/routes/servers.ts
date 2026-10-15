@@ -12,6 +12,7 @@ import { queryServer, refreshServer } from '../gsm.js';
 import { wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
+import { downtimeByDay, incidentsSince } from '../incidents.js';
 import { getServer, publicServer, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
 
@@ -326,8 +327,28 @@ router.get('/api/status', viewer, (req, res) => {
   }
   const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
   const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+  // outages of the 30 days: minutes per day for the bars, and the list of incidents under them
+  const incidents = incidentsSince(now - 30 * 86400_000, undefined, now);
+  const downtime = downtimeByDay(incidents, now);
+  const shown = new Map(servers.map((sv) => [sv.id, sv]));
+  // response time: hourly average ping of the last 24 hours
+  const latency = new Map<number, (number | null)[]>();
+  const hourNow = Math.floor(now / 3600_000);
+  for (const r of db
+    .prepare('SELECT server_id AS id, ts / 3600000 AS h, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY id, h')
+    .all(now - 24 * 3600_000) as { id: number; h: number; a: number }[]) {
+    const arr = latency.get(r.id) ?? Array<number | null>(24).fill(null);
+    const i = 23 - (hourNow - r.h);
+    if (i >= 0 && i < 24) arr[i] = Math.round(r.a);
+    latency.set(r.id, arr);
+  }
   res.json({
     updatedAt: last ?? now,
+    incidents: incidents
+      .filter((i) => shown.has(i.serverId))
+      .reverse()
+      .slice(0, 50)
+      .map((i) => ({ ...i, serverName: shown.get(i.serverId)!.name, game: shown.get(i.serverId)!.game })),
     servers: servers.map((sv) => {
       let up = 0;
       let total = 0;
@@ -337,7 +358,8 @@ router.get('/api/status', viewer, (req, res) => {
           up += r.up;
           total += r.total;
         }
-        return { day, pct: r ? pct(r.up, r.total) : null };
+        const dt = downtime.get(`${sv.id}|${day}`);
+        return { day, pct: r ? pct(r.up, r.total) : null, down: dt ? Math.round(dt.down) : 0, planned: dt ? Math.round(dt.planned) : 0, incidents: dt?.count ?? 0 };
       });
       return {
         id: sv.id,
@@ -351,6 +373,7 @@ router.get('/api/status', viewer, (req, res) => {
         uptime30: pct(up, total),
         days: dd,
         avgPing: pings.get(sv.id) ?? null,
+        latency: latency.get(sv.id) ?? [],
       };
     }),
   });

@@ -241,6 +241,22 @@ export interface StatusDay {
   day: string;
   /** null = no data */
   pct: number | null;
+  /** minutes the server was down that day (unplanned / in a maintenance window) and how many outages began */
+  down?: number;
+  planned?: number;
+  incidents?: number;
+}
+
+/** a stretch in which a server did not answer; end null = still down */
+export interface StatusIncident {
+  serverId: number;
+  serverName: string;
+  game: string;
+  start: number;
+  end: number | null;
+  minutes: number;
+  playersBefore: number;
+  planned: boolean;
 }
 
 export interface StatusServer {
@@ -256,11 +272,15 @@ export interface StatusServer {
   /** 30 entries, oldest first */
   days: StatusDay[];
   avgPing: number | null;
+  /** hourly average ping of the last 24 hours, oldest first (null = no answer that hour) */
+  latency?: (number | null)[];
 }
 
 export interface StatusInfo {
   updatedAt: number;
   servers: StatusServer[];
+  /** newest first, 30 days */
+  incidents?: StatusIncident[];
 }
 
 // ---------- backups ----------
