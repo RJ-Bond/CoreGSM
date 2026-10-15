@@ -91,6 +91,20 @@ CREATE TABLE IF NOT EXISTS login_guard (
 );
 CREATE INDEX IF NOT EXISTS idx_login_guard_expires ON login_guard(expires_at);`),
   },
+  {
+    version: 7,
+    name: 'smart_state',
+    // smart alerts: since when a condition holds (low online, high ping, almost full) and when it was last reported
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS smart_state (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  since INTEGER,
+  last_alert INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (server_id, kind)
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

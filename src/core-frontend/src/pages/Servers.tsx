@@ -8,6 +8,8 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import CompareChart from '../components/servers/CompareChart';
+import CommunityBento from '../components/servers/CommunityBento';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -209,6 +211,8 @@ function ServerList() {
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
       )}
 
+      {loaded && servers.length > 0 && !selOn && <CommunityBento />}
+
       {servers.length > 0 && (
         <div className="srv-bar">
           {servers.length > 1 ? (
@@ -230,7 +234,7 @@ function ServerList() {
               </button>
             )}
             <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список']] as [ServersView, string][]).map(([id, label]) => (
+              {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
                 <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
               ))}
             </div>
@@ -263,6 +267,8 @@ function ServerList() {
                 renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
               />
             )}
+
+            {effView === 'chart' && visible.length > 0 && <CompareChart servers={visible} />}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
               <div className="fade-in srv-grid">
@@ -328,7 +334,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
+      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
         background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
@@ -374,12 +380,18 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           </div>
         </>
       ) : (
-        s.hasStatus && (
-          <div className="relative mt-4 rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
-            <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-            <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
-          </div>
-        )
+        // a server that is down: one compact row (what is wrong, since when) and the day's curve with the outage in red
+        <div className="relative grid items-center gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          {s.hasStatus ? (
+            <div className="rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
+              <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
+              <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-white/20 px-4 py-3 text-base font-extrabold">Ожидаем первый ответ</div>
+          )}
+          <Spark serverId={s.id} color="#ffffff" variant="hero" />
+        </div>
       )}
 
       <div className="relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
@@ -397,8 +409,9 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''}`}
-      style={stagger(idx)}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
+      // the fuller the server, the stronger its glow in the game's colour
+      style={{ ...stagger(idx), ['--gc' as string]: gameColor(s.game), ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}

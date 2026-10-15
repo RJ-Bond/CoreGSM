@@ -1,5 +1,6 @@
 import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
+import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
 import { onSessionsOpened } from './nickOnboarding.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
@@ -233,6 +234,8 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   }
   try {
     trackAlerts(s.id, d.online, r.error);
+    // smart alerts measure a working server; planned work is not a symptom
+    if (!maint) trackSmart(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers, ping: r.ping }, ts);
   } catch (e) {
     console.error('alerts failed', (e as Error).message);
   }

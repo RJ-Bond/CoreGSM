@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cf8aad366ccb"
+COREGSM_BUILD="5dbfd5ec5f25"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4106,6 +4106,7 @@ import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { gameLabel } from './games.js';
 import { inMaintenance } from './maintenance.js';
 import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
+import { SMART_KINDS, smartEnabled } from './smartAlerts.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS alert_state (
@@ -4127,7 +4128,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 `);
 
-const settings = () => ({
+export const alertSettings = () => ({
   enabled: getSetting('alerts_enabled') === '1',
   channelId: getSetting('alerts_channel') ?? '',
   afterMin: Math.min(120, Math.max(1, Number(getSetting('alerts_after_min')) || 3)),
@@ -4136,18 +4137,21 @@ const settings = () => ({
 
 const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
 
-interface Payload {
+export interface Payload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
   embed: Record<string, unknown>;
 }
 
-function enqueue(kind: 'down' | 'up' | 'test', serverName: string, payload: Payload) {
-  const s = settings();
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest';
+
+export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
+  const s = alertSettings();
+  const target = channelId || s.channelId;
   const now = Date.now();
   // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
-  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
-  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target: s.channelId, payload });
+  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, target, JSON.stringify(payload), now, now);
+  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target, payload });
   db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
 }
 
@@ -4172,7 +4176,7 @@ const human = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min /
 
 /** Called after every poll of a server. */
 export function trackAlerts(serverId: number, online: boolean, error: string | null): void {
-  const s = settings();
+  const s = alertSettings();
   if (!s.enabled || !s.channelId) {
     db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
     return;
@@ -4197,7 +4201,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
       if (st.alerted) {
         const i = info();
         if (i) {
-          enqueue('up', i.n, {
+          enqueueAlert('up', i.n, {
             content: '',
             mention: 'none',
             embed: {
@@ -4223,7 +4227,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     const i = info();
     db.prepare('UPDATE alert_state SET alerted = 1 WHERE server_id = ?').run(serverId);
     if (!i) return;
-    enqueue('down', i.n, {
+    enqueueAlert('down', i.n, {
       content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
       mention: s.mention,
       embed: {
@@ -4247,7 +4251,7 @@ export function registerAlerts(deps: {
   const { app, admin, internal, channelInfo } = deps;
 
   const payload = () => {
-    const s = settings();
+    const s = alertSettings();
     const ch = s.channelId ? channelInfo(s.channelId) : { channelName: null, guildName: null };
     const recent = db.prepare('SELECT id, kind, server_name, status, error, created_at, sent_at FROM alerts ORDER BY id DESC LIMIT 30').all() as {
       id: number;
@@ -4260,6 +4264,7 @@ export function registerAlerts(deps: {
     }[];
     return {
       ...s,
+      smart: Object.fromEntries(SMART_KINDS.map((k) => [k, smartEnabled(k)])) as Record<(typeof SMART_KINDS)[number], boolean>,
       channelName: ch.channelName,
       guildName: ch.guildName,
       recent: recent.map((r) => ({ id: r.id, kind: r.kind, serverName: r.server_name, status: r.status, error: r.error, createdAt: r.created_at, sentAt: r.sent_at })),
@@ -4275,6 +4280,7 @@ export function registerAlerts(deps: {
         channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
         afterMin: z.number().int().min(1).max(120).optional(),
         mention: z.enum(['none', 'here', 'everyone']).optional(),
+        smart: z.object({ low: z.boolean().optional(), ping: z.boolean().optional(), full: z.boolean().optional() }).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
@@ -4285,13 +4291,14 @@ export function registerAlerts(deps: {
     if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
     if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
     if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
+    for (const k of SMART_KINDS) if (b.data.smart?.[k] !== undefined) setSetting(`alerts_smart_${k}`, b.data.smart[k] ? '1' : '0');
     res.json(payload());
   });
 
   app.post('/api/alerts/test', admin, (_req, res) => {
-    const s = settings();
+    const s = alertSettings();
     if (!s.channelId) return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
-    enqueue('test', 'Проверка', {
+    enqueueAlert('test', 'Проверка', {
       content: '',
       mention: 'none',
       embed: {
@@ -5337,6 +5344,7 @@ import { db, type ServerRow, type StatusRow } from './db.js';
 import { gameLabel } from './games.js';
 import { gameIconPath } from './gameIcons.js';
 import { GAME_IMAGES } from './gameImages.js';
+import { coverFile } from './covers.js';
 
 const { Canvas, Path2D, loadImage } = skia;
 
@@ -5349,21 +5357,19 @@ async function gameImage(game: string): Promise<any> {
   return imageCache.get(game);
 }
 
-// Pastel Soft palette (matches the web panel)
+// the dark panel palette (matches the web panel's default theme)
 const C = {
-  page: '#f1effe',
-  card: '#ffffff',
-  ink: '#2b2650',
-  mute: '#7a74a8',
-  line: '#e2defa',
-  soft: '#ece9ff',
-  brand: '#5a4bd1',
-  ok: '#168a4f',
-  okBg: '#d9f7e6',
-  warn: '#b27300',
-  warnBg: '#fff0cc',
-  bad: '#c53030',
-  badBg: '#ffdede',
+  bg: '#0e0c1b',
+  bg2: '#17142c',
+  ink: '#f4f2ff',
+  mute: '#9a95c4',
+  dim: '#6a6596',
+  line: 'rgba(255, 255, 255, 0.08)',
+  soft: 'rgba(255, 255, 255, 0.06)',
+  brand: '#7b6cf6',
+  ok: '#3ddc84',
+  warn: '#f6b73c',
+  bad: '#ff5d6c',
 };
 
 // per-game accent colours (same as the panel); unknown games use the brand colour
@@ -5388,6 +5394,7 @@ const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 const MONO = '"DejaVu Sans Mono", "Liberation Mono", monospace';
 const W = 1200;
 const H = 480;
+const DAY = 86_400_000;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function fit(ctx: any, text: string, maxWidth: number): string {
@@ -5413,6 +5420,35 @@ export function renderCard(serverId: number): Promise<Buffer | null> {
 /** true for games with their own colour/pictogram; everything else gets the generic icon */
 export const isKnownGame = (game: string): boolean => game in GAME_COLORS;
 
+/** a rounded rectangle path */
+function rr(ctx: any, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+}
+
+/** "#7c3aed" with alpha 0..1 */
+function alpha(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+/** the last 24 hours in 15-minute steps: the most players of each step, and whether the server was down all of it */
+function last24h(serverId: number, now: number): { players: number; down: boolean; empty: boolean }[] {
+  const STEP = 900_000;
+  const n = 96;
+  const from = now - n * STEP;
+  const out = Array.from({ length: n }, () => ({ players: 0, down: true, empty: true }));
+  for (const r of db.prepare('SELECT ts, online, players FROM history WHERE server_id = ? AND ts > ?').iterate(serverId, from) as Iterable<{ ts: number; online: number; players: number }>) {
+    const b = out[Math.min(n - 1, Math.floor((r.ts - from) / STEP))];
+    b.empty = false;
+    if (r.online) {
+      b.down = false;
+      b.players = Math.max(b.players, r.players);
+    }
+  }
+  return out;
+}
+
 async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const hit = cache.get(serverId);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
@@ -5420,9 +5456,11 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const s = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId) as ServerRow | undefined;
   if (!s) return null;
   const st = db.prepare('SELECT * FROM status WHERE server_id = ?').get(serverId) as StatusRow | undefined;
-  const hist = db
-    .prepare('SELECT players FROM history WHERE server_id = ? AND ts > ? ORDER BY ts')
-    .all(serverId, Date.now() - 24 * 3600 * 1000) as { players: number }[];
+  const now = Date.now();
+  const steps = last24h(serverId, now);
+  const known = steps.filter((b) => !b.empty);
+  const uptime = known.length ? Math.round((known.filter((b) => !b.down).length / known.length) * 1000) / 10 : null;
+  const record = (db.prepare('SELECT MAX(players) AS p FROM history WHERE server_id = ? AND ts > ? AND online = 1').get(serverId, now - 30 * DAY) as { p: number | null }).p;
 
   const online = !!st?.online;
   const players = st?.players ?? 0;
@@ -5430,38 +5468,70 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const names: string[] = st ? JSON.parse(st.player_names) : [];
   const [abbr, accent] = GAME_COLORS[s.game] ?? [s.game.slice(0, 2).toUpperCase(), C.brand];
   const laggy = online && st?.ping != null && st.ping > 100;
+  const status = !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
 
   const canvas = new Canvas(W, H);
   const ctx: any = canvas.getContext('2d');
-
-  // page + white card
-  ctx.fillStyle = C.page;
-  ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  ctx.shadowColor = 'rgba(90, 75, 209, 0.16)';
-  ctx.shadowBlur = 28;
-  ctx.shadowOffsetY = 8;
-  ctx.fillStyle = C.card;
-  ctx.beginPath();
-  ctx.roundRect(24, 20, W - 48, H - 48, 36);
-  ctx.fill();
-  ctx.restore();
-
   ctx.textBaseline = 'alphabetic';
 
-  // game avatar: the artwork sits on a deep tile of the game colour, a pictogram on the colour itself
+  // the card: the cover (if any) under a dark veil, else a glow of the game colour
+  ctx.save();
+  rr(ctx, 0, 0, W, H, 32);
+  ctx.clip();
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, C.bg2);
+  bg.addColorStop(1, C.bg);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const file = coverFile(serverId);
+  let cover: any = null;
+  if (file) {
+    try { cover = await loadImage(file); } catch { /* a broken file: no cover */ }
+  }
+  if (cover) {
+    const k = Math.max(W / cover.width, H / cover.height);
+    ctx.drawImage(cover, (W - cover.width * k) / 2, (H - cover.height * k) / 2, cover.width * k, cover.height * k);
+    const veil = ctx.createLinearGradient(0, 0, W, 0);
+    veil.addColorStop(0, 'rgba(12, 10, 24, 0.95)');
+    veil.addColorStop(0.5, 'rgba(12, 10, 24, 0.84)');
+    veil.addColorStop(1, 'rgba(12, 10, 24, 0.62)');
+    ctx.fillStyle = veil;
+    ctx.fillRect(0, 0, W, H);
+  }
+  const glow = ctx.createRadialGradient(W - 140, -40, 0, W - 140, -40, 560);
+  glow.addColorStop(0, alpha(accent, cover ? 0.28 : 0.4));
+  glow.addColorStop(1, alpha(accent, 0));
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+  // a thin line of the status colour along the top
+  ctx.fillStyle = status;
+  ctx.fillRect(0, 0, W, 5);
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.lineWidth = 2;
+  rr(ctx, 1, 1, W - 2, H - 2, 31);
+  ctx.stroke();
+
+  // game avatar: the artwork on a deep tile of the game colour, a pictogram on the colour itself
   const art = await gameImage(s.game);
-  ctx.fillStyle = art ? mixToBlack(accent, 0.62) : accent;
-  ctx.beginPath();
-  ctx.roundRect(64, 56, 84, 84, 26);
+  const grad = ctx.createLinearGradient(48, 44, 132, 128);
+  grad.addColorStop(0, art ? mixToBlack(accent, 0.45) : accent);
+  grad.addColorStop(1, art ? mixToBlack(accent, 0.75) : mixToBlack(accent, 0.3));
+  ctx.save();
+  ctx.shadowColor = alpha(accent, 0.5);
+  ctx.shadowBlur = 30;
+  ctx.shadowOffsetY = 10;
+  ctx.fillStyle = grad;
+  rr(ctx, 48, 44, 84, 84, 26);
   ctx.fill();
+  ctx.restore();
   const iconPath = gameIconPath(s.game);
   if (art) {
-    ctx.drawImage(art, 106 - 38, 98 - 38, 76, 76);
+    ctx.drawImage(art, 90 - 38, 86 - 38, 76, 76);
   } else if (iconPath) {
     // the same pictogram as in the panel: 24x24 grid scaled to ~46px, centred in the 84px square
     ctx.save();
-    ctx.translate(106 - 12 * 1.95, 98 - 12 * 1.95);
+    ctx.translate(90 - 12 * 1.95, 86 - 12 * 1.95);
     ctx.scale(1.95, 1.95);
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
@@ -5473,46 +5543,47 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
     ctx.fillStyle = '#ffffff';
     ctx.font = `700 ${abbr.length > 2 ? 28 : 34}px ${SANS}`;
     ctx.textAlign = 'center';
-    ctx.fillText(abbr, 106, 109);
+    ctx.fillText(abbr, 90, 97);
+    ctx.textAlign = 'left';
   }
-  ctx.textAlign = 'left';
 
   // status pill (top right)
   const label = !st ? 'ОЖИДАНИЕ' : !online ? 'OFFLINE' : laggy ? 'LAG' : 'ONLINE';
-  const [pillBg, pillFg] = !st ? [C.soft, C.mute] : !online ? [C.badBg, C.bad] : laggy ? [C.warnBg, C.warn] : [C.okBg, C.ok];
-  ctx.font = `700 22px ${SANS}`;
-  const pw = ctx.measureText(label).width + 62;
-  const px = W - 64 - pw;
-  ctx.fillStyle = pillBg;
-  ctx.beginPath();
-  ctx.roundRect(px, 62, pw, 44, 22);
+  ctx.font = `700 21px ${SANS}`;
+  const pw = ctx.measureText(label).width + 60;
+  const px = W - 48 - pw;
+  ctx.fillStyle = alpha(status === C.mute ? '#9a95c4' : status, 0.16);
+  rr(ctx, px, 52, pw, 44, 22);
   ctx.fill();
-  ctx.fillStyle = pillFg;
+  ctx.save();
+  ctx.shadowColor = status;
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = status;
   ctx.beginPath();
-  ctx.arc(px + 26, 84, 7, 0, Math.PI * 2);
+  ctx.arc(px + 26, 74, 7, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillText(label, px + 42, 92);
+  ctx.restore();
+  ctx.fillStyle = status;
+  ctx.fillText(label, px + 42, 82);
 
-  // title
-  const titleX = 172;
-  ctx.fillStyle = C.ink;
-  ctx.font = `700 44px ${SANS}`;
+  // title: shrink the font first, then wrap onto two lines (ellipsis only if even that is not enough)
+  const titleX = 156;
   // never put the internal query address on a public card: prefer the display address
   const address = s.display_address || `${s.host}:${s.port}`;
   const title = s.name || st?.name || address;
-  // long titles: first shrink the font, then wrap onto two lines (ellipsis only if even that is not enough)
   const maxTitleW = px - titleX - 24;
   let titleSize = 44;
-  ctx.font = `700 ${titleSize}px ${SANS}`;
-  while (titleSize > 36 && ctx.measureText(title).width > maxTitleW) {
+  ctx.fillStyle = C.ink;
+  ctx.font = `800 ${titleSize}px ${SANS}`;
+  while (titleSize > 34 && ctx.measureText(title).width > maxTitleW) {
     titleSize -= 2;
-    ctx.font = `700 ${titleSize}px ${SANS}`;
+    ctx.font = `800 ${titleSize}px ${SANS}`;
   }
-  let subtitleY = 132;
+  let subtitleY = 120;
   if (ctx.measureText(title).width <= maxTitleW) {
-    ctx.fillText(title, titleX, 96);
+    ctx.fillText(title, titleX, 86);
   } else {
-    ctx.font = `700 34px ${SANS}`;
+    ctx.font = `800 32px ${SANS}`;
     const lines: string[] = [];
     let cur = '';
     for (const word of title.split(/\s+/)) {
@@ -5521,97 +5592,159 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
       else { lines.push(cur); cur = word; }
     }
     lines.push(cur);
-    // anything beyond two lines is cut with an ellipsis on the second one
-    const shown = lines.length > 2 ? [lines[0], `${lines.slice(1).join(' ')}`] : lines;
-    shown.forEach((ln, i) => ctx.fillText(fit(ctx, ln, maxTitleW), titleX, 84 + i * 40));
-    subtitleY = 84 + (shown.length - 1) * 40 + 36;
+    const shown = lines.length > 2 ? [lines[0], lines.slice(1).join(' ')] : lines;
+    shown.forEach((ln, i) => ctx.fillText(fit(ctx, ln, maxTitleW), titleX, 74 + i * 36));
+    subtitleY = 74 + (shown.length - 1) * 36 + 34;
   }
   ctx.fillStyle = C.mute;
-  ctx.font = `700 22px ${SANS}`;
-  ctx.fillText(fit(ctx, `${gameLabel(s.game)}${st?.version ? ' · ' + st.version : ''}`, px - titleX - 24), titleX, subtitleY);
+  ctx.font = `700 21px ${SANS}`;
+  const sub = [gameLabel(s.game), st?.version, online ? st?.map : null].filter(Boolean).join(' · ');
+  ctx.fillText(fit(ctx, sub, px - titleX - 24), titleX, subtitleY);
 
-  // players
+  // players: the big number, the fill bar, who is in the game
   ctx.fillStyle = C.mute;
-  ctx.font = `700 20px ${SANS}`;
-  ctx.fillText('Игроки', 64, 206);
-  ctx.fillStyle = online ? C.ink : C.mute;
-  ctx.font = `700 100px ${SANS}`;
+  ctx.font = `700 17px ${SANS}`;
+  ctx.fillText('ИГРОКИ', 48, 196);
+  ctx.fillStyle = online ? C.ink : C.dim;
+  ctx.font = `800 104px ${SANS}`;
   const big = online ? `${players}` : '–';
-  ctx.fillText(big, 64, 300);
+  ctx.fillText(big, 44, 292);
   const bigW = ctx.measureText(big).width;
   if (online && max) {
     ctx.fillStyle = C.mute;
-    ctx.font = `700 44px ${SANS}`;
-    ctx.fillText(`/ ${max}`, 64 + bigW + 14, 300);
+    ctx.font = `700 40px ${SANS}`;
+    ctx.fillText(`/ ${max}`, 44 + bigW + 14, 292);
   }
-
-  // fill bar
   const barW = 500;
   ctx.fillStyle = C.soft;
-  ctx.beginPath();
-  ctx.roundRect(64, 322, barW, 20, 10);
+  rr(ctx, 48, 314, barW, 14, 7);
   ctx.fill();
   if (online && max > 0) {
-    const ratio = Math.min(1, players / max);
-    ctx.fillStyle = accent;
-    ctx.beginPath();
-    ctx.roundRect(64, 322, Math.max(20, barW * ratio), 20, 10);
+    const fill = ctx.createLinearGradient(48, 0, 48 + barW, 0);
+    fill.addColorStop(0, accent);
+    fill.addColorStop(1, alpha(accent, 0.7));
+    ctx.save();
+    ctx.shadowColor = alpha(accent, 0.6);
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = fill;
+    rr(ctx, 48, 314, Math.max(14, barW * Math.min(1, players / max)), 14, 7);
     ctx.fill();
+    ctx.restore();
   }
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 18px ${SANS}`;
+  const inGame = online && names.length ? names.slice(0, 4).join(', ') + (names.length > 4 ? ` +${names.length - 4}` : '') : '';
+  if (inGame) ctx.fillText(fit(ctx, 'В игре: ' + inGame, barW), 48, 362);
+  else if (!online && st) ctx.fillText('Сервер сейчас недоступен', 48, 362);
 
-  // sparkline (24h)
-  if (hist.length > 1) {
-    const x0 = 64, y0 = 362, w = barW, h = 40;
-    const top = Math.max(1, max, ...hist.map((p) => p.players));
-    const pts = hist.map((p, i) => [x0 + (i / (hist.length - 1)) * w, y0 + h - (p.players / top) * h]);
+  // the last 24 hours: players, outages in red, the 30-day record as a dashed line
+  const gx = 592, gy = 160, gw = W - 48 - gx, gh = 206;
+  ctx.fillStyle = cover ? 'rgba(14, 12, 27, 0.6)' : 'rgba(255, 255, 255, 0.045)';
+  rr(ctx, gx, gy, gw, gh, 24);
+  ctx.fill();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 17px ${SANS}`;
+  ctx.fillText('ЗА 24 ЧАСА', gx + 22, gy + 34);
+  const peak = Math.max(0, ...steps.map((b) => b.players));
+  ctx.textAlign = 'right';
+  ctx.fillText(known.length ? `пик ${peak}` : 'нет данных', gx + gw - 22, gy + 34);
+  ctx.textAlign = 'left';
+  const cx = gx + 22, cy = gy + 52, cw = gw - 44, ch = gh - 74;
+  const top = Math.max(1, max, peak, record ?? 0);
+  const xAt = (i: number) => cx + (i / (steps.length - 1)) * cw;
+  const yAt = (v: number) => cy + ch - (v / top) * ch;
+  // outages
+  ctx.fillStyle = alpha(C.bad, 0.2);
+  steps.forEach((b, i) => { if (!b.empty && b.down) ctx.fillRect(xAt(i) - cw / steps.length / 2, cy, cw / steps.length + 0.5, ch); });
+  // the record
+  if (record) {
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = alpha(C.warn, 0.55);
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-    ctx.lineTo(x0 + w, y0 + h);
-    ctx.lineTo(x0, y0 + h);
+    ctx.moveTo(cx, yAt(record));
+    ctx.lineTo(cx + cw, yAt(record));
+    ctx.stroke();
+    ctx.restore();
+  }
+  // the players line, smooth, with a soft area under it
+  if (known.length > 1) {
+    const pts = steps.map((b, i) => [xAt(i), yAt(b.players)] as [number, number]);
+    const line = () => {
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) {
+        const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+        ctx.bezierCurveTo((x0 + x1) / 2, y0, (x0 + x1) / 2, y1, x1, y1);
+      }
+    };
+    const area = ctx.createLinearGradient(0, cy, 0, cy + ch);
+    area.addColorStop(0, alpha(accent, 0.42));
+    area.addColorStop(1, alpha(accent, 0));
+    ctx.beginPath();
+    line();
+    ctx.lineTo(cx + cw, cy + ch);
+    ctx.lineTo(cx, cy + ch);
     ctx.closePath();
-    ctx.fillStyle = accent + '24';
+    ctx.fillStyle = area;
     ctx.fill();
     ctx.beginPath();
-    pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    line();
+    ctx.save();
+    ctx.shadowColor = alpha(accent, 0.7);
+    ctx.shadowBlur = 10;
     ctx.strokeStyle = accent;
     ctx.lineWidth = 3;
     ctx.lineJoin = 'round';
     ctx.stroke();
-  }
-
-  // info tiles
-  const tile = (x: number, y: number, w: number, k: string, v: string, mono = false, color: string = C.ink) => {
-    ctx.fillStyle = C.soft;
+    ctx.restore();
+    // now
+    const [nx, ny] = pts[pts.length - 1];
+    ctx.fillStyle = C.ink;
     ctx.beginPath();
-    ctx.roundRect(x, y, w, 76, 22);
+    ctx.arc(nx, ny, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+  ctx.fillStyle = C.dim;
+  ctx.font = `700 14px ${SANS}`;
+  ctx.fillText('−24 ч', cx, gy + gh - 8);
+  ctx.textAlign = 'right';
+  ctx.fillText('сейчас', cx + cw, gy + gh - 8);
+  ctx.textAlign = 'left';
+
+  // chips: address, ping, the record, uptime
+  const chip = (x: number, w: number, k: string, v: string, color: string = C.ink, mono = false) => {
+    ctx.fillStyle = C.soft;
+    rr(ctx, x, 388, w, 60, 18);
     ctx.fill();
     ctx.fillStyle = C.mute;
-    ctx.font = `700 16px ${SANS}`;
-    ctx.fillText(k, x + 20, y + 28);
+    ctx.font = `700 14px ${SANS}`;
+    ctx.fillText(k, x + 18, 410);
     ctx.fillStyle = color;
-    ctx.font = `700 24px ${mono ? MONO : SANS}`;
-    ctx.fillText(fit(ctx, v, w - 40), x + 20, y + 58);
+    ctx.font = `700 21px ${mono ? MONO : SANS}`;
+    ctx.fillText(fit(ctx, v, w - 36), x + 18, 437);
   };
-  const tx = 640;
-  const tw = W - 64 - tx;
-  tile(tx, 176, tw, 'Адрес', address, true);
-  tile(tx, 264, tw / 2 - 8, 'Карта', online && st?.map ? st.map : '–');
-  tile(tx + tw / 2 + 8, 264, tw / 2 - 8, 'Пинг', online && st?.ping != null ? `${st.ping} мс` : '–', false, laggy ? C.warn : C.ink);
-
-  // online players line
-  ctx.fillStyle = C.mute;
-  ctx.font = `700 18px ${SANS}`;
-  const shown = online && names.length ? names.slice(0, 4).join(', ') + (names.length > 4 ? ` +${names.length - 4}` : '') : '';
-  if (shown) ctx.fillText(fit(ctx, 'В игре: ' + shown, tw), tx, 380);
+  const gap = 12;
+  const small = (W - 96 - 3 * gap - 380) / 3;
+  chip(48, 380, 'АДРЕС', address, C.ink, true);
+  chip(48 + 380 + gap, small, 'ПИНГ', online && st?.ping != null ? `${st.ping} мс` : '–', laggy ? C.warn : C.ink);
+  chip(48 + 380 + gap + (small + gap), small, 'РЕКОРД 30 ДН', record ? String(record) : '–', record && online && players >= record ? C.warn : C.ink);
+  chip(48 + 380 + gap + 2 * (small + gap), small, 'АПТАЙМ 24 Ч', uptime == null ? '–' : `${uptime}%`, uptime != null && uptime < 99 ? C.warn : C.ok);
 
   // footer
-  ctx.fillStyle = C.mute;
-  ctx.font = `700 16px ${SANS}`;
-  const when = st ? new Date(st.updated_at).toISOString().slice(11, 19) + ' UTC' : '–';
-  ctx.fillText(`Обновлено ${when}`, 64, H - 60 + 24);
+  ctx.fillStyle = C.dim;
+  ctx.font = `700 14px ${SANS}`;
+  const when = st ? new Date(st.updated_at).toISOString().slice(11, 16) + ' UTC' : '–';
+  ctx.fillText(`Обновлено ${when}`, 48, H - 12);
   ctx.textAlign = 'right';
   ctx.fillStyle = C.brand;
-  ctx.fillText('CoreGSM', W - 64, H - 60 + 24);
+  ctx.fillText('CoreGSM', W - 48, H - 12);
   ctx.textAlign = 'left';
 
   const buf = (await canvas.toBuffer('png')) as Buffer;
@@ -5706,6 +5839,12 @@ export function coverUrl(serverId: number): string | null {
   } catch {
     return null;
   }
+}
+
+/** the path of the server's cover file (the 640px one when `small`), or null without a cover */
+export function coverFile(serverId: number, small = false): string | null {
+  const f = fileOf(serverId, small);
+  return fs.existsSync(f) ? f : null;
 }
 
 export function removeCover(serverId: number): void {
@@ -6434,6 +6573,353 @@ export function registerDeliveries(deps: { app: Express; admin: RequestHandler; 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/digest.ts" << '__COREGSM_EOF__'
+/**
+ * Weekly digest: once a week (the weekday and hour of the panel's time zone are set in the panel) the bot posts a
+ * summary of the last seven days to the alerts channel or a channel of its own: players, peak, hours played,
+ * availability and outages of every server, the top players, and the change against the week before. The picture
+ * is drawn here (skia, like the server cards) and served at a signed address so that Discord can fetch it even
+ * when the panel is private.
+ */
+import crypto from 'node:crypto';
+import skia from 'skia-canvas';
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { alertSettings, enqueueAlert } from './alerts.js';
+import { JWT_SECRET } from './config.js';
+import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
+import { incidentsSince } from './incidents.js';
+import { localParts } from './localTime.js';
+import { brand, publicBase } from './site.js';
+
+const { Canvas } = skia;
+const DAY = 86_400_000;
+const WEEK = 7 * DAY;
+
+export const digestSettings = () => ({
+  enabled: getSetting('digest_enabled') === '1',
+  channelId: getSetting('digest_channel') ?? '',
+  weekday: Math.min(6, Math.max(0, Number(getSetting('digest_weekday') ?? 0) || 0)), // 0 = Monday
+  hour: Math.min(23, Math.max(0, Number(getSetting('digest_hour') ?? 10) || 0)),
+  lastSent: Number(getSetting('digest_last_sent')) || 0,
+});
+
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+export interface DigestServer {
+  id: number; name: string; game: string; players: number; prevPlayers: number; peak: number; peakAt: number | null;
+  hours: number; uptime: number | null; incidents: number; downMinutes: number;
+}
+export interface Digest {
+  from: number; to: number;
+  totals: { players: number; prevPlayers: number; peak: number; peakAt: number | null; peakServer: string | null; hours: number; prevHours: number; uptime: number | null; incidents: number; newPlayers: number };
+  days: { day: string; players: number }[];
+  servers: DigestServer[];
+  top: { name: string; hours: number }[];
+}
+
+/** the summary of the seven days that end at `to` */
+export function buildDigest(to = Date.now()): Digest {
+  const from = to - WEEK;
+  const prevFrom = from - WEEK;
+  const servers = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string; game: string }[];
+  const visits = db
+    .prepare('SELECT server_id AS s, ulower(name) AS k, name, joined_at AS j, COALESCE(left_at, ?) AS l FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ?')
+    .all(to, to, prevFrom, to) as { s: number; k: string; name: string; j: number; l: number }[];
+  const firstSeen = new Map((db.prepare('SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions GROUP BY k').all() as { k: string; t: number }[]).map((r) => [r.k, r.t]));
+  const clip = (j: number, l: number, a: number, b: number) => Math.max(0, Math.min(l, b) - Math.max(j, a)) / 3600_000;
+  const incidents = incidentsSince(from, undefined, to).filter((i) => !i.planned);
+  const tzName = tz();
+
+  const perServer: DigestServer[] = servers.map((sv) => {
+    const mine = visits.filter((v) => v.s === sv.id);
+    const cur = mine.filter((v) => v.l > from);
+    const prev = mine.filter((v) => v.j < from);
+    const peak = db.prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? AND ts <= ? ORDER BY players DESC, ts DESC LIMIT 1').get(sv.id, from, to) as { players: number; ts: number } | undefined;
+    const up = db.prepare('SELECT SUM(up) AS u, SUM(total) AS t FROM uptime_daily WHERE server_id = ? AND day >= ?').get(sv.id, new Date(from).toISOString().slice(0, 10)) as { u: number | null; t: number | null };
+    const inc = incidents.filter((i) => i.serverId === sv.id);
+    return {
+      id: sv.id,
+      name: sv.name,
+      game: sv.game,
+      players: new Set(cur.map((v) => v.k)).size,
+      prevPlayers: new Set(prev.map((v) => v.k)).size,
+      peak: peak?.players ?? 0,
+      peakAt: peak?.ts ?? null,
+      hours: Math.round(cur.reduce((n, v) => n + clip(v.j, v.l, from, to), 0)),
+      uptime: up.t ? Math.round((up.u! / up.t) * 1000) / 10 : null,
+      incidents: inc.length,
+      downMinutes: inc.reduce((n, i) => n + Math.round((Math.min(i.end ?? to, to) - Math.max(i.start, from)) / 60_000), 0),
+    };
+  });
+
+  const cur = visits.filter((v) => v.l > from);
+  const prev = visits.filter((v) => v.j < from);
+  const days = Array.from({ length: 7 }, (_, i) => localParts(from + (i + 0.5) * DAY, tzName).day);
+  const byDay = new Map(days.map((d) => [d, new Set<string>()]));
+  for (const v of cur) byDay.get(localParts(Math.max(v.j, from), tzName).day)?.add(v.k);
+  const per = new Map<string, { name: string; hours: number }>();
+  for (const v of cur) {
+    const p = per.get(v.k) ?? { name: v.name, hours: 0 };
+    p.hours += clip(v.j, v.l, from, to);
+    per.set(v.k, p);
+  }
+  const best = [...perServer].sort((a, b) => b.peak - a.peak)[0];
+  const ups = perServer.map((s) => s.uptime).filter((v): v is number => v != null);
+  return {
+    from,
+    to,
+    totals: {
+      players: new Set(cur.map((v) => v.k)).size,
+      prevPlayers: new Set(prev.map((v) => v.k)).size,
+      peak: best?.peak ?? 0,
+      peakAt: best?.peakAt ?? null,
+      peakServer: best && best.peak > 0 ? best.name : null,
+      hours: Math.round(cur.reduce((n, v) => n + clip(v.j, v.l, from, to), 0)),
+      prevHours: Math.round(prev.reduce((n, v) => n + clip(v.j, v.l, prevFrom, from), 0)),
+      uptime: ups.length ? Math.round((ups.reduce((a, b) => a + b, 0) / ups.length) * 10) / 10 : null,
+      incidents: incidents.length,
+      newPlayers: new Set(cur.filter((v) => (firstSeen.get(v.k) ?? 0) > from).map((v) => v.k)).size,
+    },
+    days: days.map((day) => ({ day, players: byDay.get(day)?.size ?? 0 })),
+    servers: perServer,
+    top: [...per.values()].sort((a, b) => b.hours - a.hours).slice(0, 5).map((p) => ({ name: p.name, hours: Math.round(p.hours * 10) / 10 })),
+  };
+}
+
+const delta = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
+const deltaText = (d: number | null) => (d == null ? '' : d === 0 ? ' (как неделей раньше)' : ` (${d > 0 ? '+' : '−'}${Math.abs(d)}% к прошлой неделе)`);
+const dateRu = (t: number) => new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: tz() });
+
+// ---------- the picture ----------
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export async function renderDigest(d: Digest): Promise<Buffer> {
+  const W = 1200;
+  const H = 675;
+  const canvas = new Canvas(W, H);
+  const ctx: any = canvas.getContext('2d');
+  const b = brand();
+  const accent = /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#5a4bd1';
+
+  // background: deep night with the brand colour glowing from the top left
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#15122b');
+  bg.addColorStop(1, '#0b0a16');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(160, 40, 10, 160, 40, 700);
+  glow.addColorStop(0, `${accent}88`);
+  glow.addColorStop(1, `${accent}00`);
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 44px ${SANS}`;
+  ctx.fillText(`Неделя на ${b.name}`, 56, 92);
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.font = `600 22px ${SANS}`;
+  ctx.fillText(`${dateRu(d.from)} – ${dateRu(d.to)}`, 56, 128);
+
+  // four numbers
+  const stats: [string, string, string][] = [
+    [String(d.totals.players), 'игроков', deltaText(delta(d.totals.players, d.totals.prevPlayers)).replace(/[()]/g, '').trim()],
+    [String(d.totals.peak), 'пик онлайна', d.totals.peakServer ?? ''],
+    [d.totals.hours.toLocaleString('ru-RU'), 'часов в игре', deltaText(delta(d.totals.hours, d.totals.prevHours)).replace(/[()]/g, '').trim()],
+    [d.totals.uptime == null ? '–' : `${String(d.totals.uptime).replace('.', ',')}%`, 'доступность', d.totals.incidents ? `${d.totals.incidents} сбоев` : 'без сбоев'],
+  ];
+  stats.forEach(([v, k, hint], i) => {
+    const x = 56 + i * 276;
+    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    ctx.beginPath();
+    ctx.roundRect(x, 160, 256, 140, 22);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 52px ${SANS}`;
+    ctx.fillText(v, x + 22, 228);
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.font = `bold 20px ${SANS}`;
+    ctx.fillText(k, x + 22, 260);
+    ctx.fillStyle = hint.startsWith('−') ? '#ff8a8a' : hint.startsWith('+') ? '#7ee2a8' : 'rgba(255,255,255,.55)';
+    ctx.font = `600 15px ${SANS}`;
+    let short = hint;
+    while (short.length > 3 && ctx.measureText(short).width > 220) short = short.slice(0, -1);
+    ctx.fillText(short === hint ? short : `${short}…`, x + 22, 286);
+  });
+
+  // players per day
+  const max = Math.max(1, ...d.days.map((x) => x.players));
+  const bx = 56;
+  const by = 340;
+  const bw = 520;
+  const bh = 270;
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.font = `bold 18px ${SANS}`;
+  ctx.fillText('Игроков в день', bx, by);
+  const slot = bw / 7;
+  d.days.forEach((x, i) => {
+    const h = Math.max(4, ((bh - 70) * x.players) / max);
+    const gx = bx + i * slot + 10;
+    const gy = by + bh - 40 - h;
+    const g = ctx.createLinearGradient(0, gy, 0, gy + h);
+    g.addColorStop(0, accent);
+    g.addColorStop(1, `${accent}66`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.roundRect(gx, gy, slot - 20, h, 10);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 17px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(x.players), gx + (slot - 20) / 2, gy - 8);
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.font = `600 15px ${SANS}`;
+    const [, m, day] = x.day.split('-');
+    ctx.fillText(`${Number(day)}.${m}`, gx + (slot - 20) / 2, by + bh - 12);
+    ctx.textAlign = 'left';
+  });
+
+  // servers
+  const sx = 640;
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.font = `bold 18px ${SANS}`;
+  ctx.fillText('Серверы', sx, by);
+  d.servers.slice(0, 5).forEach((s, i) => {
+    const y = by + 22 + i * 50;
+    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    ctx.beginPath();
+    ctx.roundRect(sx, y, 504, 42, 12);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 18px ${SANS}`;
+    let name = s.name;
+    while (name.length > 3 && ctx.measureText(name).width > 250) name = name.slice(0, -1);
+    ctx.fillText(name === s.name ? name : `${name}…`, sx + 14, y + 28);
+    ctx.font = `600 16px ${SANS}`;
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fillText(`${s.players} игр.`, sx + 290, y + 28);
+    const ok = s.incidents === 0;
+    ctx.fillStyle = ok ? '#7ee2a8' : s.downMinutes >= 60 ? '#ff8a8a' : '#ffd27a';
+    ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 390, y + 28);
+  });
+  if (d.top.length) {
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.font = `600 16px ${SANS}`;
+    const line = `Больше всех играли: ${d.top.slice(0, 3).map((p) => `${p.name} (${Math.round(p.hours)} ч)`).join(', ')}`;
+    let t = line;
+    while (t.length > 10 && ctx.measureText(t).width > 504) t = t.slice(0, -1);
+    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + Math.min(5, d.servers.length) * 50 + 22);
+  }
+  return canvas.toBuffer('png');
+}
+
+// ---------- the message ----------
+const sign = (to: number) => crypto.createHmac('sha256', JWT_SECRET).update(`digest:${to}`).digest('hex').slice(0, 20);
+
+export function digestMessage(d: Digest) {
+  const base = publicBase();
+  const t = d.totals;
+  const lines = [
+    `👥 **${t.players}** ${t.players === 1 ? 'игрок' : 'игроков'}${deltaText(delta(t.players, t.prevPlayers))}, из них новых **${t.newPlayers}**`,
+    `🔥 Пик онлайна **${t.peak}**${t.peakServer ? ` на ${t.peakServer}` : ''}`,
+    `⏱️ **${t.hours.toLocaleString('ru-RU')}** часов в игре${deltaText(delta(t.hours, t.prevHours))}`,
+    `🟢 Доступность **${t.uptime == null ? '–' : `${String(t.uptime).replace('.', ',')}%`}**${t.incidents ? `, сбоев: ${t.incidents}` : ', без сбоев'}`,
+  ];
+  if (d.top.length) lines.push(`🏆 Больше всех играли: ${d.top.slice(0, 3).map((p) => `**${p.name}** (${Math.round(p.hours)} ч)`).join(', ')}`);
+  return {
+    content: '',
+    mention: 'none' as const,
+    embed: {
+      title: `📊 Неделя на ${brand().name}: ${dateRu(d.from)} – ${dateRu(d.to)}`,
+      description: lines.join('\n'),
+      color: 0x5865f2,
+      ...(base ? { url: `${base}/status`, image: { url: `${base}/api/digest/${d.to}-${sign(d.to)}.png` } } : {}),
+      footer: { text: 'CoreGSM · итоги недели' },
+      timestamp: new Date(d.to).toISOString(),
+    },
+  };
+}
+
+export function sendDigest(now = Date.now()): boolean {
+  const s = digestSettings();
+  const channel = s.channelId || alertSettings().channelId;
+  if (!channel) return false;
+  enqueueAlert('digest', 'Итоги недели', digestMessage(buildDigest(now)), channel);
+  setSetting('digest_last_sent', String(now));
+  return true;
+}
+
+/** once every 10 minutes: is it the chosen weekday and hour, and has this week's digest not gone out yet? */
+export function digestDue(now = Date.now()): boolean {
+  const s = digestSettings();
+  if (!s.enabled) return false;
+  const p = localParts(now, tz());
+  return p.dow === s.weekday && p.hour === s.hour && now - s.lastSent > 2 * DAY;
+}
+
+let timer: NodeJS.Timeout | undefined;
+export function startDigestTimer(): void {
+  timer = setInterval(() => {
+    try {
+      if (digestDue()) sendDigest();
+    } catch (e) {
+      console.error('weekly digest failed:', (e as Error).message);
+    }
+  }, 10 * 60_000);
+  timer.unref();
+}
+
+export function registerDigest({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const payload = () => ({ ...digestSettings(), preview: buildDigest() });
+
+  app.get('/api/digest', admin, (_req, res) => res.json(payload()));
+
+  app.put('/api/digest', admin, (req, res) => {
+    const b = z
+      .object({
+        enabled: z.boolean().optional(),
+        channelId: z.string().regex(/^(\d{15,25})?$/).optional(),
+        weekday: z.number().int().min(0).max(6).optional(),
+        hour: z.number().int().min(0).max(23).optional(),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (b.data.enabled && !(b.data.channelId ?? (digestSettings().channelId || alertSettings().channelId))) {
+      return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
+    }
+    if (b.data.enabled !== undefined) setSetting('digest_enabled', b.data.enabled ? '1' : '0');
+    if (b.data.channelId !== undefined) setSetting('digest_channel', b.data.channelId);
+    if (b.data.weekday !== undefined) setSetting('digest_weekday', String(b.data.weekday));
+    if (b.data.hour !== undefined) setSetting('digest_hour', String(b.data.hour));
+    res.json(payload());
+  });
+
+  app.post('/api/digest/send', admin, (_req, res) => {
+    if (!sendDigest()) return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
+    res.json(payload());
+  });
+
+  // the picture of a digest: the administrator's preview, or the signed address in the Discord message
+  app.get('/api/digest/preview.png', admin, async (_req, res, next) => {
+    try {
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).send(await renderDigest(buildDigest()));
+    } catch (e) {
+      next(e);
+    }
+  });
+  app.get('/api/digest/:to(\\d+)-:sig([0-9a-f]{20}).png', async (req, res, next) => {
+    const to = Number(req.params.to);
+    if (req.params.sig !== sign(to) || to > Date.now() + 60_000) return res.status(404).json({ error: 'Не найдено' });
+    try {
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=604800, immutable' }).send(await renderDigest(buildDigest(to)));
+    } catch (e) {
+      next(e);
+    }
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/discordNames.ts" << '__COREGSM_EOF__'
 /** Turns a Discord display name into a panel login (3-32 chars: letters, digits, _ . - and single spaces between words). */
 export const LOGIN_MIN = 3;
@@ -6990,6 +7476,7 @@ export const ERRORS = {
 
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Сервер не найден',
+  player_not_found: 'Игрок не найден',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',
@@ -7418,6 +7905,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gsm.ts" << '__COREGSM_EOF__'
 import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
+import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
 import { onSessionsOpened } from './nickOnboarding.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
@@ -7651,6 +8139,8 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   }
   try {
     trackAlerts(s.id, d.online, r.error);
+    // smart alerts measure a working server; planned work is not a symptom
+    if (!maint) trackSmart(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers, ping: r.ping }, ts);
   } catch (e) {
     console.error('alerts failed', (e as Error).message);
   }
@@ -7989,6 +8479,90 @@ export const wrap =
   };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/incidents.ts" << '__COREGSM_EOF__'
+/**
+ * Incidents: the stretches of the poll history in which a server did not answer. A single failed poll that the
+ * poller has not confirmed yet (history.unconfirmed) is not an outage; a stretch inside a maintenance window
+ * (history.maint) is a planned one. Shared by the status page, the server page and the weekly digest.
+ */
+import { db } from './db.js';
+
+export interface Incident {
+  serverId: number;
+  start: number;
+  /** null while the server is still down */
+  end: number | null;
+  minutes: number;
+  /** players on the server at the last poll before it went down */
+  playersBefore: number;
+  planned: boolean;
+}
+
+export const DAY = 86_400_000;
+
+/** every incident that ended after `since` (or is still going on), oldest first */
+export function incidentsSince(since: number, serverId?: number, now = Date.now()): Incident[] {
+  const rows = db
+    .prepare(
+      `SELECT server_id AS s, ts, online, players, COALESCE(unconfirmed, 0) AS u, COALESCE(maint, 0) AS m
+       FROM history WHERE ts > ? ${serverId != null ? 'AND server_id = ?' : ''} ORDER BY server_id, ts`,
+    )
+    .all(...(serverId != null ? [since - DAY, serverId] : [since - DAY])) as { s: number; ts: number; online: number; players: number; u: number; m: number }[];
+  const out: Incident[] = [];
+  let cur: { serverId: number; start: number; playersBefore: number; planned: boolean } | null = null;
+  let lastServer = -1;
+  let lastPlayers = 0;
+  const close = (end: number | null) => {
+    if (!cur) return;
+    const stop = end ?? now;
+    if (stop > since) out.push({ ...cur, end, minutes: Math.max(1, Math.round((stop - cur.start) / 60_000)) });
+    cur = null;
+  };
+  for (const r of rows) {
+    if (r.s !== lastServer) {
+      // the previous server's history ended while it was down: still going on
+      close(null);
+      lastServer = r.s;
+      lastPlayers = 0;
+    }
+    const down = !r.online && !r.u;
+    if (down) {
+      if (!cur) cur = { serverId: r.s, start: r.ts, playersBefore: lastPlayers, planned: !!r.m };
+      else if (r.m) cur.planned = true;
+    } else {
+      if (cur) close(r.ts);
+      if (r.online) lastPlayers = r.players;
+    }
+  }
+  close(null);
+  return out;
+}
+
+/** minutes of downtime per UTC day (the days of uptime_daily), unplanned and planned apart */
+export function downtimeByDay(list: Incident[], now = Date.now()): Map<string, { down: number; planned: number; count: number }> {
+  const out = new Map<string, { down: number; planned: number; count: number }>();
+  for (const i of list) {
+    const end = i.end ?? now;
+    let t = i.start;
+    let first = true;
+    while (t < end) {
+      const dayEnd = (Math.floor(t / DAY) + 1) * DAY;
+      const stop = Math.min(end, dayEnd);
+      const key = `${i.serverId}|${new Date(t).toISOString().slice(0, 10)}`;
+      const v = out.get(key) ?? { down: 0, planned: 0, count: 0 };
+      const min = (stop - t) / 60_000;
+      if (i.planned) v.planned += min;
+      else v.down += min;
+      if (first) v.count++;
+      first = false;
+      out.set(key, v);
+      t = stop;
+    }
+  }
+  return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/index.ts" << '__COREGSM_EOF__'
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
@@ -8003,6 +8577,7 @@ import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
+import { registerDigest, startDigestTimer } from './digest.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -8024,6 +8599,8 @@ import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
 import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
+import { router as analyticsRouter } from './routes/analytics.js';
+import { router as communityRouter } from './routes/community.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8058,6 +8635,8 @@ app.use(updatesRouter);
 app.use(usersRouter);
 app.use(discordLoginRouter);
 app.use(serversRouter);
+app.use(analyticsRouter);
+app.use(communityRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -8083,6 +8662,7 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
+registerDigest({ app, admin });
 registerSecurity({
   app,
   admin,
@@ -8134,11 +8714,33 @@ const server = app.listen(PORT, () => {
   }
   startPoller(POLL_MS);
   startBackupTimer();
+  startDigestTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 installShutdown(server);
 
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/localTime.ts" << '__COREGSM_EOF__'
+/** Weekday, hour and day of a moment in a time zone (the panel's own, for analytics and the weekly digest). */
+
+const fmtCache = new Map<string, Intl.DateTimeFormat>();
+/** weekday (0 = Monday), hour and the day key "YYYY-MM-DD" of a moment in the panel's time zone */
+export function localParts(ts: number, tz: string): { dow: number; hour: number; day: string } {
+  let f = fmtCache.get(tz);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
+    } catch {
+      f = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
+    }
+    fmtCache.set(tz, f);
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday);
+  return { dow: Math.max(0, dow), hour: Number(p.hour) % 24, day: `${p.year}-${p.month}-${p.day}` };
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/loginGuard.ts" << '__COREGSM_EOF__'
@@ -8581,6 +9183,20 @@ CREATE TABLE IF NOT EXISTS login_guard (
   PRIMARY KEY (scope, key)
 );
 CREATE INDEX IF NOT EXISTS idx_login_guard_expires ON login_guard(expires_at);`),
+  },
+  {
+    version: 7,
+    name: 'smart_state',
+    // smart alerts: since when a condition holds (low online, high ping, almost full) and when it was last reported
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS smart_state (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  since INTEGER,
+  last_alert INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (server_id, kind)
+);`),
   },
 ];
 
@@ -11666,6 +12282,197 @@ router.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/analytics.ts" << '__COREGSM_EOF__'
+/**
+ * Player analytics of one server, from what the poller already stores: the poll history (30 days) and the visits of
+ * players (player_sessions, 90 days). Days, hours and weekdays are those of the panel's time zone.
+ *
+ * GET /api/servers/:id/analytics?days=7|30|90
+ *   heatmap   average players per weekday x hour (Monday first), the busiest and the quietest hour
+ *   summary   unique players (24 h / 7 d / 30 d), new players, visits, average and median visit, player-hours
+ *   daily     per day: unique players, new ones, player-hours, peak
+ *   sessions  visit lengths in six buckets
+ *   cohorts   weekly retention: of the players first seen in a week, the share that came back in the weeks after
+ *   top       the ten players with the most time on the server in the period
+ */
+import express from 'express';
+import { viewer } from '../auth.js';
+import { db, getSetting } from '../db.js';
+import { localParts } from '../localTime.js';
+import { vrRankIdFor } from '../profile.js';
+
+export const router = express.Router();
+
+const DAY = 86_400_000;
+const WEEK = 7 * DAY;
+export const SESSION_BUCKETS = [
+  { key: 'lt15', label: 'до 15 мин', max: 15 },
+  { key: 'lt30', label: '15–30 мин', max: 30 },
+  { key: 'lt60', label: '30–60 мин', max: 60 },
+  { key: 'lt120', label: '1–2 ч', max: 120 },
+  { key: 'lt240', label: '2–4 ч', max: 240 },
+  { key: 'more', label: '4 ч и больше', max: Infinity },
+] as const;
+
+const timeZone = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+const median = (xs: number[]) => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+const round1 = (v: number) => Math.round(v * 10) / 10;
+
+interface Visit { name: string; key: string; joined: number; left: number }
+
+export function analyticsFor(serverId: number, days: number, now = Date.now()) {
+  const tz = timeZone();
+  const since = now - days * DAY;
+
+  // ---- weekday x hour: the average of hourly averages (history is kept for 30 days) ----
+  const heatSince = now - Math.min(days, 30) * DAY;
+  const hourly = db
+    .prepare('SELECT ts / 3600000 AS h, AVG(players) AS a, MAX(players) AS m FROM history WHERE server_id = ? AND ts > ? GROUP BY h')
+    .all(serverId, heatSince) as { h: number; a: number; m: number }[];
+  const sum = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const cnt = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const peak = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  for (const r of hourly) {
+    const { dow, hour } = localParts(r.h * 3600_000, tz);
+    sum[dow][hour] += r.a;
+    cnt[dow][hour] += 1;
+    peak[dow][hour] = Math.max(peak[dow][hour], r.m);
+  }
+  const cells = sum.map((row, d) => row.map((v, h) => (cnt[d][h] ? round1(v / cnt[d][h]) : null)));
+  let busiest: { dow: number; hour: number; avg: number } | null = null;
+  let quietest: { dow: number; hour: number; avg: number } | null = null;
+  cells.forEach((row, dow) => row.forEach((avg, hour) => {
+    if (avg == null) return;
+    if (!busiest || avg > busiest.avg) busiest = { dow, hour, avg };
+    if (!quietest || avg < quietest.avg) quietest = { dow, hour, avg };
+  }));
+  // the hour of the day with the fewest players on average over the week: the suggested restart time
+  const byHour = Array.from({ length: 24 }, (_, h) => {
+    const xs = cells.map((row) => row[h]).filter((v): v is number => v != null);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  });
+  let restartHour: number | null = null;
+  byHour.forEach((v, h) => { if (v != null && (restartHour == null || v < (byHour[restartHour] ?? Infinity))) restartHour = h; });
+
+  // ---- visits ----
+  const firstSeen = new Map(
+    (db.prepare('SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions WHERE server_id = ? GROUP BY k').all(serverId) as { k: string; t: number }[]).map((r) => [r.k, r.t]),
+  );
+  // the cohorts look six weeks back whatever the period
+  const from = Math.min(since, now - 6 * WEEK);
+  const visits: Visit[] = (
+    db.prepare('SELECT name, joined_at, COALESCE(left_at, ?) AS left_at FROM player_sessions WHERE server_id = ? AND COALESCE(left_at, ?) > ? ORDER BY joined_at')
+      .all(now, serverId, now, from) as { name: string; joined_at: number; left_at: number }[]
+  ).map((r) => ({ name: r.name, key: r.name.toLowerCase(), joined: r.joined_at, left: Math.max(r.joined_at, r.left_at) }));
+  const inPeriod = visits.filter((v) => v.left > since);
+
+  const uniqueSince = (t: number) => new Set(visits.filter((v) => v.left > t).map((v) => v.key)).size;
+  const minutes = inPeriod.map((v) => (Math.min(v.left, now) - Math.max(v.joined, since)) / 60_000).filter((m) => m > 0);
+  const newPlayers = new Set(inPeriod.filter((v) => (firstSeen.get(v.key) ?? 0) > since).map((v) => v.key));
+  const players = new Set(inPeriod.map((v) => v.key));
+
+  // ---- per day ----
+  const dayKeys: string[] = [];
+  for (let t = now - (days - 1) * DAY; t <= now; t += DAY) dayKeys.push(localParts(t, tz).day);
+  const dayIdx = new Map(dayKeys.map((d, i) => [d, i]));
+  const daily = dayKeys.map((day) => ({ day, players: new Set<string>(), fresh: new Set<string>(), hours: 0, peak: 0 }));
+  for (const v of inPeriod) {
+    const i = dayIdx.get(localParts(Math.max(v.joined, since), tz).day);
+    if (i == null) continue;
+    daily[i].players.add(v.key);
+    const fs = firstSeen.get(v.key);
+    if (fs != null && localParts(fs, tz).day === daily[i].day) daily[i].fresh.add(v.key);
+    daily[i].hours += (Math.min(v.left, now) - Math.max(v.joined, since)) / 3600_000;
+  }
+  for (const r of db.prepare('SELECT ts, players FROM history WHERE server_id = ? AND ts > ?').iterate(serverId, since) as Iterable<{ ts: number; players: number }>) {
+    const i = dayIdx.get(localParts(r.ts, tz).day);
+    if (i != null && r.players > daily[i].peak) daily[i].peak = r.players;
+  }
+
+  // ---- visit lengths ----
+  const sessions = SESSION_BUCKETS.map((b) => ({ key: b.key, label: b.label, count: 0 }));
+  for (const m of minutes) sessions[SESSION_BUCKETS.findIndex((b) => m < b.max)].count++;
+
+  // ---- weekly retention: cohort c = players first seen c weeks ago ----
+  const weekOf = (t: number) => Math.floor((now - t) / WEEK);
+  const activeWeeks = new Map<string, Set<number>>();
+  for (const v of visits) {
+    const s = activeWeeks.get(v.key) ?? new Set<number>();
+    for (let w = weekOf(v.left); w <= weekOf(v.joined); w++) s.add(w);
+    activeWeeks.set(v.key, s);
+  }
+  const cohorts = [5, 4, 3, 2, 1, 0].map((c) => {
+    const members = [...firstSeen].filter(([, t]) => weekOf(t) === c).map(([k]) => k);
+    const rates: number[] = [];
+    for (let k = 1; k <= c; k++) {
+      const back = members.filter((m) => activeWeeks.get(m)?.has(c - k)).length;
+      rates.push(members.length ? Math.round((back / members.length) * 100) : 0);
+    }
+    return { start: now - (c + 1) * WEEK, size: members.length, rates };
+  });
+
+  // ---- top players ----
+  const per = new Map<string, { name: string; minutes: number; visits: number; last: number }>();
+  for (const v of inPeriod) {
+    const p = per.get(v.key) ?? { name: v.name, minutes: 0, visits: 0, last: 0 };
+    p.minutes += (Math.min(v.left, now) - Math.max(v.joined, since)) / 60_000;
+    p.visits++;
+    if (v.left >= p.last) { p.last = v.left; p.name = v.name; }
+    per.set(v.key, p);
+  }
+  const game = (db.prepare('SELECT game FROM servers WHERE id = ?').get(serverId) as { game: string } | undefined)?.game;
+  const top = [...per.values()]
+    .sort((a, b) => b.minutes - a.minutes)
+    .slice(0, 10)
+    .map((p) => ({ name: p.name, hours: round1(p.minutes / 60), visits: p.visits, lastSeen: p.last >= now - 60_000 ? null : p.last, ...(game === 'vrising' ? { rankId: vrRankIdFor(p.name) } : {}) }));
+
+  return {
+    days,
+    timeZone: tz,
+    heatmap: { days: Math.min(days, 30), cells, peak, busiest, quietest, restartHour },
+    summary: {
+      players: players.size,
+      dau: uniqueSince(now - DAY),
+      wau: uniqueSince(now - WEEK),
+      mau: uniqueSince(now - 30 * DAY),
+      newPlayers: newPlayers.size,
+      returning: players.size - newPlayers.size,
+      visits: inPeriod.length,
+      avgMinutes: minutes.length ? Math.round(minutes.reduce((a, b) => a + b, 0) / minutes.length) : null,
+      medianMinutes: minutes.length ? Math.round(median(minutes)!) : null,
+      playerHours: Math.round(minutes.reduce((a, b) => a + b, 0) / 60),
+    },
+    daily: daily.map((d) => ({ day: d.day, players: d.players.size, newPlayers: d.fresh.size, hours: round1(d.hours), peak: d.peak })),
+    sessions,
+    cohorts,
+    top,
+  };
+}
+
+// one computation per server and period per minute: the page polls and several people may look at once
+const cache = new Map<string, { at: number; v: ReturnType<typeof analyticsFor> }>();
+
+router.get('/api/servers/:id(\\d+)/analytics', viewer, (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const asked = Number(req.query.days);
+  const days = asked === 7 || asked === 90 ? asked : 30;
+  const key = `${id}|${days}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return res.json(hit.v);
+  const v = analyticsFor(id, days);
+  if (cache.size > 200) cache.clear();
+  cache.set(key, { at: Date.now(), v });
+  res.json(v);
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/bindings.ts" << '__COREGSM_EOF__'
 /** Discord bindings: which server is posted to which channel, the channel list and the embed preview. */
 import express from 'express';
@@ -11745,6 +12552,171 @@ router.delete('/api/bindings/:id', admin, (req, res) => {
   const r = db.prepare('DELETE FROM bindings WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
   res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/community.ts" << '__COREGSM_EOF__'
+/**
+ * The community as a whole, for the main page and the public «Сообщество» page, and the card of one player.
+ *
+ * GET /api/community
+ *   now       players online on all servers, servers online
+ *   record    the most players online at once in the last 30 days (5-minute buckets) and when
+ *   heatmap   average players on all servers per weekday x hour (panel time zone), the busiest hour
+ *   players   unique players in the last 24 h / 7 days / 30 days, new players this week
+ *   feed      the latest arrivals: who came to which server, newcomers marked
+ *   top       the players with the most hours this week and this month
+ *   servers   the servers by players now
+ *
+ * GET /api/players/:name   one player by the nick the game servers report: where and when they play
+ */
+import express from 'express';
+import { viewer } from '../auth.js';
+import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
+import { localParts } from '../localTime.js';
+import { vrRankIdFor } from '../profile.js';
+
+export const router = express.Router();
+
+const DAY = 86_400_000;
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+interface ServerName { id: number; name: string; game: string }
+const serverNames = () =>
+  new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
+
+function community(now = Date.now()) {
+  const names = serverNames();
+  const live = db.prepare('SELECT s.id, st.online, st.players, st.max_players FROM servers s LEFT JOIN status st ON st.server_id = s.id').all() as { id: number; online: number | null; players: number | null; max_players: number | null }[];
+
+  // the most players at once: per 5-minute bucket the busiest moment of each server, summed
+  const buckets = new Map<number, number>();
+  for (const r of db
+    .prepare('SELECT ts / 300000 AS b, server_id, MAX(players) AS p FROM history WHERE ts > ? AND online = 1 GROUP BY b, server_id')
+    .iterate(now - 30 * DAY) as Iterable<{ b: number; p: number }>) buckets.set(r.b, (buckets.get(r.b) ?? 0) + r.p);
+  let record: { players: number; at: number } | null = null;
+  for (const [b, p] of buckets) if (!record || p > record.players) record = { players: p, at: b * 300_000 };
+
+  // weekday x hour of the whole community: the hourly totals averaged
+  const hourly = new Map<number, number>();
+  for (const r of db
+    .prepare('SELECT ts / 3600000 AS h, server_id, AVG(players) AS a FROM history WHERE ts > ? GROUP BY h, server_id')
+    .iterate(now - 30 * DAY) as Iterable<{ h: number; a: number }>) hourly.set(r.h, (hourly.get(r.h) ?? 0) + r.a);
+  const sum = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const cnt = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const zone = tz();
+  for (const [h, total] of hourly) {
+    const p = localParts(h * 3600_000, zone);
+    sum[p.dow][p.hour] += total;
+    cnt[p.dow][p.hour]++;
+  }
+  const cells = sum.map((row, d) => row.map((v, h) => (cnt[d][h] ? Math.round((v / cnt[d][h]) * 10) / 10 : null)));
+  let busiest: { dow: number; hour: number; avg: number } | null = null;
+  cells.forEach((row, dow) => row.forEach((avg, hour) => { if (avg != null && (!busiest || avg > busiest.avg)) busiest = { dow, hour, avg }; }));
+
+  const uniq = (since: number) => (db.prepare('SELECT COUNT(DISTINCT ulower(name)) AS n FROM player_sessions WHERE COALESCE(left_at, ?) > ?').get(now, since) as { n: number }).n;
+  const firstSeen = db.prepare('SELECT MIN(joined_at) AS t FROM player_sessions WHERE ulower(name) = ulower(?)');
+  const newWeek = (db.prepare('SELECT COUNT(*) AS n FROM (SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions GROUP BY k) WHERE t > ?').get(now - 7 * DAY) as { n: number }).n;
+
+  const feed = (db.prepare('SELECT server_id, name, joined_at, left_at FROM player_sessions ORDER BY joined_at DESC LIMIT 14').all() as { server_id: number; name: string; joined_at: number; left_at: number | null }[])
+    .filter((r) => names.has(r.server_id))
+    .map((r) => ({
+      name: r.name,
+      serverId: r.server_id,
+      serverName: names.get(r.server_id)!.name,
+      game: names.get(r.server_id)!.game,
+      at: r.joined_at,
+      online: r.left_at == null,
+      newcomer: (firstSeen.get(r.name) as { t: number }).t === r.joined_at,
+    }));
+
+  const topSince = (since: number) =>
+    (db
+      .prepare(
+        `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+         FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY k ORDER BY h DESC LIMIT 10`,
+      )
+      .all(now, now, since, now, since) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+
+  const servers = live
+    .filter((s) => names.has(s.id))
+    .map((s) => ({ id: s.id, name: names.get(s.id)!.name, game: names.get(s.id)!.game, online: !!s.online, players: s.online ? s.players ?? 0 : 0, maxPlayers: s.max_players ?? 0 }))
+    .sort((a, b) => b.players - a.players);
+
+  return {
+    now: { players: servers.reduce((n, s) => n + s.players, 0), online: servers.filter((s) => s.online).length, servers: servers.length },
+    record,
+    heatmap: { cells, busiest },
+    players: { day: uniq(now - DAY), week: uniq(now - 7 * DAY), month: uniq(now - 30 * DAY), newWeek },
+    feed,
+    top: { week: topSince(now - 7 * DAY), month: topSince(now - 30 * DAY) },
+    servers,
+  };
+}
+
+let cached: { at: number; v: ReturnType<typeof community> } | null = null;
+router.get('/api/community', viewer, (_req, res) => {
+  if (!cached || Date.now() - cached.at > 30_000) cached = { at: Date.now(), v: community() };
+  res.json(cached.v);
+});
+
+/** one player: the visits of a nick (any case) on every server in the 90 days the panel keeps */
+export function playerCard(nick: string, now = Date.now()) {
+  const visits = db
+    .prepare('SELECT server_id, name, joined_at, COALESCE(left_at, ?) AS left_at, left_at IS NULL AS live FROM player_sessions WHERE ulower(name) = ulower(?) ORDER BY joined_at')
+    .all(now, nick) as { server_id: number; name: string; joined_at: number; left_at: number; live: number }[];
+  if (!visits.length) return null;
+  const names = serverNames();
+  const zone = tz();
+  const hours = (v: { joined_at: number; left_at: number }) => (v.left_at - v.joined_at) / 3600_000;
+  const per = new Map<number, { hours: number; visits: number; last: number }>();
+  const byHour = Array<number>(24).fill(0);
+  const days = new Set<string>();
+  for (const v of visits) {
+    const p = per.get(v.server_id) ?? { hours: 0, visits: 0, last: 0 };
+    p.hours += hours(v);
+    p.visits++;
+    p.last = Math.max(p.last, v.left_at);
+    per.set(v.server_id, p);
+    // the hours of the day the player is on, counted in quarter-hour steps
+    for (let t = v.joined_at; t < v.left_at; t += 900_000) byHour[localParts(t, zone).hour] += 0.25;
+    days.add(localParts(v.joined_at, zone).day);
+  }
+  // the streak: days in a row with a visit, up to today (or yesterday)
+  let streak = 0;
+  for (let k = 0; k < 90; k++) {
+    const d = localParts(now - k * DAY, zone).day;
+    if (days.has(d)) streak++;
+    else if (k > 0) break;
+  }
+  const name = visits[visits.length - 1].name;
+  const game = [...per.keys()].map((id) => names.get(id)?.game).find((g) => g === 'vrising');
+  const total = visits.reduce((n, v) => n + hours(v), 0);
+  return {
+    name,
+    firstSeen: visits[0].joined_at,
+    lastSeen: visits.some((v) => v.live) ? null : visits[visits.length - 1].left_at,
+    online: visits.some((v) => v.live),
+    hours: Math.round(total * 10) / 10,
+    visits: visits.length,
+    days: days.size,
+    streak,
+    usualHour: byHour.some((v) => v > 0) ? byHour.indexOf(Math.max(...byHour)) : null,
+    byHour: byHour.map((v) => Math.round(v * 10) / 10),
+    servers: [...per]
+      .filter(([id]) => names.has(id))
+      .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
+      .sort((a, b) => b.hours - a.hours),
+    recent: visits.slice(-8).reverse().filter((v) => names.has(v.server_id)).map((v) => ({ serverId: v.server_id, serverName: names.get(v.server_id)!.name, from: v.joined_at, to: v.live ? null : v.left_at })),
+    ...(game ? { rankId: vrRankIdFor(name) } : {}),
+  };
+}
+
+router.get('/api/players/:name', viewer, (req, res) => {
+  const nick = String(req.params.name).slice(0, 64);
+  const card = playerCard(nick);
+  if (!card) return res.status(404).json({ error: 'Игрок не найден' });
+  res.json(card);
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
@@ -11998,6 +12970,7 @@ import { queryServer, refreshServer } from '../gsm.js';
 import { wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
+import { downtimeByDay, incidentsSince } from '../incidents.js';
 import { getServer, publicServer, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
 
@@ -12026,6 +12999,32 @@ router.get('/api/servers', viewer, (req, res) => {
   const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
   const list = rows.map(serialize);
   res.json(isAdmin(req) ? list : list.map(publicServer));
+});
+
+/**
+ * The sparklines of the server list (and the comparison chart) in one request: for every server the player count
+ * over the last `hours` (up to 14 days), cut into `points` buckets (48 by default, the busiest moment of each),
+ * and which buckets had the server down. An empty bucket (no poll in it) is null.
+ */
+router.get('/api/servers/sparks', viewer, (req, res) => {
+  const hours = Math.min(336, Math.max(1, Number(req.query.hours) || 24));
+  const SPARK_POINTS = Math.min(200, Math.max(12, Number(req.query.points) || 48));
+  const now = Date.now();
+  const since = now - hours * 3600_000;
+  const bucket = Math.ceil((hours * 3600_000) / SPARK_POINTS);
+  const rows = db
+    .prepare(
+      `SELECT server_id AS id, MIN(CAST((ts - ?) / ? AS INTEGER), ${SPARK_POINTS - 1}) AS b, MAX(players) AS p, MIN(online) AS o
+       FROM history WHERE ts > ? GROUP BY server_id, b`,
+    )
+    .all(since, bucket, since) as { id: number; b: number; p: number; o: number }[];
+  const out: Record<number, { players: (number | null)[]; down: boolean[] }> = {};
+  for (const r of rows) {
+    const s = (out[r.id] ??= { players: Array(SPARK_POINTS).fill(null), down: Array(SPARK_POINTS).fill(false) });
+    s.players[r.b] = r.p;
+    if (!r.o) s.down[r.b] = true;
+  }
+  res.set('Cache-Control', 'no-cache').json({ hours, points: SPARK_POINTS, from: since, to: now, servers: out });
 });
 
 router.post(
@@ -12160,8 +13159,25 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
       peakAt: peak?.ts ?? null,
     },
     events,
+    // «обычно»: the average players per hour of the week (UTC weekday * 24 + hour) over the four weeks before the
+    // shown period, so the chart can show where today is unusual; null where there is not enough history
+    baseline: hours <= 168 ? usualWeek(id, since) : null,
   });
 });
+
+function usualWeek(serverId: number, before: number): (number | null)[] {
+  const out = Array<number | null>(168).fill(null);
+  const rows = db
+    .prepare(
+      `SELECT CAST(strftime('%w', ts / 1000, 'unixepoch') AS INTEGER) * 24 + CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS how,
+              AVG(players) AS a, COUNT(DISTINCT ts / 86400000) AS days
+       FROM history WHERE server_id = ? AND online = 1 AND ts > ? AND ts < ? GROUP BY how`,
+    )
+    .all(serverId, before - 28 * 86400_000, before) as { how: number; a: number; days: number }[];
+  // at least two different days behind an hour, otherwise one odd evening would be "usual"
+  for (const r of rows) if (r.days >= 2) out[r.how] = Math.round(r.a * 10) / 10;
+  return out;
+}
 
 router.post(
   '/api/servers/:id/refresh',
@@ -12286,8 +13302,28 @@ router.get('/api/status', viewer, (req, res) => {
   }
   const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
   const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+  // outages of the 30 days: minutes per day for the bars, and the list of incidents under them
+  const incidents = incidentsSince(now - 30 * 86400_000, undefined, now);
+  const downtime = downtimeByDay(incidents, now);
+  const shown = new Map(servers.map((sv) => [sv.id, sv]));
+  // response time: hourly average ping of the last 24 hours
+  const latency = new Map<number, (number | null)[]>();
+  const hourNow = Math.floor(now / 3600_000);
+  for (const r of db
+    .prepare('SELECT server_id AS id, ts / 3600000 AS h, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY id, h')
+    .all(now - 24 * 3600_000) as { id: number; h: number; a: number }[]) {
+    const arr = latency.get(r.id) ?? Array<number | null>(24).fill(null);
+    const i = 23 - (hourNow - r.h);
+    if (i >= 0 && i < 24) arr[i] = Math.round(r.a);
+    latency.set(r.id, arr);
+  }
   res.json({
     updatedAt: last ?? now,
+    incidents: incidents
+      .filter((i) => shown.has(i.serverId))
+      .reverse()
+      .slice(0, 50)
+      .map((i) => ({ ...i, serverName: shown.get(i.serverId)!.name, game: shown.get(i.serverId)!.game })),
     servers: servers.map((sv) => {
       let up = 0;
       let total = 0;
@@ -12297,7 +13333,8 @@ router.get('/api/status', viewer, (req, res) => {
           up += r.up;
           total += r.total;
         }
-        return { day, pct: r ? pct(r.up, r.total) : null };
+        const dt = downtime.get(`${sv.id}|${day}`);
+        return { day, pct: r ? pct(r.up, r.total) : null, down: dt ? Math.round(dt.down) : 0, planned: dt ? Math.round(dt.planned) : 0, incidents: dt?.count ?? 0 };
       });
       return {
         id: sv.id,
@@ -12311,6 +13348,7 @@ router.get('/api/status', viewer, (req, res) => {
         uptime30: pct(up, total),
         days: dd,
         avgPing: pings.get(sv.id) ?? null,
+        latency: latency.get(sv.id) ?? [],
       };
     }),
   });
@@ -12435,6 +13473,12 @@ router.put(
     res.json(brand());
   },
 );
+router.put('/api/branding/theme', admin, (req, res) => {
+  const b = z.object({ theme: z.enum(['auto', 'light', 'dark']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  setSetting('default_theme', b.data.theme);
+  res.json(brand());
+});
 router.delete('/api/branding/logo', admin, (_req, res) => {
   const old = logoFile();
   if (old) fs.rmSync(old, { force: true });
@@ -13470,11 +14514,139 @@ export const brand = () => ({
   color: getSetting('brand_color') || '#4f46e5',
   color2: getSetting('brand_color2') || '',
   preset: getSetting('brand_preset') || '',
+  // the theme for visitors who have not picked one themselves
+  theme: (['auto', 'light', 'dark'].includes(getSetting('default_theme') ?? '') ? getSetting('default_theme') : 'dark') as 'auto' | 'light' | 'dark',
   hasLogo: !!logoFile(),
   logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
 });
 
 export const baseOf = (req: Request) => `${req.protocol}://${req.get('host')}`;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/smartAlerts.ts" << '__COREGSM_EOF__'
+/**
+ * Smart alerts: messages to the alerts channel about a server that answers but is not well. Each kind is switched on
+ * by itself in the panel and fires only when its condition has held for a while, then rests for a cooldown:
+ *   low   far fewer players than usual for this weekday and hour (under 30% of the average of the last four weeks,
+ *         when that average is at least 5) for 20 minutes
+ *   ping  the ping is over twice the day's average and over 150 ms for 15 minutes
+ *   full  90% of the slots or more are taken for 15 minutes
+ */
+import { alertSettings, enqueueAlert } from './alerts.js';
+import { db, EFFECTIVE_NAME, getSetting } from './db.js';
+import { gameLabel } from './games.js';
+
+export type SmartKind = 'low' | 'ping' | 'full';
+export const SMART_KINDS: SmartKind[] = ['low', 'ping', 'full'];
+
+const RULES: Record<SmartKind, { holdMin: number; cooldownH: number; color: number }> = {
+  low: { holdMin: 20, cooldownH: 6, color: 0xf5b01e },
+  ping: { holdMin: 15, cooldownH: 3, color: 0xf5b01e },
+  full: { holdMin: 15, cooldownH: 12, color: 0x5865f2 },
+};
+
+export const smartEnabled = (k: SmartKind) => getSetting(`alerts_smart_${k}`) === '1';
+
+// the usual players for an hour of the week and the day's ping are read once an hour per server
+const usualCache = new Map<string, { at: number; v: number | null }>();
+function usualPlayers(serverId: number, now: number): number | null {
+  const how = new Date(now).getUTCDay() * 24 + new Date(now).getUTCHours();
+  const key = `${serverId}|${how}`;
+  const c = usualCache.get(key);
+  if (c && now - c.at < 3600_000) return c.v;
+  const r = db
+    .prepare(
+      `SELECT AVG(players) AS a, COUNT(*) AS n FROM history
+       WHERE server_id = ? AND online = 1 AND ts > ? AND ts < ? AND CAST(strftime('%w', ts / 1000, 'unixepoch') AS INTEGER) * 24 + CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) = ?`,
+    )
+    .get(serverId, now - 28 * 86400_000, now - 86400_000, how) as { a: number | null; n: number };
+  // at least two weeks' worth of that hour, otherwise there is nothing to compare with
+  const v = r.n >= 40 && r.a != null ? r.a : null;
+  usualCache.set(key, { at: now, v });
+  return v;
+}
+const pingCache = new Map<number, { at: number; v: number | null }>();
+function usualPing(serverId: number, now: number): number | null {
+  const c = pingCache.get(serverId);
+  if (c && now - c.at < 3600_000) return c.v;
+  const r = db.prepare('SELECT AVG(ping) AS a, COUNT(*) AS n FROM history WHERE server_id = ? AND online = 1 AND ping IS NOT NULL AND ts > ?').get(serverId, now - 86400_000) as { a: number | null; n: number };
+  const v = r.n >= 20 && r.a != null ? r.a : null;
+  pingCache.set(serverId, { at: now, v });
+  return v;
+}
+
+/** whether each condition holds now, with the numbers for the message */
+export function smartConditions(
+  serverId: number,
+  s: { online: boolean; players: number; maxPlayers: number; ping: number | null },
+  now = Date.now(),
+): Record<SmartKind, { on: boolean; text: string }> {
+  const usual = s.online ? usualPlayers(serverId, now) : null;
+  const ping = s.online && s.ping != null ? usualPing(serverId, now) : null;
+  return {
+    low: {
+      on: s.online && usual != null && usual >= 5 && s.players < usual * 0.3,
+      text: `Сейчас ${s.players} ${s.players === 1 ? 'игрок' : 'игроков'}, а обычно в это время около ${Math.round(usual ?? 0)}.`,
+    },
+    ping: {
+      on: s.online && s.ping != null && ping != null && s.ping > 150 && s.ping > ping * 2,
+      text: `Пинг ${s.ping} мс, а за сутки в среднем ${Math.round(ping ?? 0)} мс.`,
+    },
+    full: {
+      on: s.online && s.maxPlayers > 0 && s.players >= s.maxPlayers * 0.9,
+      text: `Занято ${s.players} из ${s.maxPlayers} мест: новым игрокам скоро будет некуда зайти. Возможно, пора добавить слоты.`,
+    },
+  };
+}
+
+const TITLE: Record<SmartKind, (n: string) => string> = {
+  low: (n) => `📉 На ${n} необычно мало игроков`,
+  ping: (n) => `🐢 ${n}: вырос пинг`,
+  full: (n) => `🔥 ${n} почти заполнен`,
+};
+
+/** Called after every confirmed poll of a server (not during maintenance). */
+export function trackSmart(serverId: number, s: { online: boolean; players: number; maxPlayers: number; ping: number | null }, now = Date.now()): void {
+  const a = alertSettings();
+  if (!a.enabled || !a.channelId || !SMART_KINDS.some(smartEnabled)) return;
+  const cond = smartConditions(serverId, s, now);
+  const get = db.prepare('SELECT since, last_alert FROM smart_state WHERE server_id = ? AND kind = ?');
+  const put = db.prepare(
+    'INSERT INTO smart_state (server_id, kind, since, last_alert) VALUES (?, ?, ?, ?) ON CONFLICT (server_id, kind) DO UPDATE SET since = excluded.since, last_alert = excluded.last_alert',
+  );
+  for (const k of SMART_KINDS) {
+    if (!smartEnabled(k)) continue;
+    const st = (get.get(serverId, k) as { since: number | null; last_alert: number } | undefined) ?? { since: null, last_alert: 0 };
+    if (!cond[k].on) {
+      if (st.since != null) put.run(serverId, k, null, st.last_alert);
+      continue;
+    }
+    const since = st.since ?? now;
+    const rule = RULES[k];
+    if (now - since >= rule.holdMin * 60_000 && now - st.last_alert >= rule.cooldownH * 3600_000) {
+      const i = db
+        .prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.game, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`)
+        .get(serverId) as { n: string; game: string; display_address: string; host: string; port: number } | undefined;
+      if (i) {
+        enqueueAlert(k, i.n, {
+          content: '',
+          mention: 'none',
+          embed: {
+            title: TITLE[k](i.n),
+            description: `${cond[k].text}\n📍 \`${i.display_address || `${i.host}:${i.port}`}\``,
+            color: rule.color,
+            author: { name: `🎮 ${gameLabel(i.game)}` },
+            footer: { text: 'CoreGSM · умное оповещение' },
+            timestamp: new Date(now).toISOString(),
+          },
+        });
+      }
+      put.run(serverId, k, since, now);
+    } else if (st.since == null) {
+      put.run(serverId, k, since, st.last_alert);
+    }
+  }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/subscriptions.ts" << '__COREGSM_EOF__'
@@ -15835,9 +17007,9 @@ __COREGSM_EOF__
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>CoreGSM</title>
     <script>
-      // apply the saved theme before first paint to avoid a flash
+      // apply the visitor's theme (or the community's default) before first paint to avoid a flash
       try {
-        var t = localStorage.getItem('coregsm_theme');
+        var t = localStorage.getItem('coregsm_theme') || localStorage.getItem('coregsm_theme_default') || 'dark';
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
       } catch (e) {}
     </script>
@@ -15880,7 +17052,7 @@ server {
   add_header X-Frame-Options "DENY" always;
   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
 
   location /assets/ {
     expires 30d;
@@ -15889,7 +17061,7 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
   }
 
   # the service worker must be revalidated on every start so that updates reach people
@@ -15918,7 +17090,7 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
   }
 }
 __COREGSM_EOF__
@@ -37694,7 +38866,7 @@ import Register from './pages/Register';
 import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, navigate, parseRoute, toast, useRoute } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
 const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
@@ -37703,6 +38875,8 @@ const ProfilePage = lazyPage(() => import('./pages/Profile'));
 const PublicProfilePage = lazyPage(() => import('./pages/PublicProfile'));
 const StatusPage = lazyPage(() => import('./pages/Status'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
+const CommunityPage = lazyPage(() => import('./pages/Community'));
+const PlayerPage = lazyPage(() => import('./pages/Player'));
 // rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
 const Setup = lazyPage(() => import('./pages/Setup'));
 const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
@@ -37710,6 +38884,12 @@ const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
 const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
 const Tour = lazyPage(() => import('./components/Tour'));
 const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
+
+const IconCommunity = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
+  </svg>
+);
 
 const IconStatus = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -37724,6 +38904,7 @@ const PAGES: PageDef[] = [
   { id: 'servers', label: 'nav.servers', icon: IconServers },
   { id: 'news', label: 'nav.news', icon: IconNews },
   { id: 'status', label: 'nav.status', icon: IconStatus },
+  { id: 'community', label: 'nav.community', icon: IconCommunity },
   { id: 'admin', label: 'nav.admin', icon: IconSettings, admin: true },
 ];
 
@@ -37748,6 +38929,8 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
  * keeps >= 4.5:1 on the card and soft surfaces of the current theme (darkened in light, lightened in dark).
  */
 function useBrand(b: Access['brand']) {
+  // the community's default theme, for visitors who have not picked one
+  useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
   useEffect(() => {
     const root = document.documentElement;
     // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
@@ -37880,7 +39063,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -37946,11 +39129,11 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
-  if (page === 'u') {
+  if (page === 'u' || page === 'player') {
     try { publicName = decodeURIComponent(sub.split('/')[0]); } catch { publicName = sub.split('/')[0]; }
   }
   const sectionTitle = boot.needsSetup
@@ -37961,7 +39144,7 @@ export default function App() {
         ? 'UI-кит'
         : page === '404'
         ? t('title.notfound')
-        : page === 'u'
+        : page === 'u' || page === 'player'
         ? publicName
         : page === 'profile'
         ? t('hdr.profile')
@@ -38136,6 +39319,8 @@ export default function App() {
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}
             {page === 'status' && <StatusPage />}
+            {page === 'community' && <CommunityPage />}
+            {page === 'player' && <PlayerPage name={publicName} />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}
             {page === 'u' && <PublicProfilePage username={publicName} />}
@@ -38568,6 +39753,22 @@ export interface StatusDay {
   day: string;
   /** null = no data */
   pct: number | null;
+  /** minutes the server was down that day (unplanned / in a maintenance window) and how many outages began */
+  down?: number;
+  planned?: number;
+  incidents?: number;
+}
+
+/** a stretch in which a server did not answer; end null = still down */
+export interface StatusIncident {
+  serverId: number;
+  serverName: string;
+  game: string;
+  start: number;
+  end: number | null;
+  minutes: number;
+  playersBefore: number;
+  planned: boolean;
 }
 
 export interface StatusServer {
@@ -38583,11 +39784,15 @@ export interface StatusServer {
   /** 30 entries, oldest first */
   days: StatusDay[];
   avgPing: number | null;
+  /** hourly average ping of the last 24 hours, oldest first (null = no answer that hour) */
+  latency?: (number | null)[];
 }
 
 export interface StatusInfo {
   updatedAt: number;
   servers: StatusServer[];
+  /** newest first, 30 days */
+  incidents?: StatusIncident[];
 }
 
 // ---------- backups ----------
@@ -38637,6 +39842,8 @@ export interface ServerDetails {
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   /** newest first; `players` is set for 'peak' */
   events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance'; players: number | null; name?: string }[];
+  /** the usual players per hour of the week (index = UTC weekday * 24 + hour) over the 4 weeks before; null = unknown */
+  baseline?: (number | null)[] | null;
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }
@@ -38928,6 +40135,8 @@ export interface Brand {
   color2?: string;
   /** id of the chosen theme preset ('' = custom colour) */
   preset?: string;
+  /** the theme of visitors who have not picked one (set by the administrator) */
+  theme?: 'auto' | 'light' | 'dark';
   hasLogo: boolean;
   logoV: number;
 }
@@ -40009,6 +41218,111 @@ export default function DeliveryList() {
           ))}
         </ul>
       )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DigestSection.tsx" << '__COREGSM_EOF__'
+/** Admin → Оповещения: the weekly digest (settings, the numbers of the coming digest and its picture). */
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { ChannelPicker } from './ChannelPicker';
+import { ErrorLine, Section, Switch, ago, plural, toast } from '../ui';
+
+interface DigestInfo {
+  enabled: boolean;
+  channelId: string;
+  weekday: number;
+  hour: number;
+  lastSent: number;
+  preview: {
+    totals: { players: number; prevPlayers: number; peak: number; peakServer: string | null; hours: number; prevHours: number; uptime: number | null; incidents: number; newPlayers: number };
+  };
+}
+
+const WEEKDAYS = ['понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу', 'воскресенье'];
+
+export default function DigestSection({ alertsChannel }: { alertsChannel: string }) {
+  const [info, setInfo] = useState<DigestInfo | null>(null);
+  const [error, setError] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [imgKey, setImgKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api<DigestInfo>('/digest').then(setInfo).catch((e: Error) => setError(e.message));
+  }, []);
+
+  const save = async (patch: Partial<Pick<DigestInfo, 'enabled' | 'channelId' | 'weekday' | 'hour'>>, done?: string) => {
+    await api<DigestInfo>('/digest', 'PUT', patch)
+      .then((d) => { setInfo(d); setError(''); if (done) toast(done); })
+      .catch((e: Error) => setError(e.message));
+  };
+  const sendNow = async () => {
+    setBusy(true);
+    await api<DigestInfo>('/digest/send', 'POST')
+      .then((d) => { setInfo(d); toast('Итоги недели поставлены в очередь: бот отправит их в канал'); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setBusy(false));
+  };
+
+  if (!info) return <Section title="Итоги недели">{error ? <ErrorLine text={error} /> : <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" />}</Section>;
+  const t = info.preview.totals;
+  const channel = info.channelId || alertsChannel;
+  return (
+    <Section title="Итоги недели" description="Раз в неделю бот публикует картинку с итогами: игроки, пик, часы в игре, доступность серверов и самые активные игроки.">
+      <ErrorLine text={error} />
+      <label className="flex cursor-pointer items-start gap-3">
+        <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Итоги недели включены' : 'Итоги недели выключены')} />
+        <span>
+          <span className="block font-extrabold">Публиковать итоги недели</span>
+          <span className="block text-sm font-semibold text-mute">
+            {channel ? `В ${WEEKDAYS[info.weekday]} в ${String(info.hour).padStart(2, '0')}:00` : 'Нужен канал: выберите его ниже или в настройках оповещений'}
+            {info.lastSent ? ` · последний раз ${ago(info.lastSent)}` : ''}
+          </span>
+        </span>
+      </label>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label htmlFor="digest-day" className="label">День</label>
+          <select id="digest-day" className="input" value={info.weekday} onChange={(e) => void save({ weekday: Number(e.target.value) }, 'Сохранено')}>
+            {WEEKDAYS.map((d, i) => <option key={d} value={i}>{['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][i]}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="digest-hour" className="label">Время</label>
+          <select id="digest-hour" className="input" value={info.hour} onChange={(e) => void save({ hour: Number(e.target.value) }, 'Сохранено')}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <span className="label">Канал</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="font-black">{info.channelId ? `Канал ${info.channelId}` : alertsChannel ? 'тот же, что для оповещений' : 'не выбран'}</span>
+          <button className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>Выбрать другой</button>
+          {info.channelId && <button className="btn-link text-sm" onClick={() => void save({ channelId: '' }, 'Итоги пойдут в канал оповещений')}>Как у оповещений</button>}
+        </div>
+        {picking && (
+          <div className="mt-3">
+            <ChannelPicker id="digest-channel" value={info.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }, 'Канал сохранён'); setPicking(false); } }} />
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-ui-lg bg-soft p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm font-extrabold text-mute">Так будут выглядеть итоги последних 7 дней</span>
+          <span className="flex flex-wrap gap-2">
+            <button className="btn btn-soft btn-sm" onClick={() => setImgKey((k) => k + 1)}>Обновить картинку</button>
+            <button className="btn btn-sm" disabled={busy || !channel} onClick={() => void sendNow()}>Отправить сейчас</button>
+          </span>
+        </div>
+        <img key={imgKey} src={`/api/digest/preview.png?k=${imgKey}`} alt={`Итоги недели: ${t.players} ${plural(t.players, ['игрок', 'игрока', 'игроков'])}, пик ${t.peak}, ${t.hours} часов в игре`} className="w-full rounded-ui-lg" loading="lazy" />
+      </div>
     </Section>
   );
 }
@@ -45858,6 +47172,285 @@ export const isArray = (v: unknown) => Array.isArray(v);
 export const isObject = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/AnalyticsTab.tsx" << '__COREGSM_EOF__'
+/**
+ * «Аналитика» of a server: who plays and when. Everything comes from GET /api/servers/:id/analytics (the poll history
+ * and the players' visits the panel already keeps). The charts are plain SVG/CSS in the colour of the game.
+ */
+import { useEffect, useMemo, useState } from 'react';
+import '../../styles/analytics.css';
+import { api } from '../../api';
+import { rankById } from '../../vrisingRanks';
+import { ago, ErrorLine, fmtDate, plural } from '../../ui';
+
+interface Analytics {
+  days: number;
+  timeZone: string;
+  heatmap: {
+    days: number;
+    cells: (number | null)[][];
+    peak: number[][];
+    busiest: { dow: number; hour: number; avg: number } | null;
+    quietest: { dow: number; hour: number; avg: number } | null;
+    restartHour: number | null;
+  };
+  summary: {
+    players: number; dau: number; wau: number; mau: number; newPlayers: number; returning: number; visits: number;
+    avgMinutes: number | null; medianMinutes: number | null; playerHours: number;
+  };
+  daily: { day: string; players: number; newPlayers: number; hours: number; peak: number }[];
+  sessions: { key: string; label: string; count: number }[];
+  cohorts: { start: number; size: number; rates: number[] }[];
+  top: { name: string; hours: number; visits: number; lastSeen: number | null; rankId?: string }[];
+}
+
+const DOW = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const DOW_LONG = ['в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу', 'в субботу', 'в воскресенье'];
+const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
+const minutesText = (m: number | null) => (m == null ? '–' : m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60 ? `${m % 60} мин` : ''}`.trim());
+const dayLabel = (d: string) => {
+  const [, m, day] = d.split('-');
+  return `${Number(day)}.${m}`;
+};
+
+function PeriodSwitch({ days, onChange }: { days: number; onChange: (d: number) => void }) {
+  return (
+    <div className="seg" role="group" aria-label="Период">
+      {[7, 30, 90].map((d) => (
+        <button key={d} type="button" className="seg-item" aria-pressed={days === d} onClick={() => onChange(d)}>{d} дн</button>
+      ))}
+    </div>
+  );
+}
+
+function Kpi({ k, v, hint }: { k: string; v: string | number; hint?: string }) {
+  return (
+    <div className="an-kpi">
+      <div className="an-kpi-k">{k}</div>
+      <div className="an-kpi-v">{v}</div>
+      {hint && <div className="an-kpi-h">{hint}</div>}
+    </div>
+  );
+}
+
+/** weekday x hour: the darker the cell, the more players on average */
+function Heatmap({ h }: { h: Analytics['heatmap'] }) {
+  const [hover, setHover] = useState<{ dow: number; hour: number } | null>(null);
+  const max = Math.max(1, ...h.cells.flat().map((v) => v ?? 0));
+  const cur = hover ? { avg: h.cells[hover.dow][hover.hour], peak: h.peak[hover.dow][hover.hour] } : null;
+  return (
+    <div>
+      <div className="an-heat" role="img" aria-label={h.busiest ? `Больше всего игроков ${DOW_LONG[h.busiest.dow]} в ${hh(h.busiest.hour)}` : 'Пока мало данных'} onMouseLeave={() => setHover(null)}>
+        <span />
+        {Array.from({ length: 24 }, (_, i) => <span key={i} className="an-heat-hour">{i % 3 === 0 ? i : ''}</span>)}
+        {h.cells.map((row, dow) => (
+          <div key={dow} className="contents">
+            <span className="an-heat-dow">{DOW[dow]}</span>
+            {row.map((v, hour) => (
+              <span
+                key={hour}
+                className={`an-heat-cell ${v == null ? 'is-empty' : ''} ${hover?.dow === dow && hover.hour === hour ? 'is-hover' : ''}`}
+                style={v == null ? undefined : { ['--a' as string]: (0.1 + 0.9 * (v / max)).toFixed(3) }}
+                onMouseEnter={() => setHover({ dow, hour })}
+                title={v == null ? 'нет данных' : `${DOW[dow]} ${hh(hour)}: в среднем ${v}, максимум ${h.peak[dow][hour]}`}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="an-heat-foot">
+        <span className="an-heat-scale" aria-hidden>
+          меньше <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> больше
+        </span>
+        <span className="font-bold text-ink" aria-live="polite">
+          {hover && cur ? (cur.avg == null ? `${DOW[hover.dow]} ${hh(hover.hour)}: нет данных` : `${DOW[hover.dow]} ${hh(hover.hour)}: в среднем ${cur.avg}, максимум ${cur.peak}`) : `средние за ${h.days} ${plural(h.days, ['день', 'дня', 'дней'])}`}
+        </span>
+      </div>
+      <div className="an-facts">
+        {h.busiest && <p><b>Пик</b> {DOW_LONG[h.busiest.dow]} в {hh(h.busiest.hour)}: в среднем {h.busiest.avg} {plural(Math.round(h.busiest.avg), ['игрок', 'игрока', 'игроков'])}</p>}
+        {h.quietest && <p><b>Тише всего</b> {DOW_LONG[h.quietest.dow]} в {hh(h.quietest.hour)}</p>}
+        {h.restartHour != null && <p><b>Рестарт</b> лучше всего в {hh(h.restartHour)}: в это время меньше всего игроков в любой день</p>}
+      </div>
+    </div>
+  );
+}
+
+/** unique players per day: returning (accent) and new (lighter) stacked */
+function DailyBars({ daily }: { daily: Analytics['daily'] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const max = Math.max(1, ...daily.map((d) => d.players));
+  const d = hover != null ? daily[hover] : null;
+  const step = Math.ceil(daily.length / 8);
+  return (
+    <div>
+      <div className="an-bars" role="img" aria-label={`Уникальных игроков в день: до ${max}`} onMouseLeave={() => setHover(null)}>
+        {daily.map((x, i) => (
+          <div key={x.day} className={`an-bar ${hover === i ? 'is-hover' : ''}`} onMouseEnter={() => setHover(i)} title={`${dayLabel(x.day)}: ${x.players} игроков, новых ${x.newPlayers}`}>
+            <span className="an-bar-new" style={{ height: `${(x.newPlayers / max) * 100}%` }} />
+            <span className="an-bar-old" style={{ height: `${((x.players - x.newPlayers) / max) * 100}%` }} />
+          </div>
+        ))}
+      </div>
+      <div className="an-bars-axis" aria-hidden>
+        {/* every step-th day; the last one only when it does not run into the label before it */}
+        {daily.map((x, i) => <span key={x.day}>{i % step === 0 || (i === daily.length - 1 && i % step >= step / 2) ? dayLabel(x.day) : ''}</span>)}
+      </div>
+      <div className="an-heat-foot">
+        <span className="flex flex-wrap gap-3">
+          <span className="an-legend"><i className="an-bar-old" />вернулись</span>
+          <span className="an-legend"><i className="an-bar-new" />новые</span>
+        </span>
+        <span className="font-bold text-ink" aria-live="polite">
+          {d ? `${dayLabel(d.day)}: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}, новых ${d.newPlayers}, ${d.hours} ч в игре, пик ${d.peak}` : 'наведите на столбец'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function SessionBars({ sessions }: { sessions: Analytics['sessions'] }) {
+  const total = sessions.reduce((a, b) => a + b.count, 0);
+  const max = Math.max(1, ...sessions.map((s) => s.count));
+  return (
+    <ul className="space-y-2">
+      {sessions.map((s) => (
+        <li key={s.key} className="an-hbar">
+          <span className="an-hbar-k">{s.label}</span>
+          <span className="an-hbar-track"><span style={{ width: `${(s.count / max) * 100}%` }} /></span>
+          <span className="an-hbar-v">{total ? Math.round((s.count / total) * 100) : 0}%</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** of the players first seen in a week, the share that came back 1, 2 ... weeks later */
+function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
+  const width = Math.max(1, ...cohorts.map((c) => c.rates.length));
+  if (!cohorts.some((c) => c.size > 0)) return <p className="text-sm font-semibold text-mute">Новых игроков за шесть недель не было.</p>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="an-cohorts">
+        <thead>
+          <tr>
+            <th scope="col">Неделя первого входа</th>
+            <th scope="col">Игроков</th>
+            {Array.from({ length: width }, (_, i) => <th key={i} scope="col">+{i + 1} нед</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {cohorts.map((c) => (
+            <tr key={c.start}>
+              <th scope="row">с {fmtDate(c.start)}</th>
+              <td className="font-extrabold">{c.size}</td>
+              {Array.from({ length: width }, (_, i) => {
+                const v = c.rates[i];
+                return v == null || !c.size
+                  ? <td key={i} className="is-empty" />
+                  : <td key={i} style={{ ['--a' as string]: (0.08 + 0.92 * (v / 100)).toFixed(3) }} className={v >= 55 ? 'is-strong' : ''}>{v}%</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TopPlayers({ top }: { top: Analytics['top'] }) {
+  const max = Math.max(1, ...top.map((p) => p.hours));
+  if (!top.length) return <p className="text-sm font-semibold text-mute">За этот период никто не играл.</p>;
+  return (
+    <ol className="an-top">
+      {top.map((p, i) => {
+        const rank = p.rankId ? rankById(p.rankId) : null;
+        return (
+          <li key={p.name}>
+            <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-baseline gap-2">
+                <span className="truncate font-extrabold">{p.name}</span>
+                {rank && <span className="truncate text-xs font-bold text-mute">{rank.name}</span>}
+              </span>
+              <span className="an-top-bar"><span style={{ width: `${(p.hours / max) * 100}%` }} /></span>
+            </span>
+            <span className="shrink-0 text-right">
+              <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+              <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+export default function AnalyticsTab({ id }: { id: number }) {
+  const [days, setDays] = useState(30);
+  const [data, setData] = useState<Analytics | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setError('');
+    api<Analytics>(`/servers/${id}/analytics?days=${days}`)
+      .then((d) => { if (alive) setData(d); })
+      .catch((e: Error) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [id, days]);
+
+  const s = data?.summary;
+  const newShare = useMemo(() => (s && s.players ? Math.round((s.newPlayers / s.players) * 100) : 0), [s]);
+
+  if (error) return <ErrorLine text={error} />;
+  if (!data || !s) return <div className="tile skeleton h-72" aria-label="Загрузка аналитики" role="status" />;
+
+  return (
+    <div className="an space-y-3.5">
+      <section className="tile tile-in p-4 sm:p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-extrabold">Игроки за {days} {plural(days, ['день', 'дня', 'дней'])}</h2>
+          <PeriodSwitch days={days} onChange={setDays} />
+        </div>
+        <div className="an-kpis">
+          <Kpi k="Уникальных игроков" v={s.players} hint={`сегодня ${s.dau} · за неделю ${s.wau} · за месяц ${s.mau}`} />
+          <Kpi k="Новых" v={s.newPlayers} hint={s.players ? `${newShare}% от всех, вернулись ${s.returning}` : undefined} />
+          <Kpi k="Обычный визит" v={minutesText(s.medianMinutes)} hint={s.avgMinutes != null ? `в среднем ${minutesText(s.avgMinutes)} · ${s.visits} ${plural(s.visits, ['визит', 'визита', 'визитов'])}` : undefined} />
+          <Kpi k="Часов в игре" v={s.playerHours.toLocaleString('ru-RU')} hint="все игроки вместе" />
+        </div>
+      </section>
+
+      <section className="tile tile-in p-4 sm:p-5">
+        <h2 className="mb-3 text-base font-extrabold">Когда играют</h2>
+        <Heatmap h={data.heatmap} />
+      </section>
+
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
+          <h2 className="mb-3 text-base font-extrabold">Игроки по дням</h2>
+          <DailyBars daily={data.daily} />
+        </section>
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
+          <h2 className="mb-3 text-base font-extrabold">Сколько длится визит</h2>
+          <SessionBars sessions={data.sessions} />
+        </section>
+      </div>
+
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
+          <h2 className="mb-1 text-base font-extrabold">Возвращаются ли новички</h2>
+          <p className="mb-3 text-sm font-semibold text-mute">Доля игроков, впервые зашедших в эту неделю, которые вернулись через одну, две и больше недель.</p>
+          <Cohorts cohorts={data.cohorts} />
+        </section>
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
+          <h2 className="mb-3 text-base font-extrabold">Больше всех в игре</h2>
+          <TopPlayers top={data.top} />
+        </section>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useRef, useState } from 'react';
 import { applyConnectTemplates, connectGuide } from '../../connectGuides';
@@ -46197,14 +47790,45 @@ const fullTime = (ts: number) =>
   new Date(ts).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /**
+ * the usual value at a moment: the backend gives one value per hour of the week (UTC); it stands for the middle of
+ * its hour and the curve goes straight from one middle to the next, so the band is smooth instead of steps
+ */
+const usualAt = (baseline: (number | null)[], ts: number) => {
+  const h = (ts - 1800_000) / 3600_000; // hours since the epoch, shifted so that :30 is a whole number
+  const i = Math.floor(h);
+  const f = h - i;
+  const at = (k: number) => {
+    const d = new Date(k * 3600_000 + 1800_000);
+    return baseline[d.getUTCDay() * 24 + d.getUTCHours()] ?? null;
+  };
+  const a = at(i);
+  const b = at(i + 1);
+  if (a == null || b == null) return a ?? b;
+  return a + (b - a) * f;
+};
+
+/**
  * Players (or ping) over time: smooth area, red bands where the server did not answer, a cursor with a tooltip
  * that follows the mouse / finger / pen and the arrow keys, Y axis that fits the data.
+ * On the players chart: a band of the usual level for that hour of the week (the four weeks before) and the ping
+ * as a thin line on a second axis. Dragging with the mouse zooms into a stretch; the overview strip under a long
+ * period shows where the zoom is and can be dragged too.
  */
 export default function HistoryChart({
-  points, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '',
-}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string }) {
+  points: allPoints, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '', baseline = null,
+}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string; baseline?: (number | null)[] | null }) {
   useI18n();
-  const L = 38, R = 10, B = 28;
+  const [zoom, setZoom] = useState<[number, number] | null>(null);
+  const [showUsual, setShowUsual] = useState(true);
+  const [showPing, setShowPing] = useState(false);
+  const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
+  // a new period starts unzoomed
+  useEffect(() => { setZoom(null); }, [hours]);
+  const points = zoom ? allPoints.filter((p) => p.ts >= zoom[0] && p.ts <= zoom[1]) : allPoints;
+  const hasUsual = series === 'players' && !!baseline && baseline.some((v) => v != null);
+  const usualOn = hasUsual && showUsual;
+  const pingOn = series === 'players' && showPing && allPoints.some((p) => p.ping != null);
+  const L = 38, R = pingOn ? 46 : 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -46224,15 +47848,15 @@ export default function HistoryChart({
   }, []);
   const H = W < 520 ? 230 : 320;
 
-  const now = Date.now();
-  const winStart = now - hours * 3600_000;
+  const now = zoom ? zoom[1] : Date.now();
+  const winStart = zoom ? zoom[0] : now - hours * 3600_000;
   const first = points.length ? points[0].ts : now;
   const sparse = points.length < 20;
   // data may begin later than the window (new server, 30 days asked while 7 are kept)
   const late = points.length > 0 && first - winStart > hours * 3600_000 * 0.08;
   // with only a few samples the window shrinks to them instead of leaving a lonely tail on the right
   let t0 = winStart;
-  if (sparse || late) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
+  if (!zoom && (sparse || late)) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
   const span = now - t0;
   // vertical markers for outages, returns and the busiest moment
   const marks = events.filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
@@ -46244,10 +47868,37 @@ export default function HistoryChart({
     return series === 'ping' ? p.ping : p.players;
   };
   const vals = points.map(valueOf).filter((v): v is number => v != null);
-  const dataMax = Math.max(0, ...vals);
+  // the usual level along the shown stretch (about 120 steps), so that the scale leaves room for it
+  const usual: { ts: number; v: number | null }[] = [];
+  if (usualOn && baseline) for (let i = 0; i <= 120; i++) { const ts = t0 + (span * i) / 120; usual.push({ ts, v: usualAt(baseline, ts) }); }
+  const usualMax = Math.max(0, ...usual.map((u) => (u.v ?? 0) * 1.2));
+  const dataMax = Math.max(0, ...vals, usualMax);
   const scale = niceScale(dataMax, series === 'ping' ? 20 : 2);
   const yMax = scale.max;
   const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
+  // second axis: the ping, on the players chart
+  const pings = pingOn ? points.map((p) => (p.online ? p.ping : null)) : [];
+  const pScale = niceScale(Math.max(0, ...pings.filter((v): v is number => v != null)), 20);
+  const y2 = (v: number) => T + (1 - v / pScale.max) * (H - T - B);
+  const pingSegs: [number, number][][] = [];
+  if (pingOn) {
+    let run: [number, number][] = [];
+    points.forEach((p, i) => {
+      const v = pings[i];
+      if (v == null) { if (run.length) pingSegs.push(run); run = []; return; }
+      run.push([x(p.ts), y2(v)]);
+    });
+    if (run.length) pingSegs.push(run);
+  }
+  // the usual band: 80-120% of the usual value, broken where it is unknown
+  const usualRuns: { ts: number; v: number }[][] = [];
+  {
+    let run: { ts: number; v: number }[] = [];
+    for (const u of usual) {
+      if (u.v == null) { if (run.length) usualRuns.push(run); run = []; } else run.push({ ts: u.ts, v: u.v });
+    }
+    if (run.length) usualRuns.push(run);
+  }
 
   // continuous runs of answered samples are separate curves; a gap is much wider than the usual spacing
   const bucket = (hours * 3600_000) / 180;
@@ -46272,10 +47923,29 @@ export default function HistoryChart({
     points.forEach((p, i) => { if (Math.abs(x(p.ts) - vx) < Math.abs(x(points[best].ts) - vx)) best = i; });
     return best;
   };
+  const svgX = (clientX: number) => {
+    const r = svg.current?.getBoundingClientRect();
+    return r && r.width ? ((clientX - r.left) / r.width) * W : 0;
+  };
+  const tsAt = (vx: number) => t0 + ((Math.min(W - R, Math.max(L, vx)) - L) / (W - L - R)) * span;
   const onPointer = (e: ReactPointerEvent) => {
     setKbd(false);
+    if (drag && e.buttons === 1) setDrag({ ...drag, to: svgX(e.clientX) });
     const i = nearest(e.clientX);
     if (i != null) setHover(i);
+  };
+  const onDown = (e: ReactPointerEvent) => {
+    // only the mouse zooms: a finger scrolls the page and moves the cursor
+    if (e.pointerType === 'mouse' && e.button === 0) setDrag({ from: svgX(e.clientX), to: svgX(e.clientX) });
+    onPointer(e);
+  };
+  const onUp = () => {
+    if (drag && Math.abs(drag.to - drag.from) > 12) {
+      const a = tsAt(Math.min(drag.from, drag.to));
+      const b = tsAt(Math.max(drag.from, drag.to));
+      if (b - a > 10 * 60_000) { setZoom([a, b]); setHover(null); }
+    }
+    setDrag(null);
   };
   const onKey = (e: ReactKeyboardEvent) => {
     if (points.length === 0) return;
@@ -46296,7 +47966,8 @@ export default function HistoryChart({
   const hp = hover != null ? points[Math.min(hover, points.length - 1)] ?? null : null;
   const hv = hp ? valueOf(hp) : null;
   const lastSeg = segments[segments.length - 1];
-  const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
+  // «now» only on the live chart: a zoomed stretch ends in the past
+  const endPt = !zoom && lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
   const unit = series === 'ping' ? 'мс' : '';
   const peak = findPeak(points.filter((p) => p.ts >= t0), series);
   const longRange = hours > 36;
@@ -46441,6 +48112,27 @@ export default function HistoryChart({
           {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}
+      {(hasUsual || series === 'players' || zoom) && (
+        <div className="hc-tools">
+          {hasUsual && (
+            <button type="button" className="hc-chip" aria-pressed={showUsual} onClick={() => setShowUsual((v) => !v)}>
+              <i className="hc-chip-usual" aria-hidden />обычный уровень
+            </button>
+          )}
+          {series === 'players' && allPoints.some((p) => p.ping != null) && (
+            <button type="button" className="hc-chip" aria-pressed={showPing} onClick={() => setShowPing((v) => !v)}>
+              <i className="hc-chip-ping" aria-hidden />пинг, мс (справа)
+            </button>
+          )}
+          {zoom ? (
+            <button type="button" className="hc-chip is-zoom" onClick={() => setZoom(null)}>
+              {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · показать весь период
+            </button>
+          ) : (
+            <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+          )}
+        </div>
+      )}
       <div className="hc-head">
         <span className="hc-cap">{series === 'ping' ? t('srv.chart.axisPing') : t('srv.chart.axisPlayers')}</span>
         <span className="hc-notes">
@@ -46468,10 +48160,11 @@ export default function HistoryChart({
           viewBox={`0 0 ${W} ${H}`}
           className="hc-fade block h-auto w-full touch-pan-y select-none"
           aria-hidden
-          onPointerDown={onPointer}
+          onPointerDown={onDown}
           onPointerMove={onPointer}
-          onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHover(null); }}
-          onPointerCancel={() => setHover(null)}
+          onPointerUp={onUp}
+          onPointerLeave={(e) => { if (e.pointerType === 'mouse') { setHover(null); setDrag(null); } }}
+          onPointerCancel={() => { setHover(null); setDrag(null); }}
         >
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
@@ -46494,6 +48187,17 @@ export default function HistoryChart({
             const bw = Math.max(3, ((W - L - R) * bucket) / span);
             return <rect key={p.ts} x={Math.max(L, x(p.ts) - bw / 2)} y={T} width={bw} height={H - T - B} className="fill-bad" opacity="0.2" />;
           })}
+          {usualRuns.map((run, i) => {
+            const hi = run.map((u): [number, number] => [x(u.ts), y(u.v * 1.2)]);
+            const lo = run.map((u): [number, number] => [x(u.ts), y(u.v * 0.8)]).reverse();
+            const mid = smoothPath(run.map((u): [number, number] => [x(u.ts), y(u.v)]));
+            return (
+              <g key={`u${i}`} className="hc-usual">
+                <path d={`${smoothPath(hi)} L${lo[0][0].toFixed(1)},${lo[0][1].toFixed(1)} ${smoothPath(lo).slice(1)} Z`} />
+                <path d={mid} fill="none" strokeDasharray="5 5" />
+              </g>
+            );
+          })}
           {segments.map((seg, i) => {
             const pts = seg.map((p): [number, number] => [x(p.ts), y(p.v)]);
             const d = smoothPath(pts);
@@ -46505,6 +48209,13 @@ export default function HistoryChart({
               </g>
             );
           })}
+          {pingSegs.map((run, i) => (run.length > 1 ? <path key={`p${i}`} d={smoothPath(run)} className="hc-ping" fill="none" /> : null))}
+          {pingOn && pScale.ticks.map((v) => (
+            <text key={`pt${v}`} x={W - R + 6} y={y2(v) + 4} className="hc-ping-tick" fontSize="11" fontWeight="700">{v}</text>
+          ))}
+          {drag && Math.abs(drag.to - drag.from) > 3 && (
+            <rect x={Math.max(L, Math.min(drag.from, drag.to))} y={T} width={Math.min(W - R, Math.max(drag.from, drag.to)) - Math.max(L, Math.min(drag.from, drag.to))} height={H - T - B} className="hc-drag" />
+          )}
           {peak && peak.ts >= t0 && (
             <circle cx={x(peak.ts)} cy={y(peak.value)} r="7" fill="none" style={{ stroke: color }} strokeWidth="2" opacity="0.9" />
           )}
@@ -46558,6 +48269,9 @@ export default function HistoryChart({
                   <span className="text-[15px] font-extrabold">{hp.players}</span>
                   {max > 0 && <span className="opacity-80"> / {max}</span>}
                 </div>
+                {usualOn && baseline && usualAt(baseline, hp.ts) != null && (
+                  <div className="whitespace-nowrap"><span className="opacity-80">Обычно </span><span className="font-extrabold">~{Math.round(usualAt(baseline, hp.ts)!)}</span></div>
+                )}
                 <div className="whitespace-nowrap">
                   <span className="opacity-80">Пинг </span>
                   {hp.ping != null ? <span className="text-[15px] font-extrabold">{hp.ping} мс</span> : <span className="opacity-70">нет данных</span>}
@@ -46573,6 +48287,9 @@ export default function HistoryChart({
         )}
         <span className="sr-only" aria-live="polite">{kbd && hp ? describe(hp) : ''}</span>
       </div>
+      {(hours > 24 || zoom) && allPoints.length > 1 && (
+        <Overview points={allPoints} hours={hours} color={color} zoom={zoom} onZoom={setZoom} />
+      )}
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <p className="text-xs font-bold text-mute">
         {t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}
@@ -46597,6 +48314,57 @@ export default function HistoryChart({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** the whole period in a thin strip: the zoomed stretch is lit; dragging on the strip picks another one */
+function Overview({ points, hours, color, zoom, onZoom }: { points: Point[]; hours: number; color: string; zoom: [number, number] | null; onZoom: (z: [number, number] | null) => void }) {
+  const ref = useRef<SVGSVGElement>(null);
+  const [sel, setSel] = useState<{ a: number; b: number } | null>(null);
+  const W = 1000;
+  const H = 44;
+  const end = Date.now();
+  const start = end - hours * 3600_000;
+  const x = (ts: number) => ((ts - start) / (end - start)) * W;
+  const top = Math.max(1, ...points.map((p) => p.players));
+  const pts = points.filter((p) => p.ts >= start).map((p): [number, number] => [x(p.ts), H - 4 - (p.online ? p.players / top : 0) * (H - 10)]);
+  const at = (clientX: number) => {
+    const r = ref.current?.getBoundingClientRect();
+    return r && r.width ? Math.min(1, Math.max(0, (clientX - r.left) / r.width)) : 0;
+  };
+  const toTs = (f: number) => start + f * (end - start);
+  const lit = sel ? [Math.min(sel.a, sel.b), Math.max(sel.a, sel.b)] : zoom ? [(zoom[0] - start) / (end - start), (zoom[1] - start) / (end - start)] : null;
+  return (
+    <div className="hc-over">
+      <svg
+        ref={ref}
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="block h-11 w-full cursor-crosshair touch-none select-none"
+        role="img"
+        aria-label="Весь период: потяните, чтобы выбрать участок"
+        onPointerDown={(e) => { (e.target as Element).setPointerCapture?.(e.pointerId); const f = at(e.clientX); setSel({ a: f, b: f }); }}
+        onPointerMove={(e) => { if (sel) setSel({ ...sel, b: at(e.clientX) }); }}
+        onPointerUp={() => {
+          if (sel) {
+            const [a, b] = [Math.min(sel.a, sel.b), Math.max(sel.a, sel.b)];
+            if (b - a > 0.01) onZoom([toTs(a), toTs(b)]);
+            else onZoom(null);
+          }
+          setSel(null);
+        }}
+      >
+        {pts.length > 1 && <path d={`${smoothPath(pts)} L${pts[pts.length - 1][0]},${H} L${pts[0][0]},${H} Z`} style={{ fill: color }} opacity="0.28" />}
+        {pts.length > 1 && <path d={smoothPath(pts)} fill="none" style={{ stroke: color }} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />}
+        {lit && (
+          <>
+            <rect x="0" y="0" width={lit[0] * W} height={H} className="hc-over-dim" />
+            <rect x={lit[1] * W} y="0" width={W - lit[1] * W} height={H} className="hc-over-dim" />
+            <rect x={lit[0] * W} y="1" width={(lit[1] - lit[0]) * W} height={H - 2} className="hc-over-win" vectorEffect="non-scaling-stroke" />
+          </>
+        )}
+      </svg>
     </div>
   );
 }
@@ -46840,12 +48608,11 @@ export default function Passport({ d }: { d: PassportData }) {
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
       <dl className="pp pp-main">
         <Item k="Игра"><span>{d.game}</span></Item>
-        <Item k="Карта"><span title={d.map ?? undefined}>{d.map && d.online ? d.map : '–'}</span></Item>
-        <Item k="Версия"><span>{d.version ? `v${d.version.replace(/^v/i, '')}` : '–'}</span></Item>
-        <Item k="Страна"><span>{d.country ? `${d.flag} ${d.country}`.trim() : '–'}</span></Item>
-        <Item k="Пинг">
-          {pt && d.ping != null ? <span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span> : <span>–</span>}
-        </Item>
+        {/* a fact the server does not report is left out instead of showing a dash */}
+        {d.map && d.online && <Item k="Карта"><span title={d.map}>{d.map}</span></Item>}
+        {d.version && <Item k="Версия"><span>{`v${d.version.replace(/^v/i, '')}`}</span></Item>}
+        {d.country && <Item k="Страна"><span>{`${d.flag} ${d.country}`.trim()}</span></Item>}
+        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span></Item>}
       </dl>
       <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
         {open ? t('srv.pp.less') : t('srv.pp.more')}
@@ -47302,6 +49069,7 @@ export const TAB_LIST: { id: TabId; label: string }[] = [
   { id: '', label: 'Обзор' },
   { id: 'players', label: 'Игроки' },
   { id: 'history', label: 'История' },
+  { id: 'stats', label: 'Аналитика' },
   { id: 'events', label: 'События' },
   { id: 'connect', label: 'Подключение' },
 ];
@@ -47581,12 +49349,85 @@ export default function SubscribeMenu({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/coverAccent.ts" << '__COREGSM_EOF__'
+/**
+ * The accent of a server page taken from its cover: the picture is shrunk to 32x32 and the hue of its colourful
+ * pixels (weighted by saturation and brightness, dark and washed-out ones ignored) becomes the colour of the
+ * charts, bars and glows. The result is tuned to stay readable and cached per picture for the visit.
+ */
+import { useEffect, useState } from 'react';
+
+const cache = new Map<string, string | null>();
+
+function accentOf(img: HTMLImageElement): string | null {
+  const N = 32;
+  const cv = document.createElement('canvas');
+  cv.width = N;
+  cv.height = N;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, N, N);
+  let data: Uint8ClampedArray;
+  try {
+    data = ctx.getImageData(0, 0, N, N).data;
+  } catch {
+    return null; // a picture from another origin taints the canvas
+  }
+  let sx = 0;
+  let sy = 0;
+  let sw = 0;
+  let sat = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i] / 255;
+    const g = data[i + 1] / 255;
+    const b = data[i + 2] / 255;
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const d = mx - mn;
+    if (data[i + 3] < 200 || mx < 0.18 || d < 0.12) continue;
+    const s = d / mx;
+    const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    const a = (h * Math.PI) / 3;
+    const w = s * s * mx;
+    sx += Math.cos(a) * w;
+    sy += Math.sin(a) * w;
+    sw += w;
+    sat += s * w;
+  }
+  if (sw < 2) return null; // grey or nearly black picture: keep the game's colour
+  const hue = ((Math.atan2(sy, sx) * 180) / Math.PI + 360) % 360;
+  const s = Math.round(Math.min(78, Math.max(48, (sat / sw) * 100)));
+  return `hsl(${Math.round(hue)} ${s}% 52%)`;
+}
+
+/** the cover's accent, or `fallback` until it is known (and for pictures without a clear colour) */
+export function useCoverAccent(url: string | null | undefined, fallback: string): string {
+  const [c, setC] = useState<string | null>(() => (url ? cache.get(url) ?? null : null));
+  useEffect(() => {
+    if (!url) { setC(null); return; }
+    if (cache.has(url)) { setC(cache.get(url) ?? null); return; }
+    let alive = true;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      const v = accentOf(img);
+      cache.set(url, v);
+      if (alive) setC(v);
+    };
+    img.onerror = () => cache.set(url, null);
+    img.src = url;
+    return () => { alive = false; };
+  }, [url]);
+  return c ?? fallback;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/helpers.ts" << '__COREGSM_EOF__'
 import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react';
 import { COUNTRIES } from '../../countries';
 import { getPrefs } from '../../i18n';
 
-export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
+export const SERVER_TABS = ['players', 'history', 'stats', 'events', 'connect'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
 
 /** hash of a server page tab: '' = overview */
@@ -47974,6 +49815,361 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/CommunityBento.tsx" << '__COREGSM_EOF__'
+/**
+ * The top of the main page: the community at a glance. Players online now against the 30-day record (a new record
+ * gets a small celebration), when the community usually plays, and the latest arrivals.
+ */
+import { useEffect, useRef, useState } from 'react';
+import { api } from '../../api';
+import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll } from '../../ui';
+import '../../styles/community.css';
+
+export interface Community {
+  now: { players: number; online: number; servers: number };
+  record: { players: number; at: number } | null;
+  heatmap: { cells: (number | null)[][]; busiest: { dow: number; hour: number; avg: number } | null };
+  players: { day: number; week: number; month: number; newWeek: number };
+  feed: { name: string; serverId: number; serverName: string; game: string; at: number; online: boolean; newcomer: boolean }[];
+  top: { week: { name: string; hours: number; servers: number }[]; month: { name: string; hours: number; servers: number }[] };
+  servers: { id: number; name: string; game: string; online: boolean; players: number; maxPlayers: number }[];
+}
+
+export const DOW_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const DOW_IN = ['по понедельникам', 'по вторникам', 'по средам', 'по четвергам', 'по пятницам', 'по субботам', 'по воскресеньям'];
+const RECORD_KEY = 'coregsm_record_seen';
+
+export function useCommunity(): Community | null {
+  const [data, setData] = useState<Community | null>(null);
+  usePoll(() => api<Community>('/community').then(setData).catch(() => undefined), 30_000);
+  return data;
+}
+
+/** weekday x hour of the whole community, small */
+export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; big?: boolean }) {
+  const max = Math.max(1, ...cells.flat().map((v) => v ?? 0));
+  return (
+    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label="Когда играет сообщество: по дням недели и часам">
+      {cells.map((row, d) => (
+        <div key={d} className="contents">
+          <span className="cm-heat-d">{DOW_SHORT[d]}</span>
+          {row.map((v, h) => (
+            <span key={h} className="cm-heat-c" style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${v}`} />
+          ))}
+        </div>
+      ))}
+      <span />
+      {Array.from({ length: 24 }, (_, h) => <span key={h} className="cm-heat-h">{h % 6 === 0 ? h : ''}</span>)}
+    </div>
+  );
+}
+
+export function busiestText(b: Community['heatmap']['busiest']) {
+  return b ? `Больше всего игроков ${DOW_IN[b.dow]} около ${String(b.hour).padStart(2, '0')}:00` : 'Данных пока мало';
+}
+
+export function FeedItem({ f }: { f: Community['feed'][number] }) {
+  return (
+    <li className="cm-feed-i">
+      <GameAvatar game={f.game} size={30} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm">
+          <a href={`/player/${encodeURIComponent(f.name)}`} className="font-extrabold hover:text-link">{f.name}</a>
+          <span className="text-mute"> зашёл на </span>
+          <a href={`/servers/${f.serverId}`} className="font-bold hover:text-link">{f.serverName}</a>
+        </span>
+        <span className="flex items-center gap-2 text-xs font-bold text-mute">
+          {ago(f.at)}
+          {f.online && <span className="cm-live">в игре</span>}
+          {f.newcomer && <span className="cm-new">новичок</span>}
+        </span>
+      </span>
+    </li>
+  );
+}
+
+export default function CommunityBento() {
+  const c = useCommunity();
+  const [celebrate, setCelebrate] = useState(false);
+  const shown = useRef(false);
+
+  // a new record (higher than any the visitor has already celebrated): confetti once
+  useEffect(() => {
+    if (!c?.record || shown.current) return;
+    const isRecord = c.now.players > 0 && c.now.players >= c.record.players;
+    if (!isRecord) return;
+    let seen = 0;
+    try { seen = Number(localStorage.getItem(RECORD_KEY)) || 0; } catch { /* no storage */ }
+    if (c.now.players > seen) {
+      shown.current = true;
+      setCelebrate(true);
+      try { localStorage.setItem(RECORD_KEY, String(c.now.players)); } catch { /* not remembered */ }
+      window.setTimeout(() => setCelebrate(false), 4000);
+    }
+  }, [c]);
+
+  if (!c) return <div className="cm-bento" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-44" /><div className="tile skeleton h-44" /></div>;
+  const rec = c.record;
+  const toRecord = rec ? Math.max(0, Math.min(1, c.now.players / Math.max(1, rec.players))) : 0;
+  const isRecord = !!rec && c.now.players > 0 && c.now.players >= rec.players;
+  return (
+    <div className="cm-bento fade-in">
+      <section className={`tile cm-now ${isRecord ? 'is-record' : ''}`} aria-label="Сейчас играют">
+        <div className="cm-k">Сейчас играют</div>
+        <div className="relative inline-flex items-baseline gap-2">
+          <AnimatedNumber value={c.now.players} className="cm-big" pulse />
+          <span className="font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])}</span>
+          {celebrate && <Burst count={14} radius={46} />}
+        </div>
+        <div className="cm-meter" aria-hidden><span style={{ width: `${toRecord * 100}%` }} /></div>
+        <p className="cm-sub">
+          {isRecord ? '🎉 Это рекорд за 30 дней!' : rec ? `Рекорд за 30 дней: ${rec.players} (${fmtDateTime(rec.at)})` : 'Рекорд появится, когда накопится история'}
+        </p>
+        <dl className="cm-mini">
+          <div><dt>Серверов в сети</dt><dd>{c.now.online} из {c.now.servers}</dd></div>
+          <div><dt>Игроков за неделю</dt><dd>{c.players.week}</dd></div>
+          <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
+        </dl>
+      </section>
+
+      <section className="tile cm-when" aria-label="Когда играет сообщество">
+        <div className="cm-k">Когда играет сообщество</div>
+        <MiniHeat cells={c.heatmap.cells} />
+        <p className="cm-sub">{busiestText(c.heatmap.busiest)}</p>
+      </section>
+
+      <section className="tile cm-feed" aria-label="Живая лента">
+        <div className="flex items-center justify-between gap-2">
+          <div className="cm-k">Живая лента</div>
+          <a href="/community" className="text-xs font-extrabold text-link hover:underline">Сообщество →</a>
+        </div>
+        {c.feed.length ? <ul className="cm-feed-list">{c.feed.slice(0, 5).map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
+      </section>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/CompareChart.tsx" << '__COREGSM_EOF__'
+/**
+ * All servers on one chart: players (or the share of slots taken) over a day or a week, a line per server in its
+ * game's colour, a cursor that lists every server at that moment, legend chips that hide a line, and a ranking:
+ * average, peak and the change against the period before.
+ */
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import type { Server } from '../../api';
+import { getToken } from '../../api';
+import { gameColor } from '../../games';
+import { GameAvatar, smoothPath } from '../../ui';
+
+interface Sparks { hours: number; points: number; from: number; to: number; servers: Record<number, { players: (number | null)[]; down: boolean[] }> }
+
+// distinct colours when two servers run the same game
+const SPARE = ['#2563eb', '#db2777', '#059669', '#d97706', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#c026d3', '#0d9488'];
+
+const PERIODS: [number, string][] = [[24, 'Сутки'], [168, 'Неделя']];
+
+/** distance between the hues of two '#rrggbb' colours, in degrees */
+function hueGap(a: string, b: string): number {
+  const hue = (hex: string) => {
+    const n = parseInt(hex.replace('#', '').slice(0, 6), 16);
+    if (Number.isNaN(n)) return 0;
+    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, bl = (n & 255) / 255;
+    const mx = Math.max(r, g, bl), mn = Math.min(r, g, bl), d = mx - mn;
+    if (!d) return 0;
+    const h = mx === r ? ((g - bl) / d) % 6 : mx === g ? (bl - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+  const d = Math.abs(hue(a) - hue(b));
+  return Math.min(d, 360 - d);
+}
+
+export default function CompareChart({ servers }: { servers: Server[] }) {
+  const [hours, setHours] = useState(24);
+  const [pct, setPct] = useState(false);
+  const [hidden, setHidden] = useState<Set<number>>(new Set());
+  const [data, setData] = useState<Sparks | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
+  const [W, setW] = useState(900);
+  const wrap = useRef<HTMLDivElement>(null);
+  const svg = useRef<SVGSVGElement>(null);
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setW(Math.max(300, Math.round(el.clientWidth))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // twice the period: the first half is the period before, for the change in the ranking
+  useEffect(() => {
+    let alive = true;
+    const token = getToken();
+    const points = hours <= 24 ? 96 : 168;
+    fetch(`/api/servers/sparks?hours=${hours * 2}&points=${points}`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
+      .then((r) => (r.ok ? (r.json() as Promise<Sparks>) : null))
+      .then((d) => { if (alive && d) setData(d); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [hours]);
+
+  // a line keeps its game's colour unless that hue is already taken by a line before it
+  const colors = useMemo(() => {
+    const used: string[] = [];
+    let spare = 0;
+    return new Map(servers.map((s) => {
+      let c = gameColor(s.game);
+      for (let k = 0; used.some((u) => hueGap(u, c) < 28) && k < SPARE.length; k++) c = SPARE[spare++ % SPARE.length];
+      used.push(c);
+      return [s.id, c];
+    }));
+  }, [servers]);
+
+  const series = useMemo(() => {
+    if (!data) return [];
+    const half = Math.floor(data.points / 2);
+    return servers.map((s) => {
+      const raw = data.servers[s.id]?.players ?? [];
+      const prevRaw = raw.slice(0, half);
+      const curRaw = raw.slice(half);
+      const known = (xs: (number | null)[]) => xs.filter((v): v is number => v != null);
+      const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+      const cur = known(curRaw);
+      const a = avg(cur);
+      const p = avg(known(prevRaw));
+      const scale = (v: number | null) => (v == null ? null : pct ? (s.maxPlayers > 0 ? Math.min(100, (v / s.maxPlayers) * 100) : null) : v);
+      return {
+        s,
+        color: colors.get(s.id)!,
+        values: curRaw.map(scale),
+        avg: a,
+        peak: cur.length ? Math.max(...cur) : null,
+        change: a != null && p != null && p > 0 ? Math.round(((a - p) / p) * 100) : null,
+      };
+    });
+  }, [data, servers, pct, colors]);
+
+  const shown = series.filter((x) => !hidden.has(x.s.id));
+  const n = shown[0]?.values.length ?? 0;
+  const L = 40;
+  const R = 12;
+  const T = 12;
+  const B = 26;
+  const H = W < 520 ? 240 : 320;
+  const top = pct ? 100 : Math.max(1, ...shown.flatMap((x) => x.values.filter((v): v is number => v != null)));
+  const step = top <= 5 ? 1 : top <= 10 ? 2 : top <= 50 ? 10 : top <= 100 ? 20 : 50;
+  const yMax = pct ? 100 : Math.ceil((top * 1.1) / step) * step;
+  const x = (i: number) => L + (i / Math.max(1, n - 1)) * (W - L - R);
+  const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
+  const from = data ? data.to - hours * 3600_000 : Date.now() - hours * 3600_000;
+  const tsOf = (i: number) => from + (i / Math.max(1, n - 1)) * hours * 3600_000;
+  const label = (ts: number) => (hours <= 24 ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : new Date(ts).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric' }));
+
+  const onMove = (e: ReactPointerEvent) => {
+    const r = svg.current?.getBoundingClientRect();
+    if (!r || !n) return;
+    const vx = ((e.clientX - r.left) / r.width) * W;
+    setHover(Math.min(n - 1, Math.max(0, Math.round(((vx - L) / (W - L - R)) * (n - 1)))));
+  };
+  const toggle = (id: number) => setHidden((h) => { const next = new Set(h); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const ranked = [...series].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+  const fmt = (v: number | null) => (v == null ? '–' : pct ? `${Math.round(v)}%` : String(Math.round(v * 10) / 10).replace('.', ','));
+
+  return (
+    <section className="tile tile-in p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-extrabold">Сравнение серверов</h2>
+        <div className="flex flex-wrap gap-2">
+          <div className="seg" role="group" aria-label="Что показывать">
+            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>Игроки</button>
+            <button type="button" className="seg-item" aria-pressed={pct} onClick={() => setPct(true)}>% мест</button>
+          </div>
+          <div className="seg" role="group" aria-label="Период">
+            {PERIODS.map(([h, l]) => <button key={h} type="button" className="seg-item" aria-pressed={hours === h} onClick={() => setHours(h)}>{l}</button>)}
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-2" aria-label="Показать или скрыть сервер">
+        {series.map((x) => (
+          <button key={x.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(x.s.id)} onClick={() => toggle(x.s.id)} style={{ ['--c' as string]: x.color }}>
+            <i aria-hidden />{x.s.name}
+          </button>
+        ))}
+      </div>
+
+      <div ref={wrap} className="relative">
+        {!data ? (
+          <div className="skeleton rounded-2xl bg-soft" style={{ height: H }} aria-label="Загрузка" role="status" />
+        ) : (
+          <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full touch-pan-y select-none" role="img" aria-label={`Игроки на серверах за ${hours <= 24 ? 'сутки' : 'неделю'}`} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
+            {Array.from({ length: Math.floor(yMax / (pct ? 25 : step)) + 1 }, (_, i) => i * (pct ? 25 : step)).map((v) => (
+              <g key={v}>
+                <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeDasharray={v ? '3 5' : undefined} />
+                <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{pct ? `${v}%` : v}</text>
+              </g>
+            ))}
+            {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
+              <text key={f} x={L + f * (W - L - R)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{label(from + f * hours * 3600_000)}</text>
+            ))}
+            {shown.map((x) => {
+              const runs: [number, number][][] = [];
+              let run: [number, number][] = [];
+              x.values.forEach((v, i) => { if (v == null) { if (run.length) runs.push(run); run = []; } else run.push([L + (i / Math.max(1, n - 1)) * (W - L - R), y(v)]); });
+              if (run.length) runs.push(run);
+              return runs.map((r, k) => <path key={`${x.s.id}-${k}`} d={smoothPath(r)} fill="none" stroke={x.color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" opacity={hover == null ? 0.95 : 0.85} />);
+            })}
+            {hover != null && (
+              <>
+                <line x1={x(hover)} x2={x(hover)} y1={T} y2={H - B} className="stroke-mute" strokeDasharray="3 3" />
+                {shown.map((s) => s.values[hover] != null && <circle key={s.s.id} cx={x(hover)} cy={y(s.values[hover]!)} r="4.5" fill={s.color} className="stroke-card" strokeWidth="2" />)}
+              </>
+            )}
+          </svg>
+        )}
+        {hover != null && data && (
+          <div className="pointer-events-none absolute top-1 z-10 min-w-[11rem] -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-[13px] font-bold text-page shadow-pop" style={{ left: Math.min(W - 100, Math.max(100, x(hover))) }}>
+            <div className="mb-1 text-[12px] font-semibold opacity-80">{new Date(tsOf(hover)).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+            {[...shown].sort((a, b) => (b.values[hover] ?? -1) - (a.values[hover] ?? -1)).map((s) => (
+              <div key={s.s.id} className="flex items-center gap-2 whitespace-nowrap">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
+                <span className="max-w-[10rem] truncate opacity-90">{s.s.name}</span>
+                <span className="ml-auto font-extrabold">{s.values[hover] == null ? '—' : fmt(s.values[hover])}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="cmp-rank">
+          <thead>
+            <tr><th scope="col">#</th><th scope="col">Сервер</th><th scope="col">В среднем</th><th scope="col">Пик</th><th scope="col">К прошлому периоду</th></tr>
+          </thead>
+          <tbody>
+            {ranked.map((r, i) => (
+              <tr key={r.s.id}>
+                <td className="font-extrabold text-mute">{i + 1}</td>
+                <td>
+                  <a href={`/servers/${r.s.id}`} className="flex items-center gap-2 font-extrabold hover:text-link">
+                    <GameAvatar game={r.s.game} size={26} />
+                    <span className="truncate">{r.s.name}</span>
+                  </a>
+                </td>
+                <td className="tabular-nums">{fmt(r.avg)}</td>
+                <td className="tabular-nums">{fmt(r.peak)}</td>
+                <td>{r.change == null ? <span className="text-mute">–</span> : <span className={`cmp-change ${r.change > 0 ? 'is-up' : r.change < 0 ? 'is-down' : ''}`}>{r.change > 0 ? '▲' : r.change < 0 ? '▼' : '•'} {Math.abs(r.change)}%</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/PulseStrip.tsx" << '__COREGSM_EOF__'
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
 import { useId } from 'react';
@@ -48103,13 +50299,13 @@ import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../.
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
-export type ServersView = 'tiles' | 'list';
+export type ServersView = 'tiles' | 'list' | 'chart';
 export const VIEW_KEY = 'coregsm_servers_view';
 
 export function readView(): ServersView {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    return v === 'list' ? v : 'tiles';
+    return v === 'list' || v === 'chart' ? v : 'tiles';
   } catch {
     return 'tiles';
   }
@@ -48472,7 +50668,10 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
           <span aria-hidden className={`srv-new-chev ${open ? 'open' : ''}`}><IconChevronDown /></span>
         </button>
       </h2>
-      {open && (
+      {open && news === null && maint.length === 0 && (
+        <p id={bodyId} className="srv-new-quiet">{t('srv.new.quiet')}</p>
+      )}
+      {open && !(news === null && maint.length === 0) && (
         <div id={bodyId} className="srv-new-body">
           <section>
             <h3 className="srv-new-h">{t('srv.new.news')}</h3>
@@ -49398,6 +51597,12 @@ __COREGSM_EOF__
 /** Games that ship a default cover (files in public/games/covers: <game>.jpg 1280x720 and <game>@s.jpg 640x360). */
 const DEFAULT_COVERS = new Set(['vrising', 'icarus']);
 
+/** the picture of a server: its uploaded cover, else the default cover of its game, else null (small = the 640px one) */
+export function coverUrlOf(coverUrl: string | null | undefined, game: string, small = true): string | null {
+  if (coverUrl) return small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
+  return DEFAULT_COVERS.has(game) ? `/games/covers/${game}${small ? '@s' : ''}.jpg` : null;
+}
+
 /**
  * CSS `background` for a server cover: the uploaded picture (or the default cover of the game) with a dark
  * gradient on top (white text stays readable), the game gradient underneath as a fallback while the picture loads.
@@ -50051,6 +52256,9 @@ __COREGSM_EOF__
 
 @layer base {
   html, body, #root { min-height: 100%; }
+  /* the body carries the background glow: it must reach the bottom of the window on short pages too (html has no
+     fixed height, so min-height: 100% alone resolved to the content height and the glow ended in a hard line) */
+  body { min-height: 100vh; min-height: 100dvh; }
   body {
     @apply bg-page text-ink font-sans text-[15px] antialiased;
     -webkit-text-size-adjust: 100%;
@@ -50068,8 +52276,9 @@ __COREGSM_EOF__
 
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }
-  /* long words (usernames, addresses) must not stretch the layout */
-  h1, h2, h3 { overflow-wrap: anywhere; }
+  /* long words (usernames, addresses) must not stretch the layout. break-word, not anywhere: anywhere also lowers the
+     minimum width, and a heading in a flex row then shrank to a couple of letters per line («Показате / ли») */
+  h1, h2, h3 { overflow-wrap: break-word; }
 }
 
 @layer components {
@@ -50766,6 +52975,8 @@ a:focus-visible, button.text-link:focus-visible, .hint-more:focus-visible { bord
 
 /* ---------- server page: foldable sections and the mini table of contents ---------- */
 .srv-sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+/* the title takes the free space and wraps whole words; the controls move to the next line when they do not fit */
+.srv-sec-head > h2 { flex: 1 1 10rem; }
 .srv-sec.is-closed > .srv-sec-head { margin-bottom: 0; }
 .srv-sec-bare > .srv-sec-head { margin-bottom: 8px; padding: 0 4px; }
 .srv-sec-bare.is-closed > .srv-sec-head { margin-bottom: 0; }
@@ -51013,6 +53224,7 @@ const en: Record<keyof typeof ru, string> = {
   'nav.servers': 'Servers',
   'nav.news': 'News',
   'nav.status': 'Status',
+  'nav.community': 'Community',
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'nav.skip': 'Skip to content',
@@ -51442,6 +53654,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.new.noNews': 'No news yet',
   'srv.new.maint': 'Maintenance',
   'srv.new.noMaint': 'No planned maintenance',
+  'srv.new.quiet': 'All quiet: no news, no planned maintenance',
   'srv.new.until': 'in progress, until {time}',
   'srv.new.from': '{from} – {to}',
   'srv.new.events': 'Events',
@@ -51747,6 +53960,7 @@ const errorsEn: Record<string, string> = {
 
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Server not found',
+  player_not_found: 'Player not found',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
@@ -51872,6 +54086,7 @@ const ru = {
   'nav.servers': 'Серверы',
   'nav.news': 'Новости',
   'nav.status': 'Статус',
+  'nav.community': 'Сообщество',
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'nav.skip': 'Перейти к содержимому',
@@ -52301,6 +54516,7 @@ const ru = {
   'srv.new.noNews': 'Новостей пока нет',
   'srv.new.maint': 'Обслуживание',
   'srv.new.noMaint': 'Работ не запланировано',
+  'srv.new.quiet': 'Тихо: новостей нет, работ не запланировано',
   'srv.new.until': 'идёт, до {time}',
   'srv.new.from': '{from} – {to}',
   'srv.new.events': 'События',
@@ -53416,6 +55632,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Alerts.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
+import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
@@ -53428,14 +55645,25 @@ interface AlertsInfo {
   guildName: string | null;
   afterMin: number;
   mention: 'none' | 'here' | 'everyone';
-  recent: { id: number; kind: 'down' | 'up' | 'test'; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
+  smart?: { low: boolean; ping: boolean; full: boolean };
+  recent: { id: number; kind: keyof typeof KIND; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
 }
 
 const KIND = {
   down: { label: 'Сервер упал', cls: 'pill-bad' },
   up: { label: 'Сервер вернулся', cls: 'pill-ok' },
   test: { label: 'Проверка', cls: 'pill-mute' },
+  low: { label: 'Мало игроков', cls: 'pill-warn' },
+  ping: { label: 'Вырос пинг', cls: 'pill-warn' },
+  full: { label: 'Почти заполнен', cls: 'pill-mute' },
+  digest: { label: 'Итоги недели', cls: 'pill-ok' },
 } as const;
+
+const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
+  { key: 'low', title: 'Необычно мало игроков', text: 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).' },
+  { key: 'ping', title: 'Вырос пинг', text: 'Пинг 15 минут выше 150 мс и вдвое выше среднего за сутки.' },
+  { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
+];
 
 /** Messages to a Discord channel when a game server stops answering and when it is back. */
 export default function AlertsPage() {
@@ -53450,7 +55678,7 @@ export default function AlertsPage() {
   };
   usePoll(load, 10_000);
 
-  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention'>>, done?: string) => {
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>>, done?: string) => {
     await api<AlertsInfo>('/alerts', 'PUT', patch)
       .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
@@ -53524,6 +55752,23 @@ export default function AlertsPage() {
           </div>
         </Section>
       )}
+
+      {info && (
+        <Section title="Умные оповещения" description="Сервер работает, но что-то не так. Каждое правило срабатывает, только если условие держится какое-то время, и потом молчит несколько часов.">
+          {SMART.map((r) => (
+            <label key={r.key} className="flex cursor-pointer items-start gap-3">
+              <Switch className="mt-0.5" checked={!!info.smart?.[r.key]} disabled={!info.enabled} onChange={(on) => void save({ smart: { ...(info.smart ?? { low: false, ping: false, full: false }), [r.key]: on } }, on ? 'Включено' : 'Выключено')} />
+              <span>
+                <span className="block font-extrabold">{r.title}</span>
+                <span className="block text-sm font-semibold text-mute">{r.text}</span>
+              </span>
+            </label>
+          ))}
+          {!info.enabled && <p className="text-sm font-semibold text-mute">Сначала включите оповещения выше.</p>}
+        </Section>
+      )}
+
+      <DigestSection alertsChannel={info?.channelId ?? ''} />
 
       <Section title="Последние оповещения">
         {!info && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />}
@@ -53969,6 +56214,121 @@ export default function CardsPage() {
         ))}
       </div>
     </AdminPage>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Community.tsx" << '__COREGSM_EOF__'
+/**
+ * «Сообщество»: the public showcase. Players online now and the record, how many people play, when the community
+ * plays, the live feed of arrivals, the most active players of the week and the month, and the servers by players.
+ */
+import { useState } from 'react';
+import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
+import { AnimatedNumber, GameAvatar, PageHead, fmtDateTime, plural } from '../ui';
+import '../styles/analytics.css';
+import '../styles/community.css';
+
+const IconPeople = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
+  </svg>
+);
+
+export default function CommunityPage() {
+  const c = useCommunity();
+  const [period, setPeriod] = useState<'week' | 'month'>('week');
+  if (!c) {
+    return (
+      <div className="space-y-5" aria-busy="true">
+        <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где" />
+        <div className="tile skeleton h-56" />
+        <div className="tile skeleton h-72" />
+      </div>
+    );
+  }
+  const top = c.top[period];
+  const maxH = Math.max(1, ...top.map((p) => p.hours));
+  const maxP = Math.max(1, ...c.servers.map((s) => s.players));
+  return (
+    <div className="space-y-5">
+      <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где: живые цифры всех серверов" />
+
+      <section className="tile cm-hero fade-in">
+        <div className="cm-hero-main">
+          <div className="cm-k">Сейчас в игре</div>
+          <div className="flex items-baseline gap-3">
+            <AnimatedNumber value={c.now.players} className="cm-hero-n" pulse />
+            <span className="text-lg font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])} на {c.now.online} {plural(c.now.online, ['сервере', 'серверах', 'серверах'])}</span>
+          </div>
+          {c.record && <p className="cm-sub">Рекорд за 30 дней: <b className="text-ink">{c.record.players}</b>, {fmtDateTime(c.record.at)}</p>}
+        </div>
+        <dl className="cm-hero-stats">
+          <div><dt>За сутки</dt><dd>{c.players.day}</dd></div>
+          <div><dt>За неделю</dt><dd>{c.players.week}</dd></div>
+          <div><dt>За месяц</dt><dd>{c.players.month}</dd></div>
+          <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
+        </dl>
+      </section>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
+        <MiniHeat cells={c.heatmap.cells} big />
+        <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам.</p>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="tile p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-extrabold">Самые активные</h2>
+            <div className="seg" role="group" aria-label="Период">
+              <button type="button" className="seg-item" aria-pressed={period === 'week'} onClick={() => setPeriod('week')}>Неделя</button>
+              <button type="button" className="seg-item" aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>Месяц</button>
+            </div>
+          </div>
+          {top.length === 0 ? <p className="cm-sub">Пока никто не играл.</p> : (
+            <ol className="an-top">
+              {top.map((p, i) => (
+                <li key={p.name}>
+                  <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <a href={`/player/${encodeURIComponent(p.name)}`} className="block truncate font-extrabold hover:text-link">{p.name}</a>
+                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+                    <span className="block text-xs font-bold text-mute">{p.servers} {plural(p.servers, ['сервер', 'сервера', 'серверов'])}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">Живая лента</h2>
+          {c.feed.length ? <ul className="cm-feed-list">{c.feed.map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
+        </section>
+      </div>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Где играют сейчас</h2>
+        <ul className="grid gap-2.5">
+          {c.servers.map((s) => (
+            <li key={s.id}>
+              <a href={`/servers/${s.id}`} className="cm-srv">
+                <GameAvatar game={s.game} size={36} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-extrabold">{s.name}</span>
+                  <span className="cm-srv-bar"><span style={{ width: `${(s.players / maxP) * 100}%` }} /></span>
+                </span>
+                <span className="shrink-0 text-right font-extrabold tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : <span className="text-bad">не в сети</span>}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -56085,6 +58445,130 @@ export default function NewsFeed({ sub = '' }: { sub?: string }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Player.tsx" << '__COREGSM_EOF__'
+/**
+ * The card of a player by the nick the game servers report (/player/<nick>): where they play, how much, at what
+ * time of day, the streak of days in a row and the latest visits. Works without signing in on a public panel.
+ */
+import { useEffect, useState } from 'react';
+import { api, ApiError } from '../api';
+import { rankById } from '../vrisingRanks';
+import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural } from '../ui';
+import '../styles/community.css';
+
+interface PlayerCard {
+  name: string;
+  firstSeen: number;
+  lastSeen: number | null;
+  online: boolean;
+  hours: number;
+  visits: number;
+  days: number;
+  streak: number;
+  usualHour: number | null;
+  byHour: number[];
+  servers: { id: number; name: string; game: string; hours: number; visits: number; last: number }[];
+  recent: { serverId: number; serverName: string; from: number; to: number | null }[];
+  rankId?: string;
+}
+
+const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
+
+export default function PlayerPage({ name }: { name: string }) {
+  const [p, setP] = useState<PlayerCard | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setP(null);
+    setMissing(false);
+    api<PlayerCard>(`/players/${encodeURIComponent(name)}`)
+      .then(setP)
+      .catch((e: Error) => (e instanceof ApiError && e.status === 404 ? setMissing(true) : setError(e.message)));
+  }, [name]);
+
+  if (missing) return <Empty title="Такого игрока не видели" text={`Ник «${name}» не появлялся на серверах за последние 90 дней.`}><a href="/community" className="btn mt-2">К сообществу</a></Empty>;
+  if (error) return <ErrorLine text={error} />;
+  if (!p) return <div className="space-y-4" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-60" /></div>;
+
+  const rank = p.rankId ? rankById(p.rankId) : null;
+  const maxH = Math.max(1, ...p.byHour);
+  const maxS = Math.max(1, ...p.servers.map((s) => s.hours));
+  return (
+    <div className="space-y-5">
+      <a href="/community" className="ml-1 inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Сообщество</a>
+      <section className="tile pl-hero fade-in">
+        <span className="pl-ava" aria-hidden>{p.name.slice(0, 1).toUpperCase()}</span>
+        <div className="min-w-0 flex-1">
+          <h1 className="text-3xl font-black leading-tight">{p.name}</h1>
+          <p className="mt-1 flex flex-wrap items-center gap-2 font-bold text-mute">
+            {p.online ? <span className="cm-live">сейчас в игре</span> : p.lastSeen ? <span>был {ago(p.lastSeen)}</span> : null}
+            {rank && <span className="pl-rank">{rank.name}</span>}
+            <span>впервые {fmtDateTime(p.firstSeen)}</span>
+          </p>
+        </div>
+        <dl className="pl-stats">
+          <div><dt>Часов</dt><dd>{p.hours}</dd></div>
+          <div><dt>Визитов</dt><dd>{p.visits}</dd></div>
+          <div><dt>Дней в игре</dt><dd>{p.days}</dd></div>
+          <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>Подряд</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{p.streak} {plural(p.streak, ['день', 'дня', 'дней'])}</dd></div>
+        </dl>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-1 text-lg font-extrabold">Когда играет</h2>
+          <p className="mb-3 text-sm font-semibold text-mute">{p.usualHour != null ? `Чаще всего ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : 'Пока мало данных'}</p>
+          <div className="pl-hours" role="img" aria-label="Часы в игре по времени суток">
+            {p.byHour.map((v, h) => (
+              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${v} ч`}>
+                <i style={{ height: `${(v / maxH) * 100}%` }} />
+                <b>{h % 3 === 0 ? h : ''}</b>
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">Где играет</h2>
+          <ul className="grid gap-2.5">
+            {p.servers.map((s) => (
+              <li key={s.id}>
+                <a href={`/servers/${s.id}`} className="cm-srv">
+                  <GameAvatar game={s.game} size={34} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-extrabold">{s.name}</span>
+                    <span className="cm-srv-bar"><span style={{ width: `${(s.hours / maxS) * 100}%` }} /></span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className="block font-extrabold tabular-nums">{s.hours} ч</span>
+                    <span className="block text-xs font-bold text-mute">{s.visits} {plural(s.visits, ['визит', 'визита', 'визитов'])}</span>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Последние визиты</h2>
+        <ul className="divide-y divide-line">
+          {p.recent.map((v) => (
+            <li key={`${v.serverId}-${v.from}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <a href={`/servers/${v.serverId}`} className="min-w-0 flex-1 truncate font-bold hover:text-link">{v.serverName}</a>
+              <span className="text-sm font-semibold text-mute">
+                {fmtDateTime(v.from)} – {v.to ? fmtTime(v.to) : 'сейчас'}
+                {v.to ? ` · ${Math.max(1, Math.round((v.to - v.from) / 60_000))} мин` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Profile.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
@@ -56917,12 +59401,18 @@ import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
+import { useCoverAccent } from '../components/server/coverAccent';
+import { coverUrlOf } from '../cover';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
   countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
+import { lazyPage, PageFrame } from '../lazyPage';
+
+// the analytics tab and its charts load when it is opened
+const AnalyticsTab = lazyPage(() => import('../components/server/AnalyticsTab'));
 
 export { SERVER_TABS } from '../components/server/helpers';
 
@@ -57084,6 +59574,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
 
+  // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
+  const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
+
   if (missing) return <NotFound kind="server" />;
 
   const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
@@ -57104,7 +59597,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   }
 
   const { server: s, stats, events, points } = data;
-  const accent = gameAccent(s.game);
+  const accent = coverAccentOrGame;
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
@@ -57183,7 +59676,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
@@ -57224,6 +59717,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
       </div>
     );
+  } else if (tab === 'stats') {
+    panel = <PageFrame><AnalyticsTab id={id} /></PageFrame>;
   } else if (tab === 'events') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
@@ -57615,6 +60110,8 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import CompareChart from '../components/servers/CompareChart';
+import CommunityBento from '../components/servers/CommunityBento';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -57816,6 +60313,8 @@ function ServerList() {
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
       )}
 
+      {loaded && servers.length > 0 && !selOn && <CommunityBento />}
+
       {servers.length > 0 && (
         <div className="srv-bar">
           {servers.length > 1 ? (
@@ -57837,7 +60336,7 @@ function ServerList() {
               </button>
             )}
             <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список']] as [ServersView, string][]).map(([id, label]) => (
+              {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
                 <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
               ))}
             </div>
@@ -57870,6 +60369,8 @@ function ServerList() {
                 renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
               />
             )}
+
+            {effView === 'chart' && visible.length > 0 && <CompareChart servers={visible} />}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
               <div className="fade-in srv-grid">
@@ -57935,7 +60436,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
+      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
         background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
@@ -57981,12 +60482,18 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           </div>
         </>
       ) : (
-        s.hasStatus && (
-          <div className="relative mt-4 rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
-            <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-            <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
-          </div>
-        )
+        // a server that is down: one compact row (what is wrong, since when) and the day's curve with the outage in red
+        <div className="relative grid items-center gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          {s.hasStatus ? (
+            <div className="rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
+              <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
+              <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-white/20 px-4 py-3 text-base font-extrabold">Ожидаем первый ответ</div>
+          )}
+          <Spark serverId={s.id} color="#ffffff" variant="hero" />
+        </div>
       )}
 
       <div className="relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
@@ -58004,8 +60511,9 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''}`}
-      style={stagger(idx)}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
+      // the fuller the server, the stronger its glow in the game's colour
+      style={{ ...stagger(idx), ['--gc' as string]: gameColor(s.game), ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
@@ -58276,85 +60784,198 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Status.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
-import { api, type StatusDay, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, StatusPill, ago, usePoll } from '../ui';
-
-const dayColor = (pct: number | null) =>
-  pct == null ? 'bg-line' : pct >= 99.9 ? 'bg-ok' : pct >= 95 ? 'bg-ok/60' : pct >= 80 ? 'bg-warn' : 'bg-bad';
+import { useMemo, useState } from 'react';
+import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
+import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import '../styles/status.css';
 
 const fmtDay = (day: string) => {
   const d = new Date(`${day}T12:00:00`);
-  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 };
 const fmtPct = (p: number) => `${(Math.round(p * 10) / 10).toLocaleString('ru-RU')}%`;
-const dayTitle = (d: StatusDay) => (d.pct == null ? `${fmtDay(d.day)}: нет данных` : `${fmtDay(d.day)}: ${fmtPct(d.pct)}`);
+const dur = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min / 60)} ч${min % 60 ? ` ${min % 60} мин` : ''}`);
+
+/** the colour of a day: by how long the server was down, not by a percentage that hides a 40-minute outage */
+function dayTone(d: StatusDay): 'none' | 'ok' | 'blip' | 'warn' | 'bad' | 'planned' {
+  if (d.pct == null) return 'none';
+  const down = d.down ?? 0;
+  if (down >= 60) return 'bad';
+  if (down >= 15) return 'warn';
+  if (down > 0) return 'blip';
+  if ((d.planned ?? 0) > 0) return 'planned';
+  return 'ok';
+}
+
+function dayText(d: StatusDay): string {
+  if (d.pct == null) return `${fmtDay(d.day)}: нет данных`;
+  const parts = [`${fmtDay(d.day)}: доступен ${fmtPct(d.pct)}`];
+  if (d.down) parts.push(`простой ${dur(d.down)}${d.incidents && d.incidents > 1 ? `, ${d.incidents} ${plural(d.incidents, ['сбой', 'сбоя', 'сбоев'])}` : ''}`);
+  else parts.push('без сбоев');
+  if (d.planned) parts.push(`плановые работы ${dur(d.planned)}`);
+  return parts.join(' · ');
+}
 
 function UptimeBar({ s }: { s: StatusServer }) {
-  const withData = s.days.filter((d) => d.pct != null);
-  const summary = s.uptime30 == null
-    ? 'Нет данных об аптайме за 30 дней'
-    : `Аптайм за 30 дней: ${fmtPct(s.uptime30)}; дней без данных: ${s.days.length - withData.length}`;
+  const [hover, setHover] = useState<number | null>(null);
+  const summary = s.uptime30 == null ? 'Нет данных об аптайме за 30 дней' : `Аптайм за 30 дней: ${fmtPct(s.uptime30)}`;
   return (
-    <div className="flex h-8 w-full min-w-0 gap-[2px] sm:gap-[3px]" role="img" aria-label={summary}>
-      {s.days.map((d) => (
-        <span key={d.day} title={dayTitle(d)} className={`h-full min-w-0 flex-1 rounded-[3px] ${dayColor(d.pct)}`} />
-      ))}
+    <div>
+      <div className="st-bars" role="img" aria-label={summary} onMouseLeave={() => setHover(null)}>
+        {s.days.map((d, i) => (
+          <span key={d.day} className={`st-day is-${dayTone(d)} ${hover === i ? 'is-hover' : ''}`} title={dayText(d)} onMouseEnter={() => setHover(i)} />
+        ))}
+      </div>
+      <div className="st-bars-foot">
+        <span>30 дней назад</span>
+        <span className="st-bars-read" aria-live="polite">{hover != null ? dayText(s.days[hover]) : ''}</span>
+        <span>сегодня</span>
+      </div>
+    </div>
+  );
+}
+
+/** the hourly average ping of the day */
+function Latency({ s }: { s: StatusServer }) {
+  const vals = (s.latency ?? []).filter((v): v is number => v != null);
+  if (vals.length < 2) return null;
+  let prev = vals[0];
+  const filled = (s.latency ?? []).map((v) => (v == null ? prev : (prev = v)));
+  const tone = (s.avgPing ?? 0) > 100 ? 'rgb(var(--warn))' : 'rgb(var(--link))';
+  return (
+    <div className="st-lat">
+      <div className="st-lat-k">Отклик за 24 ч</div>
+      <SmoothArea values={filled} color={tone} w={200} h={36} fill={0.2} strokeWidth={1.8} className="h-9" label={`Пинг за 24 часа: от ${Math.min(...vals)} до ${Math.max(...vals)} мс`} />
+      <div className="st-lat-v">{s.avgPing != null ? `${s.avgPing} мс` : '–'}</div>
     </div>
   );
 }
 
 function ServerRow({ s }: { s: StatusServer }) {
+  const incidents30 = s.days.reduce((n, d) => n + (d.incidents ?? 0), 0);
   return (
-    <li className="panel space-y-3 p-4 sm:p-5">
+    <li className="st-server tile tile-in">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <GameAvatar game={s.game} size={40} />
+        <GameAvatar game={s.game} size={44} />
         <div className="min-w-0 flex-1 basis-40">
-          <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} className="block break-words text-[17px] font-extrabold leading-tight hover:text-link">{s.name}</a>
           <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
         </div>
-        {s.online && <span className="text-sm font-bold tabular-nums text-mute">{s.players}/{s.maxPlayers}{s.avgPing != null ? ` · ${s.avgPing} мс` : ''}</span>}
+        {s.online && <span className="text-sm font-bold tabular-nums text-mute">{s.players}/{s.maxPlayers} игроков</span>}
         <StatusPill online={s.online} known lag={s.online && s.avgPing != null && s.avgPing > 100} />
       </div>
-      <div className="flex items-center gap-3">
-        <UptimeBar s={s} />
-        <div className="w-16 shrink-0 text-right text-sm font-black tabular-nums sm:w-20 sm:text-base">
-          {s.uptime30 == null ? <span className="text-mute">–</span> : fmtPct(s.uptime30)}
+      <div className="st-server-body">
+        <div className="min-w-0 flex-1">
+          <UptimeBar s={s} />
         </div>
-      </div>
-      <div className="flex justify-between text-xs font-semibold text-mute">
-        <span>30 дней назад</span>
-        <span>сегодня</span>
+        <div className="st-server-side">
+          <div className="st-up">
+            <div className="st-up-v">{s.uptime30 == null ? '–' : fmtPct(s.uptime30)}</div>
+            <div className="st-up-k">{incidents30 ? `${incidents30} ${plural(incidents30, ['сбой', 'сбоя', 'сбоев'])} за 30 дней` : 'без сбоев за 30 дней'}</div>
+          </div>
+          <Latency s={s} />
+        </div>
       </div>
     </li>
   );
 }
 
-function Banner({ servers }: { servers: StatusServer[] }) {
+function Banner({ data }: { data: StatusInfo }) {
+  const servers = data.servers;
   const total = servers.length;
   const up = servers.filter((s) => s.online).length;
-  const [cls, title] = up === total
-    ? ['bg-okbg text-ok', 'Все серверы работают']
+  const ongoing = (data.incidents ?? []).filter((i) => i.end == null && !i.planned).length;
+  const ups = servers.map((s) => s.uptime30).filter((v): v is number => v != null);
+  const avg = ups.length ? ups.reduce((a, b) => a + b, 0) / ups.length : null;
+  const players = servers.reduce((n, s) => n + (s.online ? s.players : 0), 0);
+  const [tone, title, text] = up === total
+    ? ['ok', 'Все серверы работают', 'Игроки могут заходить на любой сервер.']
     : up === 0
-      ? ['bg-badbg text-bad', 'Все серверы недоступны']
-      : ['bg-warnbg text-warn', 'Часть серверов недоступна'];
+      ? ['bad', 'Все серверы недоступны', 'Мы уже видим проблему: страница обновится сама, когда серверы вернутся.']
+      : ['warn', `${total - up} ${plural(total - up, ['сервер недоступен', 'сервера недоступны', 'серверов недоступны'])}`, 'Остальные работают в обычном режиме.'];
   return (
-    <div className={`flex flex-wrap items-center justify-between gap-2 rounded-3xl px-5 py-4 ${cls}`} role="status">
-      <span className="text-xl font-black">{title}</span>
-      <span className="font-bold">онлайн: {up} из {total}</span>
-    </div>
+    <section className={`st-banner is-${tone}`} role="status">
+      <span className="st-banner-dot" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <h2 className="text-2xl font-black leading-tight sm:text-3xl">{title}</h2>
+        <p className="mt-1 font-semibold opacity-85">{text}</p>
+      </div>
+      <dl className="st-banner-stats">
+        <div><dt>Онлайн</dt><dd>{up} из {total}</dd></div>
+        <div><dt>Игроков</dt><dd>{players}</dd></div>
+        <div><dt>Аптайм 30 дн</dt><dd>{avg == null ? '–' : fmtPct(avg)}</dd></div>
+        {ongoing > 0 && <div><dt>Сбоев сейчас</dt><dd>{ongoing}</dd></div>}
+      </dl>
+    </section>
+  );
+}
+
+function IncidentItem({ i }: { i: StatusIncident }) {
+  const live = i.end == null;
+  const kind = i.planned ? 'planned' : live ? 'live' : 'past';
+  return (
+    <li className={`st-inc is-${kind}`}>
+      <GameAvatar game={i.game} size={36} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-extrabold">{i.serverName}</span>
+          <span className={`st-inc-badge is-${kind}`}>{i.planned ? 'Плановые работы' : live ? 'Продолжается' : 'Решено'}</span>
+        </div>
+        <p className="text-sm font-semibold text-mute">
+          {live ? `Не отвечает ${dur(i.minutes)}, с ${fmtTime(i.start)}` : `Недоступен ${dur(i.minutes)}: ${fmtTime(i.start)} – ${fmtTime(i.end!)}`}
+          {i.playersBefore > 0 && ` · в игре было ${i.playersBefore} ${plural(i.playersBefore, ['игрок', 'игрока', 'игроков'])}`}
+        </p>
+      </div>
+      <time className="shrink-0 text-xs font-bold text-mute" dateTime={new Date(i.start).toISOString()} title={fmtDateTime(i.start)}>{ago(i.start)}</time>
+    </li>
+  );
+}
+
+/** incidents of the 30 days grouped by day, newest first */
+function Incidents({ list }: { list: StatusIncident[] }) {
+  const groups = useMemo(() => {
+    const m = new Map<string, StatusIncident[]>();
+    for (const i of list) {
+      const key = new Date(i.start).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' });
+      m.set(key, [...(m.get(key) ?? []), i]);
+    }
+    return [...m];
+  }, [list]);
+  return (
+    <section className="tile tile-in p-4 sm:p-5">
+      <h2 className="mb-3 text-lg font-extrabold">История сбоев</h2>
+      {list.length === 0 ? (
+        <div className="st-calm">
+          <span aria-hidden>✨</span>
+          <div>
+            <p className="font-extrabold">За 30 дней ни одного сбоя</p>
+            <p className="text-sm font-semibold text-mute">Все серверы отвечали на каждый опрос.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {groups.map(([day, items]) => (
+            <div key={day}>
+              <h3 className="mb-2 text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h3>
+              <ul className="space-y-2">{items.map((i) => <IncidentItem key={`${i.serverId}-${i.start}`} i={i} />)}</ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
 const LEGEND: [string, string][] = [
-  ['bg-ok', '99,9% и выше'],
-  ['bg-ok/60', 'от 95%'],
-  ['bg-warn', 'от 80%'],
-  ['bg-bad', 'ниже 80%'],
-  ['bg-line', 'нет данных'],
+  ['ok', 'без сбоев'],
+  ['blip', 'до 15 мин'],
+  ['warn', '15–60 мин'],
+  ['bad', 'больше часа'],
+  ['planned', 'плановые работы'],
+  ['none', 'нет данных'],
 ];
 
-/** Public status page: every server with its 30-day availability. */
+/** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 export default function StatusPage() {
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
@@ -58367,14 +60988,14 @@ export default function StatusPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов за последние 30 дней" />
+      <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов и история сбоев за 30 дней" />
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
         <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
-          <div className="skeleton panel h-16" />
-          <div className="skeleton panel h-32" />
-          <div className="skeleton panel h-32" />
+          <div className="skeleton panel h-28" />
+          <div className="skeleton panel h-36" />
+          <div className="skeleton panel h-36" />
         </div>
       )}
 
@@ -58384,16 +61005,17 @@ export default function StatusPage() {
 
       {data && data.servers.length > 0 && (
         <div className="fade-in space-y-5">
-          <Banner servers={data.servers} />
+          <Banner data={data} />
           <ul className="space-y-3">
             {data.servers.map((s) => <ServerRow key={s.id} s={s} />)}
           </ul>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-mute">
             {LEGEND.map(([c, t]) => (
-              <span key={t} className="inline-flex items-center gap-1.5"><span className={`inline-block h-3 w-3 rounded-[3px] ${c}`} aria-hidden />{t}</span>
+              <span key={t} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t}</span>
             ))}
             <span className="ml-auto">обновлено {ago(data.updatedAt)}</span>
           </div>
+          <Incidents list={data.incidents ?? []} />
         </div>
       )}
     </div>
@@ -59479,6 +62101,24 @@ export function BrandCard() {
       actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
       data-tour="brand"
     >
+      <div>
+        <label htmlFor="brand-theme" className="label">Тема для посетителей</label>
+        <select
+          id="brand-theme"
+          className="input"
+          value={b.theme ?? 'dark'}
+          onChange={(e) => {
+            void api('/branding/theme', 'PUT', { theme: e.target.value })
+              .then(() => { toast('Тема по умолчанию сохранена'); return reload(); })
+              .catch((err: Error) => toast(err.message, 'err'));
+          }}
+        >
+          <option value="dark">Тёмная (обложки игр смотрятся лучше всего)</option>
+          <option value="light">Светлая</option>
+          <option value="auto">Как в системе посетителя</option>
+        </select>
+        <p className="mt-1 text-sm font-semibold text-mute">Действует для тех, кто сам не выбирал тему кнопкой в шапке.</p>
+      </div>
       <TextField
         id="brand-name"
         label="Название"
@@ -60206,6 +62846,76 @@ export function downsample(values: (number | null)[], max: number): (number | nu
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
+/* «Аналитика» tab of a server page. The colour is the game's (--srv-accent, set on .srv-page); --a is a cell's weight. */
+.an { --an: var(--srv-accent, rgb(var(--brand))); }
+
+.an-kpis { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); }
+@media (max-width: 639px) { .an-kpi-v { font-size: 24px; } }
+.an-kpi { border-radius: var(--r-lg, 18px); background: rgb(var(--soft)); padding: 12px 14px; }
+.an-kpi-k { font-size: 13px; font-weight: 800; color: rgb(var(--mute)); }
+.an-kpi-v { margin-top: 2px; font-size: 30px; font-weight: 800; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.an-kpi-h { margin-top: 4px; font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* weekday x hour */
+.an-heat { display: grid; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); gap: 3px; align-items: center; }
+.an-heat-hour { font-size: 11px; font-weight: 700; color: rgb(var(--mute)); text-align: left; }
+.an-heat-dow { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.an-heat-cell {
+  height: clamp(12px, 2.6vw, 28px); border-radius: 5px;
+  background: color-mix(in srgb, var(--an) calc(var(--a, 0) * 100%), rgb(var(--soft)));
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.an-heat-cell.is-empty { background: repeating-linear-gradient(135deg, rgb(var(--soft)) 0 4px, transparent 4px 8px); }
+.an-heat-cell.is-hover { transform: scale(1.18); box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 4px var(--an); position: relative; z-index: 1; }
+@media (max-width: 639px) { .an-heat { gap: 2px; grid-template-columns: 1.8rem repeat(24, minmax(0, 1fr)); } .an-heat-cell { border-radius: 3px; } }
+.an-heat-foot { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+.an-heat-scale { display: inline-flex; align-items: center; gap: 4px; }
+.an-heat-scale i { width: 14px; height: 14px; border-radius: 4px; background: color-mix(in srgb, var(--an) calc(var(--a) * 100%), rgb(var(--soft))); }
+.an-facts { margin-top: 12px; display: grid; gap: 6px 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); font-size: 14px; font-weight: 600; }
+.an-facts p { border-left: 3px solid var(--an); padding: 2px 0 2px 10px; }
+.an-facts b { display: block; font-size: 12px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; color: rgb(var(--mute)); }
+
+/* players per day */
+.an-bars { display: flex; align-items: flex-end; gap: 3px; height: 180px; }
+.an-bar { flex: 1 1 0; min-width: 2px; height: 100%; display: flex; flex-direction: column-reverse; border-radius: 6px 6px 2px 2px; overflow: hidden; cursor: default; }
+.an-bar > span { display: block; width: 100%; transition: height .4s cubic-bezier(.2, .8, .2, 1); }
+.an-bar-old { background: var(--an); }
+.an-bar-new { background: color-mix(in srgb, var(--an) 40%, rgb(var(--card))); }
+.an-bar.is-hover > span { filter: brightness(1.12) saturate(1.1); }
+.an-bars-axis { display: flex; gap: 3px; margin-top: 6px; }
+.an-bars-axis span { flex: 1 1 0; min-width: 2px; font-size: 11px; font-weight: 700; color: rgb(var(--mute)); white-space: nowrap; overflow: visible; }
+.an-legend { display: inline-flex; align-items: center; gap: 6px; }
+.an-legend i { width: 12px; height: 12px; border-radius: 4px; }
+
+/* visit lengths */
+.an-hbar { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) 3rem; align-items: center; gap: 10px; font-size: 14px; }
+.an-hbar-k { font-weight: 700; color: rgb(var(--mute)); }
+.an-hbar-track { height: 12px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.an-hbar-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in srgb, var(--an) 55%, rgb(var(--card))), var(--an)); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
+.an-hbar-v { text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* retention cohorts */
+.an-cohorts { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: 13px; }
+.an-cohorts th { font-weight: 800; color: rgb(var(--mute)); text-align: left; white-space: nowrap; padding: 4px 6px; }
+.an-cohorts td { min-width: 3.4rem; border-radius: 8px; padding: 7px 6px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--an) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
+.an-cohorts td.is-strong { color: #fff; }
+.an-cohorts td.is-empty { background: transparent; }
+
+/* top players */
+.an-top { display: grid; gap: 10px; }
+.an-top li { display: flex; align-items: center; gap: 10px; }
+.an-top-n { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 9999px; background: rgb(var(--soft)); font-size: 13px; font-weight: 800; color: rgb(var(--mute)); }
+.an-top-n.is-1 { background: linear-gradient(135deg, #f6d365, #fda085); color: #5a3200; }
+.an-top-n.is-2 { background: linear-gradient(135deg, #e0e6ee, #b6c2d1); color: #2b3442; }
+.an-top-n.is-3 { background: linear-gradient(135deg, #f3c39b, #c98a5a); color: #4a2408; }
+.an-top-bar { display: block; margin-top: 5px; height: 6px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.an-top-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--an); }
+
+@media (prefers-reduced-motion: reduce) { .an-bar > span, .an-hbar-track > span, .an-heat-cell { transition: none; } }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'
 /* buttons: the single source of truth for every button in the panel (imported in main.tsx after index.css and the other styles).
 
@@ -60566,6 +63276,82 @@ html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-d
 @media (max-width: 767px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/community.css" << '__COREGSM_EOF__'
+/* community: the bento at the top of the main page and the «Сообщество» page */
+.cm-bento { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.25fr) minmax(0, 1fr); }
+@media (max-width: 1099px) { .cm-bento { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .cm-feed { grid-column: 1 / -1; } }
+@media (max-width: 699px) { .cm-bento { grid-template-columns: minmax(0, 1fr); } }
+.cm-bento > .tile { padding: 16px 18px; min-width: 0; }
+.cm-k { font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); margin-bottom: 8px; }
+.cm-sub { margin-top: 8px; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+
+.cm-now { position: relative; overflow: hidden; }
+.cm-now::before {
+  content: ''; position: absolute; inset: -40% -30% auto auto; width: 70%; aspect-ratio: 1; border-radius: 9999px; pointer-events: none;
+  background: radial-gradient(circle, rgb(var(--brand) / .18), transparent 70%);
+}
+.cm-now.is-record::before { background: radial-gradient(circle, rgb(var(--warn) / .32), transparent 70%); }
+.cm-big { font-size: 64px; font-weight: 800; line-height: .95; letter-spacing: -0.045em; }
+.cm-meter { margin-top: 10px; height: 8px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.cm-meter > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); transition: width .8s cubic-bezier(.2, .8, .2, 1); }
+.cm-now.is-record .cm-meter > span { background: linear-gradient(90deg, #f6b73c, #ff7a59); }
+.cm-mini { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cm-mini > div { border-radius: 14px; background: rgb(var(--soft)); padding: 6px 10px; }
+.cm-mini dt { font-size: 11px; font-weight: 800; color: rgb(var(--mute)); line-height: 1.2; }
+.cm-mini dd { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+.cm-heat { display: grid; grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
+.cm-heat.is-big { gap: 3px; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); }
+.cm-heat-d { font-size: 11px; font-weight: 800; color: rgb(var(--mute)); }
+.cm-heat-h { font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+.cm-heat-c { height: 15px; border-radius: 3px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
+.cm-heat.is-big .cm-heat-c { height: clamp(14px, 2.4vw, 26px); border-radius: 5px; }
+
+.cm-feed-list { margin-top: 2px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.cm-feed-i { display: flex; align-items: center; gap: 10px; }
+.cm-live, .cm-new { border-radius: 9999px; padding: 0 7px; font-size: 11px; font-weight: 800; }
+.cm-live { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.cm-new { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
+.cm-feed-i { animation: cm-in .5s cubic-bezier(.2, .8, .2, 1) both; }
+.cm-feed-i:nth-child(2) { animation-delay: .05s; } .cm-feed-i:nth-child(3) { animation-delay: .1s; } .cm-feed-i:nth-child(4) { animation-delay: .15s; } .cm-feed-i:nth-child(5) { animation-delay: .2s; }
+@keyframes cm-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .cm-feed-i { animation: none; } .cm-meter > span { transition: none; } }
+html[data-motion='reduce'] .cm-feed-i { animation: none; }
+
+/* «Сообщество» page */
+.cm-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 18px; padding: 22px 24px; position: relative; overflow: hidden;
+  background: radial-gradient(120% 140% at 0% 0%, rgb(var(--brand) / .14), transparent 55%), rgb(var(--card)); }
+.cm-hero-n { font-size: 84px; font-weight: 800; line-height: .9; letter-spacing: -0.05em; }
+@media (max-width: 639px) { .cm-hero-n { font-size: 60px; } }
+.cm-hero-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 639px) { .cm-hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; } }
+.cm-hero-stats > div { min-width: 6.5rem; border-radius: 16px; background: rgb(var(--soft)); padding: 8px 12px; }
+.cm-hero-stats dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.cm-hero-stats dd { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.cm-srv { display: flex; align-items: center; gap: 12px; border-radius: 16px; padding: 8px 10px; transition: background-color .15s ease; }
+.cm-srv:hover { background: rgb(var(--soft)); }
+.cm-srv-bar { display: block; margin-top: 5px; height: 6px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.cm-srv-bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); }
+
+/* player card */
+.pl-hero { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 20px; padding: 22px 24px;
+  background: radial-gradient(120% 160% at 100% 0%, rgb(var(--link) / .14), transparent 55%), rgb(var(--card)); }
+.pl-ava { display: grid; place-items: center; width: 72px; height: 72px; flex: none; border-radius: 22px; font-size: 32px; font-weight: 900; color: #fff;
+  background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--link))); box-shadow: 0 12px 30px -12px rgb(var(--brand) / .7); }
+.pl-rank { border-radius: 9999px; padding: 1px 10px; font-size: 12.5px; background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+.pl-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 639px) { .pl-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; } }
+.pl-stats > div { min-width: 6rem; border-radius: 16px; background: rgb(var(--soft)); padding: 8px 12px; }
+.pl-stats > div.is-hot { background: linear-gradient(135deg, #ffe7c2, #ffd0b5); color: #5a2a00; }
+.pl-stats dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.pl-stats .is-hot dt { color: inherit; opacity: .8; }
+.pl-stats dd { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pl-hours { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
+.pl-hour { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
+.pl-hour i { display: block; width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, rgb(var(--link)), rgb(var(--brand))); }
+.pl-hour b { height: 14px; font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
 /* detail: styles owned by the server page workstream (see main.tsx)
    Rules: no transform transitions on blocks, no infinite animations, entrance = fill-mode backwards,
@@ -60684,17 +63470,8 @@ __COREGSM_EOF__
 @media (min-width: 640px) { .srv-hero-n { font-size: 56px; } .srv-hero-max { font-size: 26px; } }
 
 /* ---------- compact passport ---------- */
-.pp.pp-main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.pp-main .pp-i:last-child { grid-column: 1 / -1; }
-@media (min-width: 640px) {
-  .pp.pp-main { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:last-child { grid-column: span 2; }
-  .pp-main .pp-i:nth-child(n + 4) { grid-column: span 3; }
-}
-@media (min-width: 1024px) {
-  .pp.pp-main { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:nth-child(n + 4), .pp-main .pp-i:last-child { grid-column: span 1; }
-}
+/* up to five facts, only those the server reports: the cells share the row whatever their number */
+.pp.pp-main { grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr)); }
 .pp-more-btn {
   display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 36px; padding: 0 14px; border-radius: 9999px;
   font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.95); background: rgba(8, 10, 20, 0.22); transition: background-color .15s ease;
@@ -60791,6 +63568,28 @@ __COREGSM_EOF__
 }
 html[data-motion='reduce'] .srv-more-pop { animation: none !important; }
 html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none !important; }
+
+/* ---------- history chart: tools, the usual band, the ping axis, zoom ---------- */
+.hc-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 8px; }
+.hc-chip {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 3px 12px; border-radius: 9999px;
+  font-size: 12.5px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+.hc-chip[aria-pressed='true'] { color: rgb(var(--ink)); background: rgb(var(--card)); box-shadow: 0 0 0 1.5px rgb(var(--line)), 0 1px 2px rgba(20, 24, 40, .06); }
+.hc-chip.is-zoom { color: rgb(var(--link)); background: rgb(var(--link) / .1); }
+.hc-chip i { width: 16px; height: 8px; border-radius: 4px; }
+.hc-chip-usual { background: repeating-linear-gradient(90deg, rgb(var(--mute) / .6) 0 4px, transparent 4px 7px), rgb(var(--mute) / .15); }
+.hc-chip-ping { background: rgb(var(--link)); height: 3px !important; }
+.hc-tip { font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+@media (hover: none) { .hc-tip { display: none; } }
+.hc-usual path:first-child { fill: rgb(var(--mute) / .12); }
+.hc-usual path:last-child { stroke: rgb(var(--mute) / .55); stroke-width: 1.5; }
+.hc-ping { stroke: rgb(var(--link)); stroke-width: 1.6; opacity: .85; }
+.hc-ping-tick { fill: rgb(var(--link)); }
+.hc-drag { fill: var(--srv-accent, rgb(var(--brand))); fill-opacity: .12; stroke: var(--srv-accent, rgb(var(--brand))); stroke-opacity: .5; stroke-dasharray: 4 3; }
+.hc-over { margin-top: 8px; border-radius: 12px; overflow: hidden; background: rgb(var(--soft)); }
+.hc-over-dim { fill: rgb(var(--card)); fill-opacity: .55; }
+.hc-over-win { fill: none; stroke: var(--srv-accent, rgb(var(--brand))); stroke-width: 2; rx: 6; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
@@ -61362,6 +64161,7 @@ __COREGSM_EOF__
 .srv-new-chev { display: grid; place-items: center; color: rgb(var(--mute)); transition: transform .2s ease; }
 .srv-new-chev.open { transform: rotate(180deg); }
 .srv-new-body { display: flex; flex-direction: column; gap: 14px; padding: 4px 10px 12px; }
+.srv-new-quiet { margin: 0; padding: 2px 14px 14px; font-size: 13.5px; font-weight: 700; color: rgb(var(--mute)); }
 .srv-new-h { margin: 0 0 6px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
 .srv-new-news { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 16px; background: rgb(var(--soft) / .7); transition: background-color .15s ease; }
 .srv-new-news:hover { background: rgb(var(--soft)); }
@@ -61385,13 +64185,100 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 @media (min-width: 900px) {
   .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
 }
+/* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
+.srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
 .srv-tile { min-width: 0; }
+/* a full server glows in its game's colour (--fill 0..1); a server that is down steps back */
+.srv-tile { box-shadow: var(--shadow-2), 0 14px 34px -18px color-mix(in srgb, var(--gc, transparent) calc(var(--fill, 0) * 90%), transparent); }
+.srv-tile.is-busy { box-shadow: var(--shadow-2), 0 0 0 2px color-mix(in srgb, var(--gc) 55%, transparent), 0 16px 40px -14px color-mix(in srgb, var(--gc) 70%, transparent); }
+.srv-tile.is-down { filter: saturate(.55); opacity: .9; }
+.srv-tile.is-down:hover { filter: none; opacity: 1; }
+.tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
 
 /* news card in «Что нового»: the title and the foot are links, the text carries live links */
 .srv-new-news-title { font-weight: 800; color: rgb(var(--ink)); }
 .srv-new-news-title:hover { color: rgb(var(--link)); }
 .srv-new-news-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .srv-new-link { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+
+/* servers compared on one chart */
+.cmp-chip {
+  --c: rgb(var(--brand));
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; max-width: 16rem; padding: 3px 12px 3px 10px; border-radius: 9999px;
+  font-size: 13px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: opacity .15s ease, background-color .15s ease;
+}
+.cmp-chip i { width: 10px; height: 10px; flex: none; border-radius: 9999px; background: var(--c); }
+.cmp-chip[aria-pressed='true'] { color: rgb(var(--ink)); background: color-mix(in srgb, var(--c) 14%, rgb(var(--card))); }
+.cmp-chip[aria-pressed='false'] { opacity: .55; text-decoration: line-through; }
+.cmp-rank { width: 100%; border-collapse: collapse; font-size: 14px; }
+.cmp-rank th { padding: 6px 8px; text-align: left; font-size: 12px; font-weight: 800; color: rgb(var(--mute)); white-space: nowrap; }
+.cmp-rank td { padding: 8px; border-top: 1px solid rgb(var(--line)); font-weight: 700; }
+.cmp-rank td:nth-child(2) { max-width: 18rem; }
+.cmp-change { display: inline-flex; align-items: center; gap: 4px; border-radius: 9999px; padding: 2px 9px; font-size: 12.5px; font-weight: 800; background: rgb(var(--soft)); color: rgb(var(--mute)); }
+.cmp-change.is-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.cmp-change.is-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
+/* public status page */
+.st-banner {
+  --tone: var(--ok); --toneBg: var(--okbg);
+  position: relative; overflow: hidden; display: flex; flex-wrap: wrap; align-items: center; gap: 16px 20px;
+  border-radius: 28px; padding: 22px 24px; color: rgb(var(--tone));
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgb(var(--tone) / .16), transparent 60%),
+    rgb(var(--toneBg));
+  border: 1px solid rgb(var(--tone) / .25);
+}
+.st-banner.is-warn { --tone: var(--warn); --toneBg: var(--warnbg); }
+.st-banner.is-bad { --tone: var(--bad); --toneBg: var(--badbg); }
+.st-banner-dot { position: relative; width: 18px; height: 18px; flex: none; border-radius: 9999px; background: rgb(var(--tone)); }
+.st-banner-dot::after { content: ''; position: absolute; inset: -6px; border-radius: inherit; border: 2px solid rgb(var(--tone)); animation: st-ping 2.2s ease-out infinite; }
+@keyframes st-ping { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(1.8); opacity: 0; } }
+.st-banner-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.st-banner-stats > div { min-width: 6.5rem; border-radius: 16px; padding: 8px 14px; background: rgb(var(--card) / .7); }
+.st-banner-stats dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.st-banner-stats dd { font-size: 20px; font-weight: 800; color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
+
+.st-server { padding: 16px 18px; }
+.st-server-body { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 22px; }
+.st-server-side { display: flex; align-items: flex-start; gap: 18px; }
+@media (max-width: 767px) { .st-server-side { width: 100%; justify-content: space-between; } }
+.st-up-v { font-size: 26px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; text-align: right; }
+.st-up-k { margin-top: 4px; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); text-align: right; white-space: nowrap; }
+.st-lat { width: 11rem; }
+.st-lat-k { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.st-lat-v { margin-top: 2px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* 30 day bars */
+.st-bars { display: flex; height: 38px; gap: 3px; }
+@media (max-width: 639px) { .st-bars { gap: 2px; height: 32px; } }
+.st-day { flex: 1 1 0; min-width: 0; border-radius: 4px; background: rgb(var(--line)); transition: transform .12s ease, filter .12s ease; }
+.st-day.is-ok { background: rgb(var(--ok)); }
+.st-day.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 30%, rgb(var(--ok)) 30%); }
+.st-legend.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 45%, rgb(var(--ok)) 45%); }
+.st-day.is-warn { background: rgb(var(--warn)); }
+.st-day.is-bad { background: rgb(var(--bad)); }
+.st-day.is-planned { background: repeating-linear-gradient(135deg, rgb(var(--link)) 0 4px, rgb(var(--link) / .55) 4px 8px); }
+.st-day.is-hover { transform: scaleY(1.12); filter: brightness(1.08); }
+.st-legend { display: inline-block; width: 12px; height: 12px; flex: none; }
+.st-bars-foot { margin-top: 6px; display: flex; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+.st-bars-read { flex: 1; text-align: center; color: rgb(var(--ink)); }
+
+/* incidents */
+.st-inc { position: relative; display: flex; align-items: center; gap: 12px; border-radius: 18px; padding: 10px 12px 10px 16px; background: rgb(var(--soft)); }
+.st-inc::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 4px; border-radius: 0 4px 4px 0; background: rgb(var(--warn)); }
+.st-inc.is-live::before { background: rgb(var(--bad)); animation: st-blink 1.6s ease-in-out infinite; }
+.st-inc.is-planned::before { background: rgb(var(--link)); }
+@keyframes st-blink { 50% { opacity: .35; } }
+.st-inc-badge { border-radius: 9999px; padding: 1px 9px; font-size: 11.5px; font-weight: 800; background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.st-inc-badge.is-live { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+.st-inc-badge.is-planned { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
+.st-calm { display: flex; align-items: center; gap: 14px; border-radius: 18px; padding: 14px 16px; background: rgb(var(--okbg)); }
+.st-calm > span { font-size: 28px; }
+
+@media (prefers-reduced-motion: reduce) { .st-banner-dot::after, .st-inc.is-live::before { animation: none; } .st-day { transition: none; } }
+html[data-motion='reduce'] .st-banner-dot::after, html[data-motion='reduce'] .st-inc.is-live::before { animation: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'
@@ -61480,7 +64367,7 @@ export { useTween, AnimatedNumber, Burst } from './ui/motion';
 export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
 export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
-export { ThemeToggle } from './ui/theme';
+export { ThemeToggle, applyDefaultTheme } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
 export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
@@ -62194,75 +65081,91 @@ __COREGSM_EOF__
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
 
-// history of a server is shared between remounts (list <-> details) for a couple of minutes
-const sparkCache = new Map<number, { at: number; pts: number[] }>();
+/**
+ * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
+ * refreshed every 3 minutes while someone shows a sparkline and the tab is visible.
+ */
+interface SparkSet { at: number; servers: Record<number, { players: (number | null)[]; down: boolean[] }> }
 const SPARK_EVERY = 3 * 60_000;
+let sparkSet: SparkSet | null = null;
+let sparkLoading: Promise<void> | null = null;
+let sparkTimer = 0;
+const sparkSubs = new Set<() => void>();
+
+function loadSparks(): Promise<void> {
+  if (sparkLoading) return sparkLoading;
+  sparkLoading = (async () => {
+    try {
+      const token = getToken();
+      const res = await fetch('/api/servers/sparks?hours=24', { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+      if (res.ok) {
+        const d = (await res.json()) as { servers: SparkSet['servers'] };
+        sparkSet = { at: Date.now(), servers: d.servers ?? {} };
+        sparkSubs.forEach((f) => f());
+      }
+    } catch {
+      /* offline: keep what we have */
+    } finally {
+      sparkLoading = null;
+    }
+  })();
+  return sparkLoading;
+}
+
+function scheduleSparks() {
+  window.clearTimeout(sparkTimer);
+  if (!sparkSubs.size) return;
+  const age = sparkSet ? Date.now() - sparkSet.at : Infinity;
+  sparkTimer = window.setTimeout(async () => {
+    if (!document.hidden) await loadSparks();
+    scheduleSparks();
+  }, age >= SPARK_EVERY ? 0 : SPARK_EVERY - age);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && sparkSubs.size) scheduleSparks(); });
+}
+
+function useSparkSet(): SparkSet | null {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((n) => n + 1);
+    sparkSubs.add(f);
+    scheduleSparks();
+    return () => { sparkSubs.delete(f); if (!sparkSubs.size) window.clearTimeout(sparkTimer); };
+  }, []);
+  return sparkSet;
+}
+
+/** empty buckets (no poll yet, or the panel was off) take the value before them */
+const filled = (vals: (number | null)[]): number[] => {
+  let prev = vals.find((v) => v != null) ?? 0;
+  return vals.map((v) => (v == null ? prev : (prev = v)));
+};
 
 /**
- * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
- * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
+ * 24h player-count sparkline; the stretches when the server was down are tinted red. A quiet shimmering placeholder
+ * is shown only until the shared request answers.
  */
 export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
-  const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
-
-  useEffect(() => {
-    let timer = 0;
-    let ctl: AbortController | null = null;
-    let alive = true;
-
-    const load = async () => {
-      if (!alive || document.hidden) return;
-      ctl?.abort();
-      ctl = new AbortController();
-      try {
-        const token = getToken();
-        const res = await fetch(`/api/servers/${serverId}/history?hours=24`, {
-          signal: ctl.signal,
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!res.ok) return;
-        const rows = (await res.json()) as { players: number }[];
-        // downsample to at most 48 points
-        const step = Math.max(1, Math.ceil(rows.length / 48));
-        const next = rows.filter((_, i) => i % step === 0).map((r) => r.players);
-        sparkCache.set(serverId, { at: Date.now(), pts: next });
-        if (alive) setPts(next);
-      } catch {
-        /* aborted or offline: keep what we have */
-      }
-    };
-    const schedule = (delay: number) => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(async () => {
-        await load();
-        if (alive) schedule(SPARK_EVERY);
-      }, delay);
-    };
-
-    const cached = sparkCache.get(serverId);
-    const age = cached ? Date.now() - cached.at : Infinity;
-    // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
-    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : variant === 'hero' ? 0 : 150 + Math.random() * 2500);
-
-    const onVisible = () => {
-      if (document.hidden) return;
-      const c = sparkCache.get(serverId);
-      if (!c || Date.now() - c.at >= SPARK_EVERY) schedule(100 + Math.random() * 1000);
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      ctl?.abort();
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [serverId, variant]);
-
-  if (pts.length < 2) return <div className={`${variant === 'hero' ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} rounded-2xl`} aria-hidden />;
-  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}`;
-  return variant === 'hero'
-    ? <SmoothArea values={pts} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
-    : <SmoothArea values={pts} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  const hero = variant === 'hero';
+  if (!set) return <div className={`${hero ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} skeleton rounded-2xl`} aria-hidden />;
+  const known = raw ? raw.players.filter((v) => v != null).length : 0;
+  if (!raw || known < 2) {
+    return (
+      <div className={`${hero ? 'h-[130px] border-white/30 text-white/80' : 'h-10 border-line text-mute'} grid place-items-center rounded-2xl border border-dashed px-2 text-center text-xs font-bold`}>
+        История появится после нескольких опросов
+      </div>
+    );
+  }
+  const pts = filled(raw.players);
+  const downs = raw.down.filter(Boolean).length;
+  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
+  return hero
+    ? <SmoothArea values={pts} down={raw.down} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    : <SmoothArea values={pts} down={raw.down} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
 }
 
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
@@ -62283,10 +65186,12 @@ export function smoothPath(pts: [number, number][]): string {
  * The drawing stretches (preserveAspectRatio none, non-scaling stroke); the dot is an HTML element so it stays round.
  */
 export function SmoothArea({
-  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax,
+  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax, down,
 }: {
   values: number[]; color: string; w?: number; h?: number; grid?: boolean; dot?: boolean; strokeWidth?: number; fill?: number;
   className?: string; label?: string; max?: number;
+  /** points at which the server was down: a red band behind the curve */
+  down?: boolean[];
 }) {
   const gid = useId();
   const pad = 3;
@@ -62306,6 +65211,11 @@ export function SmoothArea({
         {grid && [1, 2, 3].map((k) => (
           <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
         ))}
+        {down?.map((d, i) => {
+          if (!d || !pts[i]) return null;
+          const half = (w - pad * 2) / Math.max(1, values.length - 1) / 2;
+          return <rect key={i} x={pts[i][0] - half} y={0} width={half * 2} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
+        })}
         <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>
@@ -62688,7 +65598,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/theme.tsx" << '__COREGSM_EOF__'
 /** Light / dark / auto theme. */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { t } from '../i18n';
 import { IconAuto, IconMoon, IconSun } from '../icons';
 import { revealTransition } from '../useMotion';
@@ -62696,28 +65606,53 @@ import { revealTransition } from '../useMotion';
 // ---------- theme ----------
 type Theme = 'auto' | 'light' | 'dark';
 const THEME_KEY = 'coregsm_theme';
-const readTheme = (): Theme => {
+// the community's default, remembered so that the inline script of index.html can apply it before the first paint
+const DEFAULT_KEY = 'coregsm_theme_default';
+const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark';
+const read = (key: string): Theme | null => {
   try {
-    const t = localStorage.getItem(THEME_KEY);
-    return t === 'light' || t === 'dark' ? t : 'auto';
+    const t = localStorage.getItem(key);
+    return valid(t) ? t : null;
   } catch {
-    return 'auto';
+    return null;
   }
 };
-function applyTheme(t: Theme) {
+/** the visitor's own choice, else the community's default */
+const readTheme = (): Theme => read(THEME_KEY) ?? read(DEFAULT_KEY) ?? 'dark';
+const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', t);
+};
+function applyTheme(t: Theme) {
+  paint(t);
   try {
-    if (t === 'auto') localStorage.removeItem(THEME_KEY);
-    else localStorage.setItem(THEME_KEY, t);
+    // 'auto' is stored too: it is a choice, and the community default must not override it
+    localStorage.setItem(THEME_KEY, t);
   } catch {
     /* private mode: the theme just is not remembered */
   }
 }
+const subs = new Set<(t: Theme) => void>();
+
+/** the administrator's default theme: applies to everyone who has not picked a theme in the header */
+export function applyDefaultTheme(def: Theme) {
+  try {
+    localStorage.setItem(DEFAULT_KEY, def);
+  } catch {
+    /* not remembered: applied for this visit only */
+  }
+  if (read(THEME_KEY)) return;
+  paint(def);
+  subs.forEach((f) => f(def));
+}
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(readTheme);
+  useEffect(() => {
+    subs.add(setTheme);
+    return () => { subs.delete(setTheme); };
+  }, []);
   const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
   const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') };
   return (

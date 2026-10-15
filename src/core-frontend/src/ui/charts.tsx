@@ -2,75 +2,91 @@
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
 
-// history of a server is shared between remounts (list <-> details) for a couple of minutes
-const sparkCache = new Map<number, { at: number; pts: number[] }>();
+/**
+ * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
+ * refreshed every 3 minutes while someone shows a sparkline and the tab is visible.
+ */
+interface SparkSet { at: number; servers: Record<number, { players: (number | null)[]; down: boolean[] }> }
 const SPARK_EVERY = 3 * 60_000;
+let sparkSet: SparkSet | null = null;
+let sparkLoading: Promise<void> | null = null;
+let sparkTimer = 0;
+const sparkSubs = new Set<() => void>();
+
+function loadSparks(): Promise<void> {
+  if (sparkLoading) return sparkLoading;
+  sparkLoading = (async () => {
+    try {
+      const token = getToken();
+      const res = await fetch('/api/servers/sparks?hours=24', { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+      if (res.ok) {
+        const d = (await res.json()) as { servers: SparkSet['servers'] };
+        sparkSet = { at: Date.now(), servers: d.servers ?? {} };
+        sparkSubs.forEach((f) => f());
+      }
+    } catch {
+      /* offline: keep what we have */
+    } finally {
+      sparkLoading = null;
+    }
+  })();
+  return sparkLoading;
+}
+
+function scheduleSparks() {
+  window.clearTimeout(sparkTimer);
+  if (!sparkSubs.size) return;
+  const age = sparkSet ? Date.now() - sparkSet.at : Infinity;
+  sparkTimer = window.setTimeout(async () => {
+    if (!document.hidden) await loadSparks();
+    scheduleSparks();
+  }, age >= SPARK_EVERY ? 0 : SPARK_EVERY - age);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && sparkSubs.size) scheduleSparks(); });
+}
+
+function useSparkSet(): SparkSet | null {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((n) => n + 1);
+    sparkSubs.add(f);
+    scheduleSparks();
+    return () => { sparkSubs.delete(f); if (!sparkSubs.size) window.clearTimeout(sparkTimer); };
+  }, []);
+  return sparkSet;
+}
+
+/** empty buckets (no poll yet, or the panel was off) take the value before them */
+const filled = (vals: (number | null)[]): number[] => {
+  let prev = vals.find((v) => v != null) ?? 0;
+  return vals.map((v) => (v == null ? prev : (prev = v)));
+};
 
 /**
- * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
- * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
+ * 24h player-count sparkline; the stretches when the server was down are tinted red. A quiet shimmering placeholder
+ * is shown only until the shared request answers.
  */
 export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
-  const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
-
-  useEffect(() => {
-    let timer = 0;
-    let ctl: AbortController | null = null;
-    let alive = true;
-
-    const load = async () => {
-      if (!alive || document.hidden) return;
-      ctl?.abort();
-      ctl = new AbortController();
-      try {
-        const token = getToken();
-        const res = await fetch(`/api/servers/${serverId}/history?hours=24`, {
-          signal: ctl.signal,
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!res.ok) return;
-        const rows = (await res.json()) as { players: number }[];
-        // downsample to at most 48 points
-        const step = Math.max(1, Math.ceil(rows.length / 48));
-        const next = rows.filter((_, i) => i % step === 0).map((r) => r.players);
-        sparkCache.set(serverId, { at: Date.now(), pts: next });
-        if (alive) setPts(next);
-      } catch {
-        /* aborted or offline: keep what we have */
-      }
-    };
-    const schedule = (delay: number) => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(async () => {
-        await load();
-        if (alive) schedule(SPARK_EVERY);
-      }, delay);
-    };
-
-    const cached = sparkCache.get(serverId);
-    const age = cached ? Date.now() - cached.at : Infinity;
-    // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
-    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : variant === 'hero' ? 0 : 150 + Math.random() * 2500);
-
-    const onVisible = () => {
-      if (document.hidden) return;
-      const c = sparkCache.get(serverId);
-      if (!c || Date.now() - c.at >= SPARK_EVERY) schedule(100 + Math.random() * 1000);
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      ctl?.abort();
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [serverId, variant]);
-
-  if (pts.length < 2) return <div className={`${variant === 'hero' ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} rounded-2xl`} aria-hidden />;
-  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}`;
-  return variant === 'hero'
-    ? <SmoothArea values={pts} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
-    : <SmoothArea values={pts} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  const hero = variant === 'hero';
+  if (!set) return <div className={`${hero ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} skeleton rounded-2xl`} aria-hidden />;
+  const known = raw ? raw.players.filter((v) => v != null).length : 0;
+  if (!raw || known < 2) {
+    return (
+      <div className={`${hero ? 'h-[130px] border-white/30 text-white/80' : 'h-10 border-line text-mute'} grid place-items-center rounded-2xl border border-dashed px-2 text-center text-xs font-bold`}>
+        История появится после нескольких опросов
+      </div>
+    );
+  }
+  const pts = filled(raw.players);
+  const downs = raw.down.filter(Boolean).length;
+  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
+  return hero
+    ? <SmoothArea values={pts} down={raw.down} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    : <SmoothArea values={pts} down={raw.down} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
 }
 
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
@@ -91,10 +107,12 @@ export function smoothPath(pts: [number, number][]): string {
  * The drawing stretches (preserveAspectRatio none, non-scaling stroke); the dot is an HTML element so it stays round.
  */
 export function SmoothArea({
-  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax,
+  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax, down,
 }: {
   values: number[]; color: string; w?: number; h?: number; grid?: boolean; dot?: boolean; strokeWidth?: number; fill?: number;
   className?: string; label?: string; max?: number;
+  /** points at which the server was down: a red band behind the curve */
+  down?: boolean[];
 }) {
   const gid = useId();
   const pad = 3;
@@ -114,6 +132,11 @@ export function SmoothArea({
         {grid && [1, 2, 3].map((k) => (
           <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
         ))}
+        {down?.map((d, i) => {
+          if (!d || !pts[i]) return null;
+          const half = (w - pad * 2) / Math.max(1, values.length - 1) / 2;
+          return <rect key={i} x={pts[i][0] - half} y={0} width={half * 2} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
+        })}
         <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>

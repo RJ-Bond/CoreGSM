@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react'
 import { COUNTRIES } from '../../countries';
 import { getPrefs } from '../../i18n';
 
-export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
+export const SERVER_TABS = ['players', 'history', 'stats', 'events', 'connect'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
 
 /** hash of a server page tab: '' = overview */
