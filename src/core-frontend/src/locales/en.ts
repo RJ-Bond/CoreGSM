@@ -37,6 +37,7 @@ const en: Record<keyof typeof ru, string> = {
   'nav.servers': 'Servers',
   'nav.news': 'News',
   'nav.status': 'Status',
+  'nav.community': 'Community',
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'nav.skip': 'Skip to content',

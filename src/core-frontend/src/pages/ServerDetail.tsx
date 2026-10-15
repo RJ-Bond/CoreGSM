@@ -21,6 +21,8 @@ import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
+import { useCoverAccent } from '../components/server/coverAccent';
+import { coverUrlOf } from '../cover';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
@@ -192,6 +194,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
 
+  // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
+  const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
+
   if (missing) return <NotFound kind="server" />;
 
   const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
@@ -212,7 +217,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   }
 
   const { server: s, stats, events, points } = data;
-  const accent = gameAccent(s.game);
+  const accent = coverAccentOrGame;
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];

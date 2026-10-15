@@ -115,6 +115,12 @@ router.put(
     res.json(brand());
   },
 );
+router.put('/api/branding/theme', admin, (req, res) => {
+  const b = z.object({ theme: z.enum(['auto', 'light', 'dark']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  setSetting('default_theme', b.data.theme);
+  res.json(brand());
+});
 router.delete('/api/branding/logo', admin, (_req, res) => {
   const old = logoFile();
   if (old) fs.rmSync(old, { force: true });

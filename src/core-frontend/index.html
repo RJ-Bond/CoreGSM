@@ -19,9 +19,9 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>CoreGSM</title>
     <script>
-      // apply the saved theme before first paint to avoid a flash
+      // apply the visitor's theme (or the community's default) before first paint to avoid a flash
       try {
-        var t = localStorage.getItem('coregsm_theme');
+        var t = localStorage.getItem('coregsm_theme') || localStorage.getItem('coregsm_theme_default') || 'dark';
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
       } catch (e) {}
     </script>
