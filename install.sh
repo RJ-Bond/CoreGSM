@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f164e22557dd"
+COREGSM_BUILD="64aca4ed35da"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8130,7 +8130,6 @@ export function countryLabel(code: string): string {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gsm.ts" << '__COREGSM_EOF__'
-import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
 import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
@@ -8140,79 +8139,8 @@ import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
 import { clampConcurrency, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, runPool } from './pollLogic.js';
 
-export interface QueryResult {
-  online: boolean;
-  name: string | null;
-  players: number;
-  maxPlayers: number;
-  map: string | null;
-  version: string | null;
-  ping: number | null;
-  playerNames: string[];
-  error: string | null;
-}
-
-/** Turns GameDig/network errors into a message a person can act on. */
-export function humanizeQueryError(raw: string): string {
-  const m = raw.toLowerCase();
-  if (/invalid game|unknown game|game type/.test(m)) return 'Неизвестный тип игры. Выберите игру из списка или проверьте GameDig ID.';
-  if (/enotfound|eai_again|getaddrinfo/.test(m)) return 'Адрес не найден. Проверьте имя или IP сервера.';
-  if (/econnrefused/.test(m)) return 'Соединение отклонено: порт закрыт или сервер выключен.';
-  if (/ehostunreach|enetunreach|network is unreachable/.test(m)) return 'Нет маршрута до сервера. Проверьте сеть и адрес.';
-  if (/timed out|timeout|failed all|no response|etimedout/.test(m)) {
-    return 'Сервер не ответил. Проверьте адрес и порт, включён ли сервер и разрешён ли query (некоторым играм нужен отдельный query-порт).';
-  }
-  return raw.slice(0, 160);
-}
-
-const clean = (s: unknown): string | null => {
-  if (typeof s !== 'string') return null;
-  // strip Minecraft colour codes and control characters
-  const v = s.replace(/§./g, '').replace(/[\u0000-\u001f]/g, ' ').trim();
-  return v.length ? v.slice(0, 120) : null;
-};
-
-export async function queryServer(s: ServerRow): Promise<QueryResult> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r: any = await GameDig.query({
-      type: s.game,
-      host: s.host,
-      port: s.query_port ?? s.port,
-      maxRetries: 1,
-      socketTimeout: 3000,
-      attemptTimeout: 9000,
-    });
-    const names: string[] = Array.isArray(r.players)
-      ? r.players.map((p: { name?: string }) => clean(p?.name)).filter((n: string | null): n is string => !!n)
-      : [];
-    const count = Number(r.numplayers ?? (Array.isArray(r.players) ? r.players.length : 0)) || 0;
-    const rawVersion = r.version ?? r.raw?.version?.name ?? r.raw?.version ?? null;
-    return {
-      online: true,
-      name: clean(r.name),
-      players: count,
-      maxPlayers: Number(r.maxplayers) || 0,
-      map: clean(r.map),
-      version: clean(typeof rawVersion === 'string' ? rawVersion : null),
-      ping: typeof r.ping === 'number' ? Math.round(r.ping) : null,
-      playerNames: names.slice(0, 200),
-      error: null,
-    };
-  } catch (e) {
-    return {
-      online: false,
-      name: null,
-      players: 0,
-      maxPlayers: 0,
-      map: null,
-      version: null,
-      ping: null,
-      playerNames: [],
-      error: humanizeQueryError(e instanceof Error ? e.message : String(e)),
-    };
-  }
-}
+export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
+import { queryServer, type QueryResult } from './query.js';
 
 const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
@@ -8833,6 +8761,7 @@ import { router as seasonsRouter } from './seasons.js';
 import { router as reviewsRouter } from './reviews.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
+import { router as probesRouter } from './probes.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8874,6 +8803,7 @@ app.use(seasonsRouter);
 app.use(reviewsRouter);
 app.use(galleryRouter);
 app.use(restartsRouter);
+app.use(probesRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -11312,6 +11242,244 @@ export async function runPool<T>(items: T[], limit: number, worker: (item: T, in
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/probeAgent.ts" << '__COREGSM_EOF__'
+/**
+ * The probe: a small program that runs on another machine (another city, another provider), queries the panel's
+ * game servers from there and reports what it sees. The panel serves it as one file (GET /api/probe/agent.mjs);
+ * it needs Node 18+ and the gamedig package, nothing else.
+ *
+ *   PANEL_URL=https://panel.example PROBE_TOKEN=... node probe.mjs
+ */
+export const GAMEDIG_VERSION = '5';
+
+export const AGENT_SOURCE = `// CoreGSM probe: queries the game servers of the panel from this machine and reports the results.
+// Run: PANEL_URL=https://panel.example PROBE_TOKEN=... node probe.mjs   (needs: npm i gamedig@${GAMEDIG_VERSION})
+import { GameDig } from 'gamedig';
+
+const PANEL = (process.env.PANEL_URL || '').replace(/\\/+$/, '');
+const TOKEN = process.env.PROBE_TOKEN || '';
+const EVERY = Math.max(30, Number(process.env.PROBE_INTERVAL_SEC) || 60) * 1000;
+const VERSION = 'probe-1';
+if (!PANEL || !TOKEN) {
+  console.error('Set PANEL_URL and PROBE_TOKEN');
+  process.exit(1);
+}
+const headers = { 'x-probe-token': TOKEN, 'content-type': 'application/json', 'x-probe-version': VERSION };
+
+async function query(t) {
+  const started = Date.now();
+  try {
+    const r = await GameDig.query({ type: t.game, host: t.host, port: t.queryPort || t.port, maxRetries: 1, socketTimeout: 3000, attemptTimeout: 9000 });
+    const players = Number(r.numplayers ?? (Array.isArray(r.players) ? r.players.length : 0)) || 0;
+    return { serverId: t.id, online: true, ping: typeof r.ping === 'number' ? Math.round(r.ping) : Date.now() - started, players, error: null };
+  } catch (e) {
+    return { serverId: t.id, online: false, ping: null, players: 0, error: String(e && e.message || e).slice(0, 160) };
+  }
+}
+
+async function round() {
+  const res = await fetch(PANEL + '/api/probe/targets', { headers });
+  if (res.status === 401) throw new Error('the panel does not know this token (removed or replaced?)');
+  if (!res.ok) throw new Error('targets: HTTP ' + res.status);
+  const targets = await res.json();
+  const results = [];
+  for (let i = 0; i < targets.length; i += 4) results.push(...(await Promise.all(targets.slice(i, i + 4).map(query))));
+  const sent = await fetch(PANEL + '/api/probe/results', { method: 'POST', headers, body: JSON.stringify(results) });
+  if (!sent.ok) throw new Error('results: HTTP ' + sent.status);
+  console.log(new Date().toISOString(), 'checked', results.length, 'servers,', results.filter((r) => r.online).length, 'online');
+}
+
+for (;;) {
+  try {
+    await round();
+  } catch (e) {
+    console.error(new Date().toISOString(), String(e && e.message || e));
+  }
+  await new Promise((r) => setTimeout(r, EVERY));
+}
+`;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/probes.ts" << '__COREGSM_EOF__'
+/**
+ * Checks from other places: probes (probeAgent.ts) running on other machines query the same game servers and
+ * report here. A server that the panel cannot reach but a probe can is a network problem between them, not a
+ * server that is down; the players see where the server answers from.
+ *
+ *   GET    /api/probes                 the probes with their last report (administrators)
+ *   POST   /api/probes                 add one; the answer holds its token once (administrators)
+ *   POST   /api/probes/:id/token       issue a new token, the old one stops working (administrators)
+ *   DELETE /api/probes/:id             remove (administrators)
+ *   GET    /api/probe/agent.mjs        the probe program
+ *   GET    /api/probe/targets          the servers to check (probe token)
+ *   POST   /api/probe/results          what the probe saw (probe token)
+ *   GET    /api/servers/:id/probes     the view of one server from every probe and from the panel
+ */
+import crypto from 'node:crypto';
+import express from 'express';
+import { z } from 'zod';
+import { admin, viewer } from './auth.js';
+import { db } from './db.js';
+import { AGENT_SOURCE, GAMEDIG_VERSION } from './probeAgent.js';
+import { publicBase } from './site.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS probes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  last_seen INTEGER,
+  last_ip TEXT,
+  version TEXT
+);
+CREATE TABLE IF NOT EXISTS probe_status (
+  probe_id INTEGER NOT NULL REFERENCES probes(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  online INTEGER NOT NULL,
+  ping INTEGER,
+  players INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (probe_id, server_id)
+);
+CREATE TABLE IF NOT EXISTS probe_history (
+  probe_id INTEGER NOT NULL REFERENCES probes(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  online INTEGER NOT NULL,
+  ping INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_probe_hist ON probe_history(server_id, ts);
+`);
+
+/** a report older than this counts as «no data» */
+export const STALE_MS = 5 * 60_000;
+const HISTORY_DAYS = 7;
+
+const hash = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
+const newToken = () => `cgp_${crypto.randomBytes(24).toString('base64url')}`;
+
+interface ProbeRow { id: number; name: string; created_at: number; last_seen: number | null; last_ip: string | null; version: string | null }
+
+function probeFrom(req: express.Request): ProbeRow | null {
+  const t = String(req.headers['x-probe-token'] ?? '');
+  if (t.length < 20 || t.length > 100) return null;
+  return (db.prepare('SELECT id, name, created_at, last_seen, last_ip, version FROM probes WHERE token_hash = ?').get(hash(t)) as ProbeRow | undefined) ?? null;
+}
+
+function commands(token: string) {
+  const base = publicBase() ?? 'https://ваш-адрес-панели';
+  return {
+    docker: `docker run -d --name coregsm-probe --restart unless-stopped -e PANEL_URL=${base} -e PROBE_TOKEN=${token} node:22-alpine sh -c "cd /tmp && npm i --silent gamedig@${GAMEDIG_VERSION} && wget -qO probe.mjs ${base}/api/probe/agent.mjs && node probe.mjs"`,
+    node: `npm i gamedig@${GAMEDIG_VERSION} && curl -fsSLo probe.mjs ${base}/api/probe/agent.mjs && PANEL_URL=${base} PROBE_TOKEN=${token} node probe.mjs`,
+  };
+}
+
+// ---------- administrators ----------
+
+router.get('/api/probes', admin, (_req, res) => {
+  const now = Date.now();
+  const stats = db.prepare('SELECT COUNT(*) AS n, SUM(online) AS up FROM probe_status WHERE probe_id = ? AND updated_at > ?');
+  res.json(
+    (db.prepare('SELECT id, name, created_at, last_seen, last_ip, version FROM probes ORDER BY id').all() as ProbeRow[]).map((p) => {
+      const s = stats.get(p.id, now - STALE_MS) as { n: number; up: number | null };
+      return { id: p.id, name: p.name, createdAt: p.created_at, lastSeen: p.last_seen, ip: p.last_ip, version: p.version, alive: !!p.last_seen && now - p.last_seen < STALE_MS, servers: s.n, online: s.up ?? 0 };
+    }),
+  );
+});
+
+router.post('/api/probes', admin, (req, res) => {
+  const b = z.object({ name: z.string().trim().min(1).max(40) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const token = newToken();
+  const id = Number(db.prepare('INSERT INTO probes (name, token_hash, created_at) VALUES (?, ?, ?)').run(b.data.name, hash(token), Date.now()).lastInsertRowid);
+  res.json({ id, token, commands: commands(token) });
+});
+
+router.post('/api/probes/:id(\\d+)/token', admin, (req, res) => {
+  const token = newToken();
+  const r = db.prepare('UPDATE probes SET token_hash = ? WHERE id = ?').run(hash(token), Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json({ token, commands: commands(token) });
+});
+
+router.delete('/api/probes/:id(\\d+)', admin, (req, res) => {
+  db.prepare('DELETE FROM probes WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// ---------- the probe ----------
+
+router.get('/api/probe/agent.mjs', (_req, res) => {
+  res.set({ 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache' }).send(AGENT_SOURCE);
+});
+
+router.get('/api/probe/targets', (req, res) => {
+  const p = probeFrom(req);
+  if (!p) return res.status(401).json({ error: 'Требуется вход' });
+  const rows = db.prepare('SELECT id, game, host, port, query_port FROM servers ORDER BY id').all() as { id: number; game: string; host: string; port: number; query_port: number | null }[];
+  res.json(rows.map((r) => ({ id: r.id, game: r.game, host: r.host, port: r.port, queryPort: r.query_port })));
+});
+
+router.post('/api/probe/results', (req, res) => {
+  const p = probeFrom(req);
+  if (!p) return res.status(401).json({ error: 'Требуется вход' });
+  const b = z
+    .array(z.object({ serverId: z.number().int().positive(), online: z.boolean(), ping: z.number().int().min(0).max(60_000).nullable(), players: z.number().int().min(0).max(100_000).default(0), error: z.string().max(200).nullable().optional() }))
+    .max(500)
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const now = Date.now();
+  const known = new Set((db.prepare('SELECT id FROM servers').all() as { id: number }[]).map((r) => r.id));
+  db.transaction(() => {
+    for (const r of b.data) {
+      if (!known.has(r.serverId)) continue;
+      db.prepare(
+        `INSERT INTO probe_status (probe_id, server_id, online, ping, players, error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(probe_id, server_id) DO UPDATE SET online = excluded.online, ping = excluded.ping, players = excluded.players, error = excluded.error, updated_at = excluded.updated_at`,
+      ).run(p.id, r.serverId, r.online ? 1 : 0, r.ping, r.players, r.online ? null : r.error ?? null, now);
+      db.prepare('INSERT INTO probe_history (probe_id, server_id, ts, online, ping) VALUES (?, ?, ?, ?, ?)').run(p.id, r.serverId, now, r.online ? 1 : 0, r.ping);
+    }
+    db.prepare('UPDATE probes SET last_seen = ?, last_ip = ?, version = ? WHERE id = ?').run(now, (req.ip ?? '').slice(0, 64), String(req.headers['x-probe-version'] ?? '').slice(0, 20) || null, p.id);
+    db.prepare('DELETE FROM probe_history WHERE ts < ?').run(now - HISTORY_DAYS * 86_400_000);
+  })();
+  res.json({ ok: true });
+});
+
+// ---------- everybody ----------
+
+/** the server seen from the panel and from every probe: up or down now, ping, availability over 24 hours */
+export function probeView(serverId: number, now = Date.now()) {
+  const day = now - 86_400_000;
+  const panel = db.prepare('SELECT online, ping, updated_at FROM status WHERE server_id = ?').get(serverId) as { online: number; ping: number | null; updated_at: number } | undefined;
+  const panelDay = db.prepare('SELECT COUNT(*) AS n, SUM(online) AS up FROM history WHERE server_id = ? AND ts > ?').get(serverId, day) as { n: number; up: number | null };
+  const probes = (db
+    .prepare(
+      `SELECT p.id, p.name, s.online, s.ping, s.updated_at,
+         (SELECT COUNT(*) FROM probe_history h WHERE h.probe_id = p.id AND h.server_id = ? AND h.ts > ?) AS n,
+         (SELECT SUM(online) FROM probe_history h WHERE h.probe_id = p.id AND h.server_id = ? AND h.ts > ?) AS up
+       FROM probes p LEFT JOIN probe_status s ON s.probe_id = p.id AND s.server_id = ? ORDER BY p.id`,
+    )
+    .all(serverId, day, serverId, day, serverId) as { id: number; name: string; online: number | null; ping: number | null; updated_at: number | null; n: number; up: number | null }[]).map((r) => {
+    const fresh = r.updated_at != null && now - r.updated_at < STALE_MS;
+    return { name: r.name, online: fresh ? !!r.online : null, ping: fresh ? r.ping : null, updatedAt: r.updated_at, uptime: r.n ? Math.round(((r.up ?? 0) / r.n) * 1000) / 10 : null };
+  });
+  return {
+    panel: { name: 'Панель', online: panel ? !!panel.online : null, ping: panel?.online ? panel.ping : null, updatedAt: panel?.updated_at ?? null, uptime: panelDay.n ? Math.round(((panelDay.up ?? 0) / panelDay.n) * 1000) / 10 : null },
+    probes,
+  };
+}
+
+router.get('/api/servers/:id(\\d+)/probes', viewer, (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json(probeView(id));
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/profile.ts" << '__COREGSM_EOF__'
 /**
  * Personal profile of the signed-in user: preferences, player profile (game nick, bio), play statistics and
@@ -12219,6 +12387,87 @@ export const PROXY_HELP = 'Прокси: host:port:логин:пароль, sock
 export const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/;
 // a browser that autofills the panel's own password into the token field must not overwrite a working token
 export const TOKEN_HELP = 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).';
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/query.ts" << '__COREGSM_EOF__'
+/** One query of a game server over its game protocol (GameDig). No database: the poller and the probes share it. */
+import { GameDig } from 'gamedig';
+import type { ServerRow } from './db.js';
+
+export interface QueryResult {
+  online: boolean;
+  name: string | null;
+  players: number;
+  maxPlayers: number;
+  map: string | null;
+  version: string | null;
+  ping: number | null;
+  playerNames: string[];
+  error: string | null;
+}
+
+/** Turns GameDig/network errors into a message a person can act on. */
+export function humanizeQueryError(raw: string): string {
+  const m = raw.toLowerCase();
+  if (/invalid game|unknown game|game type/.test(m)) return 'Неизвестный тип игры. Выберите игру из списка или проверьте GameDig ID.';
+  if (/enotfound|eai_again|getaddrinfo/.test(m)) return 'Адрес не найден. Проверьте имя или IP сервера.';
+  if (/econnrefused/.test(m)) return 'Соединение отклонено: порт закрыт или сервер выключен.';
+  if (/ehostunreach|enetunreach|network is unreachable/.test(m)) return 'Нет маршрута до сервера. Проверьте сеть и адрес.';
+  if (/timed out|timeout|failed all|no response|etimedout/.test(m)) {
+    return 'Сервер не ответил. Проверьте адрес и порт, включён ли сервер и разрешён ли query (некоторым играм нужен отдельный query-порт).';
+  }
+  return raw.slice(0, 160);
+}
+
+const clean = (s: unknown): string | null => {
+  if (typeof s !== 'string') return null;
+  // strip Minecraft colour codes and control characters
+  const v = s.replace(/§./g, '').replace(/[\u0000-\u001f]/g, ' ').trim();
+  return v.length ? v.slice(0, 120) : null;
+};
+
+export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 'query_port'> & Partial<ServerRow>): Promise<QueryResult> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r: any = await GameDig.query({
+      type: s.game,
+      host: s.host,
+      port: s.query_port ?? s.port,
+      maxRetries: 1,
+      socketTimeout: 3000,
+      attemptTimeout: 9000,
+    });
+    const names: string[] = Array.isArray(r.players)
+      ? r.players.map((p: { name?: string }) => clean(p?.name)).filter((n: string | null): n is string => !!n)
+      : [];
+    const count = Number(r.numplayers ?? (Array.isArray(r.players) ? r.players.length : 0)) || 0;
+    const rawVersion = r.version ?? r.raw?.version?.name ?? r.raw?.version ?? null;
+    return {
+      online: true,
+      name: clean(r.name),
+      players: count,
+      maxPlayers: Number(r.maxplayers) || 0,
+      map: clean(r.map),
+      version: clean(typeof rawVersion === 'string' ? rawVersion : null),
+      ping: typeof r.ping === 'number' ? Math.round(r.ping) : null,
+      playerNames: names.slice(0, 200),
+      error: null,
+    };
+  } catch (e) {
+    return {
+      online: false,
+      name: null,
+      players: 0,
+      maxPlayers: 0,
+      map: null,
+      version: null,
+      ping: null,
+      playerNames: [],
+      error: humanizeQueryError(e instanceof Error ? e.message : String(e)),
+    };
+  }
+}
+
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/ranks.ts" << '__COREGSM_EOF__'
@@ -44090,6 +44339,114 @@ export default function PollSettingsCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ProbesSection.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Система: probes, small programs on other machines that check the game servers from there. A server the
+ * panel cannot reach but a probe can has a network problem between them, not an outage.
+ */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast } from '../ui';
+
+interface Probe { id: number; name: string; createdAt: number; lastSeen: number | null; ip: string | null; version: string | null; alive: boolean; servers: number; online: number }
+interface Issued { token: string; commands: { docker: string; node: string } }
+
+function Copyable({ label, text }: { label: string; text: string }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="label !mb-0">{label}</span>
+        <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast('Скопировано'))}><IconCopy size={14} /> Копировать</button>
+      </div>
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-soft px-3 py-2 font-mono text-[12.5px] font-semibold">{text}</pre>
+    </div>
+  );
+}
+
+export default function ProbesSection() {
+  const [list, setList] = useState<Probe[] | null>(null);
+  const [error, setError] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [issued, setIssued] = useState<(Issued & { name: string }) | null>(null);
+  const load = () => api<Probe[]>('/probes').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+
+  const rotate = async (p: Probe) => {
+    if (!(await confirmDialog({ title: `Новый ключ для «${p.name}»?`, text: 'Старый ключ перестанет работать: точку нужно будет перезапустить с новым.', confirmLabel: 'Выдать новый' }))) return;
+    await api<Issued>(`/probes/${p.id}/token`, 'POST').then((r) => setIssued({ ...r, name: p.name })).catch((e: Error) => setError(e.message));
+  };
+  const remove = async (p: Probe) => {
+    if (!(await confirmDialog({ title: `Удалить «${p.name}»?`, text: 'Её проверки пропадут со страниц серверов.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/probes/${p.id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+
+  return (
+    <Section
+      title="Точки проверки"
+      description="Небольшая программа на другом компьютере или VPS (в другом городе, у другого провайдера) проверяет игровые серверы оттуда. Если панель сервер не видит, а точки видят, — дело в сети между ними, а не в сервере. Игроки увидят на странице сервера, откуда он доступен."
+      actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>Добавить точку</button>}
+    >
+      <ErrorLine text={error} />
+      {list && list.length === 0 && <p className="text-sm font-semibold text-mute">Точек пока нет: серверы проверяет только сама панель.</p>}
+      <ul className="grid gap-2">
+        {list?.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? 'на связи' : 'не на связи'} role="img" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-extrabold">📍 {p.name}</span>
+              <span className="block text-sm font-semibold text-mute">
+                {p.lastSeen ? `на связи ${ago(p.lastSeen)}${p.alive ? ` · видит ${p.online} из ${p.servers}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : 'ещё ни разу не выходила на связь'}
+              </span>
+            </span>
+            <button type="button" className="row-act" aria-label="Новый ключ" title="Новый ключ" onClick={() => void rotate(p)}><IconRefresh /></button>
+            <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void remove(p)}><IconTrash /></button>
+          </li>
+        ))}
+      </ul>
+      {adding && <AddProbe onClose={() => setAdding(false)} onDone={(r) => { setAdding(false); setIssued(r); void load(); }} />}
+      {issued && (
+        <Modal title={`Точка «${issued.name}»`} onClose={() => { setIssued(null); void load(); }}>
+          <div className="space-y-3.5">
+            <p className="font-semibold">Запустите на нужной машине одну из команд. Ключ показывается только сейчас: сохраните команду, если понадобится повторить.</p>
+            <Copyable label="Docker (проще всего)" text={issued.commands.docker} />
+            <Copyable label="Или Node.js 18+" text={issued.commands.node} />
+            <p className="text-sm font-semibold text-mute">Точка появится «на связи» через минуту после запуска.</p>
+            <div className="flex justify-end"><button type="button" className="btn" onClick={() => { setIssued(null); void load(); }}>Готово</button></div>
+          </div>
+        </Modal>
+      )}
+    </Section>
+  );
+}
+
+function AddProbe({ onClose, onDone }: { onClose: () => void; onDone: (r: Issued & { name: string }) => void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    await api<Issued>('/probes', 'POST', { name: name.trim() })
+      .then((r) => onDone({ ...r, name: name.trim() }))
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Modal title="Новая точка проверки" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3.5">
+        <Field label="Название (его увидят игроки)"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Например: Франкфурт" required autoFocus /></Field>
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <Button loading={busy}>Создать</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/RestartPlans.tsx" << '__COREGSM_EOF__'
 /**
  * Admin → Обслуживание: scheduled restarts per server (days and time, the warning in Discord and in the game chat,
@@ -50694,6 +51051,61 @@ export default function PlayersList({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/ProbesView.tsx" << '__COREGSM_EOF__'
+/** «Доступность из разных мест»: the server seen from the panel and from every probe, with a short verdict. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { ago } from '../../ui';
+
+interface Point { name: string; online: boolean | null; ping: number | null; updatedAt: number | null; uptime: number | null }
+export interface ProbeView { panel: Point; probes: Point[] }
+
+/** what the views together say */
+export function verdict(v: ProbeView): { tone: 'ok' | 'warn' | 'bad' | 'mute'; text: string } {
+  const known = [v.panel, ...v.probes].filter((p) => p.online !== null);
+  if (!known.length) return { tone: 'mute', text: 'Пока нет свежих проверок' };
+  const up = known.filter((p) => p.online);
+  if (up.length === known.length) return { tone: 'ok', text: 'Сервер доступен отовсюду' };
+  if (!up.length) return { tone: 'bad', text: 'Сервер не отвечает ни из одной точки' };
+  return { tone: 'warn', text: `Доступен не отовсюду: не отвечает из ${known.filter((p) => !p.online).map((p) => `«${p.name}»`).join(', ')}. Похоже на проблему сети, а не сервера.` };
+}
+
+export function useProbes(serverId: number): ProbeView | null {
+  const [v, setV] = useState<ProbeView | null>(null);
+  useEffect(() => {
+    let on = true;
+    const load = () => api<ProbeView>(`/servers/${serverId}/probes`).then((x) => on && setV(x)).catch(() => undefined);
+    void load();
+    const t = window.setInterval(load, 60_000);
+    return () => { on = false; window.clearInterval(t); };
+  }, [serverId]);
+  return v;
+}
+
+export default function ProbesView({ v }: { v: ProbeView }) {
+  const vd = verdict(v);
+  return (
+    <div className="space-y-3">
+      <p className={`rounded-xl px-3 py-2 text-sm font-bold ${vd.tone === 'ok' ? 'bg-okbg text-ok' : vd.tone === 'warn' ? 'bg-warnbg text-warn' : vd.tone === 'bad' ? 'bg-badbg text-bad' : 'bg-soft text-mute'}`}>{vd.text}</p>
+      <ul className="pr-points">
+        {[v.panel, ...v.probes].map((p, i) => (
+          <li key={`${i}-${p.name}`} className="pr-point">
+            <span className={`pr-dot ${p.online === null ? 'is-unknown' : p.online ? 'is-up' : 'is-down'}`} aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-extrabold">{i === 0 ? '🖥 Панель' : `📍 ${p.name}`}</span>
+              <span className="block text-xs font-bold text-mute">
+                {p.online === null ? (p.updatedAt ? `нет данных с ${ago(p.updatedAt)}` : 'нет данных') : p.online ? (p.ping != null ? `${p.ping} мс` : 'отвечает') : 'не отвечает'}
+                {p.uptime != null ? ` · ${String(p.uptime).replace('.', ',')}% за сутки` : ''}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/QrCode.tsx" << '__COREGSM_EOF__'
 import { useMemo } from 'react';
 import qrcode from 'qrcode-generator';
@@ -51557,6 +51969,28 @@ export function useStickyTop(): number {
   }, []);
   return top;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/probes.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { verdict, type ProbeView } from './ProbesView';
+
+const pt = (name: string, online: boolean | null) => ({ name, online, ping: online ? 40 : null, updatedAt: 1, uptime: null });
+const view = (panel: boolean | null, ...probes: (boolean | null)[]): ProbeView => ({ panel: pt('Панель', panel), probes: probes.map((o, i) => pt(`P${i + 1}`, o)) });
+
+describe('availability verdict', () => {
+  it('everyone sees it: ok; nobody: bad; nothing fresh: mute', () => {
+    expect(verdict(view(true, true, true)).tone).toBe('ok');
+    expect(verdict(view(false, false)).tone).toBe('bad');
+    expect(verdict(view(null, null)).tone).toBe('mute');
+  });
+  it('some see it: a network problem, the silent points named; stale points are left out', () => {
+    const v = verdict(view(false, true, null));
+    expect(v.tone).toBe('warn');
+    expect(v.text).toContain('«Панель»');
+    expect(v.text).not.toContain('P2');
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/serverLogic.ts" << '__COREGSM_EOF__'
@@ -61881,6 +62315,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import ServerReviews from '../components/server/Reviews';
+import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
@@ -61931,6 +62366,7 @@ const OVERVIEW_SECTIONS: SectionDef[] = [
   { id: 'ov-chart', label: 'График' },
   { id: 'ov-events', label: 'События', secondary: true },
   { id: 'ov-players', label: 'Игроки' },
+  { id: 'ov-probes', label: 'Доступность', secondary: true },
   { id: 'ov-reviews', label: 'Отзывы', secondary: true },
 ];
 const HISTORY_SECTIONS: SectionDef[] = [
@@ -61995,6 +62431,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const { me, isAdmin } = useAuth();
   // editing a server: administrators and moderators given «Серверы»
   const canEdit = isAdmin || !!me?.perms?.includes('servers');
+  const probes = useProbes(id);
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -62249,6 +62686,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
+        {probes && probes.probes.length > 0 && (
+          <SectionCard id="ov-probes" state={sections} style={stagger(4)} title="Доступность из разных мест">
+            <ProbesView v={probes} />
+          </SectionCard>
+        )}
         <SectionCard id="ov-reviews" state={sections} style={stagger(4)} title="Отзывы игроков">
           <ServerReviews serverId={id} />
         </SectionCard>
@@ -63537,6 +63979,7 @@ import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
+import ProbesSection from '../components/ProbesSection';
 import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 
 interface Health {
@@ -63705,6 +64148,8 @@ export default function SystemPage() {
           </>
         )}
       </Section>
+
+      <ProbesSection />
 
       <Strip>
         <div className="min-w-0">
@@ -66165,6 +66610,13 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .rv-item { border-radius: 16px; background: rgb(var(--soft)); padding: 10px 14px; }
 .rv-item.is-mine { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .4); }
 @media (prefers-reduced-motion: reduce) { .rv-pick button { transition: none; } }
+
+/* ---------- availability from several places ---------- */
+.pr-points { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); }
+.pr-point { display: flex; align-items: center; gap: 10px; border-radius: 16px; background: rgb(var(--soft)); padding: 10px 12px; }
+.pr-dot { width: 10px; height: 10px; flex: none; border-radius: 9999px; background: rgb(var(--mute)); }
+.pr-dot.is-up { background: rgb(var(--ok)); box-shadow: 0 0 0 4px rgb(var(--ok) / .18); }
+.pr-dot.is-down { background: rgb(var(--bad)); box-shadow: 0 0 0 4px rgb(var(--bad) / .18); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'

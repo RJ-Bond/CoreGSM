@@ -259,3 +259,10 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .rv-item { border-radius: 16px; background: rgb(var(--soft)); padding: 10px 14px; }
 .rv-item.is-mine { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .4); }
 @media (prefers-reduced-motion: reduce) { .rv-pick button { transition: none; } }
+
+/* ---------- availability from several places ---------- */
+.pr-points { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); }
+.pr-point { display: flex; align-items: center; gap: 10px; border-radius: 16px; background: rgb(var(--soft)); padding: 10px 12px; }
+.pr-dot { width: 10px; height: 10px; flex: none; border-radius: 9999px; background: rgb(var(--mute)); }
+.pr-dot.is-up { background: rgb(var(--ok)); box-shadow: 0 0 0 4px rgb(var(--ok) / .18); }
+.pr-dot.is-down { background: rgb(var(--bad)); box-shadow: 0 0 0 4px rgb(var(--bad) / .18); }

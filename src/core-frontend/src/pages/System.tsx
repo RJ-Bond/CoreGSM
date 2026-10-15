@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
+import ProbesSection from '../components/ProbesSection';
 import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 
 interface Health {
@@ -170,6 +171,8 @@ export default function SystemPage() {
           </>
         )}
       </Section>
+
+      <ProbesSection />
 
       <Strip>
         <div className="min-w-0">
