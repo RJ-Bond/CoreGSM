@@ -260,6 +260,8 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 @media (min-width: 900px) {
   .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
 }
+/* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
+.srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
 .srv-tile { min-width: 0; }
 
 /* news card in «Что нового»: the title and the foot are links, the text carries live links */

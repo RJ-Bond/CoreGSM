@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cf8aad366ccb"
+COREGSM_BUILD="6aae4b9550a3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -12026,6 +12026,32 @@ router.get('/api/servers', viewer, (req, res) => {
   const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
   const list = rows.map(serialize);
   res.json(isAdmin(req) ? list : list.map(publicServer));
+});
+
+/**
+ * The sparklines of the server list in one request: for every server the player count over the last `hours`,
+ * cut into `SPARK_POINTS` buckets (the busiest moment of each), and which buckets had the server down.
+ * An empty bucket (no poll in it) is null.
+ */
+const SPARK_POINTS = 48;
+router.get('/api/servers/sparks', viewer, (req, res) => {
+  const hours = Math.min(168, Math.max(1, Number(req.query.hours) || 24));
+  const now = Date.now();
+  const since = now - hours * 3600_000;
+  const bucket = Math.ceil((hours * 3600_000) / SPARK_POINTS);
+  const rows = db
+    .prepare(
+      `SELECT server_id AS id, MIN(CAST((ts - ?) / ? AS INTEGER), ${SPARK_POINTS - 1}) AS b, MAX(players) AS p, MIN(online) AS o
+       FROM history WHERE ts > ? GROUP BY server_id, b`,
+    )
+    .all(since, bucket, since) as { id: number; b: number; p: number; o: number }[];
+  const out: Record<number, { players: (number | null)[]; down: boolean[] }> = {};
+  for (const r of rows) {
+    const s = (out[r.id] ??= { players: Array(SPARK_POINTS).fill(null), down: Array(SPARK_POINTS).fill(false) });
+    s.players[r.b] = r.p;
+    if (!r.o) s.down[r.b] = true;
+  }
+  res.set('Cache-Control', 'no-cache').json({ hours, points: SPARK_POINTS, from: since, to: now, servers: out });
 });
 
 router.post(
@@ -46840,12 +46866,11 @@ export default function Passport({ d }: { d: PassportData }) {
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
       <dl className="pp pp-main">
         <Item k="Игра"><span>{d.game}</span></Item>
-        <Item k="Карта"><span title={d.map ?? undefined}>{d.map && d.online ? d.map : '–'}</span></Item>
-        <Item k="Версия"><span>{d.version ? `v${d.version.replace(/^v/i, '')}` : '–'}</span></Item>
-        <Item k="Страна"><span>{d.country ? `${d.flag} ${d.country}`.trim() : '–'}</span></Item>
-        <Item k="Пинг">
-          {pt && d.ping != null ? <span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span> : <span>–</span>}
-        </Item>
+        {/* a fact the server does not report is left out instead of showing a dash */}
+        {d.map && d.online && <Item k="Карта"><span title={d.map}>{d.map}</span></Item>}
+        {d.version && <Item k="Версия"><span>{`v${d.version.replace(/^v/i, '')}`}</span></Item>}
+        {d.country && <Item k="Страна"><span>{`${d.flag} ${d.country}`.trim()}</span></Item>}
+        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span></Item>}
       </dl>
       <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
         {open ? t('srv.pp.less') : t('srv.pp.more')}
@@ -50051,6 +50076,9 @@ __COREGSM_EOF__
 
 @layer base {
   html, body, #root { min-height: 100%; }
+  /* the body carries the background glow: it must reach the bottom of the window on short pages too (html has no
+     fixed height, so min-height: 100% alone resolved to the content height and the glow ended in a hard line) */
+  body { min-height: 100vh; min-height: 100dvh; }
   body {
     @apply bg-page text-ink font-sans text-[15px] antialiased;
     -webkit-text-size-adjust: 100%;
@@ -50068,8 +50096,9 @@ __COREGSM_EOF__
 
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }
-  /* long words (usernames, addresses) must not stretch the layout */
-  h1, h2, h3 { overflow-wrap: anywhere; }
+  /* long words (usernames, addresses) must not stretch the layout. break-word, not anywhere: anywhere also lowers the
+     minimum width, and a heading in a flex row then shrank to a couple of letters per line («Показате / ли») */
+  h1, h2, h3 { overflow-wrap: break-word; }
 }
 
 @layer components {
@@ -50766,6 +50795,8 @@ a:focus-visible, button.text-link:focus-visible, .hint-more:focus-visible { bord
 
 /* ---------- server page: foldable sections and the mini table of contents ---------- */
 .srv-sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+/* the title takes the free space and wraps whole words; the controls move to the next line when they do not fit */
+.srv-sec-head > h2 { flex: 1 1 10rem; }
 .srv-sec.is-closed > .srv-sec-head { margin-bottom: 0; }
 .srv-sec-bare > .srv-sec-head { margin-bottom: 8px; padding: 0 4px; }
 .srv-sec-bare.is-closed > .srv-sec-head { margin-bottom: 0; }
@@ -57935,7 +57966,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''}`}
+      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
         background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
@@ -57981,12 +58012,18 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           </div>
         </>
       ) : (
-        s.hasStatus && (
-          <div className="relative mt-4 rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
-            <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-            <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
-          </div>
-        )
+        // a server that is down: one compact row (what is wrong, since when) and the day's curve with the outage in red
+        <div className="relative grid items-center gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          {s.hasStatus ? (
+            <div className="rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
+              <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
+              <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-white/20 px-4 py-3 text-base font-extrabold">Ожидаем первый ответ</div>
+          )}
+          <Spark serverId={s.id} color="#ffffff" variant="hero" />
+        </div>
       )}
 
       <div className="relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
@@ -60684,17 +60721,8 @@ __COREGSM_EOF__
 @media (min-width: 640px) { .srv-hero-n { font-size: 56px; } .srv-hero-max { font-size: 26px; } }
 
 /* ---------- compact passport ---------- */
-.pp.pp-main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.pp-main .pp-i:last-child { grid-column: 1 / -1; }
-@media (min-width: 640px) {
-  .pp.pp-main { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:last-child { grid-column: span 2; }
-  .pp-main .pp-i:nth-child(n + 4) { grid-column: span 3; }
-}
-@media (min-width: 1024px) {
-  .pp.pp-main { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:nth-child(n + 4), .pp-main .pp-i:last-child { grid-column: span 1; }
-}
+/* up to five facts, only those the server reports: the cells share the row whatever their number */
+.pp.pp-main { grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr)); }
 .pp-more-btn {
   display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 36px; padding: 0 14px; border-radius: 9999px;
   font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.95); background: rgba(8, 10, 20, 0.22); transition: background-color .15s ease;
@@ -61385,6 +61413,8 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 @media (min-width: 900px) {
   .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
 }
+/* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
+.srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
 .srv-tile { min-width: 0; }
 
 /* news card in «Что нового»: the title and the foot are links, the text carries live links */
@@ -62194,75 +62224,91 @@ __COREGSM_EOF__
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
 
-// history of a server is shared between remounts (list <-> details) for a couple of minutes
-const sparkCache = new Map<number, { at: number; pts: number[] }>();
+/**
+ * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
+ * refreshed every 3 minutes while someone shows a sparkline and the tab is visible.
+ */
+interface SparkSet { at: number; servers: Record<number, { players: (number | null)[]; down: boolean[] }> }
 const SPARK_EVERY = 3 * 60_000;
+let sparkSet: SparkSet | null = null;
+let sparkLoading: Promise<void> | null = null;
+let sparkTimer = 0;
+const sparkSubs = new Set<() => void>();
+
+function loadSparks(): Promise<void> {
+  if (sparkLoading) return sparkLoading;
+  sparkLoading = (async () => {
+    try {
+      const token = getToken();
+      const res = await fetch('/api/servers/sparks?hours=24', { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+      if (res.ok) {
+        const d = (await res.json()) as { servers: SparkSet['servers'] };
+        sparkSet = { at: Date.now(), servers: d.servers ?? {} };
+        sparkSubs.forEach((f) => f());
+      }
+    } catch {
+      /* offline: keep what we have */
+    } finally {
+      sparkLoading = null;
+    }
+  })();
+  return sparkLoading;
+}
+
+function scheduleSparks() {
+  window.clearTimeout(sparkTimer);
+  if (!sparkSubs.size) return;
+  const age = sparkSet ? Date.now() - sparkSet.at : Infinity;
+  sparkTimer = window.setTimeout(async () => {
+    if (!document.hidden) await loadSparks();
+    scheduleSparks();
+  }, age >= SPARK_EVERY ? 0 : SPARK_EVERY - age);
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && sparkSubs.size) scheduleSparks(); });
+}
+
+function useSparkSet(): SparkSet | null {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((n) => n + 1);
+    sparkSubs.add(f);
+    scheduleSparks();
+    return () => { sparkSubs.delete(f); if (!sparkSubs.size) window.clearTimeout(sparkTimer); };
+  }, []);
+  return sparkSet;
+}
+
+/** empty buckets (no poll yet, or the panel was off) take the value before them */
+const filled = (vals: (number | null)[]): number[] => {
+  let prev = vals.find((v) => v != null) ?? 0;
+  return vals.map((v) => (v == null ? prev : (prev = v)));
+};
 
 /**
- * 24h player-count sparkline. Loads its own history, but cheaply: the first request is staggered, it refreshes every 3 minutes,
- * pauses while the tab is hidden and is aborted on unmount. A quiet placeholder is shown until there are two points.
+ * 24h player-count sparkline; the stretches when the server was down are tinted red. A quiet shimmering placeholder
+ * is shown only until the shared request answers.
  */
 export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
-  const [pts, setPts] = useState<number[]>(() => sparkCache.get(serverId)?.pts ?? []);
-
-  useEffect(() => {
-    let timer = 0;
-    let ctl: AbortController | null = null;
-    let alive = true;
-
-    const load = async () => {
-      if (!alive || document.hidden) return;
-      ctl?.abort();
-      ctl = new AbortController();
-      try {
-        const token = getToken();
-        const res = await fetch(`/api/servers/${serverId}/history?hours=24`, {
-          signal: ctl.signal,
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!res.ok) return;
-        const rows = (await res.json()) as { players: number }[];
-        // downsample to at most 48 points
-        const step = Math.max(1, Math.ceil(rows.length / 48));
-        const next = rows.filter((_, i) => i % step === 0).map((r) => r.players);
-        sparkCache.set(serverId, { at: Date.now(), pts: next });
-        if (alive) setPts(next);
-      } catch {
-        /* aborted or offline: keep what we have */
-      }
-    };
-    const schedule = (delay: number) => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(async () => {
-        await load();
-        if (alive) schedule(SPARK_EVERY);
-      }, delay);
-    };
-
-    const cached = sparkCache.get(serverId);
-    const age = cached ? Date.now() - cached.at : Infinity;
-    // spread the first requests of many cards over ~2.5 s so they do not arrive as one burst
-    schedule(age < SPARK_EVERY ? SPARK_EVERY - age : variant === 'hero' ? 0 : 150 + Math.random() * 2500);
-
-    const onVisible = () => {
-      if (document.hidden) return;
-      const c = sparkCache.get(serverId);
-      if (!c || Date.now() - c.at >= SPARK_EVERY) schedule(100 + Math.random() * 1000);
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      ctl?.abort();
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [serverId, variant]);
-
-  if (pts.length < 2) return <div className={`${variant === 'hero' ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} rounded-2xl`} aria-hidden />;
-  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}`;
-  return variant === 'hero'
-    ? <SmoothArea values={pts} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
-    : <SmoothArea values={pts} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  const hero = variant === 'hero';
+  if (!set) return <div className={`${hero ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} skeleton rounded-2xl`} aria-hidden />;
+  const known = raw ? raw.players.filter((v) => v != null).length : 0;
+  if (!raw || known < 2) {
+    return (
+      <div className={`${hero ? 'h-[130px] border-white/30 text-white/80' : 'h-10 border-line text-mute'} grid place-items-center rounded-2xl border border-dashed px-2 text-center text-xs font-bold`}>
+        История появится после нескольких опросов
+      </div>
+    );
+  }
+  const pts = filled(raw.players);
+  const downs = raw.down.filter(Boolean).length;
+  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
+  return hero
+    ? <SmoothArea values={pts} down={raw.down} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    : <SmoothArea values={pts} down={raw.down} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
 }
 
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
@@ -62283,10 +62329,12 @@ export function smoothPath(pts: [number, number][]): string {
  * The drawing stretches (preserveAspectRatio none, non-scaling stroke); the dot is an HTML element so it stays round.
  */
 export function SmoothArea({
-  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax,
+  values, color, w = 240, h = 40, grid = false, dot = true, strokeWidth = 2, fill = 0.28, className = 'h-10', label, max: fixedMax, down,
 }: {
   values: number[]; color: string; w?: number; h?: number; grid?: boolean; dot?: boolean; strokeWidth?: number; fill?: number;
   className?: string; label?: string; max?: number;
+  /** points at which the server was down: a red band behind the curve */
+  down?: boolean[];
 }) {
   const gid = useId();
   const pad = 3;
@@ -62306,6 +62354,11 @@ export function SmoothArea({
         {grid && [1, 2, 3].map((k) => (
           <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
         ))}
+        {down?.map((d, i) => {
+          if (!d || !pts[i]) return null;
+          const half = (w - pad * 2) / Math.max(1, values.length - 1) / 2;
+          return <rect key={i} x={pts[i][0] - half} y={0} width={half * 2} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
+        })}
         <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>

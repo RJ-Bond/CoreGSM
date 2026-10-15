@@ -128,6 +128,9 @@
 
 @layer base {
   html, body, #root { min-height: 100%; }
+  /* the body carries the background glow: it must reach the bottom of the window on short pages too (html has no
+     fixed height, so min-height: 100% alone resolved to the content height and the glow ended in a hard line) */
+  body { min-height: 100vh; min-height: 100dvh; }
   body {
     @apply bg-page text-ink font-sans text-[15px] antialiased;
     -webkit-text-size-adjust: 100%;
@@ -145,8 +148,9 @@
 
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }
-  /* long words (usernames, addresses) must not stretch the layout */
-  h1, h2, h3 { overflow-wrap: anywhere; }
+  /* long words (usernames, addresses) must not stretch the layout. break-word, not anywhere: anywhere also lowers the
+     minimum width, and a heading in a flex row then shrank to a couple of letters per line («Показате / ли») */
+  h1, h2, h3 { overflow-wrap: break-word; }
 }
 
 @layer components {
@@ -843,6 +847,8 @@ a:focus-visible, button.text-link:focus-visible, .hint-more:focus-visible { bord
 
 /* ---------- server page: foldable sections and the mini table of contents ---------- */
 .srv-sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+/* the title takes the free space and wraps whole words; the controls move to the next line when they do not fit */
+.srv-sec-head > h2 { flex: 1 1 10rem; }
 .srv-sec.is-closed > .srv-sec-head { margin-bottom: 0; }
 .srv-sec-bare > .srv-sec-head { margin-bottom: 8px; padding: 0 4px; }
 .srv-sec-bare.is-closed > .srv-sec-head { margin-bottom: 0; }
