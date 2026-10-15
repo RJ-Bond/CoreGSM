@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="842cc946ba2c"
+COREGSM_BUILD="9228d31e48eb"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4744,9 +4744,16 @@ export async function runScheduledIfDue(now = Date.now()): Promise<BackupItem | 
   }
 }
 
+const backupTimers: NodeJS.Timeout[] = [];
 export function startBackupTimer(): void {
-  setTimeout(() => void runScheduledIfDue(), 60_000).unref();
-  setInterval(() => void runScheduledIfDue(), 3600_000).unref();
+  backupTimers.push(setTimeout(() => void runScheduledIfDue(), 60_000).unref());
+  backupTimers.push(setInterval(() => void runScheduledIfDue(), 3600_000).unref());
+}
+
+/** Shutdown: no new scheduled backups; a backup being written is finished before the database closes. */
+export async function stopBackups(): Promise<void> {
+  for (const t of backupTimers) clearTimeout(t);
+  while (busy) await new Promise((r) => setTimeout(r, 100));
 }
 
 // ---------- restoring ----------
@@ -7170,12 +7177,14 @@ let lastStats: PollStats = { at: null, durationMs: null, servers: 0, failures: 0
 export const lastPollStats = (): PollStats => ({ ...lastStats });
 
 let running = false;
+let stopping = false;
+let pollTimer: NodeJS.Timeout | undefined;
 let jitterMaxMs = 1500;
 let pollCount = 0;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function pollAll(): Promise<void> {
-  if (running) return;
+  if (running || stopping) return;
   running = true;
   try {
     const t0 = Date.now();
@@ -7185,6 +7194,8 @@ export async function pollAll(): Promise<void> {
     await runPool(servers, concurrency, async (s) => {
       // servers do not all start at the same instant
       if (jitterMaxMs > 0) await sleep(Math.floor(Math.random() * jitterMaxMs));
+      // shutting down: the servers not queried yet wait for the next start
+      if (stopping) return;
       try {
         const o = await refreshServer(s, { debounce: true });
         if (o && !o.polledOnline) failures++;
@@ -7213,7 +7224,15 @@ export async function pollAll(): Promise<void> {
 export function startPoller(intervalMs: number): void {
   jitterMaxMs = Math.min(1500, Math.max(0, Math.floor(intervalMs / 10)));
   void pollAll();
-  setInterval(() => void pollAll(), intervalMs).unref?.();
+  pollTimer = setInterval(() => void pollAll(), intervalMs);
+  pollTimer.unref();
+}
+
+/** Shutdown: no new poll cycles, the running one skips the servers it has not started and is awaited. */
+export async function stopPoller(): Promise<void> {
+  stopping = true;
+  clearInterval(pollTimer);
+  while (running) await sleep(50);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -7453,9 +7472,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
-import { queryServer, refreshServer, startPoller } from './gsm.js';
+import { queryServer, refreshServer, startPoller, stopPoller } from './gsm.js';
+import { installShutdown, onShutdown } from './shutdown.js';
 import { isKnownGame, renderCard, renderGameIcon } from './card.js';
-import { registerBackups, startBackupTimer } from './backup.js';
+import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { gameLabel } from './games.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
@@ -9238,7 +9258,7 @@ app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Re
   res.status(500).json({ error: 'Внутренняя ошибка сервера' });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`CoreGSM backend listening on :${PORT}`);
   if (needsSetup()) {
     console.log('First run: open the panel in a browser and create the administrator.');
@@ -9247,6 +9267,9 @@ app.listen(PORT, () => {
   startPoller(POLL_MS);
   startBackupTimer();
 });
+onShutdown('poller', stopPoller);
+onShutdown('backups', stopBackups);
+installShutdown(server);
 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -12894,6 +12917,69 @@ export function registerSecurity(d: SecurityDeps): void {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/shutdown.ts" << '__COREGSM_EOF__'
+/**
+ * Graceful shutdown on SIGTERM/SIGINT (docker stop, compose restart, an update): stop accepting connections,
+ * let the running poll cycle and backup finish, then close SQLite so the WAL is checkpointed. Docker kills the
+ * container 10 s after SIGTERM, so whatever is still pending after FORCE_AFTER_MS is abandoned.
+ */
+import type { Server } from 'node:http';
+import { db } from './db.js';
+
+const FORCE_AFTER_MS = 8000;
+
+type Step = { name: string; run: () => void | Promise<void> };
+const steps: Step[] = [];
+
+/** Registers work to finish before the database closes; steps run in parallel. */
+export function onShutdown(name: string, run: Step['run']): void {
+  steps.push({ name, run });
+}
+
+let shuttingDown = false;
+export const isShuttingDown = () => shuttingDown;
+
+export async function shutdown(server: Server, signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const t0 = Date.now();
+  console.log(`${signal}: shutting down`);
+  const force = setTimeout(() => {
+    console.error(`shutdown took longer than ${FORCE_AFTER_MS} ms, exiting anyway`);
+    process.exit(1);
+  }, FORCE_AFTER_MS);
+  force.unref();
+
+  // no new connections; idle keep-alive sockets are closed now, busy ones after their response
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+  server.closeIdleConnections();
+  // a slow response (a large backup download) must not hold the database open until the forced exit
+  setTimeout(() => server.closeAllConnections(), FORCE_AFTER_MS - 3000).unref();
+  await Promise.all([
+    closed,
+    ...steps.map(async (s) => {
+      try {
+        await s.run();
+      } catch (e) {
+        console.error(`shutdown step "${s.name}" failed:`, (e as Error).message);
+      }
+    }),
+  ]);
+  try {
+    db.close();
+  } catch (e) {
+    console.error('closing the database failed:', (e as Error).message);
+  }
+  clearTimeout(force);
+  console.log(`stopped in ${Date.now() - t0} ms`);
+  process.exit(0);
+}
+
+export function installShutdown(server: Server): void {
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => void shutdown(server, sig));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/subscriptions.ts" << '__COREGSM_EOF__'
 /**
  * Server subscriptions: a signed-in user asks to be told when
@@ -13153,6 +13239,7 @@ __COREGSM_EOF__
       },
       "devDependencies": {
         "@types/node": "^22.10.0",
+        "tsx": "^4.23.15",
         "typescript": "^5.6.3"
       }
     },
@@ -13286,6 +13373,448 @@ __COREGSM_EOF__
         "url": "https://github.com/discordjs/discord.js?sponsor"
       }
     },
+    "node_modules/@esbuild/aix-ppc64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.2.tgz",
+      "integrity": "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==",
+      "cpu": [
+        "ppc64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "aix"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/android-arm": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.2.tgz",
+      "integrity": "sha512-kXXoiPVVGQcnIYGOeaovwOURpniDBpSq4A03qkQ+BMQqtGG6HYap3xne9C1O1yo4TR3qxlCX5IqqmX6fFo2Lqg==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/android-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.2.tgz",
+      "integrity": "sha512-5YfKeeI8qWfBZIX+u2xZC3Zlb3Os/gLS2sbEKM+I4ZOcsWmHS2WLysCcQZDAFRslDUU5Oiq44gf6PYN1vGwG5A==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/android-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.2.tgz",
+      "integrity": "sha512-O387ite7SzUyCcy3JQX4P4bLtEA7bLLkx+esve5JHnyYfNTxcVpXZo9jhdB0lTKN44gztELTdU7nS8Nr16Fs1Q==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/darwin-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.2.tgz",
+      "integrity": "sha512-n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/darwin-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.2.tgz",
+      "integrity": "sha512-uq6suIWYP37qzGddBKPw5QEQPi6HiLGsO7UmkpfyaYNQ3D+rN6w6WfwH+nuqcGXWvawGwxOEroO4YGnFh95azw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/freebsd-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.2.tgz",
+      "integrity": "sha512-n+I0BTSRIoy+d6RPKnEVwql5UwBJolytvY4mAOIEJorKlqgPII8ix6slVVrfZ5Tnj7glIZvloylbB/EJPMWEXw==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/freebsd-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.2.tgz",
+      "integrity": "sha512-78XJTJkvPs0kz2w61301PJjXl4g7q3JqiYMZ/M/yVI73EHBrCRTgkhu9oqG7vPqq+a/yadEW8aD+agKlk5xrmg==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-arm": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.28.2.tgz",
+      "integrity": "sha512-XlDnu2q5yoqems+xay6wSAcg9DDD7K9RLKZEBOMZm3ckNpJBvOX20tSfby8KfrrhINDyv9V2YVZKY/SpoGJI8w==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.28.2.tgz",
+      "integrity": "sha512-pW4AC0P3it8c7do9MVM4p51FzHzdM/TZrerurgRcHJ2WTa1VQ1CIq18xncfpBJw4ojkiZZrKW2yIBWBP92j6Ug==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-ia32": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.28.2.tgz",
+      "integrity": "sha512-CYbnj78HsIeA+DhgUKgFCfvNsTHFhMMrinUrMZpDXJXKN8T3XViTZ/+wtHeVxEWY8ewSzTFN+nRmSwO2tZaLUQ==",
+      "cpu": [
+        "ia32"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-loong64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.28.2.tgz",
+      "integrity": "sha512-buwkd8nsph4R+ajRvw0qM5Hja/TXQow3ptzWO2EbG/cqcIkHloRrdlBtQlshyYGTNFvfkfJ5tpPLVkY4DtsPfQ==",
+      "cpu": [
+        "loong64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-mips64el": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.28.2.tgz",
+      "integrity": "sha512-ZVykbDyk7519VwiNb9Lcj9m8XM6v5V9uKPvrEMkkEedVewf+0itkhahp4HDpgERXhwLRpWFypsGbG/J8s0QjJA==",
+      "cpu": [
+        "mips64el"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-ppc64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.28.2.tgz",
+      "integrity": "sha512-CAXl+Dtd9UUuJd8pKKdwh6MLm3MUMiqMPmhZ3tTSXPqfyQ3vDl6R5hZdZ/kYojK4ofXtdfSv1tFq8XzWx3heNQ==",
+      "cpu": [
+        "ppc64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-riscv64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.2.tgz",
+      "integrity": "sha512-GeXCej4IQtU1B+QlDV8W/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==",
+      "cpu": [
+        "riscv64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-s390x": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.28.2.tgz",
+      "integrity": "sha512-3H1weTYZPxt/WOhByszQZybS9w5lKzUn1FDMsgEChbHWQwHYQQRfBxgCcZvPhjHfKyJjIievvMmEUawJrdY9Dg==",
+      "cpu": [
+        "s390x"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/linux-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.2.tgz",
+      "integrity": "sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/netbsd-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.28.2.tgz",
+      "integrity": "sha512-sSATRjPeDBg3pdgHoQfoYBob11Kk1FGa9lui5RIHZCoCkJa9QKlvl3/vKz2usCmYYjs7ymJR/2Nnsqe+Hjt5nw==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "netbsd"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/netbsd-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.28.2.tgz",
+      "integrity": "sha512-lqnzCV+mM0gIADaKihiCg6ifgfU2L3h5E33rNQBN1Y4MaVGnzryzmvvf7UHxprpQdE8hpqLolJ9Rl+SkIRDpyw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "netbsd"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/openbsd-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-arm64/-/openbsd-arm64-0.28.2.tgz",
+      "integrity": "sha512-AL2qJILH7lNjrDmCQDvdxMfAUIv8KMNZOvrwAQ8i8//ntL9FflhOyMJ8OZSMBb8/AWXe3/5v5S20y3zCoZWKoQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "openbsd"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/openbsd-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.28.2.tgz",
+      "integrity": "sha512-QtiuPytchRyC4rwUKhexJdQKvDuZ6hWloi3igqPQNUJCS1/v9EiO3UTOXR6A3FoMo4fnAKbWJdqaIwhOzh8qEw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "openbsd"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/openharmony-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/openharmony-arm64/-/openharmony-arm64-0.28.2.tgz",
+      "integrity": "sha512-WkhYDmpTjLvGlScA1rwjRUmhl4k8oXR3cIbtqWmELgU/dFeHHlEllxDvdWcNJV9rbzCexB5vz8gtNewWLgCT7Q==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "openharmony"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/sunos-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.28.2.tgz",
+      "integrity": "sha512-GPMSkTOtMnv2U2F8gxe4Io6qmVs+YKyp832Etqqxr0hFngmXQ3rzwytelm3GIn7T4VviRUlf3sOgBOiTdvaf7g==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "sunos"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/win32-arm64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.28.2.tgz",
+      "integrity": "sha512-PIhhEkE9uPBleRBrQEJpUn7MBnibZzbGzYWPmY3x+YoVg/95zbjB4CxPPOQ8l5tYYM4mMaCthF8/1DIfBQQyWQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/win32-ia32": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.28.2.tgz",
+      "integrity": "sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA==",
+      "cpu": [
+        "ia32"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@esbuild/win32-x64": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.28.2.tgz",
+      "integrity": "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">=18"
+      }
+    },
     "node_modules/@sapphire/async-queue": {
       "version": "1.5.5",
       "resolved": "https://registry.npmjs.org/@sapphire/async-queue/-/async-queue-1.5.5.tgz",
@@ -13406,6 +13935,48 @@ __COREGSM_EOF__
         "url": "https://github.com/discordjs/discord.js?sponsor"
       }
     },
+    "node_modules/esbuild": {
+      "version": "0.28.2",
+      "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
+      "integrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==",
+      "dev": true,
+      "hasInstallScript": true,
+      "license": "MIT",
+      "bin": {
+        "esbuild": "bin/esbuild"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "optionalDependencies": {
+        "@esbuild/aix-ppc64": "0.28.2",
+        "@esbuild/android-arm": "0.28.2",
+        "@esbuild/android-arm64": "0.28.2",
+        "@esbuild/android-x64": "0.28.2",
+        "@esbuild/darwin-arm64": "0.28.2",
+        "@esbuild/darwin-x64": "0.28.2",
+        "@esbuild/freebsd-arm64": "0.28.2",
+        "@esbuild/freebsd-x64": "0.28.2",
+        "@esbuild/linux-arm": "0.28.2",
+        "@esbuild/linux-arm64": "0.28.2",
+        "@esbuild/linux-ia32": "0.28.2",
+        "@esbuild/linux-loong64": "0.28.2",
+        "@esbuild/linux-mips64el": "0.28.2",
+        "@esbuild/linux-ppc64": "0.28.2",
+        "@esbuild/linux-riscv64": "0.28.2",
+        "@esbuild/linux-s390x": "0.28.2",
+        "@esbuild/linux-x64": "0.28.2",
+        "@esbuild/netbsd-arm64": "0.28.2",
+        "@esbuild/netbsd-x64": "0.28.2",
+        "@esbuild/openbsd-arm64": "0.28.2",
+        "@esbuild/openbsd-x64": "0.28.2",
+        "@esbuild/openharmony-arm64": "0.28.2",
+        "@esbuild/sunos-x64": "0.28.2",
+        "@esbuild/win32-arm64": "0.28.2",
+        "@esbuild/win32-ia32": "0.28.2",
+        "@esbuild/win32-x64": "0.28.2"
+      }
+    },
     "node_modules/fast-deep-equal": {
       "version": "3.1.3",
       "resolved": "https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz",
@@ -13429,6 +14000,21 @@ __COREGSM_EOF__
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"
+      }
+    },
+    "node_modules/fsevents": {
+      "version": "2.3.3",
+      "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz",
+      "integrity": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
+      "dev": true,
+      "hasInstallScript": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": "^8.16.0 || ^10.6.0 || >=11.0.0"
       }
     },
     "node_modules/https-proxy-agent": {
@@ -13527,6 +14113,25 @@ __COREGSM_EOF__
       "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
       "license": "0BSD"
     },
+    "node_modules/tsx": {
+      "version": "4.23.15",
+      "resolved": "https://registry.npmjs.org/tsx/-/tsx-4.23.15.tgz",
+      "integrity": "sha512-Yiex1Ovn8z2xPpOWckIiysV1SSyRMY9BkLF++q0yKiDxCqRhosKfMg3janKkiLBwZ5c/YryloKwGZcrEmtwxKw==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "esbuild": "~0.28.0"
+      },
+      "bin": {
+        "tsx": "dist/cli.mjs"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      },
+      "optionalDependencies": {
+        "fsevents": "~2.3.3"
+      }
+    },
     "node_modules/typescript": {
       "version": "5.9.3",
       "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
@@ -13589,7 +14194,9 @@ __COREGSM_EOF__
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
@@ -13601,41 +14208,61 @@ __COREGSM_EOF__
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.3"
   }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
-  cat > "$APP_DIR/core-bot/src/index.ts" << '__COREGSM_EOF__'
-import type { Agent } from 'node:http';
-import { parseProxy, patchGatewayAgent } from './proxy.js';
+  cat > "$APP_DIR/core-bot/src/backend.ts" << '__COREGSM_EOF__'
+/** Calls to the panel's internal API. Inside the Docker network they never use the proxy. */
+import { log } from './log.js';
 
 const BACKEND = process.env.BACKEND_URL ?? 'http://backend:3000';
 const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN ?? '';
-const TICK_MS = 10_000;
-const LOGIN_RETRY_MS = 60_000;
 
-// The gateway socket is created inside discord.js, so the proxy hook must be installed before it is loaded.
-// The agent is looked up on every (re)connect, which lets the panel change the proxy without a restart.
-let gatewayAgent: Agent | undefined;
-patchGatewayAgent(() => gatewayAgent);
-const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } = await import('discord.js');
-type DiscordClient = InstanceType<typeof Client>;
-
-interface Binding {
-  id: number;
-  serverId: number;
-  /** every server shown in this message (the main one first); one embed per server */
-  serverIds?: number[];
-  serverName: string;
-  channelId: string;
-  messageId: string | null;
-  intervalSec: number;
-  /** embed (default), card (PNG) or both */
-  style?: 'embed' | 'card' | 'both';
+export async function backend(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(BACKEND + path, {
+    ...init,
+    headers: { 'x-internal-token': INTERNAL_TOKEN, 'content-type': 'application/json', ...(init.headers ?? {}) },
+    signal: init.signal ?? AbortSignal.timeout(20_000),
+  });
 }
 
-/** Binding as the buttons need it: also available while paused. */
+export async function backendJson<T>(path: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const r = await backend(path, init);
+  let data: T | null = null;
+  try {
+    data = (await r.json()) as T;
+  } catch {
+    /* not JSON */
+  }
+  return { ok: r.ok, status: r.status, data };
+}
+
+/** result of a status message update, shown on the binding in the panel */
+export async function report(id: number, body: { messageId?: string | null; error?: string | null }) {
+  try {
+    await backend(`/internal/bindings/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  } catch (e) {
+    log('report failed', e);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
+/** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import { ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { backend, report } from './backend.js';
+import { handleInteraction, registerCommands } from './commands.js';
+import { deliveryFailure, humanDiscordError, newNonce, retryAfterOf, retrySocket } from './errors.js';
+import { setGatewayAgent } from './gateway.js';
+import { log } from './log.js';
+import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
+import { parseProxy } from './proxy.js';
+
+const TICK_MS = 10_000;
+const LOGIN_RETRY_MS = 60_000;
 
 interface BotConfig {
   discordToken: string;
@@ -13644,70 +14271,8 @@ interface BotConfig {
 
 type BotState = 'idle' | 'connecting' | 'online' | 'error';
 
-const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
-
-/** Turns Discord/network errors into a message a person can act on (shown in the panel). */
-function humanDiscordError(e: unknown): string {
-  const err = e as { code?: number | string; message?: string };
-  const m = String(err?.message ?? e);
-  switch (err?.code) {
-    case 50001: return 'У бота нет доступа к каналу. Пригласите бота на этот сервер и выдайте права на канал.';
-    case 10003: return 'Канал не найден. Проверьте ID и что бот приглашён на сервер, где находится канал.';
-    case 50013: return 'Не хватает прав: боту нужны «Отправка сообщений», «Прикрепление файлов» и «Встраивание ссылок» в этом канале.';
-    case 50035: return 'Discord отклонил сообщение: проверьте ссылки (они должны начинаться с http:// или https://) и длину текстов.';
-    case 10008: return 'Сообщение уже удалено в Discord.';
-    case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
-  }
-  if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
-  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|timeout|socks|proxy/i.test(m)) {
-    return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
-  }
-  return m.slice(0, 200);
-}
-
-/** Discord 429: how long to wait (ms), or 0 when the error is not a rate limit. */
-function retryAfterOf(e: unknown): number {
-  const err = e as { status?: number; retryAfter?: number; timeToReset?: number; rawError?: { retry_after?: number }; code?: number | string };
-  if (err?.status !== 429 && err?.code !== 429 && err?.timeToReset === undefined) return 0;
-  const sec = err.rawError?.retry_after;
-  const ms = err.retryAfter ?? err.timeToReset ?? (typeof sec === 'number' ? sec * 1000 : 0);
-  return Math.max(1000, Math.round(ms || 5000));
-}
-
-/** Short reason stored in the delivery log; `final` = retrying cannot help. */
-function deliveryFailure(e: unknown): { text: string; final: boolean; retryAfterMs?: number } {
-  const code = (e as { code?: number | string })?.code;
-  const wait = retryAfterOf(e);
-  if (wait) return { text: 'превышен лимит запросов Discord', final: false, retryAfterMs: wait };
-  switch (code) {
-    case 50007: return { text: 'пользователь закрыл ЛС', final: true };
-    case 10013: return { text: 'пользователь не найден', final: true };
-    case 50001:
-    case 50013: return { text: 'нет прав', final: false };
-    case 10003: return { text: 'канал не найден', final: false };
-  }
-  return { text: humanDiscordError(e).slice(0, 200), final: false };
-}
-
-// Calls to the backend inside the Docker network never use the proxy.
-async function backend(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(BACKEND + path, {
-    ...init,
-    headers: { 'x-internal-token': INTERNAL_TOKEN, 'content-type': 'application/json', ...(init.headers ?? {}) },
-    signal: init.signal ?? AbortSignal.timeout(20_000),
-  });
-}
-
-async function report(id: number, body: { messageId?: string | null; error?: string | null }) {
-  try {
-    await backend(`/internal/bindings/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
-  } catch (e) {
-    log('report failed', e);
-  }
-}
-
 // ---------- state ----------
-let client: DiscordClient | null = null;
+let client: Client | null = null;
 let appliedKey: string | null = null;
 let retryAt = 0;
 let failedKey: string | null = null;
@@ -13736,7 +14301,6 @@ function setState(s: BotState, opts: { tag?: string | null; clientId?: string | 
 let lastGuildsJson = '';
 let lastGuildsAt = 0;
 
-/** Text channels the bot can post in, grouped by server. */
 const PERM_LABELS: Record<string, string> = {
   EmbedLinks: 'Встраивание ссылок',
   AttachFiles: 'Прикрепление файлов',
@@ -13744,7 +14308,7 @@ const PERM_LABELS: Record<string, string> = {
 
 /** Text channels per Discord server. A channel is listed when the bot can see it and write to it;
  *  missing "soft" permissions are reported as warnings instead of hiding the channel. */
-function collectGuilds(c: DiscordClient) {
+function collectGuilds(c: Client) {
   const out: { id: string; name: string; hidden: number; channels: { id: string; name: string; pos: number; missing: string[] }[] }[] = [];
   for (const g of c.guilds.cache.values()) {
     const me = g.members.me;
@@ -13801,27 +14365,292 @@ async function stopClient(): Promise<void> {
   }
 }
 
-/** Discord drops a second create-message with the same nonce (within a few minutes): retries are safe */
-const newNonce = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.slice(0, 25);
+/** Fetches token/proxy from the panel and (re)connects when they change. */
+async function applyConfig(): Promise<void> {
+  const res = await backend('/internal/config');
+  if (!res.ok) throw new Error(`config HTTP ${res.status}`);
+  const cfg = (await res.json()) as BotConfig;
+  const key = `${cfg.discordToken}|${cfg.proxyUrl}`;
+  if (key === appliedKey) return;
+  // after a failure wait before retrying the SAME config; a changed config is applied immediately
+  if (key === failedKey && Date.now() < retryAt) return;
+  appliedKey = key;
+  failedKey = null;
 
-/** a pooled connection that the proxy closed under us: the request never reached Discord, so one more try is safe */
-const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated|operation was aborted|AbortError|timed out|ETIMEDOUT/i;
-async function retrySocket<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
-  for (let i = 1; ; i++) {
+  await stopClient();
+  setGatewayAgent(undefined);
+  commandsCount = null;
+  lastRun.clear();
+  lastGuildsJson = '';
+
+  if (!cfg.discordToken) {
+    setState('idle');
+    // forget the channel list of a bot that is no longer configured
+    backend('/internal/bot-guilds', { method: 'POST', body: '[]' }).catch(() => undefined);
+    log('No Discord token configured. Add it in the panel: Settings.');
+    return;
+  }
+
+  let proxy = null;
+  try {
+    proxy = parseProxy(cfg.proxyUrl);
+  } catch (e) {
+    setState('error', { error: (e as Error).message });
+    log('Proxy config error:', (e as Error).message);
+    appliedKey = null;
+    failedKey = key;
+    retryAt = Date.now() + LOGIN_RETRY_MS;
+    return;
+  }
+  setGatewayAgent(proxy?.ws);
+  if (proxy) log('Using proxy for Discord:', proxy.label);
+
+  const c = new Client({
+    intents: [GatewayIntentBits.Guilds],
+    rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
+  });
+  c.on('error', (e) => log('client error', e));
+  // added to / kicked from a Discord server: tell the panel at once instead of waiting for the next tick
+  const guildsChanged = () => {
+    lastGuildsAt = 0;
+    lastGuildsJson = '';
+    void publishGuilds().catch(() => undefined);
+  };
+  c.on('guildCreate', guildsChanged);
+  c.on('guildDelete', guildsChanged);
+  c.on('interactionCreate', (i) => {
+    if (stopping) return;
+    void handleInteraction(i).catch((e) => log('interaction failed:', (e as Error).message));
+  });
+  client = c;
+  setState('connecting');
+  try {
+    await c.login(cfg.discordToken);
+    log(`Logged in as ${c.user?.tag}`);
+    setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
+    void registerCommands(c).then(async (n) => {
+      commandsCount = n;
+      await publishStatus();
+    });
+  } catch (e) {
+    log('Discord login failed:', (e as Error).message);
+    setState('error', { error: humanDiscordError(e) });
+    await stopClient();
+    // do not hammer Discord: retry later with the same config
+    appliedKey = null;
+    failedKey = key;
+    retryAt = Date.now() + LOGIN_RETRY_MS;
+  }
+}
+
+async function update(c: Client, b: Binding): Promise<void> {
+  const built = await buildPayload(b);
+
+  const channel = await retrySocket(() => c.channels.fetch(b.channelId));
+  if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
+
+  if (b.messageId) {
     try {
-      return await fn();
+      const msg = await retrySocket(() => channel.messages.fetch(b.messageId!));
+      // attachments: [] drops a picture left over from a previous style
+      await retrySocket(() => msg.edit({ ...built, attachments: [] }));
+      return await report(b.id, { error: null });
     } catch (e) {
-      const err = e as Error & { code?: string; cause?: { message?: string; code?: string } };
-      const text = `${err.message} ${err.code ?? ''} ${err.cause?.message ?? ''} ${err.cause?.code ?? ''}`;
-      if (i >= tries || !SOCKET_ERR.test(text)) throw e;
-      log(`connection to Discord failed (${err.message}), retry ${i}/${tries - 1}`);
-      await new Promise((r) => setTimeout(r, 300 * i));
+      log(`binding ${b.id}: cannot edit message, posting a new one`, (e as Error).message);
+    }
+  }
+  const nonce = newNonce();
+  const sent = await retrySocket<{ id: string }>(() => channel.send({ ...built, nonce, enforceNonce: true }));
+  await report(b.id, { messageId: sent.id, error: null });
+}
+
+interface NewsItem {
+  id: number;
+  action: 'send' | 'edit' | 'delete';
+  channelId: string;
+  messageId: string | null;
+  payload: NewsPayload;
+  /** ready Discord embeds (server status cards) appended after the written ones */
+  statusEmbeds?: Record<string, unknown>[];
+  test?: boolean;
+}
+
+async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null; retryAfterMs?: number }) {
+  try {
+    await backend(`/internal/news/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  } catch (e) {
+    log('news report failed', e);
+  }
+}
+
+async function processNews(): Promise<void> {
+  const c = client;
+  if (!c || state !== 'online') return;
+  const res = await backend('/internal/news/pending');
+  if (!res.ok) throw new Error(`news HTTP ${res.status}`);
+  const items = (await res.json()) as NewsItem[];
+  for (const it of items) {
+    // shutting down: items not started yet are claimed again by the next start
+    if (stopping) break;
+    try {
+      const channel = await retrySocket(() => c.channels.fetch(it.channelId));
+      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
+
+      if (it.action === 'delete') {
+        try {
+          if (it.messageId) await (await channel.messages.fetch(it.messageId)).delete();
+        } catch (e) {
+          if ((e as { code?: number }).code !== 10008) throw e; // already gone: that is fine
+        }
+        await reportNews(it.id, { status: 'deleted' });
+        log(`news ${it.id}: message deleted`);
+        continue;
+      }
+
+      const msg = await buildNews(it.payload, it.statusEmbeds ?? []);
+      if (it.action === 'edit' && it.messageId) {
+        const m = await retrySocket(() => channel.messages.fetch(it.messageId!));
+        await retrySocket(() => m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, components: msg.components, attachments: [], allowedMentions: msg.allowedMentions }));
+        await reportNews(it.id, { status: 'sent', messageId: it.messageId });
+        log(`news ${it.id}: message edited`);
+      } else {
+        const nonce = newNonce();
+        const sent = await retrySocket<{ id: string }>(() => channel.send({ ...msg, nonce, enforceNonce: true }));
+        await reportNews(it.id, { status: 'sent', messageId: sent.id });
+        log(`news ${it.id}: posted`);
+      }
+    } catch (e) {
+      log(`news ${it.id} failed:`, (e as Error).message);
+      const wait = retryAfterOf(e);
+      await reportNews(it.id, { status: 'error', error: humanDiscordError(e), ...(wait ? { retryAfterMs: wait } : {}) });
+      if (wait) break; // Discord asked us to slow down: the rest of the batch waits for the next tick
     }
   }
 }
 
-// ---------- slash commands: registration of players from Discord ----------
-const COMMANDS = [
+/** Alerts (channel messages) and DMs from the panel's delivery queue; every result is reported per delivery. */
+interface DeliveryItem {
+  id: number;
+  kind: 'alert' | 'dm' | 'status';
+  target: string;
+  payload: { content?: string; mention?: 'none' | 'here' | 'everyone'; embed?: ConstructorParameters<typeof EmbedBuilder>[0] };
+}
+async function processDeliveries(): Promise<void> {
+  const c = client;
+  if (!c || state !== 'online') return;
+  const res = await backend('/internal/deliveries/pending?kinds=alert,dm');
+  if (!res.ok) throw new Error(`deliveries HTTP ${res.status}`);
+  const items = (await res.json()) as DeliveryItem[];
+  for (const it of items) {
+    if (stopping) break;
+    let body: { ok: boolean; error?: string; final?: boolean; retryAfterMs?: number } = { ok: true };
+    let limited = false;
+    try {
+      if (it.kind === 'dm') {
+        const user = await c.users.fetch(it.target);
+        await user.send({ content: (it.payload.content ?? '').slice(0, 2000), allowedMentions: { parse: [] } });
+      } else {
+        const channel = await c.channels.fetch(it.target);
+        if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
+        await channel.send({
+          content: it.payload.content || undefined,
+          embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
+          allowedMentions: { parse: ((it.payload.mention ?? 'none') === 'none' ? [] : ['everyone']) as 'everyone'[] },
+        });
+      }
+      log(`delivery ${it.id} (${it.kind}): sent`);
+    } catch (e) {
+      const f = deliveryFailure(e);
+      log(`delivery ${it.id} (${it.kind}) failed:`, (e as Error).message);
+      body = { ok: false, error: f.text, final: f.final, ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}) };
+      limited = !!f.retryAfterMs;
+    }
+    try {
+      await backend(`/internal/deliveries/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    } catch (e) {
+      log('delivery report failed', e);
+    }
+    // 429: stop for this tick, the remaining deliveries stay queued; a short pause between sends keeps us under the limits
+    if (limited) break;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
+async function updateBindings(): Promise<void> {
+  const c = client;
+  if (!c || state !== 'online') return;
+  const res = await backend('/internal/bindings');
+  if (!res.ok) throw new Error(`bindings HTTP ${res.status}`);
+  const list = (await res.json()) as Binding[];
+  const ids = new Set(list.map((b) => b.id));
+  for (const k of lastRun.keys()) if (!ids.has(k)) lastRun.delete(k);
+  for (const b of list) {
+    if (stopping) break;
+    if (Date.now() - (lastRun.get(b.id) ?? 0) < b.intervalSec * 1000) continue;
+    lastRun.set(b.id, Date.now());
+    try {
+      await update(c, b);
+      log(`binding ${b.id} (${b.serverName}) updated`);
+    } catch (e) {
+      log(`binding ${b.id} failed:`, (e as Error).message);
+      await report(b.id, { error: humanDiscordError(e) });
+    }
+  }
+}
+
+let busy = false;
+let stopping = false;
+let timer: NodeJS.Timeout | undefined;
+
+async function tick(): Promise<void> {
+  if (busy || stopping) return;
+  busy = true;
+  try {
+    await applyConfig();
+    await publishGuilds();
+    await updateBindings();
+    await processNews();
+    await processDeliveries();
+  } catch (e) {
+    log('tick failed:', (e as Error).message);
+  } finally {
+    busy = false;
+    if (!stopping) await publishStatus();
+  }
+}
+
+export function start(): void {
+  log('CoreGSM bot started; waiting for configuration from the panel.');
+  void tick();
+  timer = setInterval(() => void tick(), TICK_MS);
+}
+
+/**
+ * SIGTERM (docker stop, an update): no new ticks or commands, the message being sent is finished (so it is
+ * reported and not posted twice after the restart), then the gateway connection is closed cleanly.
+ */
+export async function stop(signal: string, graceMs = 7000): Promise<void> {
+  if (stopping) return;
+  stopping = true;
+  clearInterval(timer);
+  log(`${signal}: shutting down`);
+  const until = Date.now() + graceMs;
+  while (busy && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+  if (busy) log('the current tick did not finish in time');
+  await stopClient();
+  log('stopped');
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/commands.ts" << '__COREGSM_EOF__'
+/** Slash commands: registration of players from Discord (/register, /nick, /profile) and the nick autocomplete. */
+import type { AutocompleteInteraction, Client, Interaction } from 'discord.js';
+import { backend, backendJson } from './backend.js';
+import { humanDiscordError } from './errors.js';
+import { log } from './log.js';
+import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
+
+export const COMMANDS = [
   {
     name: 'register',
     description: 'Зарегистрироваться на сайте через ваш Discord: пароль не нужен',
@@ -13838,20 +14667,20 @@ const COMMANDS = [
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
 ];
 
-async function registerCommands(c: DiscordClient): Promise<void> {
+/** registers the commands and returns how many Discord accepted (0 on failure) */
+export async function registerCommands(c: Client): Promise<number | null> {
   try {
     const set = await c.application?.commands.set(COMMANDS as never);
-    commandsCount = set ? set.size : null;
-    log(`Slash commands registered: ${commandsCount}`);
+    const n = set ? set.size : null;
+    log(`Slash commands registered: ${n}`);
+    return n;
   } catch (e) {
-    commandsCount = 0;
     log('Slash commands registration failed:', humanDiscordError(e));
+    return 0;
   }
-  await publishStatus();
 }
 
 const EPHEMERAL = 64;
-const COLORS = { ok: 0x2ecc71, warn: 0xf5b01e, bad: 0xe74c3c, info: 0x9b1c31 };
 
 interface RegisterAnswer {
   status: 'created' | 'exists' | 'pending' | 'disabled' | 'rules' | 'conflict';
@@ -13861,108 +14690,8 @@ interface RegisterAnswer {
   message?: string;
 }
 
-/** a status mark in front of a plain reply title, unless the title already starts with an emoji */
-const markOf = (color: number) => (color === COLORS.ok ? '✅' : color === COLORS.bad ? '❌' : color === COLORS.warn ? '⚠️' : 'ℹ️');
-
-function replyEmbed(title: string, description: string, color: number, url?: string) {
-  const lead = /^\p{Extended_Pictographic}/u.test(title) ? '' : `${markOf(color)} `;
-  const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color).setFooter({ text: 'CoreGSM' });
-  if (url && /^https?:\/\//.test(url)) e.setURL(url);
-  return { embeds: [e] };
-}
-
-interface ProfileData {
-  found: boolean;
-  username: string;
-  displayName: string;
-  gameNick: string;
-  rank: { id: string; name: string; hours: number; color: string; image: string; next: { name: string; minHours: number } | null; progress: number } | null;
-  achievements: number;
-  achievementsTotal?: number;
-  nickSeen?: boolean;
-  lastSeenAt?: number | null;
-  profileUrl: string;
-}
-
-const hexToInt = (hex: string) => (/^#[0-9a-f]{6}$/i.test(hex) ? parseInt(hex.slice(1), 16) : COLORS.info);
-const bar10 = (p: number) => {
-  const n = Math.max(0, Math.min(10, Math.round(p * 10)));
-  return '▰'.repeat(n) + '▱'.repeat(10 - n);
-};
-const hoursText = (h: number) => (Number.isInteger(h) ? `${h}` : h.toFixed(1)).replace('.', ',');
-
-/** the player's card: Discord name and picture on top, the rank emblem as the thumbnail, link buttons below */
-function cardReply(
-  user: { displayAvatarURL: (o?: { size?: number }) => string },
-  displayName: string,
-  p: ProfileData,
-  opts: { title: string; description?: string; color?: number; onboarding?: boolean },
-) {
-  const base = /^https?:\/\//.test(p.profileUrl) ? p.profileUrl.replace(/\/#\/profile\/?$/, '') : '';
-  const color = opts.color ?? (p.rank ? hexToInt(p.rank.color) : COLORS.info);
-  const e = new EmbedBuilder()
-    .setColor(color)
-    .setAuthor({ name: displayName.slice(0, 120), iconURL: user.displayAvatarURL({ size: 64 }) })
-    .setTitle(opts.title.slice(0, 250));
-  if (opts.description) e.setDescription(opts.description.slice(0, 3000));
-  if (base && p.rank?.image) e.setThumbnail(`${base}${p.rank.image}`);
-  const fields: { name: string; value: string; inline?: boolean }[] = [];
-  fields.push({ name: '🎮 Игровой ник', value: p.gameNick ? `\`${p.gameNick}\`` : 'не задан', inline: true });
-  if (p.rank) {
-    fields.push({ name: '🩸 Ранг V Rising', value: `**${p.rank.name}**`, inline: true });
-    fields.push({ name: '⏱️ Часов в игре', value: hoursText(p.rank.hours), inline: true });
-    if (p.rank.next) {
-      const left = Math.max(0, p.rank.next.minHours - p.rank.hours);
-      fields.push({ name: `Следующий ранг: ${p.rank.next.name}`, value: `${bar10(p.rank.progress)}  ещё **${hoursText(left)} ч**` });
-    } else {
-      fields.push({ name: 'Вершина лестницы', value: 'Вы достигли высшего ранга.' });
-    }
-  } else if (p.gameNick) {
-    fields.push({ name: '🩸 Ранг V Rising', value: 'появится после первой игры на сервере', inline: true });
-  }
-  fields.push({ name: '🏆 Достижений', value: p.achievementsTotal ? `${p.achievements} из ${p.achievementsTotal}` : String(p.achievements), inline: true });
-  if (p.gameNick) {
-    const seenLine = p.nickSeen
-      ? `✅ Ник найден на сервере: последний раз ${p.lastSeenAt ? `<t:${Math.floor(p.lastSeenAt / 1000)}:R>` : 'недавно'}`
-      : `⏳ Ждём ваш первый заход под ником \`${p.gameNick}\``;
-    if (opts.onboarding) {
-      const steps = p.nickSeen
-        ? `${seenLine}\nЧасы, ранг и достижения уже считаются. Если ник неверный, исправьте его командой \`/nick\`.`
-        : `Зайдите на сервер V Rising под ником \`${p.gameNick}\`. Как только панель увидит игрока, часы, ранг и достижения начнут считаться.\nЕсли ник указан неверно, исправьте его командой \`/nick\`.`;
-      fields.push({ name: '👣 Что дальше', value: steps.slice(0, 1000) });
-    } else {
-      fields.push({ name: '📡 Связь с сервером', value: seenLine });
-    }
-  }
-  e.addFields(fields);
-  e.setFooter({ text: 'CoreGSM · статистика копится с первого входа на сервер' });
-
-  const components = [];
-  if (base) {
-    components.push(
-      new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('👤 Профиль').setURL(`${base}/go/profile`),
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('🏆 Достижения').setURL(`${base}/go/profile/player`),
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📊 Серверы').setURL(`${base}/go/servers`),
-      ),
-    );
-  }
-  return { embeds: [e], components };
-}
-
-async function backendJson<T>(path: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const r = await backend(path, init);
-  let data: T | null = null;
-  try {
-    data = (await r.json()) as T;
-  } catch {
-    /* not JSON */
-  }
-  return { ok: r.ok, status: r.status, data };
-}
-
 /** Autocomplete of the in-game nick: up to 25 names seen on the servers. Must answer within 3 s and never throws. */
-async function handleAutocomplete(i: import('discord.js').AutocompleteInteraction): Promise<void> {
+async function handleAutocomplete(i: AutocompleteInteraction): Promise<void> {
   let names: string[] = [];
   try {
     if ((i.commandName === 'register' || i.commandName === 'nick') && i.options.getFocused(true).name === 'nick') {
@@ -13981,7 +14710,7 @@ async function handleAutocomplete(i: import('discord.js').AutocompleteInteractio
   }
 }
 
-async function handleInteraction(i: import('discord.js').Interaction): Promise<void> {
+export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isAutocomplete()) return handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   const name = i.commandName;
@@ -14084,102 +14813,191 @@ async function handleInteraction(i: import('discord.js').Interaction): Promise<v
     await friendly();
   }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/errors.ts" << '__COREGSM_EOF__'
+/** Discord and network failures: texts for the panel, rate limits, retries of dropped connections. No discord.js import. */
+import { log } from './log.js';
 
-/** Fetches token/proxy from the panel and (re)connects when they change. */
-async function applyConfig(): Promise<void> {
-  const res = await backend('/internal/config');
-  if (!res.ok) throw new Error(`config HTTP ${res.status}`);
-  const cfg = (await res.json()) as BotConfig;
-  const key = `${cfg.discordToken}|${cfg.proxyUrl}`;
-  if (key === appliedKey) return;
-  // after a failure wait before retrying the SAME config; a changed config is applied immediately
-  if (key === failedKey && Date.now() < retryAt) return;
-  appliedKey = key;
-  failedKey = null;
-
-  await stopClient();
-  gatewayAgent = undefined;
-  commandsCount = null;
-  lastRun.clear();
-  lastGuildsJson = '';
-
-  if (!cfg.discordToken) {
-    setState('idle');
-    // forget the channel list of a bot that is no longer configured
-    backend('/internal/bot-guilds', { method: 'POST', body: '[]' }).catch(() => undefined);
-    log('No Discord token configured. Add it in the panel: Settings.');
-    return;
+/** Turns Discord/network errors into a message a person can act on (shown in the panel). */
+export function humanDiscordError(e: unknown): string {
+  const err = e as { code?: number | string; message?: string };
+  const m = String(err?.message ?? e);
+  switch (err?.code) {
+    case 50001: return 'У бота нет доступа к каналу. Пригласите бота на этот сервер и выдайте права на канал.';
+    case 10003: return 'Канал не найден. Проверьте ID и что бот приглашён на сервер, где находится канал.';
+    case 50013: return 'Не хватает прав: боту нужны «Отправка сообщений», «Прикрепление файлов» и «Встраивание ссылок» в этом канале.';
+    case 50035: return 'Discord отклонил сообщение: проверьте ссылки (они должны начинаться с http:// или https://) и длину текстов.';
+    case 10008: return 'Сообщение уже удалено в Discord.';
+    case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   }
-
-  let proxy = null;
-  try {
-    proxy = parseProxy(cfg.proxyUrl);
-  } catch (e) {
-    setState('error', { error: (e as Error).message });
-    log('Proxy config error:', (e as Error).message);
-    appliedKey = null;
-    failedKey = key;
-    retryAt = Date.now() + LOGIN_RETRY_MS;
-    return;
+  if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|timeout|socks|proxy/i.test(m)) {
+    return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
   }
-  gatewayAgent = proxy?.ws;
-  if (proxy) log('Using proxy for Discord:', proxy.label);
-
-  const c = new Client({
-    intents: [GatewayIntentBits.Guilds],
-    rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
-  });
-  c.on('error', (e) => log('client error', e));
-  // added to / kicked from a Discord server: tell the panel at once instead of waiting for the next tick
-  const guildsChanged = () => {
-    lastGuildsAt = 0;
-    lastGuildsJson = '';
-    void publishGuilds().catch(() => undefined);
-  };
-  c.on('guildCreate', guildsChanged);
-  c.on('guildDelete', guildsChanged);
-  c.on('interactionCreate', (i) => {
-    void handleInteraction(i).catch((e) => log('interaction failed:', (e as Error).message));
-  });
-  client = c;
-  setState('connecting');
-  try {
-    await c.login(cfg.discordToken);
-    log(`Logged in as ${c.user?.tag}`);
-    setState('online', { tag: c.user?.tag ?? null, clientId: c.user?.id ?? null });
-    void registerCommands(c);
-  } catch (e) {
-    log('Discord login failed:', (e as Error).message);
-    setState('error', { error: humanDiscordError(e) });
-    await stopClient();
-    // do not hammer Discord: retry later with the same config
-    appliedKey = null;
-    failedKey = key;
-    retryAt = Date.now() + LOGIN_RETRY_MS;
-  }
+  return m.slice(0, 200);
 }
 
-/** Builds what a binding's message looks like (embed and card attachment). */
+/** Discord 429: how long to wait (ms), or 0 when the error is not a rate limit. */
+export function retryAfterOf(e: unknown): number {
+  const err = e as { status?: number; retryAfter?: number; timeToReset?: number; rawError?: { retry_after?: number }; code?: number | string };
+  if (err?.status !== 429 && err?.code !== 429 && err?.timeToReset === undefined) return 0;
+  const sec = err.rawError?.retry_after;
+  const ms = err.retryAfter ?? err.timeToReset ?? (typeof sec === 'number' ? sec * 1000 : 0);
+  return Math.max(1000, Math.round(ms || 5000));
+}
+
+/** Short reason stored in the delivery log; `final` = retrying cannot help. */
+export function deliveryFailure(e: unknown): { text: string; final: boolean; retryAfterMs?: number } {
+  const code = (e as { code?: number | string })?.code;
+  const wait = retryAfterOf(e);
+  if (wait) return { text: 'превышен лимит запросов Discord', final: false, retryAfterMs: wait };
+  switch (code) {
+    case 50007: return { text: 'пользователь закрыл ЛС', final: true };
+    case 10013: return { text: 'пользователь не найден', final: true };
+    case 50001:
+    case 50013: return { text: 'нет прав', final: false };
+    case 10003: return { text: 'канал не найден', final: false };
+  }
+  return { text: humanDiscordError(e).slice(0, 200), final: false };
+}
+
+/** Discord drops a second create-message with the same nonce (within a few minutes): retries are safe */
+export const newNonce = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.slice(0, 25);
+
+/** a pooled connection that the proxy closed under us: the request never reached Discord, so one more try is safe */
+export const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated|operation was aborted|AbortError|timed out|ETIMEDOUT/i;
+
+export async function retrySocket<T>(fn: () => Promise<T>, tries = 3, delayMs = 300): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const err = e as Error & { code?: string; cause?: { message?: string; code?: string } };
+      const text = `${err.message} ${err.code ?? ''} ${err.cause?.message ?? ''} ${err.cause?.code ?? ''}`;
+      if (i >= tries || !SOCKET_ERR.test(text)) throw e;
+      log(`connection to Discord failed (${err.message}), retry ${i}/${tries - 1}`);
+      await new Promise((r) => setTimeout(r, delayMs * i));
+    }
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/gateway.ts" << '__COREGSM_EOF__'
+import type { Agent } from 'node:http';
+
+/** The proxy agent for the Discord gateway; looked up on every (re)connect, so the panel can change it without a restart. */
+let gatewayAgent: Agent | undefined;
+export const getGatewayAgent = () => gatewayAgent;
+export const setGatewayAgent = (a: Agent | undefined) => {
+  gatewayAgent = a;
+};
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/index.ts" << '__COREGSM_EOF__'
+import { getGatewayAgent } from './gateway.js';
+import { patchGatewayAgent } from './proxy.js';
+
+// The gateway socket is created inside discord.js, so the proxy hook must be installed before it is loaded:
+// everything that imports discord.js is loaded dynamically below.
+patchGatewayAgent(getGatewayAgent);
+const bot = await import('./bot.js');
+
+for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(sig, () => {
+    void bot.stop(sig).finally(() => process.exit(0));
+  });
+}
+bot.start();
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/log.ts" << '__COREGSM_EOF__'
+export const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/messages.ts" << '__COREGSM_EOF__'
+/** What the bot posts: status messages of bindings and news written in the panel. */
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import { backend } from './backend.js';
+
+export interface Binding {
+  id: number;
+  serverId: number;
+  /** every server shown in this message (the main one first); one embed per server */
+  serverIds?: number[];
+  serverName: string;
+  channelId: string;
+  messageId: string | null;
+  intervalSec: number;
+  /** embed (default), card (PNG) or both */
+  style?: 'embed' | 'card' | 'both';
+}
+
+export type RawEmbed = ConstructorParameters<typeof EmbedBuilder>[0] & {
+  title?: string;
+  description?: string;
+  url?: string;
+  author?: { name: string };
+  timestamp?: string;
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string; icon_url?: string };
+};
+
 /** characters Discord counts towards the 6000 limit of one message (title, description, fields, footer) */
-function embedChars(e: { title?: string; description?: string; fields?: { name: string; value: string }[]; footer?: { text: string }; author?: { name: string } }): number {
+export function embedChars(e: { title?: string; description?: string; fields?: { name: string; value: string }[]; footer?: { text: string }; author?: { name: string } }): number {
   return (e.title?.length ?? 0) + (e.description?.length ?? 0) + (e.footer?.text.length ?? 0) + (e.author?.name.length ?? 0) + (e.fields ?? []).reduce((n, f) => n + f.name.length + f.value.length, 0);
 }
 
-async function buildPayload(b: Binding) {
-  const style = b.style ?? 'embed';
-  // one message may show up to 10 servers (a Discord limit): the main server first
-  const ids = [...new Set([b.serverId, ...(b.serverIds ?? [])])].slice(0, 10);
-  const multi = ids.length > 1;
+/** the servers of one message: the main one first, no duplicates, at most 10 (a Discord limit) */
+export const messageServerIds = (b: Pick<Binding, 'serverId' | 'serverIds'>) => [...new Set([b.serverId, ...(b.serverIds ?? [])])].slice(0, 10);
 
-  type Raw = ConstructorParameters<typeof EmbedBuilder>[0] & { title?: string; description?: string; fields?: { name: string; value: string; inline?: boolean }[]; footer?: { text: string; icon_url?: string } };
-  const raws: Raw[] = [];
-  const files: InstanceType<typeof AttachmentBuilder>[] = [];
+/**
+ * Several servers in one message: the brand line (author) only on the first embed, footer and timestamp only on
+ * the last one; over the 6000-character limit the extra fields go first, from the last server backwards.
+ */
+export function arrangeEmbeds(raws: RawEmbed[]): void {
+  if (raws.length < 2) return;
+  raws.forEach((r, i) => {
+    if (i > 0) delete r.author;
+    if (i < raws.length - 1) {
+      delete r.footer;
+      delete r.timestamp;
+    }
+  });
+  const total = () => raws.reduce((n, r) => n + embedChars(r), 0);
+  for (let i = raws.length - 1; i >= 0 && total() > 5800; i--) {
+    const f = raws[i].fields;
+    if (f && f.length > 6) raws[i].fields = f.slice(0, 6);
+  }
+}
+
+/** «Все игроки» link buttons: the players tab of each server in the panel, one per server for up to 5 servers */
+export function playerButtons(raws: RawEmbed[]): { label: string; url: string }[] {
+  const multi = raws.length > 1;
+  const out: { label: string; url: string }[] = [];
+  for (const r of raws.slice(0, 5)) {
+    if (!r.url || !/^https?:\/\//.test(r.url)) continue;
+    out.push({ label: multi ? `👥 ${String(r.title ?? 'Сервер').slice(0, 70)}` : '👥 Все игроки на сайте', url: `${r.url.replace(/\/$/, '')}/players` });
+  }
+  return out;
+}
+
+const linkRow = (links: { label: string; url: string }[]) =>
+  links.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(links.map((l) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(l.label).setURL(l.url)))] : [];
+
+/** Builds what a binding's message looks like (embeds, card attachments, buttons). */
+export async function buildPayload(b: Binding) {
+  const style = b.style ?? 'embed';
+  const ids = messageServerIds(b);
+  const multi = ids.length > 1;
+  const raws: RawEmbed[] = [];
+  const files: AttachmentBuilder[] = [];
 
   for (const [i, id] of ids.entries()) {
     // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
-    let raw: Raw;
+    let raw: RawEmbed;
     if (style === 'card') {
-      raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() } as Raw;
+      raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() };
     } else {
       const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}`);
       if (!r.ok) {
@@ -14187,7 +15005,7 @@ async function buildPayload(b: Binding) {
         if (multi && r.status === 404) continue;
         throw new Error(`embed HTTP ${r.status}`);
       }
-      raw = (await r.json()) as Raw;
+      raw = (await r.json()) as RawEmbed;
     }
     if (style !== 'embed') {
       const img = await backend(`/internal/card/${id}.png`);
@@ -14202,62 +15020,12 @@ async function buildPayload(b: Binding) {
     raws.push(raw);
   }
   if (raws.length === 0) throw new Error('Нет ни одного сервера для сообщения');
-
-  if (multi) {
-    // one footer for the whole block (on the last embed); the 6000-character limit of a message: when it is
-    // exceeded drop the player lists first, from the last server backwards, then the extra fields
-    // the brand line (author) only on the first embed; footer and timestamp only on the last one
-    raws.forEach((r, i) => {
-      if (i > 0) delete (r as { author?: unknown }).author;
-      if (i < raws.length - 1) {
-        delete r.footer;
-        delete (r as { timestamp?: unknown }).timestamp;
-      }
-    });
-    const total = () => raws.reduce((n, r) => n + embedChars(r), 0);
-    for (let i = raws.length - 1; i >= 0 && total() > 5800; i--) {
-      const f = raws[i].fields;
-      if (f && f.length > 6) raws[i].fields = f.slice(0, 6);
-    }
-  }
-  // link buttons (no interactions to handle): «Все игроки» opens the players tab of the server in the panel;
-  // one button per server for up to 5 servers, the label is the server name when there are several
-  const buttons: InstanceType<typeof ButtonBuilder>[] = [];
-  for (const r of raws.slice(0, 5)) {
-    const url = (r as { url?: string }).url;
-    if (!url || !/^https?:\/\//.test(url)) continue;
-    const label = multi ? `👥 ${String(r.title ?? 'Сервер').slice(0, 70)}` : '👥 Все игроки на сайте';
-    buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(label).setURL(`${url.replace(/\/$/, '')}/players`));
-  }
-  const components = buttons.length ? [new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(buttons)] : [];
-  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components };
-}
-
-async function update(c: DiscordClient, b: Binding): Promise<void> {
-  const built = await buildPayload(b);
-
-  const channel = await retrySocket(() => c.channels.fetch(b.channelId));
-  if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
-
-  const payload = () => built;
-
-  if (b.messageId) {
-    try {
-      const msg = await retrySocket(() => channel.messages.fetch(b.messageId!));
-      // attachments: [] drops a picture left over from a previous style
-      await retrySocket(() => msg.edit({ ...payload(), attachments: [] }));
-      return await report(b.id, { error: null });
-    } catch (e) {
-      log(`binding ${b.id}: cannot edit message, posting a new one`, (e as Error).message);
-    }
-  }
-  const nonce = newNonce();
-  const sent = await retrySocket<{ id: string }>(() => channel.send({ ...payload(), nonce, enforceNonce: true }));
-  await report(b.id, { messageId: sent.id, error: null });
+  arrangeEmbeds(raws);
+  return { embeds: raws.map((r) => new EmbedBuilder(r)), files, components: linkRow(playerButtons(raws)) };
 }
 
 // ---------- news: messages written in the panel ----------
-interface NewsEmbed {
+export interface NewsEmbed {
   title?: string;
   url?: string;
   description?: string;
@@ -14269,7 +15037,7 @@ interface NewsEmbed {
   footer?: { text: string };
   timestamp?: boolean;
 }
-interface NewsPayload {
+export interface NewsPayload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
   embed?: NewsEmbed;
@@ -14278,24 +15046,18 @@ interface NewsPayload {
   /** link buttons under the message (at most 3) */
   actions?: { label: string; url: string }[];
 }
-interface NewsItem {
-  id: number;
-  action: 'send' | 'edit' | 'delete';
-  channelId: string;
-  messageId: string | null;
-  payload: NewsPayload;
-  /** ready Discord embeds (server status cards) appended after the written ones */
-  statusEmbeds?: Record<string, unknown>[];
-  test?: boolean;
+
+/** the message text with the @everyone/@here mention in front, added once: not when the text already has it */
+export function newsContent(p: Pick<NewsPayload, 'content' | 'mention'>): string {
+  const token = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
+  const mention = token && !(p.content ?? '').includes(token) ? token : '';
+  return [mention, p.content?.trim()].filter(Boolean).join('\n');
 }
 
-async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[] = []) {
-  const files: InstanceType<typeof AttachmentBuilder>[] = [];
-  const token = p.mention === 'everyone' ? '@everyone' : p.mention === 'here' ? '@here' : '';
-  // the token is added once: not when the text already has it
-  const mention = token && !(p.content ?? '').includes(token) ? token : '';
-  const content = [mention, p.content?.trim()].filter(Boolean).join('\n');
-  const embeds: InstanceType<typeof EmbedBuilder>[] = [];
+export async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[] = []) {
+  const files: AttachmentBuilder[] = [];
+  const content = newsContent(p);
+  const embeds: EmbedBuilder[] = [];
   const attached = new Set<string>();
   for (const e of [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])].slice(0, 10)) {
     const eb = new EmbedBuilder().setColor(e.color ?? 0x5865f2);
@@ -14323,164 +15085,16 @@ async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unknown>[]
   }
   for (const raw of statusEmbeds) {
     if (embeds.length >= 10) break;
-    embeds.push(new EmbedBuilder(raw as ConstructorParameters<typeof EmbedBuilder>[0]));
+    embeds.push(new EmbedBuilder(raw as RawEmbed));
   }
-  const components = (p.actions ?? []).length
-    ? [
-        new ActionRowBuilder<InstanceType<typeof ButtonBuilder>>().addComponents(
-          (p.actions ?? []).slice(0, 3).map((a) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(a.label.slice(0, 80)).setURL(a.url)),
-        ),
-      ]
-    : [];
   return {
     content: content || undefined,
     embeds,
     files,
-    components,
+    components: linkRow((p.actions ?? []).slice(0, 3).map((a) => ({ label: a.label.slice(0, 80), url: a.url }))),
     allowedMentions: { parse: (p.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
   };
 }
-
-async function reportNews(id: number, body: { status: 'sent' | 'error' | 'deleted'; messageId?: string | null; error?: string | null; retryAfterMs?: number }) {
-  try {
-    await backend(`/internal/news/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
-  } catch (e) {
-    log('news report failed', e);
-  }
-}
-
-async function processNews(): Promise<void> {
-  const c = client;
-  if (!c || state !== 'online') return;
-  const res = await backend('/internal/news/pending');
-  if (!res.ok) throw new Error(`news HTTP ${res.status}`);
-  const items = (await res.json()) as NewsItem[];
-  for (const it of items) {
-    try {
-      const channel = await retrySocket(() => c.channels.fetch(it.channelId));
-      if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
-
-      if (it.action === 'delete') {
-        try {
-          if (it.messageId) await (await channel.messages.fetch(it.messageId)).delete();
-        } catch (e) {
-          if ((e as { code?: number }).code !== 10008) throw e; // already gone: that is fine
-        }
-        await reportNews(it.id, { status: 'deleted' });
-        log(`news ${it.id}: message deleted`);
-        continue;
-      }
-
-      const msg = await buildNews(it.payload, it.statusEmbeds ?? []);
-      if (it.action === 'edit' && it.messageId) {
-        const m = await retrySocket(() => channel.messages.fetch(it.messageId!));
-        await retrySocket(() => m.edit({ content: msg.content ?? '', embeds: msg.embeds, files: msg.files, components: msg.components, attachments: [], allowedMentions: msg.allowedMentions }));
-        await reportNews(it.id, { status: 'sent', messageId: it.messageId });
-        log(`news ${it.id}: message edited`);
-      } else {
-        const nonce = newNonce();
-        const sent = await retrySocket<{ id: string }>(() => channel.send({ ...msg, nonce, enforceNonce: true }));
-        await reportNews(it.id, { status: 'sent', messageId: sent.id });
-        log(`news ${it.id}: posted`);
-      }
-    } catch (e) {
-      log(`news ${it.id} failed:`, (e as Error).message);
-      const wait = retryAfterOf(e);
-      await reportNews(it.id, { status: 'error', error: humanDiscordError(e), ...(wait ? { retryAfterMs: wait } : {}) });
-      if (wait) break; // Discord asked us to slow down: the rest of the batch waits for the next tick
-    }
-  }
-}
-
-/** Alerts (channel messages) and DMs from the panel's delivery queue; every result is reported per delivery. */
-interface DeliveryItem {
-  id: number;
-  kind: 'alert' | 'dm' | 'status';
-  target: string;
-  payload: { content?: string; mention?: 'none' | 'here' | 'everyone'; embed?: ConstructorParameters<typeof EmbedBuilder>[0] };
-}
-async function processDeliveries(): Promise<void> {
-  const c = client;
-  if (!c || state !== 'online') return;
-  const res = await backend('/internal/deliveries/pending?kinds=alert,dm');
-  if (!res.ok) throw new Error(`deliveries HTTP ${res.status}`);
-  const items = (await res.json()) as DeliveryItem[];
-  for (const it of items) {
-    let body: { ok: boolean; error?: string; final?: boolean; retryAfterMs?: number } = { ok: true };
-    let limited = false;
-    try {
-      if (it.kind === 'dm') {
-        const user = await c.users.fetch(it.target);
-        await user.send({ content: (it.payload.content ?? '').slice(0, 2000), allowedMentions: { parse: [] } });
-      } else {
-        const channel = await c.channels.fetch(it.target);
-        if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
-        await channel.send({
-          content: it.payload.content || undefined,
-          embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
-          allowedMentions: { parse: ((it.payload.mention ?? 'none') === 'none' ? [] : ['everyone']) as 'everyone'[] },
-        });
-      }
-      log(`delivery ${it.id} (${it.kind}): sent`);
-    } catch (e) {
-      const f = deliveryFailure(e);
-      log(`delivery ${it.id} (${it.kind}) failed:`, (e as Error).message);
-      body = { ok: false, error: f.text, final: f.final, ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}) };
-      limited = !!f.retryAfterMs;
-    }
-    try {
-      await backend(`/internal/deliveries/${it.id}`, { method: 'PATCH', body: JSON.stringify(body) });
-    } catch (e) {
-      log('delivery report failed', e);
-    }
-    // 429: stop for this tick, the remaining deliveries stay queued; a short pause between sends keeps us under the limits
-    if (limited) break;
-    await new Promise((r) => setTimeout(r, 300));
-  }
-}
-
-async function updateBindings(): Promise<void> {
-  const c = client;
-  if (!c || state !== 'online') return;
-  const res = await backend('/internal/bindings');
-  if (!res.ok) throw new Error(`bindings HTTP ${res.status}`);
-  const list = (await res.json()) as Binding[];
-  const ids = new Set(list.map((b) => b.id));
-  for (const k of lastRun.keys()) if (!ids.has(k)) lastRun.delete(k);
-  for (const b of list) {
-    if (Date.now() - (lastRun.get(b.id) ?? 0) < b.intervalSec * 1000) continue;
-    lastRun.set(b.id, Date.now());
-    try {
-      await update(c, b);
-      log(`binding ${b.id} (${b.serverName}) updated`);
-    } catch (e) {
-      log(`binding ${b.id} failed:`, (e as Error).message);
-      await report(b.id, { error: humanDiscordError(e) });
-    }
-  }
-}
-
-let busy = false;
-async function tick(): Promise<void> {
-  if (busy) return;
-  busy = true;
-  try {
-    await applyConfig();
-    await publishGuilds();
-    await updateBindings();
-    await processNews();
-    await processDeliveries();
-  } catch (e) {
-    log('tick failed:', (e as Error).message);
-  } finally {
-    busy = false;
-    await publishStatus();
-  }
-}
-
-log('CoreGSM bot started; waiting for configuration from the panel.');
-void tick();
-setInterval(() => void tick(), TICK_MS);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/proxy.ts" << '__COREGSM_EOF__'
@@ -14569,6 +15183,105 @@ export function patchGatewayAgent(getAgent: () => Agent | undefined): void {
     }
   }
   ws.WebSocket = ProxiedWebSocket;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/replies.ts" << '__COREGSM_EOF__'
+/** Ephemeral replies to the slash commands: plain notices and the player's card. */
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+
+export const COLORS = { ok: 0x2ecc71, warn: 0xf5b01e, bad: 0xe74c3c, info: 0x9b1c31 };
+
+export interface ProfileData {
+  found: boolean;
+  username: string;
+  displayName: string;
+  gameNick: string;
+  rank: { id: string; name: string; hours: number; color: string; image: string; next: { name: string; minHours: number } | null; progress: number } | null;
+  achievements: number;
+  achievementsTotal?: number;
+  nickSeen?: boolean;
+  lastSeenAt?: number | null;
+  profileUrl: string;
+}
+
+/** a status mark in front of a plain reply title, unless the title already starts with an emoji */
+export const markOf = (color: number) => (color === COLORS.ok ? '✅' : color === COLORS.bad ? '❌' : color === COLORS.warn ? '⚠️' : 'ℹ️');
+
+export function replyEmbed(title: string, description: string, color: number, url?: string) {
+  const lead = /^\p{Extended_Pictographic}/u.test(title) ? '' : `${markOf(color)} `;
+  const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color).setFooter({ text: 'CoreGSM' });
+  if (url && /^https?:\/\//.test(url)) e.setURL(url);
+  return { embeds: [e] };
+}
+
+export const hexToInt = (hex: string) => (/^#[0-9a-f]{6}$/i.test(hex) ? parseInt(hex.slice(1), 16) : COLORS.info);
+export const bar10 = (p: number) => {
+  const n = Math.max(0, Math.min(10, Math.round(p * 10)));
+  return '▰'.repeat(n) + '▱'.repeat(10 - n);
+};
+export const hoursText = (h: number) => (Number.isInteger(h) ? `${h}` : h.toFixed(1)).replace('.', ',');
+
+/** the panel's address from a profile link: both the old https://host/#/profile and the new https://host/profile */
+export const panelBase = (profileUrl: string) => (/^https?:\/\//.test(profileUrl) ? profileUrl.replace(/\/(#\/)?profile\/?$/, '') : '');
+
+/** the player's card: Discord name and picture on top, the rank emblem as the thumbnail, link buttons below */
+export function cardReply(
+  user: { displayAvatarURL: (o?: { size?: number }) => string },
+  displayName: string,
+  p: ProfileData,
+  opts: { title: string; description?: string; color?: number; onboarding?: boolean },
+) {
+  const base = panelBase(p.profileUrl);
+  const color = opts.color ?? (p.rank ? hexToInt(p.rank.color) : COLORS.info);
+  const e = new EmbedBuilder()
+    .setColor(color)
+    .setAuthor({ name: displayName.slice(0, 120), iconURL: user.displayAvatarURL({ size: 64 }) })
+    .setTitle(opts.title.slice(0, 250));
+  if (opts.description) e.setDescription(opts.description.slice(0, 3000));
+  if (base && p.rank?.image) e.setThumbnail(`${base}${p.rank.image}`);
+  const fields: { name: string; value: string; inline?: boolean }[] = [];
+  fields.push({ name: '🎮 Игровой ник', value: p.gameNick ? `\`${p.gameNick}\`` : 'не задан', inline: true });
+  if (p.rank) {
+    fields.push({ name: '🩸 Ранг V Rising', value: `**${p.rank.name}**`, inline: true });
+    fields.push({ name: '⏱️ Часов в игре', value: hoursText(p.rank.hours), inline: true });
+    if (p.rank.next) {
+      const left = Math.max(0, p.rank.next.minHours - p.rank.hours);
+      fields.push({ name: `Следующий ранг: ${p.rank.next.name}`, value: `${bar10(p.rank.progress)}  ещё **${hoursText(left)} ч**` });
+    } else {
+      fields.push({ name: 'Вершина лестницы', value: 'Вы достигли высшего ранга.' });
+    }
+  } else if (p.gameNick) {
+    fields.push({ name: '🩸 Ранг V Rising', value: 'появится после первой игры на сервере', inline: true });
+  }
+  fields.push({ name: '🏆 Достижений', value: p.achievementsTotal ? `${p.achievements} из ${p.achievementsTotal}` : String(p.achievements), inline: true });
+  if (p.gameNick) {
+    const seenLine = p.nickSeen
+      ? `✅ Ник найден на сервере: последний раз ${p.lastSeenAt ? `<t:${Math.floor(p.lastSeenAt / 1000)}:R>` : 'недавно'}`
+      : `⏳ Ждём ваш первый заход под ником \`${p.gameNick}\``;
+    if (opts.onboarding) {
+      const steps = p.nickSeen
+        ? `${seenLine}\nЧасы, ранг и достижения уже считаются. Если ник неверный, исправьте его командой \`/nick\`.`
+        : `Зайдите на сервер V Rising под ником \`${p.gameNick}\`. Как только панель увидит игрока, часы, ранг и достижения начнут считаться.\nЕсли ник указан неверно, исправьте его командой \`/nick\`.`;
+      fields.push({ name: '👣 Что дальше', value: steps.slice(0, 1000) });
+    } else {
+      fields.push({ name: '📡 Связь с сервером', value: seenLine });
+    }
+  }
+  e.addFields(fields);
+  e.setFooter({ text: 'CoreGSM · статистика копится с первого входа на сервер' });
+
+  const components = [];
+  if (base) {
+    components.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('👤 Профиль').setURL(`${base}/go/profile`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('🏆 Достижения').setURL(`${base}/go/profile/player`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📊 Серверы').setURL(`${base}/go/servers`),
+      ),
+    );
+  }
+  return { embeds: [e], components };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot"
