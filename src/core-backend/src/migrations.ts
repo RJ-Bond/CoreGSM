@@ -105,6 +105,12 @@ CREATE TABLE IF NOT EXISTS smart_state (
   PRIMARY KEY (server_id, kind)
 );`),
   },
+  {
+    version: 8,
+    name: 'users.perms',
+    // what a moderator may do (JSON array of permission names); NULL = the default set
+    up: (db) => addColumn(db, 'users', 'perms', 'TEXT'),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

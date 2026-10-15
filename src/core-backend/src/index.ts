@@ -1,7 +1,7 @@
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { registerAlerts } from './alerts.js';
-import { admin, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
+import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
@@ -84,7 +84,7 @@ app.use(internalRouter);
 
 registerNews({
   app,
-  staff,
+  staff: allow('news'),
   auth,
   viewer,
   internal,
@@ -131,10 +131,10 @@ registerProfile({
 });
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
-registerCovers({ app, admin });
+registerCovers({ app, admin: allow('servers') });
 registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
-registerMaintenance({ app, admin, viewer });
+registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
 registerOverview({ app, viewer });
 

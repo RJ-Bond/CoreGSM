@@ -18,7 +18,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import skia from 'skia-canvas';
 import { z } from 'zod';
-import { auth, type AuthedRequest, isStaff, loadUser, rateLimit, staff, viewer } from './auth.js';
+import { allow, auth, type AuthedRequest, can, loadUser, permsOf, rateLimit, viewer } from './auth.js';
+
+const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
 
 const { Canvas, loadImage } = skia;
@@ -99,7 +101,7 @@ router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limi
   if (q.data.serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(q.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
   const body = req.body as Buffer;
   if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 8 МБ' });
-  const trusted = isStaff(req);
+  const trusted = can(req, 'moderation');
   const waiting = (db.prepare("SELECT COUNT(*) AS n FROM gallery WHERE user_id = ? AND status = 'pending'").get(req.user!.id) as { n: number }).n;
   if (!trusted && waiting >= PENDING_MAX) return res.status(429).json({ error: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.' });
   let big: { buf: Buffer; w: number; h: number };
@@ -143,7 +145,7 @@ router.delete('/api/gallery/:id(\\d+)', auth, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT user_id FROM gallery WHERE id = ?').get(id) as { user_id: number | null } | undefined;
   if (!row) return res.status(404).json({ error: 'Не найдено' });
-  if (row.user_id !== req.user!.id && !isStaff(req)) return res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
+  if (row.user_id !== req.user!.id && !can(req, 'moderation')) return res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
   db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
   fs.rmSync(fileOf(id), { force: true });
   fs.rmSync(fileOf(id, true), { force: true });
@@ -159,7 +161,7 @@ router.get('/api/gallery/img/:file', (req, res) => {
   if (row.status !== 'approved') {
     // a picture not approved yet: only its author and the staff see it
     const u = loadUser(req);
-    if (!u || (u.id !== row.user_id && u.role !== 'admin' && u.role !== 'moderator')) return res.status(404).end();
+    if (!u || (u.id !== row.user_id && !permsOf(u).includes('moderation'))) return res.status(404).end();
   }
   const f = fileOf(id, req.query.s === '1');
   if (!fs.existsSync(f)) return res.status(404).end();

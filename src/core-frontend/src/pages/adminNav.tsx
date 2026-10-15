@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { Perm } from '../api';
 import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
@@ -33,6 +34,9 @@ const S = {
   system: { id: 'system', label: 'Система', icon: IconSystem, desc: 'Здоровье панели: версия, диск, бот, сертификат, диагностика.', keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
   settings: { id: 'settings', label: 'Настройки', icon: IconSettings, desc: 'Токен бота, оформление, пароль, обновления и резервные копии.', keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
 } satisfies Record<string, AdminSection>;
+
+/** the permission that opens a section to a moderator (sections not listed are for administrators only) */
+export const SECTION_PERM: Partial<Record<string, Perm>> = { news: 'news', community: 'moderation', servers: 'servers', maintenance: 'maintenance', journal: 'journal' };
 
 export interface AdminGroup { title: string; sections: AdminSection[] }
 

@@ -111,6 +111,8 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const { me, isAdmin } = useAuth();
+  // editing a server: administrators and moderators given «Серверы»
+  const canEdit = isAdmin || !!me?.perms?.includes('servers');
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -386,11 +388,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   const moreItems: MoreItem[] = [
     { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
-    ...(isAdmin ? [
+    ...(canEdit ? [
       { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
       { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
-      { key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true },
     ] : []),
+    ...(isAdmin ? [{ key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true }] : []),
   ];
 
   return (

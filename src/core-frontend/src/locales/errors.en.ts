@@ -11,6 +11,7 @@ const errorsEn: Record<string, string> = {
   auth_required: 'Sign-in required',
   admin_only: 'Only an administrator can do this',
   staff_only: 'Only an administrator or a moderator can do this',
+  perm_missing: 'You do not have this permission: an administrator grants it',
   csrf_header_missing: 'Request rejected: the X-CoreGSM header is missing',
   rate_limited: 'Too many requests. Wait a minute.',
   rate_limited_later: 'Too many requests. Try again later.',

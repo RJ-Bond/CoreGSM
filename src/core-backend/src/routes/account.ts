@@ -2,7 +2,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
+import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
 import { db, setSetting } from '../db.js';
@@ -193,6 +193,7 @@ router.get('/api/me', auth, (req: AuthedRequest, res) => {
   res.json({
     username: u.username,
     role: u.role,
+    perms: permsOf({ id: u.id, role: u.role }),
     avatarUrl: custom ?? avatarUrl(u),
     avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
     discordName: u.discord_name,

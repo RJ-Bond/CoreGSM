@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="3d0fe951209d"
+COREGSM_BUILD="ea55298cfa1e"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4421,6 +4421,45 @@ export function staff(req: AuthedRequest, res: Response, next: NextFunction) {
   req.user = u;
   next();
 }
+/**
+ * What a moderator may do. Administrators may do everything; a moderator gets the permissions the administrator
+ * ticked (the default set until then: news and moderation of reviews and screenshots).
+ */
+export const PERMS = ['news', 'moderation', 'servers', 'maintenance', 'journal'] as const;
+export type Perm = (typeof PERMS)[number];
+export const DEFAULT_MOD_PERMS: Perm[] = ['news', 'moderation'];
+
+export function parsePerms(raw: string | null | undefined): Perm[] {
+  if (raw == null) return [...DEFAULT_MOD_PERMS];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? PERMS.filter((p) => v.includes(p)) : [...DEFAULT_MOD_PERMS];
+  } catch {
+    return [...DEFAULT_MOD_PERMS];
+  }
+}
+/** the permissions of an account: all for an administrator, the ticked ones for a moderator, none for a player */
+export function permsOf(u: { id: number; role: Role }): Perm[] {
+  if (u.role === 'admin') return [...PERMS];
+  if (u.role !== 'moderator') return [];
+  return parsePerms((db.prepare('SELECT perms FROM users WHERE id = ?').get(u.id) as { perms: string | null } | undefined)?.perms);
+}
+export const can = (req: Request, p: Perm): boolean => {
+  const u = (req as AuthedRequest).user;
+  return !!u && permsOf(u).includes(p);
+};
+/** administrators, and moderators with the given permission */
+export function allow(p: Perm) {
+  return (req: AuthedRequest, res: Response, next: NextFunction) => {
+    const u = loadUser(req);
+    if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+    req.user = u;
+    if (u.role === 'admin') return next();
+    if (u.role === 'moderator' && permsOf(u).includes(p)) return next();
+    res.status(403).json({ error: u.role === 'moderator' ? 'У вас нет права на это действие: его выдаёт администратор' : 'Это действие доступно администратору и модератору' });
+  };
+}
+
 /** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
 export function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   const u = loadUser(req);
@@ -7401,6 +7440,7 @@ export const ERRORS = {
   auth_required: 'Требуется вход',
   admin_only: 'Это действие доступно только администратору',
   staff_only: 'Это действие доступно администратору и модератору',
+  perm_missing: 'У вас нет права на это действие: его выдаёт администратор',
   csrf_header_missing: 'Запрос отклонён: не хватает заголовка X-CoreGSM',
   rate_limited: 'Слишком много запросов. Подождите минуту.',
   rate_limited_later: 'Слишком много запросов. Попробуйте позже.',
@@ -7637,7 +7677,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import skia from 'skia-canvas';
 import { z } from 'zod';
-import { auth, type AuthedRequest, isStaff, loadUser, rateLimit, staff, viewer } from './auth.js';
+import { allow, auth, type AuthedRequest, can, loadUser, permsOf, rateLimit, viewer } from './auth.js';
+
+const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
 
 const { Canvas, loadImage } = skia;
@@ -7718,7 +7760,7 @@ router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limi
   if (q.data.serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(q.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
   const body = req.body as Buffer;
   if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 8 МБ' });
-  const trusted = isStaff(req);
+  const trusted = can(req, 'moderation');
   const waiting = (db.prepare("SELECT COUNT(*) AS n FROM gallery WHERE user_id = ? AND status = 'pending'").get(req.user!.id) as { n: number }).n;
   if (!trusted && waiting >= PENDING_MAX) return res.status(429).json({ error: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.' });
   let big: { buf: Buffer; w: number; h: number };
@@ -7762,7 +7804,7 @@ router.delete('/api/gallery/:id(\\d+)', auth, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT user_id FROM gallery WHERE id = ?').get(id) as { user_id: number | null } | undefined;
   if (!row) return res.status(404).json({ error: 'Не найдено' });
-  if (row.user_id !== req.user!.id && !isStaff(req)) return res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
+  if (row.user_id !== req.user!.id && !can(req, 'moderation')) return res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
   db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
   fs.rmSync(fileOf(id), { force: true });
   fs.rmSync(fileOf(id, true), { force: true });
@@ -7778,7 +7820,7 @@ router.get('/api/gallery/img/:file', (req, res) => {
   if (row.status !== 'approved') {
     // a picture not approved yet: only its author and the staff see it
     const u = loadUser(req);
-    if (!u || (u.id !== row.user_id && u.role !== 'admin' && u.role !== 'moderator')) return res.status(404).end();
+    if (!u || (u.id !== row.user_id && !permsOf(u).includes('moderation'))) return res.status(404).end();
   }
   const f = fileOf(id, req.query.s === '1');
   if (!fs.existsSync(f)) return res.status(404).end();
@@ -8750,7 +8792,7 @@ __COREGSM_EOF__
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { registerAlerts } from './alerts.js';
-import { admin, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
+import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
@@ -8833,7 +8875,7 @@ app.use(internalRouter);
 
 registerNews({
   app,
-  staff,
+  staff: allow('news'),
   auth,
   viewer,
   internal,
@@ -8880,10 +8922,10 @@ registerProfile({
 });
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
-registerCovers({ app, admin });
+registerCovers({ app, admin: allow('servers') });
 registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
-registerMaintenance({ app, admin, viewer });
+registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
 registerOverview({ app, viewer });
 
@@ -9388,6 +9430,12 @@ CREATE TABLE IF NOT EXISTS smart_state (
   last_alert INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (server_id, kind)
 );`),
+  },
+  {
+    version: 8,
+    name: 'users.perms',
+    // what a moderator may do (JSON array of permission names); NULL = the default set
+    up: (db) => addColumn(db, 'users', 'perms', 'TEXT'),
   },
 ];
 
@@ -10696,6 +10744,7 @@ __COREGSM_EOF__
  * Operations for administrators: action log, bulk actions on Discord bindings,
  * system health and diagnostics, database backup and restore.
  */
+import { allow } from './auth.js';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import fs from 'node:fs';
 import tls from 'node:tls';
@@ -10883,7 +10932,7 @@ export function checkCert(force = false): Promise<CertInfo> {
 
 export function registerOps({ app, admin, getBot, guildCount, version, pollMs, publicBase }: Ctx): void {
   // ----- log -----
-  app.get('/api/audit', admin, (req, res) => {
+  app.get('/api/audit', allow('journal'), (req, res) => {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
     res.json(db.prepare('SELECT id, ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT ?').all(limit));
   });
@@ -12205,7 +12254,9 @@ __COREGSM_EOF__
  */
 import express from 'express';
 import { z } from 'zod';
-import { auth, type AuthedRequest, rateLimit, staff, viewer } from './auth.js';
+import { allow, auth, type AuthedRequest, rateLimit, viewer } from './auth.js';
+
+const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
 
 export const router = express.Router();
@@ -12297,7 +12348,7 @@ __COREGSM_EOF__
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
+import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
 import { db, setSetting } from '../db.js';
@@ -12488,6 +12539,7 @@ router.get('/api/me', auth, (req: AuthedRequest, res) => {
   res.json({
     username: u.username,
     role: u.role,
+    perms: permsOf({ id: u.id, role: u.role }),
     avatarUrl: custom ?? avatarUrl(u),
     avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
     discordName: u.discord_name,
@@ -13529,7 +13581,7 @@ __COREGSM_EOF__
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
 import express from 'express';
 import { z } from 'zod';
-import { admin, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
+import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
 import { channelInfo } from '../botState.js';
 import { isKnownGame, renderCard, renderGameIcon } from '../card.js';
 import { removeCover } from '../covers.js';
@@ -13599,7 +13651,7 @@ router.get('/api/servers/sparks', viewer, (req, res) => {
 
 router.post(
   '/api/servers',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
@@ -13614,7 +13666,7 @@ router.post(
 
 router.put(
   '/api/servers/:id',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     const b = serverSchema.safeParse(req.body);
@@ -13638,7 +13690,7 @@ router.delete('/api/servers/:id', admin, (req, res) => {
 // try a server without saving it: used by the "Проверить" button in the add/edit form
 router.post(
   '/api/servers/test',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
@@ -13751,7 +13803,7 @@ function usualWeek(serverId: number, before: number): (number | null)[] {
 
 router.post(
   '/api/servers/:id/refresh',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
     if (!row) return res.status(404).json({ error: 'Сервер не найден' });
@@ -14261,7 +14313,7 @@ __COREGSM_EOF__
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { admin, type AuthedRequest, type Role } from '../auth.js';
+import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../auth.js';
 import { removeAvatar } from '../avatars.js';
 import { db } from '../db.js';
 import { wrap } from '../http.js';
@@ -14273,15 +14325,16 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
     id: number;
     username: string;
     role: Role;
+    perms: string | null;
     created_at: number | null;
     status: string;
     discord_name: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {
@@ -14291,13 +14344,15 @@ router.post('/api/users/:id/approve', admin, (req, res) => {
 });
 
 router.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
-  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']) }).safeParse(req.body);
+  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']), perms: z.array(z.enum(PERMS)).max(PERMS.length).optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
   const id = Number(req.params.id);
   const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
   if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
   db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
+  // the permissions matter for a moderator only; not sent: the ones already set stay
+  if (b.data.perms) db.prepare('UPDATE users SET perms = ? WHERE id = ?').run(JSON.stringify([...new Set(b.data.perms)]), id);
   res.json({ ok: true });
 });
 
@@ -40972,6 +41027,8 @@ export interface NewsSettings {
 export interface Me {
   username: string;
   role: 'admin' | 'moderator' | 'player';
+  /** what this account may do in the admin area (all for an administrator) */
+  perms?: Perm[];
   /** Discord CDN url */
   avatarUrl: string | null;
   /** where the picture comes from: an uploaded file wins over Discord */
@@ -41139,10 +41196,20 @@ export interface Access {
   discordLogin: boolean;
 }
 
+export type Perm = 'news' | 'moderation' | 'servers' | 'maintenance' | 'journal';
+export const PERM_LABELS: { id: Perm; label: string; hint: string }[] = [
+  { id: 'news', label: 'Новости', hint: 'писать, планировать и публиковать' },
+  { id: 'moderation', label: 'Модерация', hint: 'отзывы и галерея скриншотов' },
+  { id: 'servers', label: 'Серверы', hint: 'добавлять и изменять (удаляет только администратор)' },
+  { id: 'maintenance', label: 'Обслуживание', hint: 'окна технических работ' },
+  { id: 'journal', label: 'Журнал', hint: 'кто и что менял в панели' },
+];
+
 export interface UserRow {
   id: number;
   username: string;
   role: 'admin' | 'moderator' | 'player';
+  perms?: Perm[];
   createdAt: number | null;
   status: 'active' | 'pending';
   discordName: string | null;
@@ -55186,6 +55253,7 @@ const errorsEn: Record<string, string> = {
   auth_required: 'Sign-in required',
   admin_only: 'Only an administrator can do this',
   staff_only: 'Only an administrator or a moderator can do this',
+  perm_missing: 'You do not have this permission: an administrator grants it',
   csrf_header_missing: 'Request rejected: the X-CoreGSM header is missing',
   rate_limited: 'Too many requests. Wait a minute.',
   rate_limited_later: 'Too many requests. Try again later.',
@@ -56273,7 +56341,7 @@ import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
 import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll, navigate } from '../ui';
-import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
+import { ADMIN_GROUPS, ADMIN_SECTIONS, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
@@ -56291,10 +56359,10 @@ import SystemPage from './System';
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
-  const { isAdmin } = useAuth();
+  const { isAdmin, me } = useAuth();
   const [section, ...rest] = sub.split('/');
-  // a moderator sees only the news section; everything else is for administrators
-  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news' || s.id === 'community');
+  // a moderator sees the sections of the permissions the administrator gave; everything else is for administrators
+  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => SECTION_PERM[s.id] && (me?.perms ?? []).includes(SECTION_PERM[s.id]!));
   const known = sections.some((s) => s.id === section);
   // bare /admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
   const home = isAdmin && !known;
@@ -56513,6 +56581,7 @@ function CertWarning() {
 
 /** Add, edit, delete and re-query servers. */
 function ServersManage({ sub }: { sub: string }) {
+  const { isAdmin } = useAuth();
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
@@ -56602,7 +56671,7 @@ function ServersManage({ sub }: { sub: string }) {
               <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
                 <IconEdit />
               </button>
-              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)}>
+              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)} hidden={!isAdmin}>
                 <IconTrash />
               </button>
             </div>
@@ -61305,6 +61374,8 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const { me, isAdmin } = useAuth();
+  // editing a server: administrators and moderators given «Серверы»
+  const canEdit = isAdmin || !!me?.perms?.includes('servers');
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -61580,11 +61651,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   const moreItems: MoreItem[] = [
     { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
-    ...(isAdmin ? [
+    ...(canEdit ? [
       { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
       { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
-      { key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true },
     ] : []),
+    ...(isAdmin ? [{ key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true }] : []),
   ];
 
   return (
@@ -63525,6 +63596,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
+import type { Perm } from '../api';
 import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
@@ -63559,6 +63631,9 @@ const S = {
   system: { id: 'system', label: 'Система', icon: IconSystem, desc: 'Здоровье панели: версия, диск, бот, сертификат, диагностика.', keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
   settings: { id: 'settings', label: 'Настройки', icon: IconSettings, desc: 'Токен бота, оформление, пароль, обновления и резервные копии.', keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
 } satisfies Record<string, AdminSection>;
+
+/** the permission that opens a section to a moderator (sections not listed are for administrators only) */
+export const SECTION_PERM: Partial<Record<string, Perm>> = { news: 'news', community: 'moderation', servers: 'servers', maintenance: 'maintenance', journal: 'journal' };
 
 export interface AdminGroup { title: string; sections: AdminSection[] }
 
@@ -64338,7 +64413,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/settings/UsersTab.tsx" << '__COREGSM_EOF__'
 /** Users: registration and access settings, pending requests, roles and passwords. */
 import { useEffect, useRef, useState } from 'react';
-import { type Access, api, type UserRow } from '../../api';
+import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../api';
+import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { confirmDialog, promptDialog } from '../../confirm';
@@ -64402,6 +64478,9 @@ export function UsersTab() {
       void reload();
     },
   });
+  const setPerms = async (u: UserRow, perms: Perm[]) => {
+    await api(`/users/${u.id}`, 'PUT', { role: u.role, perms }).then(() => { toast('Права модератора сохранены'); void load(); }).catch((e) => setError(e.message));
+  };
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
     load();
@@ -64514,6 +64593,20 @@ export function UsersTab() {
               </select>
               <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
               <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
+              {u.role === 'moderator' && (
+                <fieldset className="us-perms basis-full">
+                  <legend className="sr-only">Права модератора {u.username}</legend>
+                  {PERM_LABELS.map((p) => {
+                    const on = (u.perms ?? []).includes(p.id);
+                    return (
+                      <label key={p.id} className={`us-perm ${on ? 'is-on' : ''}`} title={p.hint}>
+                        <input type="checkbox" checked={on} onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
+                        <span><b>{p.label}</b> <span className="text-mute">· {p.hint}</span></span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              )}
             </li>
           ))}
         </ul>
@@ -64664,6 +64757,15 @@ export function downsample(values: (number | null)[], max: number): (number | nu
   }
   return out;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/admin.css" << '__COREGSM_EOF__'
+
+/* users: the permissions of a moderator, as toggle chips */
+.us-perms { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.us-perm { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; border-radius: 9999px; padding: 4px 12px 4px 8px; font-size: 13px; font-weight: 700; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, box-shadow .15s ease; }
+.us-perm.is-on { background: rgb(var(--brand) / .12); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .45); }
+.us-perm input { width: 15px; height: 15px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
