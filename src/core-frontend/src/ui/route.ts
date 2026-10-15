@@ -59,21 +59,32 @@ function install() {
   now = parseRoute();
   window.addEventListener('popstate', notify);
   window.addEventListener('hashchange', notify);
-  // links to the panel's own pages open without a reload; everything else (API, files, new tabs) is left alone
-  document.addEventListener('click', (e) => {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = (e.target as Element | null)?.closest?.('a');
-    if (!a || !a.hasAttribute('href') || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
-    const href = a.getAttribute('href') ?? '';
-    if (href.startsWith('#') && !href.startsWith('#/')) return; // an anchor on the page
-    const url = new URL(a.href, window.location.href);
-    if (url.origin !== window.location.origin) return;
-    if (/^\/(api|go|s|assets)(\/|$)/.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname)) return;
-    e.preventDefault();
-    const target = href.startsWith('#/') ? href.slice(1) : `${url.pathname}${url.search}`;
-    if (target === `${window.location.pathname}${window.location.search}` && !window.location.hash) return;
-    navigate(target);
-  });
+  // links to the panel's own pages open without a reload; everything else (API, files, new tabs) is left alone.
+  // The listener sits on React's root container, added after React's own: a row that stops the click from
+  // bubbling further (so that a link inside it does not also trigger the row) does not hide the click from it,
+  // and a component that called preventDefault() is respected. The document listener covers portals.
+  const root = document.getElementById('root');
+  root?.addEventListener('click', onLinkClick);
+  document.addEventListener('click', onLinkClick);
+}
+
+const ROUTED = Symbol('routed');
+function onLinkClick(e: MouseEvent) {
+  const ev = e as MouseEvent & { [ROUTED]?: boolean };
+  if (ev[ROUTED]) return;
+  ev[ROUTED] = true;
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = (e.target as Element | null)?.closest?.('a');
+  if (!a || !a.hasAttribute('href') || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
+  const href = a.getAttribute('href') ?? '';
+  if (href.startsWith('#') && !href.startsWith('#/')) return; // an anchor on the page
+  const url = new URL(a.href, window.location.href);
+  if (url.origin !== window.location.origin) return;
+  if (/^\/(api|go|s|assets)(\/|$)/.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname)) return;
+  e.preventDefault();
+  const target = href.startsWith('#/') ? href.slice(1) : `${url.pathname}${url.search}`;
+  if (target === `${window.location.pathname}${window.location.search}` && !window.location.hash) return;
+  navigate(target);
 }
 
 export function useRoute(): Route {
