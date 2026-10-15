@@ -318,6 +318,7 @@ export function registerSecurity(d: SecurityDeps): void {
     db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(id);
     db.prepare('INSERT INTO email_verifications (token_hash, user_id, email, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), id, u.email.toLowerCase(), Date.now() + 24 * 3600_000);
     const en = prefsOf(id).lang === 'en';
+    // links with a token use the #/ form: a fragment never reaches the server, so the token stays out of access logs
     const url = `${d.publicBase() ?? d.baseOf(req)}/#/verify/${token}`;
     const body = layout(
       d.brandName(),

@@ -47,7 +47,7 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl bg-warnbg px-4 py-3 text-sm font-bold text-warn" role="status">
         <span className="min-w-0 flex-1 basis-60">{t('nd.followup')}</span>
         <span className="flex shrink-0 gap-2">
-          <a href="#/profile/security" className="btn btn-sm" onClick={() => document.getElementById('pf-current')?.focus()}>{t('nd.changePassword')}</a>
+          <a href="/profile/security" className="btn btn-sm" onClick={() => document.getElementById('pf-current')?.focus()}>{t('nd.changePassword')}</a>
           <button type="button" className="btn btn-soft btn-sm" onClick={() => setHidden(true)}>{t('common.close')}</button>
         </span>
       </div>

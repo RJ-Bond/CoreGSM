@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a8e130175ee7"
+COREGSM_BUILD="73510eae6d99"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6526,7 +6526,7 @@ export interface DiscordRegisterDeps {
 
 export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
   const { app, internal, wrap } = deps;
-  const profileUrl = () => `${deps.publicBase() ?? ''}/#/profile`;
+  const profileUrl = () => `${deps.publicBase() ?? ''}/profile`;
   const byDiscord = (id: string) => db.prepare('SELECT id, username, status, discord_id, discord_name FROM users WHERE discord_id = ?').get(id) as UserRow | undefined;
   const nickOwner = (nick: string, exceptUser: number) =>
     db.prepare('SELECT user_id FROM user_player WHERE ulower(game_nick) = ulower(?) AND user_id != ?').get(nick, exceptUser) as { user_id: number } | undefined;
@@ -11761,8 +11761,9 @@ export const router = express.Router();
 // ---------- sign in with Discord (OAuth2, identify scope) ----------
 const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
 const redirectUri = (req: Request) => `${publicBase() ?? baseOf(req)}/api/auth/discord/callback`;
-const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
-const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
+// back to a page of the panel; the session token travels in the #/ form (a fragment never reaches the server)
+const toPanel = (res: Response, path: string) => res.redirect(302, path.startsWith('auth/') ? `/#/${path}` : `/${path}`);
+const failTo = (res: Response, msg: string) => toPanel(res, `login/${encodeURIComponent(msg)}`);
 
 router.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
   const clientId = bot.status.clientId ?? clientIdFromToken(getSetting('discord_token'));
@@ -11815,10 +11816,10 @@ router.get(
     const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
 
     if (st.mode === 'link') {
-      if (owner && owner.id !== st.userId) return toHash(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
+      if (owner && owner.id !== st.userId) return toPanel(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
       db.prepare('UPDATE users SET discord_id = ?, discord_name = ?, discord_avatar = ? WHERE id = ?').run(me.id, dname, me.avatar ?? null, st.userId);
       logAccount(req, st.userId, 'discord_linked', dname);
-      return toHash(res, 'profile');
+      return toPanel(res, 'profile');
     }
 
     if (owner) {
@@ -11828,7 +11829,7 @@ router.get(
       noteLogin(req, owner.id, brand().name);
       const tok = issueToken(owner, req);
       setSessionCookie(req, res, tok);
-      return toHash(res, `auth/${tok}`);
+      return toPanel(res, `auth/${tok}`);
     }
 
     // first sign-in with this Discord account: register it (when registration is open)
@@ -11847,7 +11848,7 @@ router.get(
     const tok = issueToken({ id, username: name }, req);
     setSessionCookie(req, res, tok);
     noteLogin(req, id, brand().name);
-    toHash(res, `auth/${tok}`);
+    toPanel(res, `auth/${tok}`);
   }),
 );
 __COREGSM_EOF__
@@ -12227,7 +12228,7 @@ router.get('/s/:id(\\d+)', (req, res) => {
   }
   parts.push(`Игра: ${gameLabel(sv.game)}`);
   const desc = parts.join(' · ');
-  const target = `/#/servers/${id}`;
+  const target = `/servers/${id}`;
   const url = `${base}/s/${id}`;
   const image = `${base}/api/card/${id}.png`;
   res.type('html').send(`<!doctype html>
@@ -13107,6 +13108,7 @@ export function registerSecurity(d: SecurityDeps): void {
     db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(id);
     db.prepare('INSERT INTO email_verifications (token_hash, user_id, email, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), id, u.email.toLowerCase(), Date.now() + 24 * 3600_000);
     const en = prefsOf(id).lang === 'en';
+    // links with a token use the #/ form: a fragment never reaches the server, so the token stays out of access logs
     const url = `${d.publicBase() ?? d.baseOf(req)}/#/verify/${token}`;
     const body = layout(
       d.brandName(),
@@ -15892,12 +15894,13 @@ server {
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'" always;
   }
 
-  # short links for Discord: https://host/go/servers/3/players -> https://host/#/servers/3/players
+  # short links in Discord messages (also the ones posted before the panel moved to plain paths):
+  # https://host/go/servers/3/players -> https://host/servers/3/players
   # (a URL fragment is easy to lose in chat clients and link scanners; a plain path is not)
   location ~ ^/go(/(.*))?$ {
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    return 302 /#/$2;
+    return 302 /$2;
   }
 
   location / {
@@ -41123,7 +41126,7 @@ import PublicProfilePage from './pages/PublicProfile';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import StatusPage from './pages/Status';
 import UiKitPage from './pages/UiKit';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, parseHash, toast, useHash } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, navigate, parseRoute, toast, useRoute } from './ui';
 
 const IconStatus = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -41197,7 +41200,7 @@ const IconLogout = () => (
 );
 
 export default function App() {
-  const { page: rawPage, sub } = useHash();
+  const { page: rawPage, sub } = useRoute();
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
@@ -41249,15 +41252,14 @@ export default function App() {
     return () => clearInterval(t);
   }, [boot.offline, load]);
 
-  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>).
+  // back from "Войти через Discord": the backend puts the new session token into the address (/auth/<jwt>).
   // The token leaves the address bar at once (no history entry), is checked with /me and only then kept.
   const pendingJwt = useRef('');
   useEffect(() => {
     if (rawPage !== 'auth' || !sub) return;
     pendingJwt.current = sub;
     setAuthing(true);
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/servers`);
-    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    navigate('/servers', { replace: true });
   }, [rawPage, sub]);
   useEffect(() => {
     if (!boot.ready || !authing) return;
@@ -41278,7 +41280,7 @@ export default function App() {
         await load();
       } else {
         toast(t('app.discordFail'), 'err');
-        window.location.hash = '#/login';
+        navigate('/login');
       }
       setAuthing(false);
     })();
@@ -41294,9 +41296,9 @@ export default function App() {
         if (!meRef.current || loggingOut.current || getToken()) return;
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
-        const { page } = parseHash();
+        const { page } = parseRoute();
         const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'u');
-        if (!publicRoute) window.location.hash = '#/login';
+        if (!publicRoute) navigate('/login');
         void load();
       }, 300);
     };
@@ -41331,7 +41333,7 @@ export default function App() {
       /* ignore */
     }
     setToken('');
-    window.location.hash = '#/servers';
+    navigate('/servers');
     await load();
     loggingOut.current = false;
   }, [load]);
@@ -41357,7 +41359,7 @@ export default function App() {
 
   // ---- document title and focus follow the route ----
   const visible = PAGES.filter((p) => !p.admin || isStaff);
-  // a public player page (#/u/<name>) is open to guests even when the rest of the panel is closed
+  // a public player page (/u/<name>) is open to guests even when the rest of the panel is closed
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
@@ -41446,9 +41448,9 @@ export default function App() {
 
   // sign-in / registration screens: for a closed panel they are the only thing a guest sees
   if (showAuth) {
-    const done = () => { window.location.hash = '#/servers'; void load(); };
+    const done = () => { navigate('/servers'); void load(); };
     const mode = rawPage === 'register' && access.registration ? 'register' : 'login';
-    // after a failed Discord sign-in the backend sends #/login/<message>
+    // after a failed Discord sign-in the backend sends /login/<message>
     let notice = '';
     if (rawPage === 'login' && sub) {
       try { notice = decodeURIComponent(sub); } catch { notice = sub; }
@@ -41475,7 +41477,7 @@ export default function App() {
   return (
     <AuthContext.Provider value={ctx}>
       <a
-        href="#/servers"
+        href="/servers"
         className="skip-link"
         onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}
       >
@@ -41483,14 +41485,14 @@ export default function App() {
       </a>
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
-          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px]">
+          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px]">
             <Logo size={34} alt="" />
             <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={`#/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
+              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
                 {t(p.label)}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
@@ -41514,7 +41516,7 @@ export default function App() {
             {me ? (
               <>
                 <a
-                  href="#/profile"
+                  href="/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
                   className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
                   title={t('hdr.profileOf', { name: me.username })}
@@ -41535,8 +41537,8 @@ export default function App() {
               </>
             ) : (
               <>
-                <a href="#/login" className="btn btn-soft btn-sm">{t('hdr.login')}</a>
-                {access.registration && <a href="#/register" className="btn btn-sm hidden sm:inline-flex">{t('hdr.register')}</a>}
+                <a href="/login" className="btn btn-soft btn-sm">{t('hdr.login')}</a>
+                {access.registration && <a href="/register" className="btn btn-sm hidden sm:inline-flex">{t('hdr.register')}</a>}
               </>
             )}
           </div>
@@ -41569,7 +41571,7 @@ export default function App() {
               return (
                 <li key={p.id} className="flex-1">
                   <a
-                    href={`#/${p.id}`}
+                    href={`/${p.id}`}
                     aria-current={active ? 'page' : undefined}
                     className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
@@ -41584,7 +41586,7 @@ export default function App() {
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
+                <a href={access.registration ? '/register' : '/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
                   <span className="grid h-7 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   {t('hdr.login')}
                 </a>
@@ -41702,7 +41704,7 @@ export function useAccentMode(): [AccentMode, (m: AccentMode) => void] {
 
 /**
  * Keeps the 'auto' game up to date: call once from App when the shell is shown. Fetches the server list once (only in
- * auto mode) and follows the route #/servers/<id>. Does nothing in the other modes.
+ * auto mode) and follows the route /servers/<id>. Does nothing in the other modes.
  */
 export function useAutoAccent(active: boolean, route: { page: string; sub: string }) {
   const [m] = useAccentMode();
@@ -42790,7 +42792,7 @@ export default function AuthFlow({ title, subtitle, children }: { title: string;
       <h1 className="mb-4 text-center text-xl font-black">{title}</h1>
       <div className="space-y-4">{children}</div>
       <p className="mt-5 text-center text-sm font-bold">
-        <a href="#/login" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.back')}</a>
+        <a href="/login" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.back')}</a>
       </p>
     </div>
   );
@@ -43016,7 +43018,7 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
     <div className="space-y-2">
       <input id={id} className="input font-mono" value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder="ID канала, например 123456789012345678" inputMode="numeric" />
       <p className="text-sm font-semibold text-mute">
-        {guilds && guilds.length === 0 ? <>Бот пока не видит каналов (его нужно пригласить на сервер Discord): <a href="#/admin/discord" className="font-extrabold text-link hover:underline">проверить бота →</a>{' '}</> : ''}
+        {guilds && guilds.length === 0 ? <>Бот пока не видит каналов (его нужно пригласить на сервер Discord): <a href="/admin/discord" className="font-extrabold text-link hover:underline">проверить бота →</a>{' '}</> : ''}
         Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».
       </p>
       <div className="flex gap-4 text-sm font-extrabold">
@@ -43035,7 +43037,7 @@ import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS } from '../pages/adminNav';
-import { GameAvatar, IconNews, IconServers, toast, useDensity } from '../ui';
+import { GameAvatar, IconNews, IconServers, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -43113,26 +43115,26 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         group: 'Серверы',
         label: s.name,
         hint: `${gameLabel(s.game)} · ${s.address}`,
-        href: `#/servers/${s.id}`,
+        href: `/servers/${s.id}`,
         icon: <GameAvatar game={s.game} size={32} />,
         hay: norm(`${s.name} ${gameLabel(s.game)} ${s.address}`),
       });
     }
     out.push(
-      sectionItem('p-servers', 'Серверы', 'Список серверов', '#/servers', <IconServers />),
-      sectionItem('p-news', 'Новости', 'Лента новостей', '#/news', <IconNews />),
-      sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '#/status', <IconPulse />),
+      sectionItem('p-servers', 'Серверы', 'Список серверов', '/servers', <IconServers />),
+      sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
+      sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
     );
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
-      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `#/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
+      for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
       if (isAdmin) {
         ADMIN_LINKS.forEach((l, i) => out.push(sectionItem(`l-${i}`, l.label, `Админка · ${l.hint}`, l.href, l.icon(), `${l.keywords} админка`, true)));
       } else {
-        out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '#/admin/news/new', <IconNews />, 'новость объявление', true));
+        out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '/admin/news/new', <IconNews />, 'новость объявление', true));
       }
     }
-    if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '#/profile', <IconUser />));
+    if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '/profile', <IconUser />));
     const compact = density === 'compact';
     out.push({
       key: 'act-density',
@@ -43167,7 +43169,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     if (!it) return;
     onClose();
     if (it.run) it.run();
-    else window.location.hash = it.href;
+    else navigate(it.href);
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -43513,7 +43515,7 @@ export function computeWizard(i: WizardInput): { steps: WizardStep[]; complete: 
 
 /** Stepper card: shown while the connection is incomplete (or when reopened by hand). */
 export function DiscordWizard({
-  input, busy, onRecheck, onCreateBinding, inviteUrl, settingsHref = '#/admin/settings/bot', onClose,
+  input, busy, onRecheck, onCreateBinding, inviteUrl, settingsHref = '/admin/settings/bot', onClose,
 }: {
   input: WizardInput;
   busy: boolean;
@@ -43531,7 +43533,7 @@ export function DiscordWizard({
     if (s.id === 'bot') return <a className="btn btn-soft btn-sm" href={settingsHref}>Открыть настройки бота</a>;
     if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">Открыть приглашение<span aria-hidden>↗</span></a> : null;
     if (s.id === 'channel') {
-      if (input.serverCount === 0) return <a className="btn btn-sm" href="#/admin/servers/new">Добавить сервер</a>;
+      if (input.serverCount === 0) return <a className="btn btn-sm" href="/admin/servers/new">Добавить сервер</a>;
       if (input.bindings.length === 0) return <button type="button" className="btn btn-sm" onClick={onCreateBinding}>Создать первую привязку</button>;
       return null;
     }
@@ -44205,11 +44207,11 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
         ? 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.'
         : 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.'}
     >
-      <a className="btn" href="#/" data-magnetic>
+      <a className="btn" href="/" data-magnetic>
         На главную
         <IconArrow />
       </a>
-      <a className="btn btn-soft" href="#/servers">К серверам</a>
+      <a className="btn btn-soft" href="/servers">К серверам</a>
     </StateView>
   );
 }
@@ -44934,6 +44936,7 @@ __COREGSM_EOF__
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useAuth } from '../auth';
 import { useDialogFocus } from '../confirm';
+import { currentPath, navigate } from '../ui/route';
 
 /**
  * First-run guided tour for administrators: a short list of coach-marks that walks through the admin area.
@@ -44959,32 +44962,32 @@ const STEPS: Step[] = [
   {
     title: 'Добавьте игровой сервер',
     text: 'Добро пожаловать! Прогресс всегда виден в «Админка → Начало работы». Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
-    route: '#/admin/servers',
-    anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="#/admin/servers"]`],
+    route: '/admin/servers',
+    anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="/admin/servers"]`],
   },
   {
     title: 'Подключите Discord-бота',
     text: 'В «Настройки → Бот и Discord» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
-    route: '#/admin/settings/bot',
-    anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="#/admin/settings/bot"]`],
+    route: '/admin/settings/bot',
+    anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="/admin/settings/bot"]`],
   },
   {
     title: 'Привяжите канал',
     text: 'В разделе «Discord» выберите канал, куда бот будет публиковать карточку сервера. Сообщение обновляется по таймеру само.',
-    route: '#/admin/discord',
-    anchors: ['[data-tour="bind-channel"]', `${ADMIN_NAV} a[href="#/admin/discord"]`],
+    route: '/admin/discord',
+    anchors: ['[data-tour="bind-channel"]', `${ADMIN_NAV} a[href="/admin/discord"]`],
   },
   {
     title: 'Пишите новости',
     text: 'В «Новости» можно подготовить запись с картинкой, отправить её в Discord сразу или по расписанию и повторять по расписанию.',
-    route: '#/admin/news',
-    anchors: ['[data-tour="news-new"]', `${ADMIN_NAV} a[href="#/admin/news"]`],
+    route: '/admin/news',
+    anchors: ['[data-tour="news-new"]', `${ADMIN_NAV} a[href="/admin/news"]`],
   },
   {
     title: 'Настройте оформление',
     text: 'В «Настройки → Оформление» задайте название сообщества, логотип и фирменный цвет. На этом всё: подсказки можно показать снова в профиле.',
-    route: '#/admin/settings/brand',
-    anchors: ['[data-tour="brand"]', `${SETTINGS_NAV} a[href="#/admin/settings/brand"]`],
+    route: '/admin/settings/brand',
+    anchors: ['[data-tour="brand"]', `${SETTINGS_NAV} a[href="/admin/settings/brand"]`],
   },
 ];
 
@@ -45068,9 +45071,9 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
 
   // open the step's page, then wait for the anchor to appear (pages load their data first)
   useEffect(() => {
-    if (window.location.hash !== step.route) {
+    if (currentPath() !== step.route) {
       // replace, not push: the back button should not walk through the tour
-      window.location.replace(`${window.location.pathname}${window.location.search}${step.route}`);
+      navigate(step.route, { replace: true });
     }
     setRect(null);
     let tries = 0;
@@ -45227,7 +45230,7 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
   const chip = (n: NewsItem) => (
     <a
       key={n.id}
-      href={`#/admin/news/${n.id}`}
+      href={`/admin/news/${n.id}`}
       draggable={movable(n)}
       onDragStart={(e) => { setDrag(n.id); e.dataTransfer.setData('text/plain', String(n.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onDragEnd={() => { setDrag(null); setOver(null); }}
@@ -46296,7 +46299,7 @@ export function NewsArticle({
           <>
             <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
             <div className="nw-toolbar">
-              <a className="btn btn-soft" href="#/news">{t('nw.back')}</a>
+              <a className="btn btn-soft" href="/news">{t('nw.back')}</a>
               <button type="button" className="btn btn-soft" onClick={() => void copy()}>
                 <IconCopyLink />
                 {t('nw.copyLink')}
@@ -46308,13 +46311,13 @@ export function NewsArticle({
       {!preview && (item.prev || item.next) && (
         <nav className="nw-prevnext" aria-label={t('nw.prevnext')}>
           {item.prev ? (
-            <a href={`#/news/${item.prev.id}`} className="nw-pn nw-pn-prev">
+            <a href={`/news/${item.prev.id}`} className="nw-pn nw-pn-prev">
               <span className="nw-pn-kicker">← {t('nw.prev')}</span>
               <span className="nw-pn-title">{item.prev.title}</span>
             </a>
           ) : <span />}
           {item.next ? (
-            <a href={`#/news/${item.next.id}`} className="nw-pn nw-pn-next">
+            <a href={`/news/${item.next.id}`} className="nw-pn nw-pn-next">
               <span className="nw-pn-kicker">{t('nw.next')} →</span>
               <span className="nw-pn-title">{item.next.title}</span>
             </a>
@@ -46651,7 +46654,7 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
         {!servers && ids.slice(0, 5).map((id) => <li key={id} className="skeleton nw-srv-skel" aria-hidden />)}
         {shown.map((s) => (
           <li key={s.id}>
-            <a className="nw-srv" href={`#/servers/${s.id}`}>
+            <a className="nw-srv" href={`/servers/${s.id}`}>
               <GameAvatar game={s.game} size={40} />
               <span className="nw-srv-main">
                 <span className="nw-srv-name">{s.name}</span>
@@ -46798,7 +46801,7 @@ function FeedSkeleton() {
   );
 }
 
-/** #/news: rubrics, pinned first, month groups, the side panel */
+/** /news: rubrics, pinned first, month groups, the side panel */
 export function NewsListPage() {
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -46870,7 +46873,7 @@ export function NewsListPage() {
                 <ul className="nw-side-list">
                   {pinned.map((n) => (
                     <li key={n.id}>
-                      <a href={`#/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
+                      <a href={`/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
                     </li>
                   ))}
                 </ul>
@@ -46911,7 +46914,7 @@ export function NewsListPage() {
   );
 }
 
-/** #/news/<id> */
+/** /news/<id> */
 export function NewsArticlePage({ id }: { id: number }) {
   const { me } = useAuth();
   const [item, setItem] = useState<PublicNewsFull | null>(null);
@@ -46925,7 +46928,7 @@ export function NewsArticlePage({ id }: { id: number }) {
     .catch((e: unknown) => setError({ status: e instanceof ApiError ? e.status : 0, text: (e as Error).message }));
   usePoll(load, 30_000);
 
-  const back = <a className="btn btn-soft" href="#/news">{t('nw.back')}</a>;
+  const back = <a className="btn btn-soft" href="/news">{t('nw.back')}</a>;
   return (
     <div className="nw-page">
       <div className="nw-article-wrap">
@@ -47193,7 +47196,7 @@ function Thumbs({ c, href }: { c: Card; href: string }) {
 }
 
 function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
-  const href = `#/news/${c.id}`;
+  const href = `/news/${c.id}`;
   return (
     <article className="nf-hero nw-hero" style={{ ['--nf-accent' as string]: c.accent }}>
       <NewsCover c={c} servers={servers} href={href} />
@@ -47216,7 +47219,7 @@ function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined })
 }
 
 function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
-  const href = `#/news/${c.id}`;
+  const href = `/news/${c.id}`;
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
       <a className="nf-thumb nw-thumb" href={href} style={coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1} />
@@ -48023,7 +48026,7 @@ export function AchievementsPreview() {
   const earned = (data ?? []).filter((a) => a.earned).sort((x, y) => (y.earnedAt ?? 0) - (x.earnedAt ?? 0));
   const next = (data ?? []).filter((a) => !a.earned).sort((x, y) => pct(y) - pct(x))[0];
   return (
-    <Section title={t('pf.ach.title')} actions={<a href="#/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.ach.all')}</a>}>
+    <Section title={t('pf.ach.title')} actions={<a href="/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.ach.all')}</a>}>
       {data === undefined && <div className="skeleton h-16 rounded-2xl bg-soft" />}
       {data && earned.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.noneYet')}</p>}
       {earned.length > 0 && (
@@ -48636,7 +48639,7 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl bg-warnbg px-4 py-3 text-sm font-bold text-warn" role="status">
         <span className="min-w-0 flex-1 basis-60">{t('nd.followup')}</span>
         <span className="flex shrink-0 gap-2">
-          <a href="#/profile/security" className="btn btn-sm" onClick={() => document.getElementById('pf-current')?.focus()}>{t('nd.changePassword')}</a>
+          <a href="/profile/security" className="btn btn-sm" onClick={() => document.getElementById('pf-current')?.focus()}>{t('nd.changePassword')}</a>
           <button type="button" className="btn btn-soft btn-sm" onClick={() => setHidden(true)}>{t('common.close')}</button>
         </span>
       </div>
@@ -48669,8 +48672,8 @@ import { isObject, useFetched } from './useFetched';
 const NICK_MAX = 32;
 const BIO_MAX = 280;
 
-/** address of the public page: the panel's own address with #/u/<username> */
-export const publicLink = (username: string) => `${window.location.origin}${window.location.pathname}#/u/${encodeURIComponent(username)}`;
+/** address of the public page: the panel's own address with /u/<username> */
+export const publicLink = (username: string) => `${window.location.origin}/u/${encodeURIComponent(username)}`;
 
 /** «Профиль игрока»: in-game nick, a short bio and the public-profile switch with the link */
 export function PlayerCard() {
@@ -48877,7 +48880,7 @@ function ServerBars({ rows }: { rows: MyStats['byServer'] }) {
           <GameAvatar game={r.game} size={34} />
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-3">
-              <a href={`#/servers/${r.serverId}`} className="min-w-0 truncate font-extrabold hover:underline">{r.name}</a>
+              <a href={`/servers/${r.serverId}`} className="min-w-0 truncate font-extrabold hover:underline">{r.name}</a>
               <span className="shrink-0 text-sm font-bold text-mute">{fmtDuration(r.seconds)}</span>
             </div>
             <div className="pf-bar pf-bar-lg mt-1" role="img" aria-label={`${r.name}: ${fmtDuration(r.seconds)}`}><i style={{ width: `${Math.max(2, (r.seconds / max) * 100)}%` }} /></div>
@@ -48948,7 +48951,7 @@ export function StatsSummary() {
   const { data } = useMyStats(30);
   if (data === null) return null;
   return (
-    <Section title={t('pf.sum.title')} description={t('pf.sum.desc')} actions={<a href="#/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.sum.more')}</a>}>
+    <Section title={t('pf.sum.title')} description={t('pf.sum.desc')} actions={<a href="/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.sum.more')}</a>}>
       {data ? <StatTiles s={data} compact /> : <div className="skeleton h-20 rounded-2xl bg-soft" />}
     </Section>
   );
@@ -49549,7 +49552,7 @@ export default function Hero({
           {freeSlot === 'subscribed' ? (
             <p className="srv-hero-sub"><IconBell size={16} />{t('srv.freeSlot.subscribed')}</p>
           ) : freeSlot === 'guest' ? (
-            <a className="btn-glass" href="#/login"><IconBell size={18} />{t('srv.freeSlot.login')}</a>
+            <a className="btn-glass" href="/login"><IconBell size={18} />{t('srv.freeSlot.login')}</a>
           ) : (
             <button type="button" className="btn-glass" onClick={onNotify} aria-haspopup="dialog"><IconBell size={18} />{t('srv.freeSlot.button')}</button>
           )}
@@ -50701,6 +50704,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ServerTabs.tsx" << '__COREGSM_EOF__'
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { navigate } from '../../ui/route';
 import { tabHref, type TabId } from './helpers';
 
 export const TAB_LIST: { id: TabId; label: string }[] = [
@@ -50764,7 +50768,7 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
     else if (e.key === 'End') n = TAB_LIST.length - 1;
     if (n < 0) return;
     e.preventDefault();
-    window.location.hash = tabHref(id, TAB_LIST[n].id);
+    navigate(tabHref(id, TAB_LIST[n].id));
     // the focus follows the selected tab
     requestAnimationFrame(() => document.getElementById(tabDomId(TAB_LIST[n].id))?.focus({ preventScroll: true }));
   };
@@ -50899,7 +50903,7 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
       {!discordLinked && (
         <p className="rounded-2xl bg-soft px-4 py-2.5 text-sm font-semibold text-mute" role="note">
           {t('sub.discordNote')}.{' '}
-          <a href="#/profile/security" className="font-extrabold text-link hover:underline">{t('sub.linkDiscord')}</a>
+          <a href="/profile/security" className="font-extrabold text-link hover:underline">{t('sub.linkDiscord')}</a>
         </p>
       )}
     </div>
@@ -50995,7 +50999,7 @@ export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
 
 /** hash of a server page tab: '' = overview */
-export const tabHref = (id: number, tab: TabId) => `#/servers/${id}${tab ? `/${tab}` : ''}`;
+export const tabHref = (id: number, tab: TabId) => `/servers/${id}${tab ? `/${tab}` : ''}`;
 
 /** re-renders the caller every `ms` and returns the current time */
 export function useNow(ms: number): number {
@@ -51611,7 +51615,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
       <div className="srv-c-name">
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
-          <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
+          <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
           <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-0.5" />}
         </div>
@@ -51885,7 +51889,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
             ) : news ? (
               <div className="srv-new-news">
-                <a href="#/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
+                <a href="/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
                 {teaserNodes(news).length > 0 && <span className="srv-new-news-text">{teaserNodes(news)}</span>}
                 <span className="srv-new-news-foot">
                   {news.sentAt && <span className="srv-new-date">{fmtDateTime(news.sentAt)}</span>}
@@ -51894,7 +51898,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
                       {t('srv.new.openLink')}
                     </a>
                   )}
-                  <a href="#/news" className="btn-link btn-xs">{t('srv.new.allNews')}</a>
+                  <a href="/news" className="btn-link btn-xs">{t('srv.new.allNews')}</a>
                 </span>
               </div>
             ) : (
@@ -52155,7 +52159,7 @@ export function NoServersState({ isAdmin }: { isAdmin: boolean }) {
       title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'}
       text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже: список появится здесь.'}
     >
-      {isAdmin && <a className="btn" href="#/admin/servers" data-magnetic>Добавить сервер</a>}
+      {isAdmin && <a className="btn" href="/admin/servers" data-magnetic>Добавить сервер</a>}
     </EmptyState>
   );
 }
@@ -52885,7 +52889,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/flashDebug.ts" << '__COREGSM_EOF__'
 /**
- * Diagnostics for the "black square" report: open the panel as  https://host/?flashdebug=1#/  and switch to another
+ * Diagnostics for the "black square" report: open the panel as  https://host/?flashdebug=1  and switch to another
  * browser tab (or press PrintScreen) and back. For ~1.5 s after the page becomes visible, the page is scanned for
  * dark opaque boxes, canvases, videos and iframes; they get a red outline and are listed in a corner panel.
  * An empty list means the square is not a DOM element (GPU / compositor), see the note in the panel.
@@ -56036,7 +56040,7 @@ export function toggleKind(kinds: readonly SubKind[], kind: SubKind): SubKind[] 
 
 /** the notification links to its server page, or nowhere */
 export function notificationHref(n: Pick<NotificationItem, 'serverId'>): string | null {
-  return n.serverId != null && Number.isFinite(Number(n.serverId)) ? `#/servers/${n.serverId}` : null;
+  return n.serverId != null && Number.isFinite(Number(n.serverId)) ? `/servers/${n.serverId}` : null;
 }
 
 /** an "unavailable" answer (older backend, feature off) hides the panel instead of showing an error */
@@ -56073,7 +56077,7 @@ import { api, type CertInfo, type Server, type ServerInput, type UpdateInfo } fr
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll, navigate } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
@@ -56096,7 +56100,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   // a moderator sees only the news section; everything else is for administrators
   const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
   const known = sections.some((s) => s.id === section);
-  // bare #/admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
+  // bare /admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
   const home = isAdmin && !known;
   const current = known ? section : sections[0].id;
   // the sub-path belongs to the section that was asked for, not to the fallback
@@ -56146,7 +56150,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const link = (s: AdminSection, pinnable = false) => (
     <a
       key={s.id}
-      href={`#/admin/${s.id}`}
+      href={`/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
       className={`flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
@@ -56269,7 +56273,7 @@ function UpdateBanner() {
           </>
         )}
       </div>
-      <a href="#/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
+      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
     </div>
   );
 }
@@ -56297,7 +56301,7 @@ function CertWarning() {
     : `Сертификат HTTPS истекает через ${d} ${plural(d, ['день', 'дня', 'дней'])}.`;
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl px-4 py-2.5 text-sm font-bold ${expired ? 'bg-badbg text-bad' : 'bg-warnbg text-warn'}`} role={expired ? 'alert' : 'status'}>
-      <span className="min-w-0 flex-1">{text} <a href="#/admin/system" className="underline">Подробнее</a></span>
+      <span className="min-w-0 flex-1">{text} <a href="/admin/system" className="underline">Подробнее</a></span>
       <button
         type="button"
         className="btn-icon-ghost btn-icon-sm btn-tone"
@@ -56325,7 +56329,7 @@ function ServersManage({ sub }: { sub: string }) {
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
 
-  // #/admin/servers/new opens the «add» form (links from the start page and Ctrl+K)
+  // /admin/servers/new opens the «add» form (links from the start page and Ctrl+K)
   const openedFor = useRef('');
   useEffect(() => {
     if (sub === 'new' && openedFor.current !== sub) {
@@ -56336,7 +56340,7 @@ function ServersManage({ sub }: { sub: string }) {
   }, [sub]);
   const closeForm = () => {
     setEditing(null);
-    if (sub === 'new') window.location.hash = '#/admin/servers';
+    if (sub === 'new') navigate('/admin/servers');
   };
 
   const remove = async (s: Server) => {
@@ -56384,7 +56388,7 @@ function ServersManage({ sub }: { sub: string }) {
           <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
             <GameAvatar game={s.game} size={44} />
             <div className="min-w-0 flex-1 basis-56">
-              <a href={`#/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
+              <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
               <div className="truncate text-sm font-semibold text-mute">
                 {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
                 {s.displayAddress ? <> · показывается как <span className="font-mono">{s.displayAddress}</span></> : null}
@@ -56394,7 +56398,7 @@ function ServersManage({ sub }: { sub: string }) {
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} maintenance={!!s.maintenance} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
-              <a className="btn btn-soft btn-sm" href={`#/admin/discord/new/${s.id}`}>Привязать к Discord</a>
+              <a className="btn btn-soft btn-sm" href={`/admin/discord/new/${s.id}`}>Привязать к Discord</a>
               <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
                 <IconRefresh spinning={busyId === s.id} />
               </button>
@@ -56428,7 +56432,7 @@ __COREGSM_EOF__
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
-import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
+import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -56511,11 +56515,11 @@ function useStartSteps() {
       }
     }
     return [
-      { id: 'server', short: 'сервер', title: 'Добавьте игровой сервер', why: 'Без сервера панели нечего показывать: онлайн, карту и пинг она берёт у вашего игрового сервера.', href: '#/admin/servers/new', cta: 'Добавить сервер', state: st(raw.servers) },
-      { id: 'bot', short: 'бот', title: 'Подключите Discord-бота', why: 'Бот публикует состояние серверов и новости в Discord. Ему нужен токен из Discord Developer Portal.', href: '#/admin/settings/bot', cta: 'Указать токен', state: bot, note: botNote },
-      { id: 'channel', short: 'канал', title: 'Привяжите канал для сообщений', why: 'Привязка говорит боту, в какой канал писать. Он отправит одно сообщение и будет обновлять его само.', href: '#/admin/discord', cta: 'Привязать канал', state: st(raw.bindings) },
-      { id: 'news', short: 'новость', title: 'Напишите первую новость', why: 'Новости видят и игроки в панели, и участники в Discord: так удобно сообщать о вайпах и работах.', href: '#/admin/news/new', cta: 'Написать новость', state: st(raw.news) },
-      { id: 'brand', short: 'оформление', title: 'Настройте оформление', why: 'Название, цвет и логотип делают панель вашей: их видят посетители и участники Discord.', href: '#/admin/settings/brand', cta: 'Настроить', state: brandDone ? 'done' : 'todo' },
+      { id: 'server', short: 'сервер', title: 'Добавьте игровой сервер', why: 'Без сервера панели нечего показывать: онлайн, карту и пинг она берёт у вашего игрового сервера.', href: '/admin/servers/new', cta: 'Добавить сервер', state: st(raw.servers) },
+      { id: 'bot', short: 'бот', title: 'Подключите Discord-бота', why: 'Бот публикует состояние серверов и новости в Discord. Ему нужен токен из Discord Developer Portal.', href: '/admin/settings/bot', cta: 'Указать токен', state: bot, note: botNote },
+      { id: 'channel', short: 'канал', title: 'Привяжите канал для сообщений', why: 'Привязка говорит боту, в какой канал писать. Он отправит одно сообщение и будет обновлять его само.', href: '/admin/discord', cta: 'Привязать канал', state: st(raw.bindings) },
+      { id: 'news', short: 'новость', title: 'Напишите первую новость', why: 'Новости видят и игроки в панели, и участники в Discord: так удобно сообщать о вайпах и работах.', href: '/admin/news/new', cta: 'Написать новость', state: st(raw.news) },
+      { id: 'brand', short: 'оформление', title: 'Настройте оформление', why: 'Название, цвет и логотип делают панель вашей: их видят посетители и участники Discord.', href: '/admin/settings/brand', cta: 'Настроить', state: brandDone ? 'done' : 'todo' },
     ];
   }, [raw, brandDone]);
 
@@ -56528,13 +56532,13 @@ function useStartSteps() {
   return { loading: steps === null, steps: steps ?? [], skipped, skip, unskip, doneCount, total: 5, resolved };
 }
 
-/** `#/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
+/** `/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
 export function AdminHome() {
   const s = useStartSteps();
   useEffect(() => {
     if (s.loading) return;
-    const target = s.resolved ? '#/admin/servers' : '#/admin/start';
-    window.location.replace(`${window.location.pathname}${window.location.search}${target}`);
+    const target = s.resolved ? '/admin/servers' : '/admin/start';
+    navigate(target, { replace: true });
   }, [s.loading, s.resolved]);
   return <StartSkeleton />;
 }
@@ -56596,11 +56600,11 @@ export default function AdminStart() {
   };
 
   const quick: { key: string; label: string; text: string; icon: ReactNode; href?: string; onClick?: () => void }[] = [
-    { key: 'server', label: 'Добавить сервер', text: 'Игра, адрес и порт', icon: <IconServers />, href: '#/admin/servers/new' },
-    { key: 'news', label: 'Написать новость', text: 'С шаблоном и предпросмотром', icon: <IconNews />, href: '#/admin/news/new' },
+    { key: 'server', label: 'Добавить сервер', text: 'Игра, адрес и порт', icon: <IconServers />, href: '/admin/servers/new' },
+    { key: 'news', label: 'Написать новость', text: 'С шаблоном и предпросмотром', icon: <IconNews />, href: '/admin/news/new' },
     { key: 'backup', label: busy ? 'Готовлю копию…' : 'Скачать копию', text: 'Все данные одним файлом', icon: <IconDownload />, onClick: () => void backup() },
-    { key: 'system', label: 'Проверить систему', text: 'Диск, бот, сертификат', icon: <IconSystem />, href: '#/admin/system' },
-    { key: 'player', label: 'Открыть панель как игрок', text: 'Так её видят посетители', icon: <IconStart />, href: '#/servers' },
+    { key: 'system', label: 'Проверить систему', text: 'Диск, бот, сертификат', icon: <IconSystem />, href: '/admin/system' },
+    { key: 'player', label: 'Открыть панель как игрок', text: 'Так её видят посетители', icon: <IconStart />, href: '/servers' },
   ];
 
   return (
@@ -56627,7 +56631,7 @@ export default function AdminStart() {
                 <h2 className="text-xl font-extrabold leading-tight">Завершено: всё настроено</h2>
                 <p className="font-semibold text-mute">Панель работает сама: бот обновляет сообщения, оповещения следят за серверами. Вернуться сюда можно из меню слева.</p>
               </div>
-              <a className="btn" href="#/admin/servers">Перейти к серверам</a>
+              <a className="btn" href="/admin/servers">Перейти к серверам</a>
             </div>
           ) : (
             <div className="tile flex flex-wrap items-center gap-4 p-5">
@@ -56733,7 +56737,7 @@ export default function AdminStart() {
 function MapRow({ id, label, desc, icon }: { id: string; label: string; desc: string; icon: ReactNode }) {
   return (
     <li>
-      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-ui-lg px-2 py-2 transition hover:bg-soft">
+      <a href={`/admin/${id}`} className="flex items-start gap-3 rounded-ui-lg px-2 py-2 transition hover:bg-soft">
         <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-soft text-link">{icon}</span>
         <span className="min-w-0">
           <span className="block font-extrabold leading-tight">{label}</span>
@@ -56807,7 +56811,7 @@ export default function AlertsPage() {
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {tokenSet === false && (
-        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
+        <Notice action={<GoLink href="/admin/settings/bot">Указать токен бота</GoLink>}>
           Оповещения не дойдут: у бота нет токена, он не подключён к Discord.
         </Notice>
       )}
@@ -57088,7 +57092,7 @@ export default function BackupsCard() {
             {unreadableSecrets(unreadable).map((x) => <li key={x.id}>{x.label}</li>)}
           </ul>
           <div className="flex flex-wrap gap-2">
-            <a className="btn btn-sm" href="#/admin/settings">{t('bk.unreadSettings')}</a>
+            <a className="btn btn-sm" href="/admin/settings">{t('bk.unreadSettings')}</a>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => void waitAndReload()}>{t('bk.unreadReload')}</button>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => { saveUnreadableSecrets([]); setUnreadable([]); }}>{t('bk.unreadDismiss')}</button>
           </div>
@@ -57275,7 +57279,7 @@ export default function CardsPage() {
       )}
       {loaded && !error && servers.length === 0 && (
         <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»: для каждого появится своя картинка.">
-          <a className="btn mt-3" href="#/admin/servers/new">Добавить сервер</a>
+          <a className="btn mt-3" href="/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
       <div className="fade-in grid gap-5 xl:grid-cols-2">
@@ -57312,7 +57316,7 @@ import DeliveryList from '../components/DeliveryList';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -57350,7 +57354,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
 
-  // #/admin/discord/new[/<serverId>]: open the form once the servers are known
+  // /admin/discord/new[/<serverId>]: open the form once the servers are known
   const openedFor = useRef('');
   useEffect(() => {
     if (!sub.startsWith('new')) { openedFor.current = ''; return; }
@@ -57362,7 +57366,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   }, [sub, loaded, servers]);
   const closeDraft = () => {
     setDraft(null);
-    if (sub.startsWith('new')) window.location.hash = '#/admin/discord';
+    if (sub.startsWith('new')) navigate('/admin/discord');
   };
 
   const server = (id: number) => servers.find((s) => s.id === id);
@@ -57432,12 +57436,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
     >
       {error && servers.length === 0 && bindings.length === 0 && !settings ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {loaded && settings && !settings.discordTokenSet && (
-        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
+        <Notice action={<GoLink href="/admin/settings/bot">Указать токен в настройках</GoLink>}>
           Бот не подключён: без токена он не сможет писать в Discord.
         </Notice>
       )}
       {loaded && servers.length === 0 && (
-        <Notice tone="info" action={<GoLink href="#/admin/servers/new">Добавить сервер</GoLink>}>
+        <Notice tone="info" action={<GoLink href="/admin/servers/new">Добавить сервер</GoLink>}>
           Сначала добавьте сервер: привязывать пока нечего.
         </Notice>
       )}
@@ -57509,7 +57513,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
-            : <a className="btn mt-3" href="#/admin/servers/new">Сначала добавьте сервер</a>}
+            : <a className="btn mt-3" href="/admin/servers/new">Сначала добавьте сервер</a>}
         </Empty>
       )}
 
@@ -57994,7 +57998,7 @@ import { api, ApiError } from '../api';
 import { t } from '../i18n';
 import { Button, ErrorLine, FieldError, useShake } from '../ui';
 
-/** #/forgot: asks for a login or e-mail; the answer is the same whether or not such an account exists */
+/** /forgot: asks for a login or e-mail; the answer is the same whether or not such an account exists */
 export default function ForgotPassword() {
   const [login, setLogin] = useState('');
   const [err, setErr] = useState('');
@@ -58254,7 +58258,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
       </label>
 
       <p className="-mt-1 text-sm font-bold">
-        <a href="#/forgot" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.link')}</a>
+        <a href="/forgot" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.link')}</a>
       </p>
 
       <ErrorLine text={error} />
@@ -58480,7 +58484,7 @@ import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { NewsArticlePage, NewsListPage } from '../components/news/NewsPublicPages';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
@@ -58558,7 +58562,7 @@ function NewsList() {
     try {
       const created = await api<NewsItem>(`/news/${n.id}/duplicate`, 'POST');
       toast('Копия создана');
-      window.location.hash = `#/admin/news/${created.id}`;
+      navigate(`/admin/news/${created.id}`);
       return;
     } catch (e) {
       // an older backend has no duplicate route: make the copy by hand
@@ -58613,7 +58617,7 @@ function NewsList() {
           hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
           help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
         >
-          <a className="btn" href="#/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
+          <a className="btn" href="/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
         </PageHead>
       )}
     >
@@ -58621,7 +58625,7 @@ function NewsList() {
 
       <Strip className="!justify-start">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
-        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`#/admin/news/new/${t.id}`}>{t.label}</a>)}
+        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${t.id}`}>{t.label}</a>)}
       </Strip>
 
       <Strip>
@@ -58667,7 +58671,7 @@ function NewsList() {
 
       {loaded && !error && list.length === 0 && (
         <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
-          <a className="btn mt-3" href="#/admin/news/new">+ Написать новость</a>
+          <a className="btn mt-3" href="/admin/news/new">+ Написать новость</a>
         </Empty>
       )}
 
@@ -58693,7 +58697,7 @@ function NewsList() {
               {excerpt(n) && <p className="line-clamp-3 break-words text-sm font-semibold text-mute">{excerpt(n)}</p>}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
-                <a className="btn btn-soft btn-sm" href={`#/admin/news/${n.id}`}>Изменить</a>
+                <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>Изменить</a>
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
@@ -58717,7 +58721,7 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
   return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
 }
 
-/** read-only feed for players and guests: the list (#/news) or one news item (#/news/<id>) */
+/** read-only feed for players and guests: the list (/news) or one news item (/news/<id>) */
 export function NewsFeed({ sub = '' }: { sub?: string }) {
   const id = Number(sub.split('/')[0]);
   if (sub && Number.isInteger(id) && id > 0) return <NewsArticlePage id={id} />;
@@ -58748,7 +58752,7 @@ import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isCh
 import { GAMES } from '../games';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
-import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate } from '../ui';
 
 export { TEMPLATES };
 
@@ -58924,7 +58928,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   if (!d) {
     return error ? (
       <StateView kind={errorKind(error)} text={errorKind(error) === 'error' ? error : undefined} onRetry={() => window.location.reload()}>
-        <a className="btn btn-soft" href="#/admin/news">К новостям</a>
+        <a className="btn btn-soft" href="/admin/news">К новостям</a>
       </StateView>
     ) : (
       <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
@@ -59028,7 +59032,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       await api(`/news/autosave?key=${encodeURIComponent(akey)}`, 'DELETE').catch(() => undefined);
       baseline.current = payloadKey(toPayload(d));
       toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
-      window.location.hash = '#/admin/news';
+      navigate('/admin/news');
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -59149,7 +59153,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
   return (
     <div className="space-y-5 pb-40 lg:pb-0">
-      <a href="#/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
+      <a href="/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
       <PageHead
         icon={<IconNews />}
         title={id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}
@@ -59186,7 +59190,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             {!isSent && noChannel && (
               <p className="-mt-1 text-sm font-semibold text-mute">
                 Канал не выбран. Задайте канал по умолчанию, и он будет подставляться в каждую новую новость:{' '}
-                <GoLink href="#/admin/news">Выбрать канал по умолчанию</GoLink>
+                <GoLink href="/admin/news">Выбрать канал по умолчанию</GoLink>
               </p>
             )}
             {!isSent && (
@@ -59432,7 +59436,7 @@ import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
-import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useHash } from '../ui';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
 const TABS: { id: Tab; label: TKey }[] = [
@@ -59442,10 +59446,10 @@ const TABS: { id: Tab; label: TKey }[] = [
   { id: 'security', label: 'pf.tab.security' },
 ];
 
-/** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (#/profile/security). */
+/** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (/profile/security). */
 export default function ProfilePage() {
   const { me } = useAuth();
-  const { sub } = useHash();
+  const { sub } = useRoute();
   useI18n();
   if (!me) return null;
   const first = sub.split('/')[0];
@@ -59458,7 +59462,7 @@ export default function ProfilePage() {
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>
           {TABS.map((x) => (
-            <a key={x.id} href={`#/profile/${x.id}`} className="seg-item" aria-current={tab === x.id ? 'page' : undefined}>{t(x.label)}</a>
+            <a key={x.id} href={`/profile/${x.id}`} className="seg-item" aria-current={tab === x.id ? 'page' : undefined}>{t(x.label)}</a>
           ))}
         </nav>
       </div>
@@ -59520,7 +59524,7 @@ function OverviewTab() {
             {favs === null && <div className="skeleton h-20 rounded-2xl bg-soft" />}
             {favs && favs.length === 0 && <p className="font-semibold text-mute">{t('pf.favs.none')}</p>}
             {favs?.map((s) => (
-              <a key={s.id} href={`#/servers/${s.id}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5 transition hover:ring-2 hover:ring-brand/30">
+              <a key={s.id} href={`/servers/${s.id}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5 transition hover:ring-2 hover:ring-brand/30">
                 <GameAvatar game={s.game} size={36} />
                 <span className="min-w-0 flex-1 truncate font-bold">{s.name}</span>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} />
@@ -59813,7 +59817,7 @@ function Tile({ value, label }: { value: string; label: string }) {
   );
 }
 
-/** #/u/<username>: the public page of a player. Works without signing in; a private or unknown profile gives a 404 state. */
+/** /u/<username>: the public page of a player. Works without signing in; a private or unknown profile gives a 404 state. */
 export default function PublicProfilePage({ username }: { username: string }) {
   const { me } = useAuth();
   useI18n();
@@ -59846,7 +59850,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
     const missing = state.kind === 'missing';
     return (
       <Empty title={missing ? t('pub.missingTitle') : t('pub.errorTitle')} text={missing ? t('pub.missingText') : state.text}>
-        <a href={me ? '#/profile' : '#/servers'} className="btn mt-2">{t('pub.back')}</a>
+        <a href={me ? '/profile' : '/servers'} className="btn mt-2">{t('pub.back')}</a>
       </Empty>
     );
   }
@@ -60028,7 +60032,7 @@ export default function Register({ onDone }: { onDone: () => void }) {
             {t('reg.sentText', { name: sent })}
           </p>
         </div>
-        <a href="#/login" className="btn w-full">{t('reg.toLogin')}</a>
+        <a href="/login" className="btn w-full">{t('reg.toLogin')}</a>
       </div>
     );
   }
@@ -60152,7 +60156,7 @@ import { api, ApiError } from '../api';
 import { t } from '../i18n';
 import { Button, ErrorLine, PasswordField, PasswordStrength, useShake } from '../ui';
 
-/** #/reset/<token>: the link from the letter; sets a new password (valid 30 minutes, once) */
+/** /reset/<token>: the link from the letter; sets a new password (valid 30 minutes, once) */
 export default function ResetPassword({ token }: { token: string }) {
   const [pass, setPass] = useState('');
   const [again, setAgain] = useState('');
@@ -60191,7 +60195,7 @@ export default function ResetPassword({ token }: { token: string }) {
     return (
       <AuthFlow title={t('reset.doneTitle')}>
         <p className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok" role="status">{t('reset.doneText')}</p>
-        <a href="#/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>
+        <a href="/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>
       </AuthFlow>
     );
   }
@@ -60200,7 +60204,7 @@ export default function ResetPassword({ token }: { token: string }) {
     return (
       <AuthFlow title={t('reset.badTitle')}>
         <p className="rounded-2xl bg-badbg px-4 py-3 font-bold text-bad" role="alert">{t('reset.badText')}</p>
-        <a href="#/forgot" className="btn w-full justify-center">{t('reset.again')}</a>
+        <a href="/forgot" className="btn w-full justify-center">{t('reset.again')}</a>
       </AuthFlow>
     );
   }
@@ -60230,7 +60234,7 @@ import { gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -60413,7 +60417,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (missing) return <NotFound kind="server" />;
 
-  const back = <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
+  const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
 
   if (!data) {
     return (
@@ -60475,7 +60479,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     try {
       await api(`/servers/${id}`, 'DELETE');
       toast('Сервер удалён');
-      window.location.hash = '#/servers';
+      navigate('/servers');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -60938,7 +60942,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
@@ -60955,7 +60959,7 @@ export default function ServersPage({ sub }: { sub: string }) {
   const id = Number(idPart);
   const tab = (SERVER_TABS as readonly string[]).includes(tabPart) ? tabPart : '';
   if (idPart && /^\d+$/.test(idPart) && Number.isInteger(id) && id > 0 && (!tabPart || tab)) return <ServerDetail id={id} tab={tab} />;
-  // "#/servers/abc" or an unknown tab: not a server page
+  // "/servers/abc" or an unknown tab: not a server page
   if (sub) return <NotFound kind="server" />;
   return <ServerList />;
 }
@@ -61028,8 +61032,8 @@ function ServerList() {
   const [updatedAt, setUpdatedAt] = useState(0);
   const [filter, setFilterState] = useState<Filter>(() => {
     try {
-      // deep link: #/servers?filter=online
-      const q = window.location.hash.match(/[?&]filter=(\w+)/)?.[1];
+      // deep link: /servers?filter=online
+      const q = routeQuery().get('filter') ?? undefined;
       const v = q ?? localStorage.getItem(FILTER_KEY);
       return v === 'online' || v === 'offline' || v === 'fav' ? v : 'all';
     } catch {
@@ -61116,7 +61120,7 @@ function ServerList() {
     ? { on: true, has: (id) => sel.includes(id), toggle: (id) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id])) }
     : undefined;
 
-  const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
+  const open = (s: Server) => { navigate(`/servers/${s.id}`); };
 
   const tileProps = (s: Server, idx: number) => ({
     rx,
@@ -61136,7 +61140,7 @@ function ServerList() {
         icon={<IconServers />}
       >
         <LiveBadge at={updatedAt} />
-        {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
+        {isAdmin && <a className="btn btn-soft" href="/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
       {loaded && servers.length > 0 && (
@@ -61279,7 +61283,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
-            <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
+            <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
             <span>{gameLabel(s.game)}</span>
@@ -61346,7 +61350,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="px-1.5">
         <h3 className="line-clamp-2 break-words text-[16.5px] font-extrabold leading-tight" title={s.name}>
-          <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
@@ -61396,7 +61400,7 @@ import { UpdateCard } from './settings/UpdateCard';
 export { BotPill } from './settings/BotCard';
 export { UsersTab } from './settings/UsersTab';
 
-// the ids stay the canonical hashes (#/admin/settings/bot|brand|security|updates); only the labels are friendlier
+// the ids stay the canonical hashes (/admin/settings/bot|brand|security|updates); only the labels are friendlier
 const TABS = SETTINGS_TABS;
 
 const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
@@ -61439,7 +61443,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         {TABS.map((t) => (
           <a
             key={t.id}
-            href={`#/admin/settings/${t.id}`}
+            href={`/admin/settings/${t.id}`}
             aria-current={tab === t.id ? 'page' : undefined}
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-1' : 'text-mute hover:text-ink'}`}
           >
@@ -61458,8 +61462,8 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
             <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
             <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1">
-              <GoLink href="#/admin/users">Пользователи и доступ</GoLink>
-              <GoLink href="#/profile">Мои сеансы в профиле</GoLink>
+              <GoLink href="/admin/users">Пользователи и доступ</GoLink>
+              <GoLink href="/profile">Мои сеансы в профиле</GoLink>
             </div>
           </Section>
           <p className="font-semibold text-mute">
@@ -61637,7 +61641,7 @@ function ServerRow({ s }: { s: StatusServer }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <GameAvatar game={s.game} size={40} />
         <div className="min-w-0 flex-1 basis-40">
-          <a href={`#/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
           <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
         </div>
         {s.online && <span className="text-sm font-bold tabular-nums text-mute">{s.players}/{s.maxPlayers}{s.avgPing != null ? ` · ${s.avgPing} мс` : ''}</span>}
@@ -61907,7 +61911,7 @@ export default function SystemPage() {
           <h2 className="text-lg font-black">Резервные копии</h2>
           <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
         </div>
-        <GoLink href="#/admin/settings/updates">Обновления и копии</GoLink>
+        <GoLink href="/admin/settings/updates">Обновления и копии</GoLink>
       </Strip>
     </AdminPage>
   );
@@ -61932,7 +61936,7 @@ import {
   type SaveStatus,
 } from '../ui';
 
-/** reference page for future screens: #/_ui (administrators only, not listed in any menu) */
+/** reference page for future screens: /_ui (administrators only, not listed in any menu) */
 
 const RADII: [string, string][] = [['sm', '8 px'], ['md', '12 px'], ['lg', '16 px'], ['xl', '26 px'], ['pill', '9999 px']];
 const SHADOWS: [string, string][] = [['shadow-1', 'мелкие элементы'], ['shadow-2', 'карточки'], ['shadow-3', 'всплывающее']];
@@ -62088,7 +62092,7 @@ function Specimen() {
       <div className="panel panel-raised space-y-1 p-4">
         <div className="font-black">Приподнятая поверхность</div>
         <p className="text-sm font-semibold text-mute">Диалоги и меню: на один шаг светлее карточки.</p>
-        <a href="#/_ui" className="text-sm font-extrabold text-link hover:underline">Ссылка</a>
+        <a href="/_ui" className="text-sm font-extrabold text-link hover:underline">Ссылка</a>
       </div>
     </div>
   );
@@ -62236,7 +62240,7 @@ export default function UiKitPage() {
         </Section>
         <Strip><span className="font-black">Strip</span><span className="text-sm font-semibold text-mute">тонкая карточка для панели инструментов</span><button className="btn btn-soft btn-sm">Кнопка</button></Strip>
         <div className="space-y-2.5">
-          <Notice tone="info" action={<GoLink href="#/_ui">Перейти</GoLink>}>Информационная полоса с действием.</Notice>
+          <Notice tone="info" action={<GoLink href="/_ui">Перейти</GoLink>}>Информационная полоса с действием.</Notice>
           <Notice tone="warn">Предупреждение: проверьте настройки.</Notice>
           <Notice tone="bad">Ошибка: что-то пошло не так.</Notice>
           <ErrorLine text="ErrorLine: короткая ошибка запроса" />
@@ -62250,7 +62254,7 @@ export default function UiKitPage() {
         <div className="grid gap-3 md:grid-cols-2">
           <StateView kind="error" compact onRetry={() => toast('Повтор запроса')} />
           <StateView kind="forbidden" compact />
-          <StateView kind="notfound" compact action={<a className="btn btn-soft" href="#/servers">К серверам</a>} />
+          <StateView kind="notfound" compact action={<a className="btn btn-soft" href="/servers">К серверам</a>} />
           <StateView kind="offline" compact onRetry={() => toast('Повтор запроса')} />
         </div>
       </Block>
@@ -62367,7 +62371,7 @@ function confirmLink(token: string) {
   return p;
 }
 
-/** #/verify/<token>: confirms the e-mail address of the account */
+/** /verify/<token>: confirms the e-mail address of the account */
 export default function VerifyEmail({ token }: { token: string }) {
   const { me, reload } = useAuth();
   const [state, setState] = useState<'checking' | 'ok' | 'bad'>('checking');
@@ -62383,7 +62387,7 @@ export default function VerifyEmail({ token }: { token: string }) {
     return () => { live = false; };
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const next = me ? <a href="#/profile" className="btn w-full justify-center">{t('verify.toProfile')}</a> : <a href="#/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>;
+  const next = me ? <a href="/profile" className="btn w-full justify-center">{t('verify.toProfile')}</a> : <a href="/login" className="btn w-full justify-center">{t('reset.toLogin')}</a>;
 
   if (state === 'checking') {
     return (
@@ -62468,17 +62472,17 @@ export interface AdminLink { label: string; hint: string; href: string; keywords
 
 /** deeper places found only by searching (Ctrl+K) */
 export const ADMIN_LINKS: AdminLink[] = [
-  ...SETTINGS_TABS.map((t) => ({ label: `Настройки: ${t.label}`, hint: 'Настройки', href: `#/admin/settings/${t.id}`, keywords: t.keywords, icon: IconSettings })),
-  { label: 'Резервные копии', hint: 'Настройки · Обновления и копии', href: '#/admin/settings/updates', keywords: 'резервная копия бэкап backup восстановить скачать расписание', icon: IconSettings },
-  { label: 'Откат обновления', hint: 'Настройки · Обновления и копии', href: '#/admin/settings/updates', keywords: 'откатить вернуть предыдущую версию rollback', icon: IconSettings },
-  { label: 'Токен Discord-бота', hint: 'Настройки · Бот и Discord', href: '#/admin/settings/bot', keywords: 'токен прокси proxy бот developer portal', icon: IconSettings },
-  { label: 'Пароль администратора', hint: 'Настройки · Безопасность', href: '#/admin/settings/security', keywords: 'сменить пароль безопасность', icon: IconSettings },
-  { label: 'Сертификат HTTPS', hint: 'Система', href: '#/admin/system', keywords: 'ssl срок сертификат истекает домен', icon: IconSystem },
-  { label: 'Диагностика', hint: 'Система', href: '#/admin/system', keywords: 'проверка здоровье состояние', icon: IconSystem },
-  { label: 'Роли и доступ', hint: 'Пользователи', href: '#/admin/users', keywords: 'роли модератор администратор регистрация правила заявки публичная панель', icon: IconUsers },
-  { label: 'Написать новость', hint: 'Новости', href: '#/admin/news/new', keywords: 'новость объявление шаблон опубликовать запланировать', icon: IconNews },
-  { label: 'Привязать канал Discord', hint: 'Discord', href: '#/admin/discord/new', keywords: 'привязка канал сообщение бот', icon: IconDiscord },
-  { label: 'Добавить сервер', hint: 'Серверы', href: '#/admin/servers/new', keywords: 'новый игровой сервер игра адрес', icon: IconServers },
+  ...SETTINGS_TABS.map((t) => ({ label: `Настройки: ${t.label}`, hint: 'Настройки', href: `/admin/settings/${t.id}`, keywords: t.keywords, icon: IconSettings })),
+  { label: 'Резервные копии', hint: 'Настройки · Обновления и копии', href: '/admin/settings/updates', keywords: 'резервная копия бэкап backup восстановить скачать расписание', icon: IconSettings },
+  { label: 'Откат обновления', hint: 'Настройки · Обновления и копии', href: '/admin/settings/updates', keywords: 'откатить вернуть предыдущую версию rollback', icon: IconSettings },
+  { label: 'Токен Discord-бота', hint: 'Настройки · Бот и Discord', href: '/admin/settings/bot', keywords: 'токен прокси proxy бот developer portal', icon: IconSettings },
+  { label: 'Пароль администратора', hint: 'Настройки · Безопасность', href: '/admin/settings/security', keywords: 'сменить пароль безопасность', icon: IconSettings },
+  { label: 'Сертификат HTTPS', hint: 'Система', href: '/admin/system', keywords: 'ssl срок сертификат истекает домен', icon: IconSystem },
+  { label: 'Диагностика', hint: 'Система', href: '/admin/system', keywords: 'проверка здоровье состояние', icon: IconSystem },
+  { label: 'Роли и доступ', hint: 'Пользователи', href: '/admin/users', keywords: 'роли модератор администратор регистрация правила заявки публичная панель', icon: IconUsers },
+  { label: 'Написать новость', hint: 'Новости', href: '/admin/news/new', keywords: 'новость объявление шаблон опубликовать запланировать', icon: IconNews },
+  { label: 'Привязать канал Discord', hint: 'Discord', href: '/admin/discord/new', keywords: 'привязка канал сообщение бот', icon: IconDiscord },
+  { label: 'Добавить сервер', hint: 'Серверы', href: '/admin/servers/new', keywords: 'новый игровой сервер игра адрес', icon: IconServers },
 ];
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
@@ -63302,7 +63306,7 @@ export function UsersTab() {
           hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
           help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
         >
-          <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
+          <a className="btn btn-soft" href="/admin/journal">Журнал: кто что менял</a>
         </PageHead>
       )}
     >
@@ -63384,7 +63388,7 @@ export function UsersTab() {
             </li>
           ))}
         </ul>
-        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="#/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
+        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
       </Section>
     </AdminPage>
   );
@@ -64804,7 +64808,8 @@ export type { SaveStatus, AutosaveOptions } from './autosave';
 // everything else lives in src/ui/; the pages keep importing from here
 export { usePoll, LAG_PING, isLag } from './ui/poll';
 export { useTween, AnimatedNumber, Burst } from './ui/motion';
-export { parseHash, useHash } from './ui/hashRoute';
+export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
+export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
 export { ThemeToggle } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';
@@ -65007,7 +65012,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
           {tabs.map((t) => (
             <a
               key={t.id}
-              href={`#/${t.id}`}
+              href={`/${t.id}`}
               aria-current={mode === t.id ? 'page' : undefined}
               className="seg-item flex-1"
             >
@@ -65018,7 +65023,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
       )}
       <div key={mode} className="auth-swap">{children}</div>
       {access.publicPanel && (
-        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('auth.guest')}</a></p>
+        <p className="mt-5 text-center text-sm font-bold"><a href="/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('auth.guest')}</a></p>
       )}
     </div>
   );
@@ -65745,72 +65750,6 @@ export function plural(n: number, forms: [string, string, string]): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
-  cat > "$APP_DIR/core-frontend/src/ui/hashRoute.ts" << '__COREGSM_EOF__'
-/** The current route, shared by every component that needs it. */
-import { useEffect, useState } from 'react';
-import { withViewTransition } from '../useMotion';
-
-/** Current route from the URL hash: "#/servers/12" -> { page: 'servers', sub: '12' }. */
-export function parseHash(): { page: string; sub: string } {
-  const [page = '', ...rest] = window.location.hash.replace(/^#\/?/, '').split('/');
-  return { page, sub: rest.join('/') };
-}
-
-// One hashchange listener for the whole app: every subscriber is updated together, inside one view transition
-// (cross-fade with a slight slide, and the server avatar morphing from its tile to the page banner).
-type HashState = { page: string; sub: string };
-let hashNow: HashState | null = null;
-const hashListeners = new Set<(h: HashState) => void>();
-
-const serverIdOf = (h: HashState) => (h.page === 'servers' && /^\d+$/.test(h.sub.split('/')[0]) ? h.sub.split('/')[0] : '');
-
-/** gives the avatar of a server (tagged data-vt-avatar) the view-transition-name that pairs the old and the new page */
-const nameAvatars = (ids: string[]) => {
-  for (const id of new Set(ids.filter(Boolean))) {
-    document.querySelector<HTMLElement>(`[data-vt-avatar="${id}"]`)?.style.setProperty('view-transition-name', `server-${id}`);
-  }
-};
-const clearAvatarNames = () => {
-  document.querySelectorAll<HTMLElement>('[data-vt-avatar]').forEach((el) => el.style.removeProperty('view-transition-name'));
-};
-
-function onHashChange() {
-  const prev = hashNow ?? parseHash();
-  const next = parseHash();
-  if (prev.page === next.page && prev.sub === next.sub) return;
-  // switching tabs inside one server page ("12" -> "12/players") is not a page change: no cross-fade
-  if (prev.page === 'servers' && next.page === 'servers' && /^\d+(\/|$)/.test(next.sub) && prev.sub.split('/')[0] === next.sub.split('/')[0]) {
-    hashNow = next;
-    hashListeners.forEach((l) => l(next));
-    return;
-  }
-  // No View Transition here: the glass header and the bottom bar (backdrop-filter) were captured as separate
-  // layers and flashed as a black rectangle while switching sections. The page itself fades in via .pop / .fade-in.
-  hashNow = next;
-  hashListeners.forEach((l) => l(next));
-}
-void withViewTransition;
-void nameAvatars;
-void clearAvatarNames;
-void serverIdOf;
-
-export function useHash() {
-  const [h, setH] = useState(parseHash);
-  useEffect(() => {
-    if (hashNow === null) {
-      hashNow = parseHash();
-      window.addEventListener('hashchange', onHashChange);
-    }
-    hashListeners.add(setH);
-    // the address may have changed between the first render and now
-    const cur = parseHash();
-    setH((p) => (p.page === cur.page && p.sub === cur.sub ? p : cur));
-    return () => { hashListeners.delete(setH); };
-  }, []);
-  return h;
-}
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/motion.tsx" << '__COREGSM_EOF__'
 /** Animated numbers and small CSS-only flourishes; all respect reduced motion. */
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
@@ -65948,6 +65887,99 @@ export function usePoll(fn: () => unknown, ms: number) {
 /** a server answers, but slowly (ping over 100 ms) */
 export const LAG_PING = 100;
 export const isLag = (s: Pick<Server, 'online' | 'ping'>) => s.online && s.ping != null && s.ping > LAG_PING;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/route.ts" << '__COREGSM_EOF__'
+/**
+ * The current route, shared by every component that needs it. Addresses are plain paths ("/servers/12/players");
+ * the old "#/servers/12" form still works, and links that carry a secret (the Discord sign-in token, password reset
+ * and e-mail confirmation) keep using it on purpose: a fragment never reaches the server, so the token stays out
+ * of request lines and access logs.
+ */
+import { useEffect, useState } from 'react';
+
+export type Route = { page: string; sub: string };
+
+/** "#/a/b?x" when the address has a route in the fragment, else "/a/b" */
+const raw = (): string => (window.location.hash.startsWith('#/') ? window.location.hash.slice(1) : window.location.pathname);
+
+/** Current route: "/servers/12" (or "#/servers/12") -> { page: 'servers', sub: '12' }. */
+export function parseRoute(): Route {
+  const [page = '', ...rest] = raw().split('?')[0].replace(/^\/+/, '').split('/');
+  return { page, sub: rest.join('/') };
+}
+
+/** the query of the route: "?filter=lag" of the path, or the one written inside an old "#/servers?filter=lag" */
+export function routeQuery(): URLSearchParams {
+  const inHash = window.location.hash.startsWith('#/') ? window.location.hash.split('?')[1] : undefined;
+  return new URLSearchParams(inHash ?? window.location.search);
+}
+
+/** the route as a path ("/servers/12"), for comparisons */
+export const currentPath = () => {
+  const r = parseRoute();
+  return `/${r.page}${r.sub ? `/${r.sub}` : ''}`;
+};
+
+/** "/x", "#/x" or "x" -> "/x" */
+const toPath = (to: string) => `/${to.replace(/^#?\/*/, '')}`;
+
+const listeners = new Set<(r: Route) => void>();
+let now: Route | null = null;
+
+function notify() {
+  const next = parseRoute();
+  if (now && now.page === next.page && now.sub === next.sub) return;
+  // No View Transition here: the glass header and the bottom bar (backdrop-filter) were captured as separate
+  // layers and flashed as a black rectangle while switching sections. The page itself fades in via .pop / .fade-in.
+  now = next;
+  listeners.forEach((l) => l(next));
+}
+
+/** opens a route of the panel without reloading; `replace` does not add a history entry */
+export function navigate(to: string, { replace = false }: { replace?: boolean } = {}): void {
+  const path = toPath(to);
+  if (replace) window.history.replaceState(null, '', path);
+  else window.history.pushState(null, '', path);
+  notify();
+}
+
+let installed = false;
+function install() {
+  if (installed) return;
+  installed = true;
+  now = parseRoute();
+  window.addEventListener('popstate', notify);
+  window.addEventListener('hashchange', notify);
+  // links to the panel's own pages open without a reload; everything else (API, files, new tabs) is left alone
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = (e.target as Element | null)?.closest?.('a');
+    if (!a || !a.hasAttribute('href') || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
+    const href = a.getAttribute('href') ?? '';
+    if (href.startsWith('#') && !href.startsWith('#/')) return; // an anchor on the page
+    const url = new URL(a.href, window.location.href);
+    if (url.origin !== window.location.origin) return;
+    if (/^\/(api|go|s|assets)(\/|$)/.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname)) return;
+    e.preventDefault();
+    const target = href.startsWith('#/') ? href.slice(1) : `${url.pathname}${url.search}`;
+    if (target === `${window.location.pathname}${window.location.search}` && !window.location.hash) return;
+    navigate(target);
+  });
+}
+
+export function useRoute(): Route {
+  const [r, setR] = useState(parseRoute);
+  useEffect(() => {
+    install();
+    listeners.add(setR);
+    // the address may have changed between the first render and now
+    const cur = parseRoute();
+    setR((p) => (p.page === cur.page && p.sub === cur.sub ? p : cur));
+    return () => { listeners.delete(setR); };
+  }, []);
+  return r;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/theme.tsx" << '__COREGSM_EOF__'

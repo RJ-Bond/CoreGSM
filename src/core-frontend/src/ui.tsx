@@ -17,7 +17,8 @@ export type { SaveStatus, AutosaveOptions } from './autosave';
 // everything else lives in src/ui/; the pages keep importing from here
 export { usePoll, LAG_PING, isLag } from './ui/poll';
 export { useTween, AnimatedNumber, Burst } from './ui/motion';
-export { parseHash, useHash } from './ui/hashRoute';
+export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
+export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
 export { ThemeToggle } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';

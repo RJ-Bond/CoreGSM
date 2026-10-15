@@ -200,7 +200,7 @@ export default function BackupsCard() {
             {unreadableSecrets(unreadable).map((x) => <li key={x.id}>{x.label}</li>)}
           </ul>
           <div className="flex flex-wrap gap-2">
-            <a className="btn btn-sm" href="#/admin/settings">{t('bk.unreadSettings')}</a>
+            <a className="btn btn-sm" href="/admin/settings">{t('bk.unreadSettings')}</a>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => void waitAndReload()}>{t('bk.unreadReload')}</button>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => { saveUnreadableSecrets([]); setUnreadable([]); }}>{t('bk.unreadDismiss')}</button>
           </div>

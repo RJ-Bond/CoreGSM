@@ -85,7 +85,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
           {tabs.map((t) => (
             <a
               key={t.id}
-              href={`#/${t.id}`}
+              href={`/${t.id}`}
               aria-current={mode === t.id ? 'page' : undefined}
               className="seg-item flex-1"
             >
@@ -96,7 +96,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
       )}
       <div key={mode} className="auth-swap">{children}</div>
       {access.publicPanel && (
-        <p className="mt-5 text-center text-sm font-bold"><a href="#/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('auth.guest')}</a></p>
+        <p className="mt-5 text-center text-sm font-bold"><a href="/servers" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('auth.guest')}</a></p>
       )}
     </div>
   );

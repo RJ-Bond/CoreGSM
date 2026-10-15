@@ -7,7 +7,7 @@ import { gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -190,7 +190,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (missing) return <NotFound kind="server" />;
 
-  const back = <a href="#/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
+  const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
 
   if (!data) {
     return (
@@ -252,7 +252,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     try {
       await api(`/servers/${id}`, 'DELETE');
       toast('Сервер удалён');
-      window.location.hash = '#/servers';
+      navigate('/servers');
     } catch (e) {
       setError((e as Error).message);
     }

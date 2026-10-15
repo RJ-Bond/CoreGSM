@@ -249,7 +249,7 @@ router.get('/s/:id(\\d+)', (req, res) => {
   }
   parts.push(`Игра: ${gameLabel(sv.game)}`);
   const desc = parts.join(' · ');
-  const target = `/#/servers/${id}`;
+  const target = `/servers/${id}`;
   const url = `${base}/s/${id}`;
   const image = `${base}/api/card/${id}.png`;
   res.type('html').send(`<!doctype html>

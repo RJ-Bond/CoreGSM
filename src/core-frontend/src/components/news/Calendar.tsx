@@ -38,7 +38,7 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
   const chip = (n: NewsItem) => (
     <a
       key={n.id}
-      href={`#/admin/news/${n.id}`}
+      href={`/admin/news/${n.id}`}
       draggable={movable(n)}
       onDragStart={(e) => { setDrag(n.id); e.dataTransfer.setData('text/plain', String(n.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onDragEnd={() => { setDrag(null); setOver(null); }}

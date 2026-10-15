@@ -19,7 +19,7 @@ function Tile({ value, label }: { value: string; label: string }) {
   );
 }
 
-/** #/u/<username>: the public page of a player. Works without signing in; a private or unknown profile gives a 404 state. */
+/** /u/<username>: the public page of a player. Works without signing in; a private or unknown profile gives a 404 state. */
 export default function PublicProfilePage({ username }: { username: string }) {
   const { me } = useAuth();
   useI18n();
@@ -52,7 +52,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
     const missing = state.kind === 'missing';
     return (
       <Empty title={missing ? t('pub.missingTitle') : t('pub.errorTitle')} text={missing ? t('pub.missingText') : state.text}>
-        <a href={me ? '#/profile' : '#/servers'} className="btn mt-2">{t('pub.back')}</a>
+        <a href={me ? '/profile' : '/servers'} className="btn mt-2">{t('pub.back')}</a>
       </Empty>
     );
   }

@@ -15,7 +15,7 @@ import {
   type SaveStatus,
 } from '../ui';
 
-/** reference page for future screens: #/_ui (administrators only, not listed in any menu) */
+/** reference page for future screens: /_ui (administrators only, not listed in any menu) */
 
 const RADII: [string, string][] = [['sm', '8 px'], ['md', '12 px'], ['lg', '16 px'], ['xl', '26 px'], ['pill', '9999 px']];
 const SHADOWS: [string, string][] = [['shadow-1', 'мелкие элементы'], ['shadow-2', 'карточки'], ['shadow-3', 'всплывающее']];
@@ -171,7 +171,7 @@ function Specimen() {
       <div className="panel panel-raised space-y-1 p-4">
         <div className="font-black">Приподнятая поверхность</div>
         <p className="text-sm font-semibold text-mute">Диалоги и меню: на один шаг светлее карточки.</p>
-        <a href="#/_ui" className="text-sm font-extrabold text-link hover:underline">Ссылка</a>
+        <a href="/_ui" className="text-sm font-extrabold text-link hover:underline">Ссылка</a>
       </div>
     </div>
   );
@@ -319,7 +319,7 @@ export default function UiKitPage() {
         </Section>
         <Strip><span className="font-black">Strip</span><span className="text-sm font-semibold text-mute">тонкая карточка для панели инструментов</span><button className="btn btn-soft btn-sm">Кнопка</button></Strip>
         <div className="space-y-2.5">
-          <Notice tone="info" action={<GoLink href="#/_ui">Перейти</GoLink>}>Информационная полоса с действием.</Notice>
+          <Notice tone="info" action={<GoLink href="/_ui">Перейти</GoLink>}>Информационная полоса с действием.</Notice>
           <Notice tone="warn">Предупреждение: проверьте настройки.</Notice>
           <Notice tone="bad">Ошибка: что-то пошло не так.</Notice>
           <ErrorLine text="ErrorLine: короткая ошибка запроса" />
@@ -333,7 +333,7 @@ export default function UiKitPage() {
         <div className="grid gap-3 md:grid-cols-2">
           <StateView kind="error" compact onRetry={() => toast('Повтор запроса')} />
           <StateView kind="forbidden" compact />
-          <StateView kind="notfound" compact action={<a className="btn btn-soft" href="#/servers">К серверам</a>} />
+          <StateView kind="notfound" compact action={<a className="btn btn-soft" href="/servers">К серверам</a>} />
           <StateView kind="offline" compact onRetry={() => toast('Повтор запроса')} />
         </div>
       </Block>

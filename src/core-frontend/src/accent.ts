@@ -101,7 +101,7 @@ export function useAccentMode(): [AccentMode, (m: AccentMode) => void] {
 
 /**
  * Keeps the 'auto' game up to date: call once from App when the shell is shown. Fetches the server list once (only in
- * auto mode) and follows the route #/servers/<id>. Does nothing in the other modes.
+ * auto mode) and follows the route /servers/<id>. Does nothing in the other modes.
  */
 export function useAutoAccent(active: boolean, route: { page: string; sub: string }) {
   const [m] = useAccentMode();

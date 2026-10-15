@@ -101,7 +101,7 @@ function ServerBars({ rows }: { rows: MyStats['byServer'] }) {
           <GameAvatar game={r.game} size={34} />
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-3">
-              <a href={`#/servers/${r.serverId}`} className="min-w-0 truncate font-extrabold hover:underline">{r.name}</a>
+              <a href={`/servers/${r.serverId}`} className="min-w-0 truncate font-extrabold hover:underline">{r.name}</a>
               <span className="shrink-0 text-sm font-bold text-mute">{fmtDuration(r.seconds)}</span>
             </div>
             <div className="pf-bar pf-bar-lg mt-1" role="img" aria-label={`${r.name}: ${fmtDuration(r.seconds)}`}><i style={{ width: `${Math.max(2, (r.seconds / max) * 100)}%` }} /></div>
@@ -172,7 +172,7 @@ export function StatsSummary() {
   const { data } = useMyStats(30);
   if (data === null) return null;
   return (
-    <Section title={t('pf.sum.title')} description={t('pf.sum.desc')} actions={<a href="#/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.sum.more')}</a>}>
+    <Section title={t('pf.sum.title')} description={t('pf.sum.desc')} actions={<a href="/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.sum.more')}</a>}>
       {data ? <StatTiles s={data} compact /> : <div className="skeleton h-20 rounded-2xl bg-soft" />}
     </Section>
   );

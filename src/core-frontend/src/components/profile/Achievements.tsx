@@ -56,7 +56,7 @@ export function AchievementsPreview() {
   const earned = (data ?? []).filter((a) => a.earned).sort((x, y) => (y.earnedAt ?? 0) - (x.earnedAt ?? 0));
   const next = (data ?? []).filter((a) => !a.earned).sort((x, y) => pct(y) - pct(x))[0];
   return (
-    <Section title={t('pf.ach.title')} actions={<a href="#/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.ach.all')}</a>}>
+    <Section title={t('pf.ach.title')} actions={<a href="/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.ach.all')}</a>}>
       {data === undefined && <div className="skeleton h-16 rounded-2xl bg-soft" />}
       {data && earned.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.noneYet')}</p>}
       {earned.length > 0 && (

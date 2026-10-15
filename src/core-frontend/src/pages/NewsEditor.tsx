@@ -20,7 +20,7 @@ import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isCh
 import { GAMES } from '../games';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
-import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate } from '../ui';
 
 export { TEMPLATES };
 
@@ -196,7 +196,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   if (!d) {
     return error ? (
       <StateView kind={errorKind(error)} text={errorKind(error) === 'error' ? error : undefined} onRetry={() => window.location.reload()}>
-        <a className="btn btn-soft" href="#/admin/news">К новостям</a>
+        <a className="btn btn-soft" href="/admin/news">К новостям</a>
       </StateView>
     ) : (
       <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
@@ -300,7 +300,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       await api(`/news/autosave?key=${encodeURIComponent(akey)}`, 'DELETE').catch(() => undefined);
       baseline.current = payloadKey(toPayload(d));
       toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
-      window.location.hash = '#/admin/news';
+      navigate('/admin/news');
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -421,7 +421,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
   return (
     <div className="space-y-5 pb-40 lg:pb-0">
-      <a href="#/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
+      <a href="/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
       <PageHead
         icon={<IconNews />}
         title={id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}
@@ -458,7 +458,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             {!isSent && noChannel && (
               <p className="-mt-1 text-sm font-semibold text-mute">
                 Канал не выбран. Задайте канал по умолчанию, и он будет подставляться в каждую новую новость:{' '}
-                <GoLink href="#/admin/news">Выбрать канал по умолчанию</GoLink>
+                <GoLink href="/admin/news">Выбрать канал по умолчанию</GoLink>
               </p>
             )}
             {!isSent && (
