@@ -6,6 +6,7 @@ import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
 import { ErrorLine, FieldError, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { errorText } from '../../apiErrors';
 
 /** готовые темы: основной цвет и конец градиента */
 const THEME_PRESETS = [
@@ -69,7 +70,7 @@ export function BrandCard() {
     setError('');
     try {
       const r = await fetch('/api/branding/logo', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
-      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить');
+      if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), 'Не удалось загрузить'));
       toast('Логотип обновлён');
       await reload();
     } catch (x) {

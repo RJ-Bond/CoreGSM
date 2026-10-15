@@ -7,6 +7,8 @@
  * memory (legacy migration / a fresh sign-in), or a harmless marker while the cookie session is believed to be active.
  * The server ignores a Bearer value that is not a valid token and falls back to the cookie.
  */
+import { localizeError } from './apiErrors';
+
 const LEGACY_KEY = 'coregsm_token';
 const HINT_KEY = 'coregsm_signed';
 const MARKER = 'cookie-session';
@@ -164,7 +166,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     setToken('');
     window.dispatchEvent(new Event('coregsm:logout'));
   }
-  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`, res.status, data as Record<string, unknown>);
+  if (!res.ok) throw new ApiError(localizeError(data) ?? `Ошибка ${res.status}`, res.status, data as Record<string, unknown>);
   return data as T;
 }
 

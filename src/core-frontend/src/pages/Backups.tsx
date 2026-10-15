@@ -4,6 +4,7 @@ import { confirmDialog, promptDialog } from '../confirm';
 import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
+import { errorText } from '../apiErrors';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -13,7 +14,7 @@ const isEncrypted = (name: string) => name.endsWith('.enc');
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
-  if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось получить копию');
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), 'Не удалось получить копию'));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
@@ -147,7 +148,7 @@ export default function BackupsCard() {
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
-      if (!r.ok) throw new Error(j?.error ?? 'Не удалось восстановить копию');
+      if (!r.ok) throw new Error(errorText(j, 'Не удалось восстановить копию'));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError((e as Error).message);

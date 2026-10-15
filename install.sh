@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f08e1bde8ac6"
+COREGSM_BUILD="a8e130175ee7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6886,6 +6886,235 @@ ${tail}` : tail;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/errors.ts" << '__COREGSM_EOF__'
+/**
+ * Error codes of the API. An error answer (status 400 and above) keeps its Russian text in `error` (the source
+ * language, shown as is by older panels and the bot) and gets a stable `code`, plus `params` for the values a text
+ * template holds ("{sec}"). The panel translates by the code (core-frontend/src/locales/errors.en.ts) and falls back
+ * to the text. The handlers keep writing plain texts: `errorCodes` finds the code by the text, and
+ * test/errors.test.ts fails when a text in the code is missing here or an entry here is no longer used.
+ */
+import type { RequestHandler } from 'express';
+
+export const ERRORS = {
+  // ---- request, access, limits ----
+  bad_json: 'Некорректный JSON в запросе',
+  too_large: 'Слишком большой запрос',
+  bad_request: 'Некорректный запрос',
+  internal_error: 'Внутренняя ошибка сервера',
+  auth_required: 'Требуется вход',
+  admin_only: 'Это действие доступно только администратору',
+  staff_only: 'Это действие доступно администратору и модератору',
+  csrf_header_missing: 'Запрос отклонён: не хватает заголовка X-CoreGSM',
+  rate_limited: 'Слишком много запросов. Подождите минуту.',
+  rate_limited_later: 'Слишком много запросов. Попробуйте позже.',
+  too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
+  bad_data: 'Неверные данные',
+  bad_data_lower: 'неверные данные',
+  check_form: 'Проверьте поля формы',
+  check_fields: 'Проверьте поля',
+  not_found: 'Не найдено',
+
+  // ---- sign-in, setup, registration ----
+  login_locked: 'Слишком много неверных попыток. Повторите через {sec} с.',
+  ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
+  bad_credentials: 'Неверный логин или пароль',
+  registration_pending: 'Заявка на регистрацию ещё не одобрена администратором',
+  already_set_up: 'Панель уже настроена. Войдите под своим логином.',
+  bad_setup_code: 'Неверный код установки',
+  not_set_up: 'Панель ещё не настроена: сначала создайте администратора',
+  registration_closed: 'Регистрация закрыта администратором',
+  rules_required: 'Нужно согласиться с правилами сообщества',
+  login_taken: 'Этот логин уже занят',
+  too_many_registrations: 'Слишком много регистраций с этого адреса. Попробуйте позже.',
+  username_format: 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -',
+  password_min_10: 'Пароль должен быть не короче 10 символов',
+  password_min_8: 'Пароль должен быть не короче 8 символов',
+
+  // ---- the signed-in user ----
+  new_password_min_8: 'Новый пароль должен быть не короче 8 символов',
+  passwords_differ: 'Пароли не совпадают',
+  wrong_current_password: 'Текущий пароль неверен',
+  email_needs_password: 'Введите текущий пароль, чтобы изменить почту',
+  check_address: 'Проверьте адрес',
+  bad_email: 'Некорректный адрес электронной почты',
+  email_taken: 'Этот адрес уже привязан к другому аккаунту',
+  session_not_found: 'Сеанс не найден',
+  set_password_first: 'Сначала задайте пароль в профиле: иначе войти будет нечем',
+  unknown_timezone: 'Неизвестный часовой пояс',
+  check_settings: 'Проверьте настройки',
+  profile_text_limits: 'Ник — до 40 символов, о себе — до 200',
+  unknown_banner: 'Неизвестный фон',
+  profile_not_found: 'Профиль не найден или скрыт',
+  image_unreadable: 'Не удалось прочитать картинку: выберите PNG, JPG или WebP',
+  image_3mb: 'Нужна картинка PNG, JPG или WebP до 3 МБ',
+  image_4mb: 'Нужна картинка PNG, JPG или WebP до 4 МБ',
+  image_5mb: 'Нужна картинка PNG, JPG или WebP до 5 МБ',
+  unknown_notification_type: 'Неизвестный тип уведомления',
+  ids_or_all: 'Укажите ids или all',
+
+  // ---- e-mail and password reset ----
+  enter_login_or_email: 'Введите логин или адрес почты',
+  mail_not_configured: 'Отправка почты не настроена администратором',
+  mail_wait: 'Письмо уже отправлено. Подождите минуту перед повторной отправкой.',
+  smtp_first: 'Сначала укажите SMTP-сервер и сохраните настройки',
+  email_first: 'Сначала укажите адрес электронной почты',
+  link_invalid: 'Ссылка недействительна или устарела',
+  reset_link_invalid: 'Ссылка недействительна или устарела. Запросите сброс ещё раз.',
+  test_mail_address: 'Укажите адрес, на который отправить пробное письмо',
+  too_many_resets: 'Слишком много запросов на сброс пароля. Попробуйте позже.',
+  smtp_host_format: 'Адрес сервера: только имя хоста или IP',
+
+  // ---- users (administrators) ----
+  request_not_found: 'Заявка не найдена',
+  bad_role: 'Неверная роль',
+  user_not_found: 'Пользователь не найден',
+  last_admin_demote: 'Нельзя снять права с последнего администратора',
+  last_admin_delete: 'Нельзя удалить последнего администратора',
+  delete_self: 'Нельзя удалить собственную учётную запись',
+
+  // ---- settings, branding, updates ----
+  proxy_format: 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port',
+  branding_format: 'Название до 32 символов, цвет в виде #RRGGBB',
+  players_shown_range: 'Число ников: от 0 до 20',
+  poll_settings_range: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32',
+  update_not_configured: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm update',
+  update_running: 'Обновление уже выполняется',
+  update_request_failed: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)',
+  rollback_not_configured: 'Откат из панели не настроен на сервере. Выполните: sudo coregsm rollback',
+  update_or_rollback_running: 'Сейчас выполняется обновление или откат',
+  rollback_unavailable: 'Откат недоступен: предыдущая версия не сохранена',
+  request_pending: 'Запрос уже ожидает выполнения',
+  rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
+
+  // ---- servers, Discord bindings, alerts, deliveries ----
+  server_not_found: 'Сервер не найден',
+  game_address_port: 'Укажите игру, адрес и порт',
+  display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
+  channel_id_format: 'ID канала — число из 15–25 цифр',
+  alert_channel_first: 'Сначала выберите канал для оповещений',
+  bulk_select: 'Выберите привязки и действие',
+  delivery_not_found: 'Доставка не найдена',
+  retry_failed_only: 'Повторить можно только неудавшуюся доставку',
+  check_filter: 'Проверьте параметры фильтра',
+
+  // ---- maintenance windows ----
+  maintenance_not_found: 'Окно обслуживания не найдено',
+  bad_date: 'Неверная дата',
+  title_required: 'Укажите название',
+  end_after_start: 'Окончание должно быть позже начала',
+  window_max_7d: 'Окно обслуживания не может быть длиннее 7 суток',
+  daily_max_24h: 'Ежедневное окно не может быть длиннее суток',
+
+  // ---- news ----
+  news_not_found: 'Новость не найдена',
+  version_not_found: 'Версия не найдена',
+  version_unrestorable: 'Эту версию нельзя восстановить: {reason}',
+  news_time_draft_only: 'Время можно менять только у черновика или запланированной новости',
+  news_sending: 'Новость сейчас отправляется, подождите несколько секунд',
+  news_already_sent: 'Эта новость уже опубликована или отправляется',
+  image_8mb: 'Загрузите картинку PNG, JPG, GIF или WebP до 8 МБ',
+  test_channel_missing: 'Не задан тестовый канал: выберите его в настройках новостей',
+  test_not_found: 'Тест не найден',
+  bad_reaction: 'Неверная реакция',
+  too_many_reactions: 'Слишком много реакций. Подождите минуту.',
+  bad_draft: 'Неверные данные черновика',
+  draft_too_large: 'Черновик слишком большой',
+  bad_channel: 'Неверный канал',
+  key_required: 'Укажите key',
+  pinned_bool: 'Укажите pinned: true или false',
+  publish_in_future: 'Укажите время публикации в будущем',
+  publish_time_or_null: 'Укажите время публикации или null',
+  news_channel_required: 'Выберите канал для новости',
+  title_max: 'Заголовок: не более 256 символов',
+  text_max: 'Текст: не более 4096 символов',
+  field_name_required: 'У каждого поля должно быть название',
+  field_value_required: 'У каждого поля должен быть текст',
+  field_value_max: 'Текст поля: не более 1024 символов',
+  fields_max: 'Полей не больше 25',
+  content_max: 'Сообщение над embed: не более 2000 символов',
+  extra_embeds_max: 'Дополнительных embed не больше 9',
+  status_embeds_max: 'Статусов серверов не больше 5',
+  gallery_max: 'В галерее не больше 6 картинок',
+  change_required: 'Текст изменения не может быть пустым',
+  change_max: 'Изменение: не более 200 символов',
+  changes_max: 'Изменений не больше 20',
+  countdown_label_max: 'Подпись таймера: не более 60 символов',
+  button_label_required: 'У кнопки должна быть подпись',
+  button_label_max: 'Подпись кнопки: не более 40 символов',
+  buttons_max: 'Кнопок не больше 3',
+  empty_message: 'Напишите текст или заполните embed: пустое сообщение отправить нельзя',
+  embeds_max_10: 'В сообщении не больше 10 embed',
+  embed_too_long: 'Embed длиннее 6000 символов (лимит Discord): сократите текст',
+  embeds_too_long: 'Все embed вместе длиннее 6000 символов (лимит Discord): сократите текст',
+
+  // ---- backups ----
+  backup_op_failed: 'Не удалось выполнить операцию: {reason}',
+  backup_not_found: 'Копия не найдена',
+  backup_remote_https: 'Адрес для копии должен начинаться с https://',
+  backup_passphrase_min: 'Пароль шифрования: не короче 8 символов',
+  backup_settings_range: 'Проверьте поля: расписание off/daily/weekly, хранить от 1 до 30 копий',
+  backup_busy: 'Резервная копия уже создаётся, подождите',
+  backup_corrupt: 'Файл повреждён',
+  backup_not_encrypted: 'Это не зашифрованная копия CoreGSM',
+  backup_bad_passphrase: 'Неверный пароль шифрования или файл повреждён',
+  backup_not_coregsm: 'Файл повреждён или это копия не от CoreGSM',
+  backup_no_admin: 'В копии нет ни одного активного администратора: восстановление отменено, чтобы вы не потеряли доступ к панели',
+  backup_bad_entry: 'В архиве есть недопустимый файл («{name}»). Восстановление отменено.',
+  backup_needs_passphrase: 'Архив зашифрован: укажите пароль шифрования (тот, что был задан при создании копии)',
+  backup_bad_structure: 'Архив повреждён или имеет неверную структуру',
+  backup_no_db: 'В архиве нет базы данных (coregsm.db)',
+  backup_wrong_file: 'Это не файл резервной копии CoreGSM (нужен .tar.gz или .db)',
+  backup_wrong_file_short: 'Это не файл резервной копии CoreGSM',
+  backup_too_large: 'Файл больше 300 МБ',
+  upload_aborted: 'Загрузка прервана',
+} as const satisfies Record<string, string>;
+
+export type ErrorCode = keyof typeof ERRORS;
+
+const exact = new Map<string, ErrorCode>();
+const templates: { code: ErrorCode; re: RegExp; names: string[] }[] = [];
+for (const [code, text] of Object.entries(ERRORS) as [ErrorCode, string][]) {
+  const names = [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+  if (!names.length) {
+    exact.set(text, code);
+    continue;
+  }
+  const pattern = text
+    .split(/\{\w+\}/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('([\\s\\S]+?)');
+  templates.push({ code, re: new RegExp(`^${pattern}$`), names });
+}
+
+/** the code (and the values of a template) of an error text; null for a text that is not in the catalogue */
+export function codeOf(text: string): { code: ErrorCode; params?: Record<string, string> } | null {
+  const c = exact.get(text);
+  if (c) return { code: c };
+  for (const t of templates) {
+    const m = t.re.exec(text);
+    if (m) return { code: t.code, params: Object.fromEntries(t.names.map((n, i) => [n, m[i + 1]])) };
+  }
+  return null;
+}
+
+/** adds `code` (and `params`) to every error answer whose text is in the catalogue */
+export const errorCodes: RequestHandler = (_req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = (body?: unknown) => {
+    if (res.statusCode >= 400 && body && typeof body === 'object' && !Array.isArray(body)) {
+      const b = body as { error?: unknown; code?: unknown };
+      if (typeof b.error === 'string' && b.code === undefined) {
+        const m = codeOf(b.error);
+        if (m) body = { ...b, code: m.code, ...(m.params ? { params: m.params } : {}) };
+      }
+    }
+    return json(body);
+  };
+  next();
+};
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gameIcons.ts" << '__COREGSM_EOF__'
 // Pictograms for the games, drawn on the PNG card. Same data as core-frontend/src/gameIcons.ts: keep both in sync.
 export const ICON_PATHS: Record<string, string> = {
@@ -7772,6 +8001,7 @@ import { registerCovers } from './covers.js';
 import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
+import { errorCodes } from './errors.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -7805,6 +8035,8 @@ const app = express();
 // writes. The backend port is not published, so clients cannot spoof them; keep it that way (see security.ts).
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+// error answers get a stable code next to the Russian text (errors.ts)
+app.use(errorCodes);
 app.use(securityHeaders);
 // a cookie-authenticated state-changing request must carry X-CoreGSM (CSRF guard)
 app.use('/api', csrfGuard);
@@ -41509,6 +41741,8 @@ __COREGSM_EOF__
  * memory (legacy migration / a fresh sign-in), or a harmless marker while the cookie session is believed to be active.
  * The server ignores a Bearer value that is not a valid token and falls back to the cookie.
  */
+import { localizeError } from './apiErrors';
+
 const LEGACY_KEY = 'coregsm_token';
 const HINT_KEY = 'coregsm_signed';
 const MARKER = 'cookie-session';
@@ -41666,7 +41900,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     setToken('');
     window.dispatchEvent(new Event('coregsm:logout'));
   }
-  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `Ошибка ${res.status}`, res.status, data as Record<string, unknown>);
+  if (!res.ok) throw new ApiError(localizeError(data) ?? `Ошибка ${res.status}`, res.status, data as Record<string, unknown>);
   return data as T;
 }
 
@@ -42153,6 +42387,32 @@ export interface PublicNewsFull extends PublicNews {
 
 /** who signs a news item (the Discord display name 1:1 and picture when linked, else the site login and picture) */
 export interface NewsAuthor { name: string; iconUrl: string | null; source: 'discord' | 'site' }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/apiErrors.ts" << '__COREGSM_EOF__'
+/**
+ * The text of an API error in the panel's language. Error answers carry a stable `code` (and `params` for the values
+ * of a template) next to the Russian `error` text; English is looked up by the code, Russian is the server's text.
+ * A code without a translation (a newer backend) falls back to the server's text.
+ */
+import { getLang } from './i18n';
+import errorsEn from './locales/errors.en';
+
+const fill = (text: string, params: unknown) =>
+  text.replace(/\{(\w+)\}/g, (_, k: string) => {
+    const v = params && typeof params === 'object' ? (params as Record<string, unknown>)[k] : undefined;
+    return v === undefined || v === null ? '' : String(v);
+  });
+
+export function localizeError(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const { error, code, params } = data as { error?: unknown; code?: unknown; params?: unknown };
+  if (getLang() === 'en' && typeof code === 'string' && Object.prototype.hasOwnProperty.call(errorsEn, code)) return fill(errorsEn[code], params);
+  return typeof error === 'string' ? error : null;
+}
+
+/** the message of a failed request read with plain fetch (file uploads): the API's text, else `fallback` */
+export const errorText = (data: unknown, fallback: string) => localizeError(data) ?? fallback;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/appearance.ts" << '__COREGSM_EOF__'
@@ -47102,6 +47362,7 @@ __COREGSM_EOF__
 import { getToken, type NewsCategory, type NewsChangeKind, type NewsEmbed, type NewsPayload } from '../../api';
 import { isHttpsUrl, isChangeKind, normCategory } from './newsLogic';
 import { GAMES } from '../../games';
+import { errorText } from '../../apiErrors';
 
 // ---------- limits (Discord) ----------
 export const LIMITS = {
@@ -47343,7 +47604,7 @@ export async function uploadImage(file: File): Promise<string> {
   if (file.size > MAX_UPLOAD) throw new Error('Файл больше 8 МБ');
   const res = await fetch('/api/news/images', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Ошибка ${res.status}`);
+  if (!res.ok) throw new Error(errorText(data, `Ошибка ${res.status}`));
   return (data as { name: string }).name;
 }
 
@@ -47827,13 +48088,14 @@ import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { toast, UserAvatar } from '../../ui';
+import { errorText } from '../../apiErrors';
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
 /** raw-body image upload (PUT, content-type = the file type); resolves, or throws an Error with the server's message */
 export async function uploadImage(path: string, file: File, fallback: string): Promise<void> {
   const r = await fetch(`/api${path}`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
-  if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? fallback);
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), fallback));
 }
 
 /** true while a file is dragged over the element; the handlers go on the element */
@@ -54720,6 +54982,188 @@ const en: Record<keyof typeof ru, string> = {
 export default en;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/locales"
+  cat > "$APP_DIR/core-frontend/src/locales/errors.en.ts" << '__COREGSM_EOF__'
+/**
+ * English texts of the API error codes (core-backend/src/errors.ts holds the codes and the Russian texts).
+ * Every code of the backend needs a text here with the same {placeholders}: test/errors.test.ts checks it.
+ */
+const errorsEn: Record<string, string> = {
+  // ---- request, access, limits ----
+  bad_json: 'Invalid JSON in the request',
+  too_large: 'The request is too large',
+  bad_request: 'Invalid request',
+  internal_error: 'Internal server error',
+  auth_required: 'Sign-in required',
+  admin_only: 'Only an administrator can do this',
+  staff_only: 'Only an administrator or a moderator can do this',
+  csrf_header_missing: 'Request rejected: the X-CoreGSM header is missing',
+  rate_limited: 'Too many requests. Wait a minute.',
+  rate_limited_later: 'Too many requests. Try again later.',
+  too_many_attempts: 'Too many attempts. Wait 10 minutes.',
+  bad_data: 'Invalid data',
+  bad_data_lower: 'invalid data',
+  check_form: 'Check the form fields',
+  check_fields: 'Check the fields',
+  not_found: 'Not found',
+
+  // ---- sign-in, setup, registration ----
+  login_locked: 'Too many wrong attempts. Try again in {sec} s.',
+  ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
+  bad_credentials: 'Wrong login or password',
+  registration_pending: 'Your registration has not been approved by an administrator yet',
+  already_set_up: 'The panel is already set up. Sign in with your login.',
+  bad_setup_code: 'Wrong setup code',
+  not_set_up: 'The panel is not set up yet: create the administrator first',
+  registration_closed: 'Registration is closed by the administrator',
+  rules_required: 'You have to accept the community rules',
+  login_taken: 'This login is already taken',
+  too_many_registrations: 'Too many registrations from this address. Try again later.',
+  username_format: 'Login: 3–32 characters: letters, digits, one space between words, _ . -',
+  password_min_10: 'The password must be at least 10 characters long',
+  password_min_8: 'The password must be at least 8 characters long',
+
+  // ---- the signed-in user ----
+  new_password_min_8: 'The new password must be at least 8 characters long',
+  passwords_differ: 'The passwords do not match',
+  wrong_current_password: 'The current password is wrong',
+  email_needs_password: 'Enter your current password to change the e-mail',
+  check_address: 'Check the address',
+  bad_email: 'Invalid e-mail address',
+  email_taken: 'This address is already linked to another account',
+  session_not_found: 'Session not found',
+  set_password_first: 'Set a password in your profile first, otherwise you will have no way to sign in',
+  unknown_timezone: 'Unknown time zone',
+  check_settings: 'Check the settings',
+  profile_text_limits: 'Nickname up to 40 characters, about up to 200',
+  unknown_banner: 'Unknown background',
+  profile_not_found: 'Profile not found or hidden',
+  image_unreadable: 'Could not read the image: choose a PNG, JPG or WebP file',
+  image_3mb: 'A PNG, JPG or WebP image up to 3 MB is required',
+  image_4mb: 'A PNG, JPG or WebP image up to 4 MB is required',
+  image_5mb: 'A PNG, JPG or WebP image up to 5 MB is required',
+  unknown_notification_type: 'Unknown notification type',
+  ids_or_all: 'Specify ids or all',
+
+  // ---- e-mail and password reset ----
+  enter_login_or_email: 'Enter your login or e-mail address',
+  mail_not_configured: 'Sending e-mail is not set up by the administrator',
+  mail_wait: 'The e-mail has already been sent. Wait a minute before sending it again.',
+  smtp_first: 'Enter the SMTP server and save the settings first',
+  email_first: 'Enter an e-mail address first',
+  link_invalid: 'The link is invalid or has expired',
+  reset_link_invalid: 'The link is invalid or has expired. Request a reset again.',
+  test_mail_address: 'Enter the address to send the test e-mail to',
+  too_many_resets: 'Too many password reset requests. Try again later.',
+  smtp_host_format: 'Server address: a host name or an IP address only',
+
+  // ---- users (administrators) ----
+  request_not_found: 'Request not found',
+  bad_role: 'Invalid role',
+  user_not_found: 'User not found',
+  last_admin_demote: 'The last administrator cannot be demoted',
+  last_admin_delete: 'The last administrator cannot be deleted',
+  delete_self: 'You cannot delete your own account',
+
+  // ---- settings, branding, updates ----
+  proxy_format: 'Proxy: host:port:login:password, socks5://login:password@host:port or http://host:port',
+  branding_format: 'Name up to 32 characters, colour as #RRGGBB',
+  players_shown_range: 'Number of nicknames: 0 to 20',
+  poll_settings_range: 'Outage confirmation: 1 to 5 polls, concurrency: 1 to 32',
+  update_not_configured: 'Updating from the panel is not set up on the server. Run: sudo coregsm update',
+  update_running: 'An update is already running',
+  update_request_failed: 'Could not create the update request (no write access to /app/update)',
+  rollback_not_configured: 'Rollback from the panel is not set up on the server. Run: sudo coregsm rollback',
+  update_or_rollback_running: 'An update or a rollback is running right now',
+  rollback_unavailable: 'Rollback is not available: the previous version was not kept',
+  request_pending: 'A request is already waiting to be carried out',
+  rollback_request_failed: 'Could not create the rollback request (no write access to /app/update)',
+
+  // ---- servers, Discord bindings, alerts, deliveries ----
+  server_not_found: 'Server not found',
+  game_address_port: 'Enter the game, the address and the port',
+  display_address_format: 'The display address must not contain spaces or quotes',
+  channel_id_format: 'A channel ID is a number of 15–25 digits',
+  alert_channel_first: 'Choose a channel for alerts first',
+  bulk_select: 'Choose bindings and an action',
+  delivery_not_found: 'Delivery not found',
+  retry_failed_only: 'Only a failed delivery can be retried',
+  check_filter: 'Check the filter parameters',
+
+  // ---- maintenance windows ----
+  maintenance_not_found: 'Maintenance window not found',
+  bad_date: 'Invalid date',
+  title_required: 'Enter a title',
+  end_after_start: 'The end must be later than the start',
+  window_max_7d: 'A maintenance window cannot be longer than 7 days',
+  daily_max_24h: 'A daily window cannot be longer than a day',
+
+  // ---- news ----
+  news_not_found: 'News item not found',
+  version_not_found: 'Version not found',
+  version_unrestorable: 'This version cannot be restored: {reason}',
+  news_time_draft_only: 'The time can only be changed for a draft or a scheduled news item',
+  news_sending: 'The news item is being sent, wait a few seconds',
+  news_already_sent: 'This news item has already been published or is being sent',
+  image_8mb: 'Upload a PNG, JPG, GIF or WebP image up to 8 MB',
+  test_channel_missing: 'No test channel: choose one in the news settings',
+  test_not_found: 'Test not found',
+  bad_reaction: 'Invalid reaction',
+  too_many_reactions: 'Too many reactions. Wait a minute.',
+  bad_draft: 'Invalid draft data',
+  draft_too_large: 'The draft is too large',
+  bad_channel: 'Invalid channel',
+  key_required: 'Specify key',
+  pinned_bool: 'Specify pinned: true or false',
+  publish_in_future: 'Choose a publication time in the future',
+  publish_time_or_null: 'Specify a publication time or null',
+  news_channel_required: 'Choose a channel for the news item',
+  title_max: 'Title: 256 characters at most',
+  text_max: 'Text: 4096 characters at most',
+  field_name_required: 'Every field needs a name',
+  field_value_required: 'Every field needs a text',
+  field_value_max: 'Field text: 1024 characters at most',
+  fields_max: '25 fields at most',
+  content_max: 'Message above the embed: 2000 characters at most',
+  extra_embeds_max: '9 extra embeds at most',
+  status_embeds_max: '5 server statuses at most',
+  gallery_max: '6 images in the gallery at most',
+  change_required: 'A change cannot be empty',
+  change_max: 'Change: 200 characters at most',
+  changes_max: '20 changes at most',
+  countdown_label_max: 'Countdown label: 60 characters at most',
+  button_label_required: 'Every button needs a label',
+  button_label_max: 'Button label: 40 characters at most',
+  buttons_max: '3 buttons at most',
+  empty_message: 'Write a text or fill in the embed: an empty message cannot be sent',
+  embeds_max_10: '10 embeds per message at most',
+  embed_too_long: 'The embed is longer than 6000 characters (the Discord limit): shorten the text',
+  embeds_too_long: 'All embeds together are longer than 6000 characters (the Discord limit): shorten the text',
+
+  // ---- backups ----
+  backup_op_failed: 'The operation failed: {reason}',
+  backup_not_found: 'Backup not found',
+  backup_remote_https: 'The backup address must start with https://',
+  backup_passphrase_min: 'Encryption password: at least 8 characters',
+  backup_settings_range: 'Check the fields: schedule off/daily/weekly, keep 1 to 30 backups',
+  backup_busy: 'A backup is already being created, wait',
+  backup_corrupt: 'The file is damaged',
+  backup_not_encrypted: 'This is not an encrypted CoreGSM backup',
+  backup_bad_passphrase: 'Wrong encryption password, or the file is damaged',
+  backup_not_coregsm: 'The file is damaged or is not a CoreGSM backup',
+  backup_no_admin: 'The backup has no active administrator: the restore was cancelled so that you do not lose access to the panel',
+  backup_bad_entry: 'The archive contains a forbidden file («{name}»). The restore was cancelled.',
+  backup_needs_passphrase: 'The archive is encrypted: enter the encryption password (the one set when the backup was created)',
+  backup_bad_structure: 'The archive is damaged or its structure is wrong',
+  backup_no_db: 'The archive has no database (coregsm.db)',
+  backup_wrong_file: 'This is not a CoreGSM backup file (a .tar.gz or .db file is needed)',
+  backup_wrong_file_short: 'This is not a CoreGSM backup file',
+  backup_too_large: 'The file is larger than 300 MB',
+  upload_aborted: 'The upload was interrupted',
+};
+
+export default errorsEn;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/locales"
   cat > "$APP_DIR/core-frontend/src/locales/ru.ts" << '__COREGSM_EOF__'
 /**
  * Russian dictionary: the source language and the fallback of every other one.
@@ -56448,6 +56892,7 @@ import { confirmDialog, promptDialog } from '../confirm';
 import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
+import { errorText } from '../apiErrors';
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -56457,7 +56902,7 @@ const isEncrypted = (name: string) => name.endsWith('.enc');
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
-  if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось получить копию');
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), 'Не удалось получить копию'));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
@@ -56591,7 +57036,7 @@ export default function BackupsCard() {
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
-      if (!r.ok) throw new Error(j?.error ?? 'Не удалось восстановить копию');
+      if (!r.ok) throw new Error(errorText(j, 'Не удалось восстановить копию'));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError((e as Error).message);
@@ -60282,6 +60727,7 @@ import { ErrorLine, Field, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
+import { errorText } from '../apiErrors';
 
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
@@ -60298,7 +60744,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     try {
       const r = await fetch(`/api/servers/${id}/cover`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
       const j = (await r.json().catch(() => null)) as { coverUrl?: string; error?: string } | null;
-      if (!r.ok) throw new Error(j?.error ?? 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)');
+      if (!r.ok) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)'));
       setCover(j?.coverUrl ?? null);
       onCoverChanged?.();
     } catch (e) {
@@ -62278,6 +62724,7 @@ import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
 import { ErrorLine, FieldError, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { errorText } from '../../apiErrors';
 
 /** готовые темы: основной цвет и конец градиента */
 const THEME_PRESETS = [
@@ -62341,7 +62788,7 @@ export function BrandCard() {
     setError('');
     try {
       const r = await fetch('/api/branding/logo', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
-      if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? 'Не удалось загрузить');
+      if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), 'Не удалось загрузить'));
       toast('Логотип обновлён');
       await reload();
     } catch (x) {

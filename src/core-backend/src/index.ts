@@ -10,6 +10,7 @@ import { registerCovers } from './covers.js';
 import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
+import { errorCodes } from './errors.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -43,6 +44,8 @@ const app = express();
 // writes. The backend port is not published, so clients cannot spoof them; keep it that way (see security.ts).
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+// error answers get a stable code next to the Russian text (errors.ts)
+app.use(errorCodes);
 app.use(securityHeaders);
 // a cookie-authenticated state-changing request must carry X-CoreGSM (CSRF guard)
 app.use('/api', csrfGuard);
