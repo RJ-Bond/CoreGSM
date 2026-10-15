@@ -1,14 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { IconBars, IconBolt, IconGrid, IconPlug, IconTrend, IconUsers, type IconProps } from '../../icons';
 import { navigate } from '../../ui/route';
 import { tabHref, type TabId } from './helpers';
 
-export const TAB_LIST: { id: TabId; label: string }[] = [
-  { id: '', label: 'Обзор' },
-  { id: 'players', label: 'Игроки' },
-  { id: 'history', label: 'История' },
-  { id: 'stats', label: 'Аналитика' },
-  { id: 'events', label: 'События' },
-  { id: 'connect', label: 'Подключение' },
+export const TAB_LIST: { id: TabId; label: string; icon: ComponentType<IconProps> }[] = [
+  { id: '', label: 'Обзор', icon: IconGrid },
+  { id: 'players', label: 'Игроки', icon: IconUsers },
+  { id: 'history', label: 'История', icon: IconTrend },
+  { id: 'stats', label: 'Аналитика', icon: IconBars },
+  { id: 'events', label: 'События', icon: IconBolt },
+  { id: 'connect', label: 'Подключение', icon: IconPlug },
 ];
 
 export const tabDomId = (id: TabId) => `srv-tab-${id || 'overview'}`;
@@ -94,6 +95,7 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
                 tabIndex={on ? 0 : -1}
                 className={`seg-item shrink-0 ${on ? 'on' : ''}`}
               >
+                <t.icon size={17} className="srv-tab-i" />
                 {t.label}
                 {n != null && n > 0 && <span className="tab-count">{n}</span>}
               </a>
