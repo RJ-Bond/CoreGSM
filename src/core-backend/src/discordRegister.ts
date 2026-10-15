@@ -50,7 +50,7 @@ export interface DiscordRegisterDeps {
 
 export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
   const { app, internal, wrap } = deps;
-  const profileUrl = () => `${deps.publicBase() ?? ''}/#/profile`;
+  const profileUrl = () => `${deps.publicBase() ?? ''}/profile`;
   const byDiscord = (id: string) => db.prepare('SELECT id, username, status, discord_id, discord_name FROM users WHERE discord_id = ?').get(id) as UserRow | undefined;
   const nickOwner = (nick: string, exceptUser: number) =>
     db.prepare('SELECT user_id FROM user_player WHERE ulower(game_nick) = ulower(?) AND user_id != ?').get(nick, exceptUser) as { user_id: number } | undefined;

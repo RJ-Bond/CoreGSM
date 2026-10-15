@@ -5,7 +5,7 @@ import DeliveryList from '../components/DeliveryList';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll } from '../ui';
+import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -43,7 +43,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
 
-  // #/admin/discord/new[/<serverId>]: open the form once the servers are known
+  // /admin/discord/new[/<serverId>]: open the form once the servers are known
   const openedFor = useRef('');
   useEffect(() => {
     if (!sub.startsWith('new')) { openedFor.current = ''; return; }
@@ -55,7 +55,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   }, [sub, loaded, servers]);
   const closeDraft = () => {
     setDraft(null);
-    if (sub.startsWith('new')) window.location.hash = '#/admin/discord';
+    if (sub.startsWith('new')) navigate('/admin/discord');
   };
 
   const server = (id: number) => servers.find((s) => s.id === id);
@@ -125,12 +125,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
     >
       {error && servers.length === 0 && bindings.length === 0 && !settings ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {loaded && settings && !settings.discordTokenSet && (
-        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен в настройках</GoLink>}>
+        <Notice action={<GoLink href="/admin/settings/bot">Указать токен в настройках</GoLink>}>
           Бот не подключён: без токена он не сможет писать в Discord.
         </Notice>
       )}
       {loaded && servers.length === 0 && (
-        <Notice tone="info" action={<GoLink href="#/admin/servers/new">Добавить сервер</GoLink>}>
+        <Notice tone="info" action={<GoLink href="/admin/servers/new">Добавить сервер</GoLink>}>
           Сначала добавьте сервер: привязывать пока нечего.
         </Notice>
       )}
@@ -202,7 +202,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
-            : <a className="btn mt-3" href="#/admin/servers/new">Сначала добавьте сервер</a>}
+            : <a className="btn mt-3" href="/admin/servers/new">Сначала добавьте сервер</a>}
         </Empty>
       )}
 

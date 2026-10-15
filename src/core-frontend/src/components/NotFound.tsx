@@ -20,11 +20,11 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
         ? 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.'
         : 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.'}
     >
-      <a className="btn" href="#/" data-magnetic>
+      <a className="btn" href="/" data-magnetic>
         На главную
         <IconArrow />
       </a>
-      <a className="btn btn-soft" href="#/servers">К серверам</a>
+      <a className="btn btn-soft" href="/servers">К серверам</a>
     </StateView>
   );
 }

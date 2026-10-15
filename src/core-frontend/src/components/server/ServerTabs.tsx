@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { navigate } from '../../ui/route';
 import { tabHref, type TabId } from './helpers';
 
 export const TAB_LIST: { id: TabId; label: string }[] = [
@@ -62,7 +63,7 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
     else if (e.key === 'End') n = TAB_LIST.length - 1;
     if (n < 0) return;
     e.preventDefault();
-    window.location.hash = tabHref(id, TAB_LIST[n].id);
+    navigate(tabHref(id, TAB_LIST[n].id));
     // the focus follows the selected tab
     requestAnimationFrame(() => document.getElementById(tabDomId(TAB_LIST[n].id))?.focus({ preventScroll: true }));
   };

@@ -59,7 +59,7 @@ export default function AlertsPage() {
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {tokenSet === false && (
-        <Notice action={<GoLink href="#/admin/settings/bot">Указать токен бота</GoLink>}>
+        <Notice action={<GoLink href="/admin/settings/bot">Указать токен бота</GoLink>}>
           Оповещения не дойдут: у бота нет токена, он не подключён к Discord.
         </Notice>
       )}

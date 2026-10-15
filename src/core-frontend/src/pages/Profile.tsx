@@ -17,7 +17,7 @@ import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
-import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useHash } from '../ui';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
 const TABS: { id: Tab; label: TKey }[] = [
@@ -27,10 +27,10 @@ const TABS: { id: Tab; label: TKey }[] = [
   { id: 'security', label: 'pf.tab.security' },
 ];
 
-/** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (#/profile/security). */
+/** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (/profile/security). */
 export default function ProfilePage() {
   const { me } = useAuth();
-  const { sub } = useHash();
+  const { sub } = useRoute();
   useI18n();
   if (!me) return null;
   const first = sub.split('/')[0];
@@ -43,7 +43,7 @@ export default function ProfilePage() {
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>
           {TABS.map((x) => (
-            <a key={x.id} href={`#/profile/${x.id}`} className="seg-item" aria-current={tab === x.id ? 'page' : undefined}>{t(x.label)}</a>
+            <a key={x.id} href={`/profile/${x.id}`} className="seg-item" aria-current={tab === x.id ? 'page' : undefined}>{t(x.label)}</a>
           ))}
         </nav>
       </div>
@@ -105,7 +105,7 @@ function OverviewTab() {
             {favs === null && <div className="skeleton h-20 rounded-2xl bg-soft" />}
             {favs && favs.length === 0 && <p className="font-semibold text-mute">{t('pf.favs.none')}</p>}
             {favs?.map((s) => (
-              <a key={s.id} href={`#/servers/${s.id}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5 transition hover:ring-2 hover:ring-brand/30">
+              <a key={s.id} href={`/servers/${s.id}`} className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5 transition hover:ring-2 hover:ring-brand/30">
                 <GameAvatar game={s.game} size={36} />
                 <span className="min-w-0 flex-1 truncate font-bold">{s.name}</span>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} />

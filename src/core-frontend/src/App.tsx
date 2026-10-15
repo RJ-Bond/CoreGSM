@@ -1,27 +1,31 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
-import CommandPalette from './components/CommandPalette';
 import NotificationBell from './components/NotificationBell';
 import NotFound from './components/NotFound';
-import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import Setup from './pages/Setup';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
-import VerifyEmail from './pages/VerifyEmail';
 import ServersPage from './pages/Servers';
-import { NewsFeed } from './pages/News';
-import AdminPage from './pages/Admin';
-import ProfilePage from './pages/Profile';
-import PublicProfilePage from './pages/PublicProfile';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
-import StatusPage from './pages/Status';
-import UiKitPage from './pages/UiKit';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, parseHash, toast, useHash } from './ui';
+import { lazyPage, PageFrame } from './lazyPage';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, navigate, parseRoute, toast, useRoute } from './ui';
+
+// loaded on demand: the server list (the first screen) does not wait for these
+const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
+const AdminPage = lazyPage(() => import('./pages/Admin'));
+const ProfilePage = lazyPage(() => import('./pages/Profile'));
+const PublicProfilePage = lazyPage(() => import('./pages/PublicProfile'));
+const StatusPage = lazyPage(() => import('./pages/Status'));
+const UiKitPage = lazyPage(() => import('./pages/UiKit'));
+// rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
+const Setup = lazyPage(() => import('./pages/Setup'));
+const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
+const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
+const Tour = lazyPage(() => import('./components/Tour'));
+const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 
 const IconStatus = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -95,7 +99,7 @@ const IconLogout = () => (
 );
 
 export default function App() {
-  const { page: rawPage, sub } = useHash();
+  const { page: rawPage, sub } = useRoute();
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
@@ -147,15 +151,14 @@ export default function App() {
     return () => clearInterval(t);
   }, [boot.offline, load]);
 
-  // back from "Войти через Discord": the backend puts the new session token into the address (#/auth/<jwt>).
+  // back from "Войти через Discord": the backend puts the new session token into the address (/auth/<jwt>).
   // The token leaves the address bar at once (no history entry), is checked with /me and only then kept.
   const pendingJwt = useRef('');
   useEffect(() => {
     if (rawPage !== 'auth' || !sub) return;
     pendingJwt.current = sub;
     setAuthing(true);
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/servers`);
-    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    navigate('/servers', { replace: true });
   }, [rawPage, sub]);
   useEffect(() => {
     if (!boot.ready || !authing) return;
@@ -176,7 +179,7 @@ export default function App() {
         await load();
       } else {
         toast(t('app.discordFail'), 'err');
-        window.location.hash = '#/login';
+        navigate('/login');
       }
       setAuthing(false);
     })();
@@ -192,9 +195,9 @@ export default function App() {
         if (!meRef.current || loggingOut.current || getToken()) return;
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
-        const { page } = parseHash();
+        const { page } = parseRoute();
         const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'u');
-        if (!publicRoute) window.location.hash = '#/login';
+        if (!publicRoute) navigate('/login');
         void load();
       }, 300);
     };
@@ -229,7 +232,7 @@ export default function App() {
       /* ignore */
     }
     setToken('');
-    window.location.hash = '#/servers';
+    navigate('/servers');
     await load();
     loggingOut.current = false;
   }, [load]);
@@ -255,7 +258,7 @@ export default function App() {
 
   // ---- document title and focus follow the route ----
   const visible = PAGES.filter((p) => !p.admin || isStaff);
-  // a public player page (#/u/<name>) is open to guests even when the rest of the panel is closed
+  // a public player page (/u/<name>) is open to guests even when the rest of the panel is closed
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
@@ -321,7 +324,9 @@ export default function App() {
   if (boot.needsSetup) {
     return (
       <AuthContext.Provider value={ctx}>
-        <Setup onDone={() => void load()} />
+        <PageFrame>
+          <Setup onDone={() => void load()} />
+        </PageFrame>
         <Toaster />
         <ConfirmHost />
       </AuthContext.Provider>
@@ -334,7 +339,9 @@ export default function App() {
     return (
       <AuthContext.Provider value={ctx}>
         <AuthShell>
-          {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+          <PageFrame>
+            {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+          </PageFrame>
         </AuthShell>
         <Toaster />
         <ConfirmHost />
@@ -344,9 +351,9 @@ export default function App() {
 
   // sign-in / registration screens: for a closed panel they are the only thing a guest sees
   if (showAuth) {
-    const done = () => { window.location.hash = '#/servers'; void load(); };
+    const done = () => { navigate('/servers'); void load(); };
     const mode = rawPage === 'register' && access.registration ? 'register' : 'login';
-    // after a failed Discord sign-in the backend sends #/login/<message>
+    // after a failed Discord sign-in the backend sends /login/<message>
     let notice = '';
     if (rawPage === 'login' && sub) {
       try { notice = decodeURIComponent(sub); } catch { notice = sub; }
@@ -373,7 +380,7 @@ export default function App() {
   return (
     <AuthContext.Provider value={ctx}>
       <a
-        href="#/servers"
+        href="/servers"
         className="skip-link"
         onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}
       >
@@ -381,14 +388,14 @@ export default function App() {
       </a>
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
-          <a href="#/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px]">
+          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px]">
             <Logo size={34} alt="" />
             <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={`#/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
+              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
                 {t(p.label)}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
@@ -412,7 +419,7 @@ export default function App() {
             {me ? (
               <>
                 <a
-                  href="#/profile"
+                  href="/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
                   className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
                   title={t('hdr.profileOf', { name: me.username })}
@@ -433,28 +440,32 @@ export default function App() {
               </>
             ) : (
               <>
-                <a href="#/login" className="btn btn-soft btn-sm">{t('hdr.login')}</a>
-                {access.registration && <a href="#/register" className="btn btn-sm hidden sm:inline-flex">{t('hdr.register')}</a>}
+                <a href="/login" className="btn btn-soft btn-sm">{t('hdr.login')}</a>
+                {access.registration && <a href="/register" className="btn btn-sm hidden sm:inline-flex">{t('hdr.register')}</a>}
               </>
             )}
           </div>
         </header>
 
         <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
-          {page === 'servers' && <ServersPage sub={sub} />}
-          {page === 'news' && <NewsFeed sub={sub} />}
-          {page === 'status' && <StatusPage />}
-          {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
-          {page === 'profile' && <ProfilePage />}
-          {page === 'u' && <PublicProfilePage username={publicName} />}
-          {page === '_ui' && <UiKitPage />}
-          {page === '404' && <NotFound />}
+          <PageFrame>
+            {page === 'servers' && <ServersPage sub={sub} />}
+            {page === 'news' && <NewsFeed sub={sub} />}
+            {page === 'status' && <StatusPage />}
+            {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
+            {page === 'profile' && <ProfilePage />}
+            {page === 'u' && <PublicProfilePage username={publicName} />}
+            {page === '_ui' && <UiKitPage />}
+            {page === '404' && <NotFound />}
+          </PageFrame>
         </main>
 
         <Toaster />
         <ConfirmHost />
-        {isAdmin && <Tour />}
-        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
+        <Suspense fallback={null}>
+          {isAdmin && <Tour />}
+          {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
+        </Suspense>
 
         <nav
           className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"
@@ -467,7 +478,7 @@ export default function App() {
               return (
                 <li key={p.id} className="flex-1">
                   <a
-                    href={`#/${p.id}`}
+                    href={`/${p.id}`}
                     aria-current={active ? 'page' : undefined}
                     className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
@@ -482,7 +493,7 @@ export default function App() {
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '#/register' : '#/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
+                <a href={access.registration ? '/register' : '/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
                   <span className="grid h-7 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   {t('hdr.login')}
                 </a>

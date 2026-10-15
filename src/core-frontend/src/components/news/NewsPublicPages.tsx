@@ -82,7 +82,7 @@ function FeedSkeleton() {
   );
 }
 
-/** #/news: rubrics, pinned first, month groups, the side panel */
+/** /news: rubrics, pinned first, month groups, the side panel */
 export function NewsListPage() {
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -154,7 +154,7 @@ export function NewsListPage() {
                 <ul className="nw-side-list">
                   {pinned.map((n) => (
                     <li key={n.id}>
-                      <a href={`#/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
+                      <a href={`/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
                     </li>
                   ))}
                 </ul>
@@ -195,7 +195,7 @@ export function NewsListPage() {
   );
 }
 
-/** #/news/<id> */
+/** /news/<id> */
 export function NewsArticlePage({ id }: { id: number }) {
   const { me } = useAuth();
   const [item, setItem] = useState<PublicNewsFull | null>(null);
@@ -209,7 +209,7 @@ export function NewsArticlePage({ id }: { id: number }) {
     .catch((e: unknown) => setError({ status: e instanceof ApiError ? e.status : 0, text: (e as Error).message }));
   usePoll(load, 30_000);
 
-  const back = <a className="btn btn-soft" href="#/news">{t('nw.back')}</a>;
+  const back = <a className="btn btn-soft" href="/news">{t('nw.back')}</a>;
   return (
     <div className="nw-page">
       <div className="nw-article-wrap">

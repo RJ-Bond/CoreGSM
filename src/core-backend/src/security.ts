@@ -12,6 +12,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { db, setSetting } from './db.js';
+import { guardGet, guardSet } from './loginGuard.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
 
@@ -124,36 +125,36 @@ export function windowLimiter(max: number, windowMs: number, message = 'Слиш
   };
 }
 
-// per-address lockout after repeated failed logins across different usernames (the per-account lockout is in index.ts)
+// per-address lockout after repeated failed logins across different usernames (the per-account lockout is in auth.ts)
 const IP_LOCK_AFTER = 6;
 const IP_LOCK_MIN_NAMES = 3;
-const ipFails = new Map<string, { n: number; names: Set<string>; until: number; last: number; level: number }>();
-setInterval(() => {
-  for (const [k, v] of ipFails) if (v.last < Date.now() - 3600_000 && v.until < Date.now()) ipFails.delete(k);
-}, 600_000).unref();
+// kept in SQLite (loginGuard.ts): a restart does not lift a lockout
+interface IpFails { n: number; names: string[]; until: number; last: number; level: number }
 
 /** seconds until this address may try again (0 = not locked) */
 export function ipLockRemaining(ip: string | undefined): number {
-  const f = ipFails.get(ip ?? 'x');
+  const f = guardGet<IpFails>('ip', ip ?? 'x');
   return f && f.until > Date.now() ? Math.ceil((f.until - Date.now()) / 1000) : 0;
 }
 
 export function ipLoginFailed(ip: string | undefined, username: string): void {
   const key = ip ?? 'x';
   const now = Date.now();
-  let f = ipFails.get(key);
-  if (!f || f.last < now - 30 * 60_000) f = { n: 0, names: new Set(), until: 0, last: now, level: f?.level ?? 0 };
+  let f = guardGet<IpFails>('ip', key);
+  if (!f || f.last < now - 30 * 60_000) f = { n: 0, names: [], until: 0, last: now, level: f?.level ?? 0 };
   f.n++;
   f.last = now;
-  if (f.names.size < 50) f.names.add(username.toLowerCase());
-  if (f.n >= IP_LOCK_AFTER && f.names.size >= IP_LOCK_MIN_NAMES) {
+  const name = username.toLowerCase();
+  if (f.names.length < 50 && !f.names.includes(name)) f.names.push(name);
+  if (f.n >= IP_LOCK_AFTER && f.names.length >= IP_LOCK_MIN_NAMES) {
     // 1, 2, 4 ... up to 30 minutes
     f.until = now + Math.min(30 * 60_000, 60_000 * 2 ** f.level);
     f.level++;
     f.n = 0;
-    f.names.clear();
+    f.names = [];
   }
-  ipFails.set(key, f);
+  // forgotten an hour after the last failure (and never while locked)
+  guardSet('ip', key, f, Math.max(f.until, f.last + 3600_000));
 }
 
 // ---------- tokens ----------
@@ -317,6 +318,7 @@ export function registerSecurity(d: SecurityDeps): void {
     db.prepare('DELETE FROM email_verifications WHERE user_id = ?').run(id);
     db.prepare('INSERT INTO email_verifications (token_hash, user_id, email, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), id, u.email.toLowerCase(), Date.now() + 24 * 3600_000);
     const en = prefsOf(id).lang === 'en';
+    // links with a token use the #/ form: a fragment never reaches the server, so the token stays out of access logs
     const url = `${d.publicBase() ?? d.baseOf(req)}/#/verify/${token}`;
     const body = layout(
       d.brandName(),

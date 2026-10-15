@@ -11,6 +11,8 @@ export interface Api {
   dir: string;
   dbPath: string;
   stop: () => Promise<void>;
+  /** stops the backend (SIGTERM) and starts it again on the same database and port */
+  restart: () => Promise<void>;
   call: (method: string, url: string, opts?: { token?: string; body?: unknown; raw?: BodyInit; headers?: Record<string, string> }) => Promise<{ status: number; body: any }>;
 }
 
@@ -41,31 +43,40 @@ export async function startBackend(extraEnv: Record<string, string> = {}): Promi
     NODE_ENV: 'test',
     ...extraEnv,
   };
-  const child: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
-    cwd: path.resolve(import.meta.dirname, '..'),
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
   let log = '';
-  child.stdout?.on('data', (d) => (log += String(d)));
-  child.stderr?.on('data', (d) => (log += String(d)));
   const base = `http://127.0.0.1:${port}`;
-
-  const started = Date.now();
-  for (;;) {
-    if (child.exitCode !== null) throw new Error(`backend exited early:\n${log}`);
-    try {
-      const r = await fetch(`${base}/api/setup/status`);
-      if (r.ok) break;
-    } catch {
-      /* not listening yet */
+  const boot = async (): Promise<ChildProcess> => {
+    const child: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+      cwd: path.resolve(import.meta.dirname, '..'),
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout?.on('data', (d) => (log += String(d)));
+    child.stderr?.on('data', (d) => (log += String(d)));
+    const started = Date.now();
+    for (;;) {
+      if (child.exitCode !== null) throw new Error(`backend exited early:\n${log}`);
+      try {
+        const r = await fetch(`${base}/api/setup/status`);
+        if (r.ok) break;
+      } catch {
+        /* not listening yet */
+      }
+      if (Date.now() - started > 30_000) {
+        child.kill();
+        throw new Error(`backend did not start in 30 s:\n${log}`);
+      }
+      await new Promise((r) => setTimeout(r, 150));
     }
-    if (Date.now() - started > 30_000) {
-      child.kill();
-      throw new Error(`backend did not start in 30 s:\n${log}`);
-    }
-    await new Promise((r) => setTimeout(r, 150));
-  }
+    return child;
+  };
+  let child = await boot();
+  const halt = async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise((r) => child.once('exit', r));
+    child.kill();
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 10_000))]);
+  };
 
   const call: Api['call'] = async (method, url, opts = {}) => {
     const headers: Record<string, string> = { ...(opts.headers ?? {}) };
@@ -93,9 +104,12 @@ export async function startBackend(extraEnv: Record<string, string> = {}): Promi
     dir,
     dbPath: env.DB_PATH,
     call,
+    restart: async () => {
+      await halt();
+      child = await boot();
+    },
     stop: async () => {
-      child.kill();
-      await new Promise((r) => setTimeout(r, 150));
+      await halt();
       try {
         fs.rmSync(dir, { recursive: true, force: true });
       } catch {

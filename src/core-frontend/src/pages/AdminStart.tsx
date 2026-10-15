@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
-import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, toast, usePoll } from '../ui';
+import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -84,11 +84,11 @@ function useStartSteps() {
       }
     }
     return [
-      { id: 'server', short: 'сервер', title: 'Добавьте игровой сервер', why: 'Без сервера панели нечего показывать: онлайн, карту и пинг она берёт у вашего игрового сервера.', href: '#/admin/servers/new', cta: 'Добавить сервер', state: st(raw.servers) },
-      { id: 'bot', short: 'бот', title: 'Подключите Discord-бота', why: 'Бот публикует состояние серверов и новости в Discord. Ему нужен токен из Discord Developer Portal.', href: '#/admin/settings/bot', cta: 'Указать токен', state: bot, note: botNote },
-      { id: 'channel', short: 'канал', title: 'Привяжите канал для сообщений', why: 'Привязка говорит боту, в какой канал писать. Он отправит одно сообщение и будет обновлять его само.', href: '#/admin/discord', cta: 'Привязать канал', state: st(raw.bindings) },
-      { id: 'news', short: 'новость', title: 'Напишите первую новость', why: 'Новости видят и игроки в панели, и участники в Discord: так удобно сообщать о вайпах и работах.', href: '#/admin/news/new', cta: 'Написать новость', state: st(raw.news) },
-      { id: 'brand', short: 'оформление', title: 'Настройте оформление', why: 'Название, цвет и логотип делают панель вашей: их видят посетители и участники Discord.', href: '#/admin/settings/brand', cta: 'Настроить', state: brandDone ? 'done' : 'todo' },
+      { id: 'server', short: 'сервер', title: 'Добавьте игровой сервер', why: 'Без сервера панели нечего показывать: онлайн, карту и пинг она берёт у вашего игрового сервера.', href: '/admin/servers/new', cta: 'Добавить сервер', state: st(raw.servers) },
+      { id: 'bot', short: 'бот', title: 'Подключите Discord-бота', why: 'Бот публикует состояние серверов и новости в Discord. Ему нужен токен из Discord Developer Portal.', href: '/admin/settings/bot', cta: 'Указать токен', state: bot, note: botNote },
+      { id: 'channel', short: 'канал', title: 'Привяжите канал для сообщений', why: 'Привязка говорит боту, в какой канал писать. Он отправит одно сообщение и будет обновлять его само.', href: '/admin/discord', cta: 'Привязать канал', state: st(raw.bindings) },
+      { id: 'news', short: 'новость', title: 'Напишите первую новость', why: 'Новости видят и игроки в панели, и участники в Discord: так удобно сообщать о вайпах и работах.', href: '/admin/news/new', cta: 'Написать новость', state: st(raw.news) },
+      { id: 'brand', short: 'оформление', title: 'Настройте оформление', why: 'Название, цвет и логотип делают панель вашей: их видят посетители и участники Discord.', href: '/admin/settings/brand', cta: 'Настроить', state: brandDone ? 'done' : 'todo' },
     ];
   }, [raw, brandDone]);
 
@@ -101,13 +101,13 @@ function useStartSteps() {
   return { loading: steps === null, steps: steps ?? [], skipped, skip, unskip, doneCount, total: 5, resolved };
 }
 
-/** `#/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
+/** `/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
 export function AdminHome() {
   const s = useStartSteps();
   useEffect(() => {
     if (s.loading) return;
-    const target = s.resolved ? '#/admin/servers' : '#/admin/start';
-    window.location.replace(`${window.location.pathname}${window.location.search}${target}`);
+    const target = s.resolved ? '/admin/servers' : '/admin/start';
+    navigate(target, { replace: true });
   }, [s.loading, s.resolved]);
   return <StartSkeleton />;
 }
@@ -169,11 +169,11 @@ export default function AdminStart() {
   };
 
   const quick: { key: string; label: string; text: string; icon: ReactNode; href?: string; onClick?: () => void }[] = [
-    { key: 'server', label: 'Добавить сервер', text: 'Игра, адрес и порт', icon: <IconServers />, href: '#/admin/servers/new' },
-    { key: 'news', label: 'Написать новость', text: 'С шаблоном и предпросмотром', icon: <IconNews />, href: '#/admin/news/new' },
+    { key: 'server', label: 'Добавить сервер', text: 'Игра, адрес и порт', icon: <IconServers />, href: '/admin/servers/new' },
+    { key: 'news', label: 'Написать новость', text: 'С шаблоном и предпросмотром', icon: <IconNews />, href: '/admin/news/new' },
     { key: 'backup', label: busy ? 'Готовлю копию…' : 'Скачать копию', text: 'Все данные одним файлом', icon: <IconDownload />, onClick: () => void backup() },
-    { key: 'system', label: 'Проверить систему', text: 'Диск, бот, сертификат', icon: <IconSystem />, href: '#/admin/system' },
-    { key: 'player', label: 'Открыть панель как игрок', text: 'Так её видят посетители', icon: <IconStart />, href: '#/servers' },
+    { key: 'system', label: 'Проверить систему', text: 'Диск, бот, сертификат', icon: <IconSystem />, href: '/admin/system' },
+    { key: 'player', label: 'Открыть панель как игрок', text: 'Так её видят посетители', icon: <IconStart />, href: '/servers' },
   ];
 
   return (
@@ -200,7 +200,7 @@ export default function AdminStart() {
                 <h2 className="text-xl font-extrabold leading-tight">Завершено: всё настроено</h2>
                 <p className="font-semibold text-mute">Панель работает сама: бот обновляет сообщения, оповещения следят за серверами. Вернуться сюда можно из меню слева.</p>
               </div>
-              <a className="btn" href="#/admin/servers">Перейти к серверам</a>
+              <a className="btn" href="/admin/servers">Перейти к серверам</a>
             </div>
           ) : (
             <div className="tile flex flex-wrap items-center gap-4 p-5">
@@ -306,7 +306,7 @@ export default function AdminStart() {
 function MapRow({ id, label, desc, icon }: { id: string; label: string; desc: string; icon: ReactNode }) {
   return (
     <li>
-      <a href={`#/admin/${id}`} className="flex items-start gap-3 rounded-ui-lg px-2 py-2 transition hover:bg-soft">
+      <a href={`/admin/${id}`} className="flex items-start gap-3 rounded-ui-lg px-2 py-2 transition hover:bg-soft">
         <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-soft text-link">{icon}</span>
         <span className="min-w-0">
           <span className="block font-extrabold leading-tight">{label}</span>

@@ -98,7 +98,8 @@ cert_kind() { # letsencrypt | selfsigned
 
 PROXY_ARGS=()
 _p="$(envget PROXY_URL)"; [ -n "$_p" ] && PROXY_ARGS=(--proxy "${_p/#socks5:/socks5h:}")
-fetch() { curl -fsSL --max-time "${FETCH_TIMEOUT:-60}" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "$1"; }
+# --compressed: raw.githubusercontent.com sends install.sh gzipped (about half the size); curl unpacks it
+fetch() { curl -fsSL --compressed --max-time "${FETCH_TIMEOUT:-60}" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "$1"; }
 
 # raw.githubusercontent.com is cached for minutes after a push, so a fresh version.txt/install.sh can look
 # "old" for a while. The GitHub API serves the file as it is now; the plain URL stays as the fallback.
@@ -347,7 +348,10 @@ screen_power() {
 download_installer() { # download_installer EXPECTED_SHA -> prints path
   local tmp i; tmp="$(mktemp)"
   for i in 1 2 3 4; do
-    if fetch_repo install.sh > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ] && bash -n "$tmp"; then
+    # the plain URL first: it comes compressed; while its cache still holds an older file the checksum differs
+    # and the GitHub API (uncompressed, always current) is used instead
+    if { { fetch "$BASE/install.sh" > "$tmp" 2>/dev/null && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; } \
+         || { fetch_repo install.sh > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; }; } && bash -n "$tmp"; then
       printf '%s' "$tmp"; return 0
     fi
     sleep "${RETRY_SLEEP:-8}"

@@ -3,13 +3,14 @@ import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { toast, UserAvatar } from '../../ui';
+import { errorText } from '../../apiErrors';
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
 /** raw-body image upload (PUT, content-type = the file type); resolves, or throws an Error with the server's message */
 export async function uploadImage(path: string, file: File, fallback: string): Promise<void> {
   const r = await fetch(`/api${path}`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
-  if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error ?? fallback);
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), fallback));
 }
 
 /** true while a file is dragged over the element; the handlers go on the element */

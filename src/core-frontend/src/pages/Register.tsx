@@ -101,7 +101,7 @@ export default function Register({ onDone }: { onDone: () => void }) {
             {t('reg.sentText', { name: sent })}
           </p>
         </div>
-        <a href="#/login" className="btn w-full">{t('reg.toLogin')}</a>
+        <a href="/login" className="btn w-full">{t('reg.toLogin')}</a>
       </div>
     );
   }

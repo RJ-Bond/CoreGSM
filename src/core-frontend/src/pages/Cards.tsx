@@ -63,7 +63,7 @@ export default function CardsPage() {
       )}
       {loaded && !error && servers.length === 0 && (
         <Empty art={<CardsArt />} title="Карточек пока нет" text="Сначала добавьте сервер на вкладке «Серверы»: для каждого появится своя картинка.">
-          <a className="btn mt-3" href="#/admin/servers/new">Добавить сервер</a>
+          <a className="btn mt-3" href="/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
       <div className="fade-in grid gap-5 xl:grid-cols-2">

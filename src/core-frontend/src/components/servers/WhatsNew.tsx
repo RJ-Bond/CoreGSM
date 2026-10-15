@@ -126,7 +126,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
             ) : news ? (
               <div className="srv-new-news">
-                <a href="#/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
+                <a href="/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
                 {teaserNodes(news).length > 0 && <span className="srv-new-news-text">{teaserNodes(news)}</span>}
                 <span className="srv-new-news-foot">
                   {news.sentAt && <span className="srv-new-date">{fmtDateTime(news.sentAt)}</span>}
@@ -135,7 +135,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
                       {t('srv.new.openLink')}
                     </a>
                   )}
-                  <a href="#/news" className="btn-link btn-xs">{t('srv.new.allNews')}</a>
+                  <a href="/news" className="btn-link btn-xs">{t('srv.new.allNews')}</a>
                 </span>
               </div>
             ) : (

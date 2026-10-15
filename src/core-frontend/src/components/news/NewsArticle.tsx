@@ -55,7 +55,7 @@ export function NewsArticle({
           <>
             <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
             <div className="nw-toolbar">
-              <a className="btn btn-soft" href="#/news">{t('nw.back')}</a>
+              <a className="btn btn-soft" href="/news">{t('nw.back')}</a>
               <button type="button" className="btn btn-soft" onClick={() => void copy()}>
                 <IconCopyLink />
                 {t('nw.copyLink')}
@@ -67,13 +67,13 @@ export function NewsArticle({
       {!preview && (item.prev || item.next) && (
         <nav className="nw-prevnext" aria-label={t('nw.prevnext')}>
           {item.prev ? (
-            <a href={`#/news/${item.prev.id}`} className="nw-pn nw-pn-prev">
+            <a href={`/news/${item.prev.id}`} className="nw-pn nw-pn-prev">
               <span className="nw-pn-kicker">← {t('nw.prev')}</span>
               <span className="nw-pn-title">{item.prev.title}</span>
             </a>
           ) : <span />}
           {item.next ? (
-            <a href={`#/news/${item.next.id}`} className="nw-pn nw-pn-next">
+            <a href={`/news/${item.next.id}`} className="nw-pn nw-pn-next">
               <span className="nw-pn-kicker">{t('nw.next')} →</span>
               <span className="nw-pn-title">{item.next.title}</span>
             </a>

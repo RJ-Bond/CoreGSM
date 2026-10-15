@@ -10,7 +10,7 @@ export default function AuthFlow({ title, subtitle, children }: { title: string;
       <h1 className="mb-4 text-center text-xl font-black">{title}</h1>
       <div className="space-y-4">{children}</div>
       <p className="mt-5 text-center text-sm font-bold">
-        <a href="#/login" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.back')}</a>
+        <a href="/login" className="inline-flex items-center text-link hover:underline max-sm:min-h-[44px]">{t('forgot.back')}</a>
       </p>
     </div>
   );

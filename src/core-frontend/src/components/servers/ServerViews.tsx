@@ -110,7 +110,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
       <div className="srv-c-name">
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
-          <a href={`#/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
+          <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
           <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-0.5" />}
         </div>

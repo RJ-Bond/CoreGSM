@@ -8,8 +8,8 @@ import { isObject, useFetched } from './useFetched';
 const NICK_MAX = 32;
 const BIO_MAX = 280;
 
-/** address of the public page: the panel's own address with #/u/<username> */
-export const publicLink = (username: string) => `${window.location.origin}${window.location.pathname}#/u/${encodeURIComponent(username)}`;
+/** address of the public page: the panel's own address with /u/<username> */
+export const publicLink = (username: string) => `${window.location.origin}/u/${encodeURIComponent(username)}`;
 
 /** «Профиль игрока»: in-game nick, a short bio and the public-profile switch with the link */
 export function PlayerCard() {

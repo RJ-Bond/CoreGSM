@@ -3,7 +3,7 @@ import { api, type CertInfo, type Server, type ServerInput, type UpdateInfo } fr
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll, navigate } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
@@ -26,7 +26,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   // a moderator sees only the news section; everything else is for administrators
   const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
   const known = sections.some((s) => s.id === section);
-  // bare #/admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
+  // bare /admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
   const home = isAdmin && !known;
   const current = known ? section : sections[0].id;
   // the sub-path belongs to the section that was asked for, not to the fallback
@@ -76,7 +76,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const link = (s: AdminSection, pinnable = false) => (
     <a
       key={s.id}
-      href={`#/admin/${s.id}`}
+      href={`/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
       className={`flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
@@ -199,7 +199,7 @@ function UpdateBanner() {
           </>
         )}
       </div>
-      <a href="#/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
+      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
     </div>
   );
 }
@@ -227,7 +227,7 @@ function CertWarning() {
     : `Сертификат HTTPS истекает через ${d} ${plural(d, ['день', 'дня', 'дней'])}.`;
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl px-4 py-2.5 text-sm font-bold ${expired ? 'bg-badbg text-bad' : 'bg-warnbg text-warn'}`} role={expired ? 'alert' : 'status'}>
-      <span className="min-w-0 flex-1">{text} <a href="#/admin/system" className="underline">Подробнее</a></span>
+      <span className="min-w-0 flex-1">{text} <a href="/admin/system" className="underline">Подробнее</a></span>
       <button
         type="button"
         className="btn-icon-ghost btn-icon-sm btn-tone"
@@ -255,7 +255,7 @@ function ServersManage({ sub }: { sub: string }) {
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
 
-  // #/admin/servers/new opens the «add» form (links from the start page and Ctrl+K)
+  // /admin/servers/new opens the «add» form (links from the start page and Ctrl+K)
   const openedFor = useRef('');
   useEffect(() => {
     if (sub === 'new' && openedFor.current !== sub) {
@@ -266,7 +266,7 @@ function ServersManage({ sub }: { sub: string }) {
   }, [sub]);
   const closeForm = () => {
     setEditing(null);
-    if (sub === 'new') window.location.hash = '#/admin/servers';
+    if (sub === 'new') navigate('/admin/servers');
   };
 
   const remove = async (s: Server) => {
@@ -314,7 +314,7 @@ function ServersManage({ sub }: { sub: string }) {
           <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
             <GameAvatar game={s.game} size={44} />
             <div className="min-w-0 flex-1 basis-56">
-              <a href={`#/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
+              <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
               <div className="truncate text-sm font-semibold text-mute">
                 {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
                 {s.displayAddress ? <> · показывается как <span className="font-mono">{s.displayAddress}</span></> : null}
@@ -324,7 +324,7 @@ function ServersManage({ sub }: { sub: string }) {
             <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} maintenance={!!s.maintenance} />
             <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
             <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
-              <a className="btn btn-soft btn-sm" href={`#/admin/discord/new/${s.id}`}>Привязать к Discord</a>
+              <a className="btn btn-soft btn-sm" href={`/admin/discord/new/${s.id}`}>Привязать к Discord</a>
               <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
                 <IconRefresh spinning={busyId === s.id} />
               </button>

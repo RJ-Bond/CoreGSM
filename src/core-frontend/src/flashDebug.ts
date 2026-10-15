@@ -1,5 +1,5 @@
 /**
- * Diagnostics for the "black square" report: open the panel as  https://host/?flashdebug=1#/  and switch to another
+ * Diagnostics for the "black square" report: open the panel as  https://host/?flashdebug=1  and switch to another
  * browser tab (or press PrintScreen) and back. For ~1.5 s after the page becomes visible, the page is scanned for
  * dark opaque boxes, canvases, videos and iframes; they get a red outline and are listed in a corner panel.
  * An empty list means the square is not a DOM element (GPU / compositor), see the note in the panel.
