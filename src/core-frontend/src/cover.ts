@@ -1,6 +1,12 @@
 /** Games that ship a default cover (files in public/games/covers: <game>.jpg 1280x720 and <game>@s.jpg 640x360). */
 const DEFAULT_COVERS = new Set(['vrising', 'icarus']);
 
+/** the picture of a server: its uploaded cover, else the default cover of its game, else null (small = the 640px one) */
+export function coverUrlOf(coverUrl: string | null | undefined, game: string, small = true): string | null {
+  if (coverUrl) return small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
+  return DEFAULT_COVERS.has(game) ? `/games/covers/${game}${small ? '@s' : ''}.jpg` : null;
+}
+
 /**
  * CSS `background` for a server cover: the uploaded picture (or the default cover of the game) with a dark
  * gradient on top (white text stays readable), the game gradient underneath as a fallback while the picture loads.

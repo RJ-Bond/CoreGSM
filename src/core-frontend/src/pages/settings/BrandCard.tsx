@@ -88,6 +88,24 @@ export function BrandCard() {
       actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
       data-tour="brand"
     >
+      <div>
+        <label htmlFor="brand-theme" className="label">Тема для посетителей</label>
+        <select
+          id="brand-theme"
+          className="input"
+          value={b.theme ?? 'dark'}
+          onChange={(e) => {
+            void api('/branding/theme', 'PUT', { theme: e.target.value })
+              .then(() => { toast('Тема по умолчанию сохранена'); return reload(); })
+              .catch((err: Error) => toast(err.message, 'err'));
+          }}
+        >
+          <option value="dark">Тёмная (обложки игр смотрятся лучше всего)</option>
+          <option value="light">Светлая</option>
+          <option value="auto">Как в системе посетителя</option>
+        </select>
+        <p className="mt-1 text-sm font-semibold text-mute">Действует для тех, кто сам не выбирал тему кнопкой в шапке.</p>
+      </div>
       <TextField
         id="brand-name"
         label="Название"

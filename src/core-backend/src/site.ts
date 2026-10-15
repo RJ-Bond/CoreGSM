@@ -38,6 +38,8 @@ export const brand = () => ({
   color: getSetting('brand_color') || '#4f46e5',
   color2: getSetting('brand_color2') || '',
   preset: getSetting('brand_preset') || '',
+  // the theme for visitors who have not picked one themselves
+  theme: (['auto', 'light', 'dark'].includes(getSetting('default_theme') ?? '') ? getSetting('default_theme') : 'dark') as 'auto' | 'light' | 'dark',
   hasLogo: !!logoFile(),
   logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
 });

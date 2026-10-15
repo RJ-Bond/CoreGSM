@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
@@ -11,14 +12,25 @@ interface AlertsInfo {
   guildName: string | null;
   afterMin: number;
   mention: 'none' | 'here' | 'everyone';
-  recent: { id: number; kind: 'down' | 'up' | 'test'; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
+  smart?: { low: boolean; ping: boolean; full: boolean };
+  recent: { id: number; kind: keyof typeof KIND; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
 }
 
 const KIND = {
   down: { label: 'Сервер упал', cls: 'pill-bad' },
   up: { label: 'Сервер вернулся', cls: 'pill-ok' },
   test: { label: 'Проверка', cls: 'pill-mute' },
+  low: { label: 'Мало игроков', cls: 'pill-warn' },
+  ping: { label: 'Вырос пинг', cls: 'pill-warn' },
+  full: { label: 'Почти заполнен', cls: 'pill-mute' },
+  digest: { label: 'Итоги недели', cls: 'pill-ok' },
 } as const;
+
+const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
+  { key: 'low', title: 'Необычно мало игроков', text: 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).' },
+  { key: 'ping', title: 'Вырос пинг', text: 'Пинг 15 минут выше 150 мс и вдвое выше среднего за сутки.' },
+  { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
+];
 
 /** Messages to a Discord channel when a game server stops answering and when it is back. */
 export default function AlertsPage() {
@@ -33,7 +45,7 @@ export default function AlertsPage() {
   };
   usePoll(load, 10_000);
 
-  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention'>>, done?: string) => {
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>>, done?: string) => {
     await api<AlertsInfo>('/alerts', 'PUT', patch)
       .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
@@ -107,6 +119,23 @@ export default function AlertsPage() {
           </div>
         </Section>
       )}
+
+      {info && (
+        <Section title="Умные оповещения" description="Сервер работает, но что-то не так. Каждое правило срабатывает, только если условие держится какое-то время, и потом молчит несколько часов.">
+          {SMART.map((r) => (
+            <label key={r.key} className="flex cursor-pointer items-start gap-3">
+              <Switch className="mt-0.5" checked={!!info.smart?.[r.key]} disabled={!info.enabled} onChange={(on) => void save({ smart: { ...(info.smart ?? { low: false, ping: false, full: false }), [r.key]: on } }, on ? 'Включено' : 'Выключено')} />
+              <span>
+                <span className="block font-extrabold">{r.title}</span>
+                <span className="block text-sm font-semibold text-mute">{r.text}</span>
+              </span>
+            </label>
+          ))}
+          {!info.enabled && <p className="text-sm font-semibold text-mute">Сначала включите оповещения выше.</p>}
+        </Section>
+      )}
+
+      <DigestSection alertsChannel={info?.channelId ?? ''} />
 
       <Section title="Последние оповещения">
         {!info && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />}

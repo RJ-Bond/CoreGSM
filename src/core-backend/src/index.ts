@@ -11,6 +11,7 @@ import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
+import { registerDigest, startDigestTimer } from './digest.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -32,6 +33,8 @@ import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
 import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
+import { router as analyticsRouter } from './routes/analytics.js';
+import { router as communityRouter } from './routes/community.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -66,6 +69,8 @@ app.use(updatesRouter);
 app.use(usersRouter);
 app.use(discordLoginRouter);
 app.use(serversRouter);
+app.use(analyticsRouter);
+app.use(communityRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -91,6 +96,7 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
+registerDigest({ app, admin });
 registerSecurity({
   app,
   admin,
@@ -142,6 +148,7 @@ const server = app.listen(PORT, () => {
   }
   startPoller(POLL_MS);
   startBackupTimer();
+  startDigestTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);

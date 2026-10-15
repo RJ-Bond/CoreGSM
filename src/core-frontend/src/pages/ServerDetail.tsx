@@ -21,12 +21,18 @@ import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
+import { useCoverAccent } from '../components/server/coverAccent';
+import { coverUrlOf } from '../cover';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
   countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
+import { lazyPage, PageFrame } from '../lazyPage';
+
+// the analytics tab and its charts load when it is opened
+const AnalyticsTab = lazyPage(() => import('../components/server/AnalyticsTab'));
 
 export { SERVER_TABS } from '../components/server/helpers';
 
@@ -188,6 +194,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
 
+  // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
+  const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
+
   if (missing) return <NotFound kind="server" />;
 
   const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
@@ -208,7 +217,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   }
 
   const { server: s, stats, events, points } = data;
-  const accent = gameAccent(s.game);
+  const accent = coverAccentOrGame;
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
@@ -287,7 +296,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
@@ -328,6 +337,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
       </div>
     );
+  } else if (tab === 'stats') {
+    panel = <PageFrame><AnalyticsTab id={id} /></PageFrame>;
   } else if (tab === 'events') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">

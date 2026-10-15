@@ -12,6 +12,7 @@ import { queryServer, refreshServer } from '../gsm.js';
 import { wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
+import { downtimeByDay, incidentsSince } from '../incidents.js';
 import { getServer, publicServer, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
 
@@ -40,6 +41,32 @@ router.get('/api/servers', viewer, (req, res) => {
   const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
   const list = rows.map(serialize);
   res.json(isAdmin(req) ? list : list.map(publicServer));
+});
+
+/**
+ * The sparklines of the server list (and the comparison chart) in one request: for every server the player count
+ * over the last `hours` (up to 14 days), cut into `points` buckets (48 by default, the busiest moment of each),
+ * and which buckets had the server down. An empty bucket (no poll in it) is null.
+ */
+router.get('/api/servers/sparks', viewer, (req, res) => {
+  const hours = Math.min(336, Math.max(1, Number(req.query.hours) || 24));
+  const SPARK_POINTS = Math.min(200, Math.max(12, Number(req.query.points) || 48));
+  const now = Date.now();
+  const since = now - hours * 3600_000;
+  const bucket = Math.ceil((hours * 3600_000) / SPARK_POINTS);
+  const rows = db
+    .prepare(
+      `SELECT server_id AS id, MIN(CAST((ts - ?) / ? AS INTEGER), ${SPARK_POINTS - 1}) AS b, MAX(players) AS p, MIN(online) AS o
+       FROM history WHERE ts > ? GROUP BY server_id, b`,
+    )
+    .all(since, bucket, since) as { id: number; b: number; p: number; o: number }[];
+  const out: Record<number, { players: (number | null)[]; down: boolean[] }> = {};
+  for (const r of rows) {
+    const s = (out[r.id] ??= { players: Array(SPARK_POINTS).fill(null), down: Array(SPARK_POINTS).fill(false) });
+    s.players[r.b] = r.p;
+    if (!r.o) s.down[r.b] = true;
+  }
+  res.set('Cache-Control', 'no-cache').json({ hours, points: SPARK_POINTS, from: since, to: now, servers: out });
 });
 
 router.post(
@@ -174,8 +201,25 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
       peakAt: peak?.ts ?? null,
     },
     events,
+    // «обычно»: the average players per hour of the week (UTC weekday * 24 + hour) over the four weeks before the
+    // shown period, so the chart can show where today is unusual; null where there is not enough history
+    baseline: hours <= 168 ? usualWeek(id, since) : null,
   });
 });
+
+function usualWeek(serverId: number, before: number): (number | null)[] {
+  const out = Array<number | null>(168).fill(null);
+  const rows = db
+    .prepare(
+      `SELECT CAST(strftime('%w', ts / 1000, 'unixepoch') AS INTEGER) * 24 + CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS how,
+              AVG(players) AS a, COUNT(DISTINCT ts / 86400000) AS days
+       FROM history WHERE server_id = ? AND online = 1 AND ts > ? AND ts < ? GROUP BY how`,
+    )
+    .all(serverId, before - 28 * 86400_000, before) as { how: number; a: number; days: number }[];
+  // at least two different days behind an hour, otherwise one odd evening would be "usual"
+  for (const r of rows) if (r.days >= 2) out[r.how] = Math.round(r.a * 10) / 10;
+  return out;
+}
 
 router.post(
   '/api/servers/:id/refresh',
@@ -300,8 +344,28 @@ router.get('/api/status', viewer, (req, res) => {
   }
   const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
   const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
+  // outages of the 30 days: minutes per day for the bars, and the list of incidents under them
+  const incidents = incidentsSince(now - 30 * 86400_000, undefined, now);
+  const downtime = downtimeByDay(incidents, now);
+  const shown = new Map(servers.map((sv) => [sv.id, sv]));
+  // response time: hourly average ping of the last 24 hours
+  const latency = new Map<number, (number | null)[]>();
+  const hourNow = Math.floor(now / 3600_000);
+  for (const r of db
+    .prepare('SELECT server_id AS id, ts / 3600000 AS h, AVG(ping) AS a FROM history WHERE ts > ? AND online = 1 AND ping IS NOT NULL GROUP BY id, h')
+    .all(now - 24 * 3600_000) as { id: number; h: number; a: number }[]) {
+    const arr = latency.get(r.id) ?? Array<number | null>(24).fill(null);
+    const i = 23 - (hourNow - r.h);
+    if (i >= 0 && i < 24) arr[i] = Math.round(r.a);
+    latency.set(r.id, arr);
+  }
   res.json({
     updatedAt: last ?? now,
+    incidents: incidents
+      .filter((i) => shown.has(i.serverId))
+      .reverse()
+      .slice(0, 50)
+      .map((i) => ({ ...i, serverName: shown.get(i.serverId)!.name, game: shown.get(i.serverId)!.game })),
     servers: servers.map((sv) => {
       let up = 0;
       let total = 0;
@@ -311,7 +375,8 @@ router.get('/api/status', viewer, (req, res) => {
           up += r.up;
           total += r.total;
         }
-        return { day, pct: r ? pct(r.up, r.total) : null };
+        const dt = downtime.get(`${sv.id}|${day}`);
+        return { day, pct: r ? pct(r.up, r.total) : null, down: dt ? Math.round(dt.down) : 0, planned: dt ? Math.round(dt.planned) : 0, incidents: dt?.count ?? 0 };
       });
       return {
         id: sv.id,
@@ -325,6 +390,7 @@ router.get('/api/status', viewer, (req, res) => {
         uptime30: pct(up, total),
         days: dd,
         avgPing: pings.get(sv.id) ?? null,
+        latency: latency.get(sv.id) ?? [],
       };
     }),
   });

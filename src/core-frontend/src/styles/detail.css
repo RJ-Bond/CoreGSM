@@ -115,17 +115,8 @@
 @media (min-width: 640px) { .srv-hero-n { font-size: 56px; } .srv-hero-max { font-size: 26px; } }
 
 /* ---------- compact passport ---------- */
-.pp.pp-main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.pp-main .pp-i:last-child { grid-column: 1 / -1; }
-@media (min-width: 640px) {
-  .pp.pp-main { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:last-child { grid-column: span 2; }
-  .pp-main .pp-i:nth-child(n + 4) { grid-column: span 3; }
-}
-@media (min-width: 1024px) {
-  .pp.pp-main { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:nth-child(n + 4), .pp-main .pp-i:last-child { grid-column: span 1; }
-}
+/* up to five facts, only those the server reports: the cells share the row whatever their number */
+.pp.pp-main { grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr)); }
 .pp-more-btn {
   display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 36px; padding: 0 14px; border-radius: 9999px;
   font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.95); background: rgba(8, 10, 20, 0.22); transition: background-color .15s ease;
@@ -222,3 +213,25 @@
 }
 html[data-motion='reduce'] .srv-more-pop { animation: none !important; }
 html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none !important; }
+
+/* ---------- history chart: tools, the usual band, the ping axis, zoom ---------- */
+.hc-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 8px; }
+.hc-chip {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 3px 12px; border-radius: 9999px;
+  font-size: 12.5px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+.hc-chip[aria-pressed='true'] { color: rgb(var(--ink)); background: rgb(var(--card)); box-shadow: 0 0 0 1.5px rgb(var(--line)), 0 1px 2px rgba(20, 24, 40, .06); }
+.hc-chip.is-zoom { color: rgb(var(--link)); background: rgb(var(--link) / .1); }
+.hc-chip i { width: 16px; height: 8px; border-radius: 4px; }
+.hc-chip-usual { background: repeating-linear-gradient(90deg, rgb(var(--mute) / .6) 0 4px, transparent 4px 7px), rgb(var(--mute) / .15); }
+.hc-chip-ping { background: rgb(var(--link)); height: 3px !important; }
+.hc-tip { font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+@media (hover: none) { .hc-tip { display: none; } }
+.hc-usual path:first-child { fill: rgb(var(--mute) / .12); }
+.hc-usual path:last-child { stroke: rgb(var(--mute) / .55); stroke-width: 1.5; }
+.hc-ping { stroke: rgb(var(--link)); stroke-width: 1.6; opacity: .85; }
+.hc-ping-tick { fill: rgb(var(--link)); }
+.hc-drag { fill: var(--srv-accent, rgb(var(--brand))); fill-opacity: .12; stroke: var(--srv-accent, rgb(var(--brand))); stroke-opacity: .5; stroke-dasharray: 4 3; }
+.hc-over { margin-top: 8px; border-radius: 12px; overflow: hidden; background: rgb(var(--soft)); }
+.hc-over-dim { fill: rgb(var(--card)); fill-opacity: .55; }
+.hc-over-win { fill: none; stroke: var(--srv-accent, rgb(var(--brand))); stroke-width: 2; rx: 6; }

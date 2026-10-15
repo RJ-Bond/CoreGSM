@@ -237,6 +237,7 @@
 .srv-new-chev { display: grid; place-items: center; color: rgb(var(--mute)); transition: transform .2s ease; }
 .srv-new-chev.open { transform: rotate(180deg); }
 .srv-new-body { display: flex; flex-direction: column; gap: 14px; padding: 4px 10px 12px; }
+.srv-new-quiet { margin: 0; padding: 2px 14px 14px; font-size: 13.5px; font-weight: 700; color: rgb(var(--mute)); }
 .srv-new-h { margin: 0 0 6px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
 .srv-new-news { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 16px; background: rgb(var(--soft) / .7); transition: background-color .15s ease; }
 .srv-new-news:hover { background: rgb(var(--soft)); }
@@ -260,10 +261,35 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 @media (min-width: 900px) {
   .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
 }
+/* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
+.srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
 .srv-tile { min-width: 0; }
+/* a full server glows in its game's colour (--fill 0..1); a server that is down steps back */
+.srv-tile { box-shadow: var(--shadow-2), 0 14px 34px -18px color-mix(in srgb, var(--gc, transparent) calc(var(--fill, 0) * 90%), transparent); }
+.srv-tile.is-busy { box-shadow: var(--shadow-2), 0 0 0 2px color-mix(in srgb, var(--gc) 55%, transparent), 0 16px 40px -14px color-mix(in srgb, var(--gc) 70%, transparent); }
+.srv-tile.is-down { filter: saturate(.55); opacity: .9; }
+.srv-tile.is-down:hover { filter: none; opacity: 1; }
+.tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
 
 /* news card in «Что нового»: the title and the foot are links, the text carries live links */
 .srv-new-news-title { font-weight: 800; color: rgb(var(--ink)); }
 .srv-new-news-title:hover { color: rgb(var(--link)); }
 .srv-new-news-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .srv-new-link { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+
+/* servers compared on one chart */
+.cmp-chip {
+  --c: rgb(var(--brand));
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; max-width: 16rem; padding: 3px 12px 3px 10px; border-radius: 9999px;
+  font-size: 13px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: opacity .15s ease, background-color .15s ease;
+}
+.cmp-chip i { width: 10px; height: 10px; flex: none; border-radius: 9999px; background: var(--c); }
+.cmp-chip[aria-pressed='true'] { color: rgb(var(--ink)); background: color-mix(in srgb, var(--c) 14%, rgb(var(--card))); }
+.cmp-chip[aria-pressed='false'] { opacity: .55; text-decoration: line-through; }
+.cmp-rank { width: 100%; border-collapse: collapse; font-size: 14px; }
+.cmp-rank th { padding: 6px 8px; text-align: left; font-size: 12px; font-weight: 800; color: rgb(var(--mute)); white-space: nowrap; }
+.cmp-rank td { padding: 8px; border-top: 1px solid rgb(var(--line)); font-weight: 700; }
+.cmp-rank td:nth-child(2) { max-width: 18rem; }
+.cmp-change { display: inline-flex; align-items: center; gap: 4px; border-radius: 9999px; padding: 2px 9px; font-size: 12.5px; font-weight: 800; background: rgb(var(--soft)); color: rgb(var(--mute)); }
+.cmp-change.is-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.cmp-change.is-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }

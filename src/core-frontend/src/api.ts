@@ -241,6 +241,22 @@ export interface StatusDay {
   day: string;
   /** null = no data */
   pct: number | null;
+  /** minutes the server was down that day (unplanned / in a maintenance window) and how many outages began */
+  down?: number;
+  planned?: number;
+  incidents?: number;
+}
+
+/** a stretch in which a server did not answer; end null = still down */
+export interface StatusIncident {
+  serverId: number;
+  serverName: string;
+  game: string;
+  start: number;
+  end: number | null;
+  minutes: number;
+  playersBefore: number;
+  planned: boolean;
 }
 
 export interface StatusServer {
@@ -256,11 +272,15 @@ export interface StatusServer {
   /** 30 entries, oldest first */
   days: StatusDay[];
   avgPing: number | null;
+  /** hourly average ping of the last 24 hours, oldest first (null = no answer that hour) */
+  latency?: (number | null)[];
 }
 
 export interface StatusInfo {
   updatedAt: number;
   servers: StatusServer[];
+  /** newest first, 30 days */
+  incidents?: StatusIncident[];
 }
 
 // ---------- backups ----------
@@ -310,6 +330,8 @@ export interface ServerDetails {
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   /** newest first; `players` is set for 'peak' */
   events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance'; players: number | null; name?: string }[];
+  /** the usual players per hour of the week (index = UTC weekday * 24 + hour) over the 4 weeks before; null = unknown */
+  baseline?: (number | null)[] | null;
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }
@@ -601,6 +623,8 @@ export interface Brand {
   color2?: string;
   /** id of the chosen theme preset ('' = custom colour) */
   preset?: string;
+  /** the theme of visitors who have not picked one (set by the administrator) */
+  theme?: 'auto' | 'light' | 'dark';
   hasLogo: boolean;
   logoV: number;
 }
