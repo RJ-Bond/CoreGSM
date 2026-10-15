@@ -6,6 +6,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { INTERNAL_TOKEN, JWT_SECRET } from './config.js';
 import { db, getSetting } from './db.js';
 import { safeEqual } from './http.js';
+import { guardDelete, guardGet, guardSet } from './loginGuard.js';
 import { uaLabel } from './profile.js';
 import { readCookie, SESSION_COOKIE } from './security.js';
 
@@ -99,9 +100,31 @@ export function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   next();
 }
 
+// ---------- lockout after wrong passwords for one login from one address (kept in SQLite, see loginGuard.ts) ----------
 export const LOCK_AFTER = 5;
-export const fails = new Map<string, { n: number; until: number }>();
-setInterval(() => { for (const [k, v] of fails) if (v.until < Date.now() - 3600_000) fails.delete(k); }, 600_000).unref();
+const accountKey = (ip: string | undefined, username: string) => `${ip ?? 'x'}|${username.toLowerCase()}`;
+
+/** seconds until this login may be tried again from this address (0 = not locked) */
+export function accountLockRemaining(ip: string | undefined, username: string): number {
+  const f = guardGet<{ n: number; until: number }>('account', accountKey(ip, username));
+  return f && f.until > Date.now() ? Math.ceil((f.until - Date.now()) / 1000) : 0;
+}
+
+/** counts a wrong password; returns how many tries are left before the lockout (0 = locked now) */
+export function accountLoginFailed(ip: string | undefined, username: string): number {
+  const key = accountKey(ip, username);
+  const now = Date.now();
+  const f = guardGet<{ n: number; until: number }>('account', key) ?? { n: 0, until: 0 };
+  f.n++;
+  // 30 s, 1 min, 2 min ... up to 15 minutes
+  if (f.n >= LOCK_AFTER) f.until = now + Math.min(15 * 60_000, 30_000 * 2 ** (f.n - LOCK_AFTER));
+  // failures below the limit are forgotten 10 minutes after the last one; a lockout is remembered for an hour
+  // after it ends, so the next one is longer
+  guardSet('account', key, f, f.until ? f.until + 3600_000 : now + 10 * 60_000);
+  return f.n >= LOCK_AFTER ? 0 : LOCK_AFTER - f.n;
+}
+
+export const accountLoginOk = (ip: string | undefined, username: string) => guardDelete('account', accountKey(ip, username));
 
 /** a lighter per-address limit for public lookups: `max` requests per minute */
 export function rateLimit(max: number) {
@@ -121,21 +144,22 @@ export function rateLimit(max: number) {
   };
 }
 
-export const attempts = new Map<string, { n: number; reset: number }>();
+/** sign-in, registration and setup: at most 10 attempts per address in 10 minutes (a success clears the count) */
 export function loginLimiter(req: Request, res: Response, next: NextFunction) {
   const key = req.ip ?? 'x';
   const now = Date.now();
-  const a = attempts.get(key);
+  const a = guardGet<{ n: number; reset: number }>('attempts', key);
   if (a && a.reset > now && a.n >= 10) {
     const retryAfter = Math.max(1, Math.ceil((a.reset - now) / 1000));
     res.setHeader('Retry-After', String(retryAfter));
     res.status(429).json({ error: 'Слишком много попыток. Подождите 10 минут.', retryAfter });
     return;
   }
-  if (!a || a.reset <= now) attempts.set(key, { n: 1, reset: now + 10 * 60 * 1000 });
-  else a.n++;
+  const next_ = !a || a.reset <= now ? { n: 1, reset: now + 10 * 60 * 1000 } : { n: a.n + 1, reset: a.reset };
+  guardSet('attempts', key, next_, next_.reset);
   next();
 }
+export const resetAttempts = (ip: string | undefined) => guardDelete('attempts', ip ?? 'x');
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
 export interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
