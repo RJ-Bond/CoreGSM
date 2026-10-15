@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ea55298cfa1e"
+COREGSM_BUILD="f164e22557dd"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4143,7 +4143,7 @@ export interface Payload {
   embed: Record<string, unknown>;
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
   const s = alertSettings();
@@ -7528,6 +7528,8 @@ export const ERRORS = {
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
   counter_exists: 'Этот канал уже стал счётчиком',
+  rcon_password_required: 'Укажите пароль RCON',
+  rcon_not_configured: 'Сначала сохраните порт и пароль RCON',
   gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',
   gallery_queue_full: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.',
   game_address_port: 'Укажите игру, адрес и порт',
@@ -8830,6 +8832,7 @@ import { router as discordExtrasRouter } from './routes/discordExtras.js';
 import { router as seasonsRouter } from './seasons.js';
 import { router as reviewsRouter } from './reviews.js';
 import { router as galleryRouter } from './gallery.js';
+import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8870,6 +8873,7 @@ app.use(discordExtrasRouter);
 app.use(seasonsRouter);
 app.use(reviewsRouter);
 app.use(galleryRouter);
+app.use(restartsRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -8948,9 +8952,11 @@ const server = app.listen(PORT, () => {
   startPoller(POLL_MS);
   startBackupTimer();
   startDigestTimer();
+  startRestartTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
+onShutdown('restarts', stopRestartTimer);
 installShutdown(server);
 
 __COREGSM_EOF__
@@ -8973,6 +8979,27 @@ export function localParts(ts: number, tz: string): { dow: number; hour: number;
   const p = Object.fromEntries(f.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
   const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday);
   return { dow: Math.max(0, dow), hour: Number(p.hour) % 24, day: `${p.year}-${p.month}-${p.day}` };
+}
+
+/** the offset of a time zone from UTC at a moment, in ms (+3 h for Moscow) */
+export function offsetAt(ts: number, tz: string): number {
+  try {
+    const p = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' })
+        .formatToParts(new Date(ts))
+        .map((x) => [x.type, Number(x.value)]),
+    );
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute) - Math.floor(ts / 60_000) * 60_000;
+  } catch {
+    return 0;
+  }
+}
+
+/** the moment of a local time of a day ("YYYY-MM-DD", minutes after midnight) in a time zone */
+export function zonedTime(day: string, minutes: number, tz: string): number {
+  const [y, m, d] = day.split('-').map(Number);
+  const naive = Date.UTC(y, m - 1, d, 0, minutes);
+  return naive - offsetAt(naive - offsetAt(naive, tz), tz);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -12239,6 +12266,395 @@ export function rankProgress(hours: number): number {
 export function rankById(id: string): VrRank | undefined {
   return VR_RANKS.find((x) => x.id === id);
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/rcon.ts" << '__COREGSM_EOF__'
+/**
+ * A small Source RCON client (the protocol of Minecraft, CS, ARK, V Rising, Palworld, Garry's Mod, Valheim with
+ * a mod and others): sign in with the password, run one command, return its text.
+ *
+ * Packet: int32 size, int32 id, int32 type, body (ASCII/UTF-8) + "\0\0", little endian; size counts everything
+ * after itself. Types: 3 auth, 2 exec (and the auth answer), 0 response value.
+ */
+import net from 'node:net';
+
+const AUTH = 3;
+const EXEC = 2;
+
+export function encodePacket(id: number, type: number, body: string): Buffer {
+  const b = Buffer.from(body, 'utf8');
+  const buf = Buffer.alloc(14 + b.length);
+  buf.writeInt32LE(10 + b.length, 0);
+  buf.writeInt32LE(id, 4);
+  buf.writeInt32LE(type, 8);
+  b.copy(buf, 12);
+  return buf;
+}
+
+/** the complete packets at the start of `buf`, and the bytes left over */
+export function decodePackets(buf: Buffer): { packets: { id: number; type: number; body: string }[]; rest: Buffer } {
+  const packets: { id: number; type: number; body: string }[] = [];
+  let off = 0;
+  while (buf.length - off >= 4) {
+    const size = buf.readInt32LE(off);
+    if (size < 10 || size > 1_000_000) throw new Error('RCON: повреждённый ответ сервера');
+    if (buf.length - off - 4 < size) break;
+    packets.push({ id: buf.readInt32LE(off + 4), type: buf.readInt32LE(off + 8), body: buf.toString('utf8', off + 12, off + 4 + size - 2) });
+    off += 4 + size;
+  }
+  return { packets, rest: buf.subarray(off) };
+}
+
+export class RconError extends Error {}
+
+/**
+ * Runs one command. The answer is everything the server sends back for it until it goes quiet for a moment
+ * (long answers come in several packets).
+ */
+export function rconCommand(host: string, port: number, password: string, command: string, timeoutMs = 6000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = net.createConnection({ host, port });
+    let buf: Buffer = Buffer.alloc(0);
+    let authed = false;
+    let out = '';
+    let quiet: NodeJS.Timeout | undefined;
+    let settled = false;
+    const done = (err: Error | null, text = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(quiet);
+      sock.destroy();
+      if (err) reject(err);
+      else resolve(text);
+    };
+    const timer = setTimeout(() => done(authed ? null : new RconError('RCON: сервер не ответил вовремя'), out.trim()), timeoutMs);
+    sock.setNoDelay(true);
+    sock.on('connect', () => sock.write(encodePacket(1, AUTH, password)));
+    sock.on('error', (e: NodeJS.ErrnoException) =>
+      done(new RconError(e.code === 'ECONNREFUSED' ? 'RCON: порт закрыт (проверьте порт и что RCON включён на сервере)' : `RCON: ${e.message}`)),
+    );
+    sock.on('close', () => done(authed ? null : new RconError('RCON: сервер закрыл соединение'), out.trim()));
+    sock.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      let parsed;
+      try {
+        parsed = decodePackets(buf);
+      } catch (e) {
+        return done(e as Error);
+      }
+      buf = parsed.rest;
+      for (const p of parsed.packets) {
+        if (!authed) {
+          if (p.type !== EXEC) continue; // some servers send an empty response value before the auth answer
+          if (p.id === -1) return done(new RconError('RCON: неверный пароль'));
+          authed = true;
+          sock.write(encodePacket(2, EXEC, command));
+          // a command with no output: finish after a short wait
+          quiet = setTimeout(() => done(null, out.trim()), 1500);
+          continue;
+        }
+        if (p.id !== 2) continue;
+        out += p.body;
+        clearTimeout(quiet);
+        quiet = setTimeout(() => done(null, out.trim()), 300);
+      }
+    });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/restartLogic.ts" << '__COREGSM_EOF__'
+/** When a scheduled restart happens, and the game chat command for its warning (pure, no database). */
+import { localParts, zonedTime } from './localTime.js';
+
+/** the next restart at or after `from` (a week ahead at most), or null when no day is ticked */
+export function nextRun(p: { days: number; at_min: number }, from: number, zone: string): number | null {
+  if (!(p.days & 127)) return null;
+  for (let k = 0; k <= 8; k++) {
+    const parts = localParts(from + k * 86_400_000, zone);
+    if (!(p.days & (1 << parts.dow))) continue;
+    const t = zonedTime(parts.day, p.at_min, zone);
+    if (t >= from) return t;
+  }
+  return null;
+}
+
+/** the game chat command that fits a game best (the admin can change it) */
+export function defaultSay(game: string): string {
+  if (game === 'vrising') return 'announce {text}';
+  if (game === 'ase' || game === 'asa') return 'ServerChat {text}';
+  if (game === 'palworld') return 'Broadcast {text}';
+  return 'say {text}';
+}
+
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/restarts.ts" << '__COREGSM_EOF__'
+/**
+ * Scheduled restarts of a game server.
+ *
+ * The admin picks the days and the time (the panel suggests the quietest hour from the analytics). Before the
+ * restart the panel warns the players: a message in Discord and, when RCON is set up, in the game chat. At the
+ * time it opens a maintenance window (the restart does not count as an outage), sends the restart command over
+ * RCON, if one is set, and reports how it went.
+ *
+ *   GET  /api/servers/:id/restart        the plan, the next run, the suggested hour, the RCON settings (no password)
+ *   PUT  /api/servers/:id/restart        save the plan (permission «Обслуживание»)
+ *   PUT  /api/servers/:id/rcon           RCON port and password (administrators)
+ *   POST /api/servers/:id/rcon/test      run a command now and show the answer (administrators)
+ *   POST /api/servers/:id/restart/now    restart now, without the warning (permission «Обслуживание»)
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin, allow, type AuthedRequest } from './auth.js';
+import { enqueueAlert } from './alerts.js';
+import { db, EFFECTIVE_NAME, getSetting } from './db.js';
+import { defaultSay, nextRun } from './restartLogic.js';
+import { rconCommand } from './rcon.js';
+import { decryptSecret, encryptSecret } from './secrets.js';
+import { analyticsFor } from './routes/analytics.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS restart_plans (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  days INTEGER NOT NULL DEFAULT 127,
+  at_min INTEGER NOT NULL DEFAULT 360,
+  duration_min INTEGER NOT NULL DEFAULT 10,
+  warn_min INTEGER NOT NULL DEFAULT 10,
+  channel_id TEXT NOT NULL DEFAULT '',
+  command TEXT NOT NULL DEFAULT '',
+  say TEXT NOT NULL DEFAULT '',
+  warned_for INTEGER NOT NULL DEFAULT 0,
+  ran_for INTEGER NOT NULL DEFAULT 0,
+  last_result TEXT,
+  last_run_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS server_rcon (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  port INTEGER NOT NULL,
+  password TEXT NOT NULL
+);
+`);
+
+export interface Plan {
+  server_id: number;
+  enabled: number;
+  /** bit 0 = Monday ... bit 6 = Sunday */
+  days: number;
+  at_min: number;
+  duration_min: number;
+  warn_min: number;
+  channel_id: string;
+  command: string;
+  /** the in-game message command, {text} is replaced by the warning */
+  say: string;
+  warned_for: number;
+  ran_for: number;
+  last_result: string | null;
+  last_run_at: number | null;
+}
+
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+const DEFAULT_PLAN = (serverId: number): Plan => ({ server_id: serverId, enabled: 0, days: 127, at_min: 360, duration_min: 10, warn_min: 10, channel_id: '', command: '', say: '', warned_for: 0, ran_for: 0, last_result: null, last_run_at: null });
+const planOf = (serverId: number): Plan => (db.prepare('SELECT * FROM restart_plans WHERE server_id = ?').get(serverId) as Plan | undefined) ?? DEFAULT_PLAN(serverId);
+
+function rconOf(serverId: number): { host: string; port: number; password: string } | null {
+  const r = db.prepare('SELECT s.host, r.port, r.password FROM server_rcon r JOIN servers s ON s.id = r.server_id WHERE r.server_id = ?').get(serverId) as { host: string; port: number; password: string } | undefined;
+  if (!r) return null;
+  try {
+    return { host: r.host, port: r.port, password: decryptSecret(r.password) };
+  } catch {
+    return null;
+  }
+}
+
+const nameOf = (serverId: number) => (db.prepare(`SELECT ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(serverId) as { name: string } | undefined)?.name ?? `#${serverId}`;
+const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+function discord(serverId: number, p: Plan, title: string, description: string, color: number) {
+  enqueueAlert('restart', nameOf(serverId), { content: '', mention: 'none', embed: { title, description, color, timestamp: new Date().toISOString() } }, p.channel_id || undefined);
+}
+
+async function say(serverId: number, p: Plan, text: string): Promise<string | null> {
+  const r = rconOf(serverId);
+  if (!r || !p.say.trim()) return null;
+  try {
+    await rconCommand(r.host, r.port, r.password, p.say.replace('{text}', text));
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+/** the restart itself: a maintenance window, the command, a report */
+async function run(serverId: number, p: Plan, at: number, by = 'расписание'): Promise<string> {
+  const now = Date.now();
+  db.prepare('INSERT INTO maintenance_windows (server_id, name, start_ts, end_ts, repeat, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    serverId,
+    'Плановый перезапуск',
+    Math.min(at, now),
+    Math.max(at, now) + p.duration_min * 60_000,
+    'none',
+    by,
+    now,
+  );
+  let result = p.command.trim() ? 'Команда отправлена' : 'Окно обслуживания открыто (команды перезапуска нет)';
+  const r = rconOf(serverId);
+  if (p.command.trim()) {
+    if (!r) result = 'Не отправлено: RCON не настроен';
+    else {
+      try {
+        const answer = await rconCommand(r.host, r.port, r.password, p.command.trim());
+        result = answer ? `Команда отправлена, сервер ответил: ${answer.slice(0, 200)}` : 'Команда отправлена';
+      } catch (e) {
+        result = `Не отправлено: ${(e as Error).message}`;
+      }
+    }
+  }
+  db.prepare('UPDATE restart_plans SET ran_for = ?, last_result = ?, last_run_at = ? WHERE server_id = ?').run(at, result, now, serverId);
+  discord(serverId, p, '🔄 Плановый перезапуск', `Сервер **${nameOf(serverId)}** перезапускается. Обычно это занимает до ${p.duration_min} мин.`, 0x5865f2);
+  return result;
+}
+
+/** one pass of the timer: warnings that are due, restarts that are due */
+export async function tickRestarts(now = Date.now()): Promise<void> {
+  const zone = tz();
+  for (const p of db.prepare('SELECT * FROM restart_plans WHERE enabled = 1').all() as Plan[]) {
+    // the restart that is due now (a run missed by less than 5 minutes still happens)
+    const due = nextRun(p, now - 5 * 60_000, zone);
+    if (due && due <= now && p.ran_for !== due) {
+      await run(p.server_id, p, due);
+      continue;
+    }
+    const next = nextRun(p, now, zone);
+    if (!next || p.warn_min <= 0) continue;
+    if (next - now <= p.warn_min * 60_000 && p.warned_for !== next) {
+      db.prepare('UPDATE restart_plans SET warned_for = ? WHERE server_id = ?').run(next, p.server_id);
+      const mins = Math.max(1, Math.round((next - now) / 60_000));
+      discord(p.server_id, p, '⏳ Скоро перезапуск', `Сервер **${nameOf(p.server_id)}** перезапустится через ${mins} мин (в ${hhmm(p.at_min)}). Сохраните прогресс.`, 0xf0b232);
+      await say(p.server_id, p, `Перезапуск сервера через ${mins} мин. Сохраните прогресс!`);
+    }
+  }
+}
+
+let timer: NodeJS.Timeout | undefined;
+let busy = false;
+export function startRestartTimer(): void {
+  timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void tickRestarts().catch(() => undefined).finally(() => { busy = false; });
+  }, 30_000);
+  timer.unref();
+}
+export const stopRestartTimer = () => clearInterval(timer);
+
+// ---------- routes ----------
+
+const serverOf = (req: express.Request) => {
+  const id = Number(req.params.id);
+  return Number.isInteger(id) && (db.prepare('SELECT id, game FROM servers WHERE id = ?').get(id) as { id: number; game: string } | undefined);
+};
+
+function view(serverId: number, game: string) {
+  const p = planOf(serverId);
+  const r = db.prepare('SELECT port FROM server_rcon WHERE server_id = ?').get(serverId) as { port: number } | undefined;
+  let suggestedHour: number | null = null;
+  try {
+    suggestedHour = analyticsFor(serverId, 30).heatmap.restartHour ?? null;
+  } catch {
+    suggestedHour = null;
+  }
+  return {
+    enabled: !!p.enabled,
+    days: p.days,
+    atMin: p.at_min,
+    durationMin: p.duration_min,
+    warnMin: p.warn_min,
+    channelId: p.channel_id,
+    command: p.command,
+    say: p.say || defaultSay(game),
+    next: p.enabled ? nextRun(p, Date.now(), tz()) : null,
+    lastResult: p.last_result,
+    lastRunAt: p.last_run_at,
+    suggestedHour,
+    timezone: tz(),
+    rcon: r ? { port: r.port, configured: true } : { port: null, configured: false },
+  };
+}
+
+router.get('/api/servers/:id(\\d+)/restart', allow('maintenance'), (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json(view(s.id, s.game));
+});
+
+router.put('/api/servers/:id(\\d+)/restart', allow('maintenance'), (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z
+    .object({
+      enabled: z.boolean(),
+      days: z.number().int().min(0).max(127),
+      atMin: z.number().int().min(0).max(1439),
+      durationMin: z.number().int().min(1).max(240),
+      warnMin: z.number().int().min(0).max(120),
+      channelId: z.string().regex(/^(\d{15,25})?$/),
+      command: z.string().trim().max(200),
+      say: z.string().trim().max(200),
+    })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const d = b.data;
+  db.prepare(
+    `INSERT INTO restart_plans (server_id, enabled, days, at_min, duration_min, warn_min, channel_id, command, say) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(server_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, at_min = excluded.at_min, duration_min = excluded.duration_min,
+       warn_min = excluded.warn_min, channel_id = excluded.channel_id, command = excluded.command, say = excluded.say`,
+  ).run(s.id, d.enabled ? 1 : 0, d.days, d.atMin, d.durationMin, d.warnMin, d.channelId, d.command, d.say);
+  res.json(view(s.id, s.game));
+});
+
+router.put('/api/servers/:id(\\d+)/rcon', admin, (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ port: z.number().int().min(1).max(65535).nullable(), password: z.string().max(200).optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (b.data.port === null) {
+    db.prepare('DELETE FROM server_rcon WHERE server_id = ?').run(s.id);
+  } else {
+    const old = db.prepare('SELECT password FROM server_rcon WHERE server_id = ?').get(s.id) as { password: string } | undefined;
+    // an empty password field keeps the saved one
+    const pass = b.data.password ? encryptSecret(b.data.password) : old?.password;
+    if (!pass) return res.status(400).json({ error: 'Укажите пароль RCON' });
+    db.prepare('INSERT INTO server_rcon (server_id, port, password) VALUES (?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET port = excluded.port, password = excluded.password').run(s.id, b.data.port, pass);
+  }
+  res.json(view(s.id, s.game));
+});
+
+router.post('/api/servers/:id(\\d+)/rcon/test', admin, async (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ command: z.string().trim().min(1).max(200) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const r = rconOf(s.id);
+  if (!r) return res.status(400).json({ error: 'Сначала сохраните порт и пароль RCON' });
+  try {
+    res.json({ ok: true, answer: await rconCommand(r.host, r.port, r.password, b.data.command) });
+  } catch (e) {
+    res.json({ ok: false, answer: (e as Error).message });
+  }
+});
+
+router.post('/api/servers/:id(\\d+)/restart/now', allow('maintenance'), async (req: AuthedRequest, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const result = await run(s.id, planOf(s.id), Date.now(), req.user?.username ?? 'админка');
+  res.json({ ...view(s.id, s.game), lastResult: result });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/reviews.ts" << '__COREGSM_EOF__'
@@ -43674,6 +44090,203 @@ export default function PollSettingsCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/RestartPlans.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Обслуживание: scheduled restarts per server (days and time, the warning in Discord and in the game chat,
+ * the restart command over RCON) and the RCON connection itself.
+ */
+import { useEffect, useState } from 'react';
+import { api, type Server } from '../api';
+import { useAuth } from '../auth';
+import { confirmDialog } from '../confirm';
+import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast } from '../ui';
+import { ChannelPicker } from './ChannelPicker';
+import '../styles/admin.css';
+
+interface Plan {
+  enabled: boolean;
+  days: number;
+  atMin: number;
+  durationMin: number;
+  warnMin: number;
+  channelId: string;
+  command: string;
+  say: string;
+  next: number | null;
+  lastResult: string | null;
+  lastRunAt: number | null;
+  suggestedHour: number | null;
+  timezone: string;
+  rcon: { port: number | null; configured: boolean };
+}
+
+const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+const daysText = (d: number) => (d === 127 ? 'каждый день' : d === 0 ? 'дни не выбраны' : DAYS.filter((_, i) => d & (1 << i)).join(', '));
+
+export default function RestartPlans({ servers }: { servers: Server[] }) {
+  const [plans, setPlans] = useState<Record<number, Plan>>({});
+  const [open, setOpen] = useState<Server | null>(null);
+  useEffect(() => {
+    for (const s of servers) api<Plan>(`/servers/${s.id}/restart`).then((p) => setPlans((x) => ({ ...x, [s.id]: p }))).catch(() => undefined);
+  }, [servers]);
+  if (!servers.length) return null;
+  return (
+    <Section
+      title="Плановые перезапуски"
+      description="Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска."
+    >
+      <ul className="grid gap-2">
+        {servers.map((s) => {
+          const p = plans[s.id];
+          return (
+            <li key={s.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <GameAvatar game={s.game} size={32} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-extrabold">{s.name}</span>
+                <span className="block text-sm font-semibold text-mute">
+                  {!p ? '…' : p.enabled ? `${daysText(p.days)} в ${hhmm(p.atMin)}${p.next ? ` · следующий ${fmtDateTime(p.next)}` : ''}` : 'выключено'}
+                  {p?.rcon.configured ? ' · RCON подключён' : ''}
+                </span>
+                {p?.lastResult && <span className="block text-xs font-bold text-mute">Последний раз {p.lastRunAt ? fmtDateTime(p.lastRunAt) : ''}: {p.lastResult}</span>}
+              </span>
+              {p?.enabled && <span className="pill pill-ok">включено</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)} disabled={!p}>Настроить</button>
+            </li>
+          );
+        })}
+      </ul>
+      {open && plans[open.id] && (
+        <PlanModal server={open} plan={plans[open.id]} onClose={() => setOpen(null)} onSaved={(p) => { setPlans((x) => ({ ...x, [open.id]: p })); }} />
+      )}
+    </Section>
+  );
+}
+
+function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: Plan; onClose: () => void; onSaved: (p: Plan) => void }) {
+  const { isAdmin } = useAuth();
+  const [f, setF] = useState(plan);
+  const [time, setTime] = useState(hhmm(plan.atMin));
+  const [port, setPort] = useState(plan.rcon.port ? String(plan.rcon.port) : '');
+  const [password, setPassword] = useState('');
+  const [testCmd, setTestCmd] = useState('status');
+  const [answer, setAnswer] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  const minutes = () => {
+    const [h, m] = time.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+  const save = async () => {
+    setBusy('save');
+    setError('');
+    try {
+      let p = await api<Plan>(`/servers/${server.id}/restart`, 'PUT', { enabled: f.enabled, days: f.days, atMin: minutes(), durationMin: f.durationMin, warnMin: f.warnMin, channelId: f.channelId, command: f.command, say: f.say });
+      if (isAdmin && (port !== (plan.rcon.port ? String(plan.rcon.port) : '') || password)) {
+        p = await api<Plan>(`/servers/${server.id}/rcon`, 'PUT', { port: port ? Number(port) : null, ...(password ? { password } : {}) });
+      }
+      onSaved(p);
+      toast('Перезапуски сохранены');
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy('');
+    }
+  };
+  const test = async () => {
+    setBusy('test');
+    setAnswer(null);
+    try {
+      if (port && (password || port !== String(plan.rcon.port ?? ''))) {
+        const p = await api<Plan>(`/servers/${server.id}/rcon`, 'PUT', { port: Number(port), ...(password ? { password } : {}) });
+        onSaved(p);
+        setPassword('');
+      }
+      const r = await api<{ ok: boolean; answer: string }>(`/servers/${server.id}/rcon/test`, 'POST', { command: testCmd });
+      setAnswer({ ok: r.ok, text: r.answer || 'Сервер выполнил команду и ничего не ответил' });
+    } catch (e) {
+      setAnswer({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy('');
+    }
+  };
+  const now = async () => {
+    if (!(await confirmDialog({ title: `Перезапустить «${server.name}» сейчас?`, text: 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.', confirmLabel: 'Перезапустить', danger: true }))) return;
+    setBusy('now');
+    await api<Plan>(`/servers/${server.id}/restart/now`, 'POST').then((p) => { onSaved(p); toast(p.lastResult ?? 'Готово'); }).catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
+  };
+
+  return (
+    <Modal title={`Перезапуски: ${server.name}`} onClose={onClose}>
+      <div className="space-y-4">
+        <label className="flex cursor-pointer items-center gap-3 font-extrabold">
+          <Switch checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> Перезапускать по расписанию
+        </label>
+        <fieldset>
+          <legend className="label">Дни</legend>
+          <div className="flex flex-wrap gap-1.5">
+            {DAYS.map((d, i) => {
+              const on = !!(f.days & (1 << i));
+              return <button key={d} type="button" className={`rp-day ${on ? 'is-on' : ''}`} aria-pressed={on} onClick={() => setF({ ...f, days: f.days ^ (1 << i) })}>{d}</button>;
+            })}
+          </div>
+        </fieldset>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Время"><input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required /></Field>
+          <Field label="Предупредить, мин"><input className="input" type="number" min={0} max={120} value={f.warnMin} onChange={(e) => setF({ ...f, warnMin: Number(e.target.value) })} /></Field>
+          <Field label="Длится, мин"><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
+        </div>
+        {plan.suggestedHour != null && (
+          <p className="-mt-2 text-sm font-semibold text-mute">
+            Время панели: {plan.timezone}. Меньше всего игроков обычно в {String(plan.suggestedHour).padStart(2, '0')}:00.{' '}
+            <button type="button" className="btn-link btn-xs" onClick={() => setTime(`${String(plan.suggestedHour).padStart(2, '0')}:00`)}>Поставить это время</button>
+          </p>
+        )}
+        <div>
+          <span className="label">Канал Discord для предупреждений</span>
+          <ChannelPicker id="restart-channel" value={f.channelId} onChange={(v) => setF({ ...f, channelId: v })} />
+          <p className="mt-1 text-sm font-semibold text-mute">Не выбран: сообщения уйдут в канал оповещений.</p>
+        </div>
+
+        <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
+          <legend className="px-1 font-extrabold">RCON (необязательно)</legend>
+          <p className="text-sm font-semibold text-mute">Для Minecraft, CS, ARK, V Rising, Palworld и других игр с Source RCON. Rust (WebRCON) пока не поддерживается.</p>
+          {isAdmin ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Порт RCON"><input className="input" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} placeholder="например 25575" /></Field>
+              <Field label={plan.rcon.configured ? 'Пароль (пусто: оставить прежний)' : 'Пароль'}><input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+            </div>
+          ) : (
+            <p className="text-sm font-bold">{plan.rcon.configured ? `Подключён, порт ${plan.rcon.port}` : 'Не подключён: порт и пароль задаёт администратор'}</p>
+          )}
+          <Field label="Команда перезапуска"><input className="input font-mono" value={f.command} onChange={(e) => setF({ ...f, command: e.target.value })} placeholder="например stop, quit или shutdown" maxLength={200} /></Field>
+          <Field label="Сообщение в игровой чат ({text} — текст предупреждения)"><input className="input font-mono" value={f.say} onChange={(e) => setF({ ...f, say: e.target.value })} maxLength={200} /></Field>
+          <p className="text-sm font-semibold text-mute">Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.</p>
+          {isAdmin && (
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="min-w-[10rem] flex-1"><Field label="Проверить команду"><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
+              <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>Выполнить</Button>
+            </div>
+          )}
+          {answer && <pre className={`whitespace-pre-wrap rounded-xl px-3 py-2 text-sm font-semibold ${answer.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`}>{answer.text}</pre>}
+        </fieldset>
+
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-between gap-2">
+          <Button type="button" className="btn-ghost text-bad" loading={busy === 'now'} onClick={() => void now()}>Перезапустить сейчас</Button>
+          <div className="flex gap-2">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+            <Button type="button" loading={busy === 'save'} onClick={() => void save()}>Сохранить</Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/SmtpCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type SmtpInfo } from '../api';
@@ -55341,6 +55954,8 @@ const errorsEn: Record<string, string> = {
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
   counter_exists: 'This channel is already a counter',
+  rcon_password_required: 'Enter the RCON password',
+  rcon_not_configured: 'Save the RCON port and password first',
   gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
   gallery_queue_full: 'You already have 5 screenshots waiting for review. Wait until they are checked.',
   game_address_port: 'Enter the game, the address and the port',
@@ -57224,6 +57839,7 @@ const KIND = {
   ping: { label: 'Вырос пинг', cls: 'pill-warn' },
   full: { label: 'Почти заполнен', cls: 'pill-mute' },
   digest: { label: 'Итоги недели', cls: 'pill-ok' },
+  restart: { label: 'Перезапуск', cls: 'pill-mute' },
 } as const;
 
 const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
@@ -59174,6 +59790,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Maintenance.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
+import RestartPlans from '../components/RestartPlans';
 import { StateView } from '../components/StateView';
 import {
   REPEAT_LABEL, fromLocalInput, presetNow, presetTonight, rangeLabel, toLocalInput, untilLabel, validateWindow, windowState,
@@ -59295,6 +59912,8 @@ export default function MaintenancePage() {
           ))}
         </ul>
       )}
+
+      <RestartPlans servers={servers} />
 
       {draft && <WindowModal draft={draft} servers={servers} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); void load(); }} />}
     </AdminPage>
@@ -64766,6 +65385,11 @@ __COREGSM_EOF__
 .us-perm { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; border-radius: 9999px; padding: 4px 12px 4px 8px; font-size: 13px; font-weight: 700; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, box-shadow .15s ease; }
 .us-perm.is-on { background: rgb(var(--brand) / .12); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .45); }
 .us-perm input { width: 15px; height: 15px; }
+
+/* restart plans: the days of the week */
+.rp-day { min-width: 2.75rem; border-radius: 9999px; padding: 6px 12px; font-size: 14px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, color .15s ease; }
+.rp-day:hover { color: rgb(var(--ink)); }
+.rp-day.is-on { color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: 0 4px 12px -6px rgb(var(--brand) / .8); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'

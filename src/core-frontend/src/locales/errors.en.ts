@@ -99,6 +99,8 @@ const errorsEn: Record<string, string> = {
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
   counter_exists: 'This channel is already a counter',
+  rcon_password_required: 'Enter the RCON password',
+  rcon_not_configured: 'Save the RCON port and password first',
   gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
   gallery_queue_full: 'You already have 5 screenshots waiting for review. Wait until they are checked.',
   game_address_port: 'Enter the game, the address and the port',

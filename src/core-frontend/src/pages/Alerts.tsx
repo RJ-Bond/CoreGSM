@@ -24,6 +24,7 @@ const KIND = {
   ping: { label: 'Вырос пинг', cls: 'pill-warn' },
   full: { label: 'Почти заполнен', cls: 'pill-mute' },
   digest: { label: 'Итоги недели', cls: 'pill-ok' },
+  restart: { label: 'Перезапуск', cls: 'pill-mute' },
 } as const;
 
 const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [

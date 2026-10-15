@@ -45,7 +45,7 @@ export interface Payload {
   embed: Record<string, unknown>;
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
   const s = alertSettings();
