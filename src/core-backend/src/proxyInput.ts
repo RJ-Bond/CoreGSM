@@ -1,4 +1,4 @@
-/** The proxy address an administrator types in: normalised to a URL and validated. */
+/** What an administrator types into the bot settings: the proxy address (normalised to a URL) and the bot token. */
 
 export const PROXY_RE = /^(socks5h?|http|https):\/\/([^@/\s]+@)?[^@/:\s]+:\d{1,5}\/?$/;
 export const maskProxy = (u: string) => u.replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:***@');
@@ -45,3 +45,8 @@ export function normalizeProxy(raw: string, type: ProxyType): string {
 }
 
 export const PROXY_HELP = 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port';
+
+/** a Discord bot token: three base64url parts joined by dots (the same check as the form in the panel) */
+export const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/;
+// a browser that autofills the panel's own password into the token field must not overwrite a working token
+export const TOKEN_HELP = 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).';

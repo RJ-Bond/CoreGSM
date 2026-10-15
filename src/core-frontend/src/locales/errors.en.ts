@@ -81,6 +81,7 @@ const errorsEn: Record<string, string> = {
 
   // ---- settings, branding, updates ----
   proxy_format: 'Proxy: host:port:login:password, socks5://login:password@host:port or http://host:port',
+  bad_bot_token: 'This does not look like a bot token: it has three parts joined by dots. Copy the whole token in the Discord Developer Portal (Bot → Reset Token).',
   branding_format: 'Name up to 32 characters, colour as #RRGGBB',
   players_shown_range: 'Number of nicknames: 0 to 20',
   poll_settings_range: 'Outage confirmation: 1 to 5 polls, concurrency: 1 to 32',
