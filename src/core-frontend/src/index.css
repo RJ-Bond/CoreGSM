@@ -145,6 +145,17 @@
     background-repeat: no-repeat;
     background-position: top;
   }
+  /* a game theme: the game's picture across the top of the page, dimmed into the page colour */
+  html[data-game-art] body {
+    background-image:
+      linear-gradient(180deg, rgb(var(--page) / .78) 0, rgb(var(--page) / .93) 34vh, rgb(var(--page)) 62vh),
+      var(--game-art),
+      radial-gradient(90% 30% at 50% 77%, var(--horizon-b), transparent 72%),
+      linear-gradient(180deg, transparent 32%, var(--horizon-a) 77%, transparent 100%);
+    background-size: 100% 100vh, 100% auto, 100% 130vh, 100% 130vh;
+    background-repeat: no-repeat;
+    background-position: top, top center, top, top;
+  }
 
   ::selection { @apply bg-brand/30; }
   :focus-visible { @apply outline-none ring-2 ring-link; }

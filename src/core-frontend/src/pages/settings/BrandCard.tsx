@@ -1,22 +1,16 @@
 /** Settings → Branding: community name, accent colours, theme presets and logo. */
+import { GAME_PRESETS, THEME_PRESETS, type ThemePreset } from '../../gameThemes';
+import '../../styles/admin.css';
 import { useEffect, useRef, useState } from 'react';
 import { onAccentChange, paintBrand } from '../../accent';
 import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
-import { ErrorLine, FieldError, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
 import { errorText } from '../../apiErrors';
 
-/** готовые темы: основной цвет и конец градиента */
-const THEME_PRESETS = [
-  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
-  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
-  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
-  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
-  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
-  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
-] as const;
+
 
 /** название, цвет и логотип сообщества: изменения сохраняются сами */
 export function BrandCard() {
@@ -33,7 +27,7 @@ export function BrandCard() {
   savedRef.current = b;
 
   const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
-  const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
+  const pickPreset = (p: ThemePreset) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
 
   // live preview of the chosen colours across the whole panel (a game accent chosen in «Внешний вид» still wins, see accent.ts)
   useEffect(() => {
@@ -129,6 +123,23 @@ export function BrandCard() {
             );
           })}
         </div>
+      </div>
+      <div>
+        <span className="label">Темы игр</span>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {GAME_PRESETS.map((p) => {
+            const on = preset === p.id;
+            return (
+              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`gt-card ${on ? 'is-on' : ''}`}>
+                <span className="gt-art" style={{ backgroundImage: `${p.art ? `linear-gradient(135deg, ${p.c1}cc, ${p.c2}ee), url("${p.art.replace('.jpg', '@s.jpg')}")` : `linear-gradient(135deg, ${p.c1}, ${p.c2})`}` }}>
+                  <GameAvatar game={p.game!} size={30} glass />
+                </span>
+                <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-1.5 text-sm font-semibold text-mute">Цвет, свечение страницы и, для V Rising и Icarus, приглушённая картинка игры в шапке каждой страницы.</p>
       </div>
       <div>
         <span className="label">Свой цвет</span>

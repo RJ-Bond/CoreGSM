@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="64aca4ed35da"
+COREGSM_BUILD="b3cf71f64080"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5860,6 +5860,178 @@ if (INTERNAL_TOKEN.length < 16) {
 export const APP_VERSION = process.env.APP_VERSION ?? '';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/configExport.ts" << '__COREGSM_EOF__'
+/**
+ * The panel's setup as one JSON file, to move it to another panel in a minute (or keep a readable copy).
+ * Unlike a backup it holds no players, history or accounts, and no secrets (bot token, passwords, keys):
+ * servers, Discord status messages, alert and digest settings, appearance, maintenance that repeats,
+ * scheduled restarts, autoroles and counters.
+ *
+ *   GET  /api/config/export             the file
+ *   POST /api/config/import?dry=1       what an import would change, without changing anything
+ *   POST /api/config/import             import: a server with the same game, address and port is updated,
+ *                                       others are added; the settings in the file replace the current ones
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin } from './auth.js';
+import { db, getSetting, setSetting } from './db.js';
+
+export const router = express.Router();
+
+/** settings that travel with the file: never a secret, never a counter or a timestamp of this panel */
+export const PORTABLE_SETTINGS = [
+  'alerts_enabled', 'alerts_channel', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
+  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour',
+  'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
+  'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
+  'poll_concurrency', 'poll_fail_threshold', 'timezone',
+  'public_panel', 'registration_open', 'registration_mode', 'rules_text',
+  'backup_schedule', 'backup_keep',
+  'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from',
+] as const;
+
+interface ServerRow { id: number; name: string; game: string; host: string; port: number; query_port: number | null; display_address: string; country: string }
+
+export function exportConfig() {
+  const servers = db.prepare('SELECT id, name, game, host, port, query_port, display_address, country FROM servers ORDER BY id').all() as ServerRow[];
+  const ref = new Map(servers.map((s, i) => [s.id, i]));
+  const settings: Record<string, string> = {};
+  for (const k of PORTABLE_SETTINGS) {
+    const v = getSetting(k);
+    if (v !== null) settings[k] = v;
+  }
+  const opt = <T,>(sql: string): T[] => {
+    try {
+      return db.prepare(sql).all() as T[];
+    } catch {
+      return [];
+    }
+  };
+  return {
+    app: 'coregsm',
+    format: 1,
+    exportedAt: new Date().toISOString(),
+    servers: servers.map((s) => ({ name: s.name, game: s.game, host: s.host, port: s.port, queryPort: s.query_port, displayAddress: s.display_address, country: s.country })),
+    bindings: opt<{ server_id: number; channel_id: string; interval_sec: number; enabled: number; style: string; extra_ids: string }>('SELECT server_id, channel_id, interval_sec, enabled, style, extra_ids FROM bindings')
+      .filter((b) => ref.has(b.server_id))
+      .map((b) => ({ server: ref.get(b.server_id)!, channelId: b.channel_id, intervalSec: b.interval_sec, enabled: !!b.enabled, style: b.style, extra: (JSON.parse(b.extra_ids || '[]') as number[]).filter((id) => ref.has(id)).map((id) => ref.get(id)!) })),
+    maintenance: opt<{ server_id: number | null; name: string; start_ts: number; end_ts: number; repeat: string }>("SELECT server_id, name, start_ts, end_ts, repeat FROM maintenance_windows WHERE repeat != 'none'")
+      .filter((w) => w.server_id === null || ref.has(w.server_id))
+      .map((w) => ({ server: w.server_id === null ? null : ref.get(w.server_id)!, name: w.name, startTs: w.start_ts, endTs: w.end_ts, repeat: w.repeat })),
+    restarts: opt<{ server_id: number; enabled: number; days: number; at_min: number; duration_min: number; warn_min: number; channel_id: string; command: string; say: string }>('SELECT * FROM restart_plans')
+      .filter((p) => ref.has(p.server_id))
+      .map((p) => ({ server: ref.get(p.server_id)!, enabled: !!p.enabled, days: p.days, atMin: p.at_min, durationMin: p.duration_min, warnMin: p.warn_min, channelId: p.channel_id, command: p.command, say: p.say })),
+    autoroles: opt<{ guild_id: string; role_id: string; kind: string; threshold: number; server_id: number | null }>('SELECT guild_id, role_id, kind, threshold, server_id FROM autoroles')
+      .map((r) => ({ guildId: r.guild_id, roleId: r.role_id, kind: r.kind, threshold: r.threshold, server: r.server_id === null ? null : ref.get(r.server_id) ?? null })),
+    counters: opt<{ channel_id: string; template: string; server_id: number | null }>('SELECT channel_id, template, server_id FROM voice_counters')
+      .map((c) => ({ channelId: c.channel_id, template: c.template, server: c.server_id === null ? null : ref.get(c.server_id) ?? null })),
+    settings,
+  };
+}
+
+const snow = z.string().regex(/^\d{15,25}$/);
+const serverRef = z.number().int().min(0).max(999);
+const fileSchema = z.object({
+  app: z.literal('coregsm'),
+  format: z.literal(1),
+  servers: z.array(z.object({ name: z.string().min(1).max(100), game: z.string().min(1).max(40), host: z.string().min(1).max(253), port: z.number().int().min(1).max(65535), queryPort: z.number().int().min(1).max(65535).nullable().optional(), displayAddress: z.string().max(200).optional(), country: z.string().max(8).optional() })).max(500),
+  bindings: z.array(z.object({ server: serverRef, channelId: snow, intervalSec: z.number().int().min(30).max(3600), enabled: z.boolean(), style: z.enum(['embed', 'card', 'both']), extra: z.array(serverRef).max(9) })).max(500).default([]),
+  maintenance: z.array(z.object({ server: serverRef.nullable(), name: z.string().max(100), startTs: z.number().int(), endTs: z.number().int(), repeat: z.enum(['daily', 'weekly']) })).max(200).default([]),
+  restarts: z.array(z.object({ server: serverRef, enabled: z.boolean(), days: z.number().int().min(0).max(127), atMin: z.number().int().min(0).max(1439), durationMin: z.number().int().min(1).max(240), warnMin: z.number().int().min(0).max(120), channelId: z.string().regex(/^(\d{15,25})?$/), command: z.string().max(200), say: z.string().max(200) })).max(500).default([]),
+  autoroles: z.array(z.object({ guildId: snow, roleId: snow, kind: z.enum(['online', 'week_top', 'hours']), threshold: z.number().int().min(0).max(10000), server: serverRef.nullable() })).max(100).default([]),
+  counters: z.array(z.object({ channelId: snow, template: z.string().min(1).max(100), server: serverRef.nullable() })).max(50).default([]),
+  settings: z.record(z.string().max(5000)).default({}),
+});
+export type ConfigFile = z.infer<typeof fileSchema>;
+
+/** applies (or, with dry, only counts) an import; the answer says what changed */
+export function importConfig(file: ConfigFile, dry: boolean) {
+  const sum = { serversAdded: 0, serversUpdated: 0, bindings: 0, maintenance: 0, restarts: 0, autoroles: 0, counters: 0, settings: 0 };
+  const apply = () => {
+    const ids: number[] = [];
+    const find = db.prepare('SELECT id FROM servers WHERE game = ? AND lower(host) = lower(?) AND port = ?');
+    for (const s of file.servers) {
+      const hit = find.get(s.game, s.host, s.port) as { id: number } | undefined;
+      if (hit) {
+        sum.serversUpdated++;
+        db.prepare('UPDATE servers SET name = ?, query_port = ?, display_address = ?, country = ? WHERE id = ?').run(s.name, s.queryPort ?? null, s.displayAddress ?? '', s.country ?? '', hit.id);
+        ids.push(hit.id);
+      } else {
+        sum.serversAdded++;
+        ids.push(Number(db.prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(s.name, s.game, s.host, s.port, s.queryPort ?? null, s.displayAddress ?? '', s.country ?? '', Date.now()).lastInsertRowid));
+      }
+    }
+    const idOf = (i: number | null) => (i === null ? null : ids[i] ?? undefined);
+    for (const b of file.bindings) {
+      const sid = idOf(b.server);
+      if (!sid) continue;
+      // the same server in the same channel: already there
+      if (db.prepare('SELECT 1 FROM bindings WHERE server_id = ? AND channel_id = ?').get(sid, b.channelId)) continue;
+      sum.bindings++;
+      db.prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, extra_ids) VALUES (?, ?, ?, ?, ?, ?)').run(sid, b.channelId, b.intervalSec, b.enabled ? 1 : 0, b.style, JSON.stringify(b.extra.map((i) => ids[i]).filter(Boolean)));
+    }
+    for (const w of file.maintenance) {
+      const sid = idOf(w.server);
+      if (sid === undefined) continue;
+      if (db.prepare('SELECT 1 FROM maintenance_windows WHERE server_id IS ? AND name = ? AND start_ts = ? AND repeat = ?').get(sid, w.name, w.startTs, w.repeat)) continue;
+      sum.maintenance++;
+      db.prepare('INSERT INTO maintenance_windows (server_id, name, start_ts, end_ts, repeat, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(sid, w.name, w.startTs, w.endTs, w.repeat, 'импорт', Date.now());
+    }
+    for (const p of file.restarts) {
+      const sid = idOf(p.server);
+      if (!sid) continue;
+      sum.restarts++;
+      db.prepare(
+        `INSERT INTO restart_plans (server_id, enabled, days, at_min, duration_min, warn_min, channel_id, command, say) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(server_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, at_min = excluded.at_min, duration_min = excluded.duration_min,
+           warn_min = excluded.warn_min, channel_id = excluded.channel_id, command = excluded.command, say = excluded.say`,
+      ).run(sid, p.enabled ? 1 : 0, p.days, p.atMin, p.durationMin, p.warnMin, p.channelId, p.command, p.say);
+    }
+    for (const r of file.autoroles) {
+      const sid = idOf(r.server);
+      if (sid === undefined) continue;
+      if (db.prepare('SELECT 1 FROM autoroles WHERE guild_id = ? AND role_id = ? AND kind = ? AND server_id IS ?').get(r.guildId, r.roleId, r.kind, sid)) continue;
+      sum.autoroles++;
+      db.prepare('INSERT INTO autoroles (guild_id, role_id, kind, threshold, server_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(r.guildId, r.roleId, r.kind, r.threshold, sid, Date.now());
+    }
+    for (const c of file.counters) {
+      const sid = idOf(c.server);
+      if (sid === undefined) continue;
+      if (db.prepare('SELECT 1 FROM voice_counters WHERE channel_id = ?').get(c.channelId)) continue;
+      sum.counters++;
+      db.prepare('INSERT INTO voice_counters (channel_id, template, server_id, created_at) VALUES (?, ?, ?, ?)').run(c.channelId, c.template, sid, Date.now());
+    }
+    for (const [k, v] of Object.entries(file.settings)) {
+      if (!(PORTABLE_SETTINGS as readonly string[]).includes(k)) continue;
+      if (getSetting(k) === v) continue;
+      sum.settings++;
+      setSetting(k, v);
+    }
+    // a dry run counts inside a transaction that is rolled back
+    if (dry) throw new DryRun();
+  };
+  try {
+    db.transaction(apply)();
+  } catch (e) {
+    if (!(e instanceof DryRun)) throw e;
+  }
+  return sum;
+}
+class DryRun extends Error {}
+
+router.get('/api/config/export', admin, (_req, res) => {
+  const day = new Date().toISOString().slice(0, 10);
+  res.set({ 'Content-Disposition': `attachment; filename="coregsm-config-${day}.json"` }).json(exportConfig());
+});
+
+router.post('/api/config/import', admin, (req, res) => {
+  const b = fileSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Это не файл настроек CoreGSM или он повреждён' });
+  res.json({ dry: req.query.dry === '1', ...importConfig(b.data, req.query.dry === '1') });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/covers.ts" << '__COREGSM_EOF__'
 /**
  * Cover pictures of servers. The uploaded picture is centre-cropped to 16:9 and stored as a 1280x720 JPEG
@@ -7528,6 +7700,7 @@ export const ERRORS = {
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
   counter_exists: 'Этот канал уже стал счётчиком',
+  config_bad_file: 'Это не файл настроек CoreGSM или он повреждён',
   rcon_password_required: 'Укажите пароль RCON',
   rcon_not_configured: 'Сначала сохраните порт и пароль RCON',
   gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',
@@ -8762,6 +8935,7 @@ import { router as reviewsRouter } from './reviews.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as probesRouter } from './probes.js';
+import { router as configRouter } from './configExport.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8782,6 +8956,7 @@ app.use('/api', csrfGuard);
 // public player pages: a coarse per-address ceiling on top of the route's own limiter
 app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
+app.use('/api/config/import', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 installAudit(app);
 
@@ -8804,6 +8979,7 @@ app.use(reviewsRouter);
 app.use(galleryRouter);
 app.use(restartsRouter);
 app.use(probesRouter);
+app.use(configRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -40554,6 +40730,7 @@ IwAAAABJRU5ErkJggg==
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
+import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
@@ -40633,6 +40810,8 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
 function useBrand(b: Access['brand']) {
   // the community's default theme, for visitors who have not picked one
   useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
+  // a game theme also tints the page glow and lays the game's picture across the top
+  useEffect(() => { paintGameTheme(b.preset); }, [b.preset]);
   useEffect(() => {
     const root = document.documentElement;
     // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
@@ -42552,8 +42731,9 @@ import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
-import { ADMIN_LINKS, ADMIN_SECTIONS } from '../pages/adminNav';
-import { GameAvatar, IconNews, IconServers, toast, useDensity, navigate } from '../ui';
+import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
+import { confirmDialog } from '../confirm';
+import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, currentTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -42602,7 +42782,8 @@ const sectionItem = (key: string, label: string, hint: string, href: string, ico
  * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
  */
 export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
-  const { me } = useAuth();
+  const { me, logout } = useAuth();
+  const perms = me?.perms ?? (isAdmin ? ['news', 'moderation', 'servers', 'maintenance', 'journal'] : []);
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -42640,17 +42821,51 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-servers', 'Серверы', 'Список серверов', '/servers', <IconServers />),
       sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
+      sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
+      sectionItem('p-gallery', 'Галерея', 'Скриншоты игроков', '/gallery', <IconCards />, 'скриншоты картинки фото загрузить', true),
     );
     if (isStaff) {
-      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
+      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => SECTION_PERM[x.id] && perms.includes(SECTION_PERM[x.id]!));
       for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
       if (isAdmin) {
         ADMIN_LINKS.forEach((l, i) => out.push(sectionItem(`l-${i}`, l.label, `Админка · ${l.hint}`, l.href, l.icon(), `${l.keywords} админка`, true)));
-      } else {
+      } else if (perms.includes('news')) {
         out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '/admin/news/new', <IconNews />, 'новость объявление', true));
       }
     }
     if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '/profile', <IconUser />));
+    // actions on a server, found by typing its name: copy the address, poll it now, restart it
+    const act = (key: string, label: string, hint: string, words: string, icon: ReactNode, run: () => void) =>
+      out.push({ key, group: 'Действия', label, hint, href: '', run, icon, hay: norm(`${label} ${hint} ${words}`), searchOnly: true });
+    for (const s of servers ?? []) {
+      act(`copy-${s.id}`, `Скопировать адрес: ${s.name}`, s.address, 'адрес ip подключиться копировать', <IconCopy />, () => {
+        void navigator.clipboard?.writeText(s.address).then(() => toast('Адрес скопирован'));
+      });
+      if (perms.includes('servers')) {
+        act(`poll-${s.id}`, `Опросить сейчас: ${s.name}`, 'Свежие онлайн, карта и пинг', 'обновить опросить проверить', <IconRefresh />, () => {
+          void api(`/servers/${s.id}/refresh`, 'POST').then(() => toast(`«${s.name}» опрошен`)).catch((e: Error) => toast(e.message, 'err'));
+        });
+      }
+      if (perms.includes('maintenance')) {
+        act(`restart-${s.id}`, `Перезапустить: ${s.name}`, 'Окно обслуживания и команда по RCON', 'перезапуск рестарт restart', <IconWrench />, () => {
+          void confirmDialog({ title: `Перезапустить «${s.name}» сейчас?`, text: 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.', confirmLabel: 'Перезапустить', danger: true }).then((ok) => {
+            if (ok) void api<{ lastResult: string | null }>(`/servers/${s.id}/restart/now`, 'POST').then((r) => toast(r.lastResult ?? 'Готово')).catch((e: Error) => toast(e.message, 'err'));
+          });
+        });
+      }
+    }
+    if (isAdmin) {
+      act('act-digest', 'Отправить итоги недели сейчас', 'Картинка с итогами в канал Discord', 'дайджест итоги неделя отчёт', <IconNews />, () => {
+        void api('/digest/send', 'POST').then(() => toast('Итоги недели поставлены в очередь')).catch((e: Error) => toast(e.message, 'err'));
+      });
+      act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
+    }
+    const theme = currentTheme();
+    for (const [t, label, icon] of [['dark', 'Тёмная тема', <IconMoon key="m" />], ['light', 'Светлая тема', <IconSun key="s" />], ['auto', 'Тема как в системе', <IconSun key="a" />]] as const) {
+      if (t === theme) continue;
+      out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
+    }
+    if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
     const compact = density === 'compact';
     out.push({
       key: 'act-density',
@@ -42663,7 +42878,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
-  }, [servers, isStaff, isAdmin, me, density]);
+  }, [servers, isStaff, isAdmin, me, density, perms, logout]);
 
   const results = useMemo(() => {
     const words = norm(q).split(/\s+/).filter(Boolean);
@@ -42795,6 +43010,81 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         <p className="sr-only" role="status">{results.length ? `Найдено: ${results.length}` : 'Ничего не найдено'}</p>
       </div>
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ConfigTransfer.tsx" << '__COREGSM_EOF__'
+/**
+ * Settings → Обновления и копии: the panel's setup as a JSON file (servers, Discord messages, alerts, appearance,
+ * maintenance, restarts, roles and counters, without secrets) and its import into this or another panel.
+ */
+import { useRef, useState } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { downloadFile } from '../pages/Backups';
+import { Button, ErrorLine, Section, toast } from '../ui';
+
+interface Summary { dry: boolean; serversAdded: number; serversUpdated: number; bindings: number; maintenance: number; restarts: number; autoroles: number; counters: number; settings: number }
+
+export function summaryText(s: Summary): string {
+  const parts = [
+    s.serversAdded && `новых серверов: ${s.serversAdded}`,
+    s.serversUpdated && `обновится серверов: ${s.serversUpdated}`,
+    s.bindings && `сообщений Discord: ${s.bindings}`,
+    s.maintenance && `окон обслуживания: ${s.maintenance}`,
+    s.restarts && `расписаний перезапуска: ${s.restarts}`,
+    s.autoroles && `авторолей: ${s.autoroles}`,
+    s.counters && `счётчиков: ${s.counters}`,
+    s.settings && `настроек: ${s.settings}`,
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'ничего не изменится: всё уже так';
+}
+
+export default function ConfigTransfer() {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const file = useRef<HTMLInputElement>(null);
+
+  const exportNow = async () => {
+    setBusy('export');
+    await downloadFile('/config/export', 'coregsm-config.json').catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
+  };
+  const importFile = async (f: File) => {
+    setError('');
+    let data: unknown;
+    try {
+      data = JSON.parse(await f.text());
+    } catch {
+      return setError('Это не файл настроек CoreGSM или он повреждён');
+    }
+    setBusy('import');
+    try {
+      const preview = await api<Summary>('/config/import?dry=1', 'POST', data);
+      const ok = await confirmDialog({ title: 'Импортировать настройки?', text: `Из файла «${f.name}»: ${summaryText(preview)}. Серверы с той же игрой, адресом и портом обновятся, остальные добавятся.`, confirmLabel: 'Импортировать' });
+      if (!ok) return;
+      const done = await api<Summary>('/config/import', 'POST', data);
+      toast(`Импортировано: ${summaryText(done)}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy('');
+      if (file.current) file.current.value = '';
+    }
+  };
+
+  return (
+    <Section
+      title="Перенос настроек"
+      description="Файл с настройкой панели: серверы, сообщения в Discord, оповещения и итоги недели, оформление, повторяющиеся окна обслуживания, перезапуски, автороли и счётчики. Без игроков, истории и секретов (токен бота и пароли вводятся заново). Удобно, чтобы поднять вторую панель или перенести её на другой сервер."
+    >
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" className="btn-soft" loading={busy === 'export'} onClick={() => void exportNow()}>Скачать файл настроек</Button>
+        <Button type="button" className="btn-soft" loading={busy === 'import'} onClick={() => file.current?.click()}>Импортировать из файла…</Button>
+        <input ref={file} type="file" accept="application/json,.json" className="sr-only" aria-hidden tabIndex={-1} onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); }} />
+      </div>
+      <ErrorLine text={error} />
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -54255,6 +54545,49 @@ export function shownFields(fields: GameProfile['fields']): ('map' | 'mode' | 'v
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/gameThemes.ts" << '__COREGSM_EOF__'
+/**
+ * Ready-made themes: the brand colour and the end of its gradient, and for the game themes also the glow along the
+ * page and, for games that ship a cover, a faint picture across the top of every page.
+ */
+export interface ThemePreset { id: string; name: string; c1: string; c2: string; game?: string; glow?: string; art?: string }
+
+export const THEME_PRESETS: ThemePreset[] = [
+  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
+  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
+  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
+  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
+  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
+  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
+];
+
+export const GAME_PRESETS: ThemePreset[] = [
+  { id: 'g-vrising', name: 'V Rising: кровавая луна', game: 'vrising', c1: '#c0262d', c2: '#5b0a1f', glow: 'rgb(220 38 38 / 0.28)', art: '/games/covers/vrising.jpg' },
+  { id: 'g-icarus', name: 'Icarus: рассвет', game: 'icarus', c1: '#d97706', c2: '#7c2d12', glow: 'rgb(245 158 11 / 0.26)', art: '/games/covers/icarus.jpg' },
+  { id: 'g-rust', name: 'Rust: ржавчина', game: 'rust', c1: '#cd4a1f', c2: '#4a1608', glow: 'rgb(234 88 12 / 0.24)' },
+  { id: 'g-minecraft', name: 'Minecraft: трава', game: 'minecraft', c1: '#3f9b2f', c2: '#1d4d18', glow: 'rgb(74 222 128 / 0.2)' },
+  { id: 'g-cs2', name: 'CS2: тактика', game: 'counterstrike2', c1: '#d69e14', c2: '#253246', glow: 'rgb(234 179 8 / 0.2)' },
+  { id: 'g-palworld', name: 'Palworld: лагуна', game: 'palworld', c1: '#0e9fb8', c2: '#0b4f66', glow: 'rgb(34 211 238 / 0.22)' },
+];
+
+export const presetById = (id: string | undefined | null) => [...THEME_PRESETS, ...GAME_PRESETS].find((p) => p.id === id) ?? null;
+
+/** the extras of a game theme on the page: the glow colour and the picture; other themes take them away */
+export function paintGameTheme(id: string | undefined | null): void {
+  const root = document.documentElement;
+  const p = presetById(id);
+  if (p?.glow) root.style.setProperty('--horizon-b', p.glow);
+  else root.style.removeProperty('--horizon-b');
+  if (p?.art) {
+    root.style.setProperty('--game-art', `url("${p.art}")`);
+    root.dataset.gameArt = '1';
+  } else {
+    root.style.removeProperty('--game-art');
+    delete root.dataset.gameArt;
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
 import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
@@ -54690,6 +55023,17 @@ __COREGSM_EOF__
     background-size: 100% 130vh;
     background-repeat: no-repeat;
     background-position: top;
+  }
+  /* a game theme: the game's picture across the top of the page, dimmed into the page colour */
+  html[data-game-art] body {
+    background-image:
+      linear-gradient(180deg, rgb(var(--page) / .78) 0, rgb(var(--page) / .93) 34vh, rgb(var(--page)) 62vh),
+      var(--game-art),
+      radial-gradient(90% 30% at 50% 77%, var(--horizon-b), transparent 72%),
+      linear-gradient(180deg, transparent 32%, var(--horizon-a) 77%, transparent 100%);
+    background-size: 100% 100vh, 100% auto, 100% 130vh, 100% 130vh;
+    background-repeat: no-repeat;
+    background-position: top, top center, top, top;
   }
 
   ::selection { @apply bg-brand/30; }
@@ -56388,6 +56732,7 @@ const errorsEn: Record<string, string> = {
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
   counter_exists: 'This channel is already a counter',
+  config_bad_file: 'This is not a CoreGSM settings file, or it is damaged',
   rcon_password_required: 'Enter the RCON password',
   rcon_not_configured: 'Save the RCON port and password first',
   gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
@@ -63516,6 +63861,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import BackupsCard from './Backups';
+import ConfigTransfer from '../components/ConfigTransfer';
 import SmtpCard from '../components/SmtpCard';
 import PollSettingsCard from '../components/PollSettingsCard';
 import type { ReactNode } from 'react';
@@ -63603,6 +63949,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         <>
           <UpdateCard />
           <BackupsCard />
+          <ConfigTransfer />
         </>
       )}
     </AdminPage>
@@ -64971,24 +65318,18 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/BrandCard.tsx" << '__COREGSM_EOF__'
 /** Settings → Branding: community name, accent colours, theme presets and logo. */
+import { GAME_PRESETS, THEME_PRESETS, type ThemePreset } from '../../gameThemes';
+import '../../styles/admin.css';
 import { useEffect, useRef, useState } from 'react';
 import { onAccentChange, paintBrand } from '../../accent';
 import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
-import { ErrorLine, FieldError, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
 import { errorText } from '../../apiErrors';
 
-/** готовые темы: основной цвет и конец градиента */
-const THEME_PRESETS = [
-  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
-  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
-  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
-  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
-  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
-  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
-] as const;
+
 
 /** название, цвет и логотип сообщества: изменения сохраняются сами */
 export function BrandCard() {
@@ -65005,7 +65346,7 @@ export function BrandCard() {
   savedRef.current = b;
 
   const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
-  const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
+  const pickPreset = (p: ThemePreset) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
 
   // live preview of the chosen colours across the whole panel (a game accent chosen in «Внешний вид» still wins, see accent.ts)
   useEffect(() => {
@@ -65101,6 +65442,23 @@ export function BrandCard() {
             );
           })}
         </div>
+      </div>
+      <div>
+        <span className="label">Темы игр</span>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {GAME_PRESETS.map((p) => {
+            const on = preset === p.id;
+            return (
+              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`gt-card ${on ? 'is-on' : ''}`}>
+                <span className="gt-art" style={{ backgroundImage: `${p.art ? `linear-gradient(135deg, ${p.c1}cc, ${p.c2}ee), url("${p.art.replace('.jpg', '@s.jpg')}")` : `linear-gradient(135deg, ${p.c1}, ${p.c2})`}` }}>
+                  <GameAvatar game={p.game!} size={30} glass />
+                </span>
+                <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-1.5 text-sm font-semibold text-mute">Цвет, свечение страницы и, для V Rising и Icarus, приглушённая картинка игры в шапке каждой страницы.</p>
       </div>
       <div>
         <span className="label">Свой цвет</span>
@@ -65835,6 +66193,12 @@ __COREGSM_EOF__
 .rp-day { min-width: 2.75rem; border-radius: 9999px; padding: 6px 12px; font-size: 14px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, color .15s ease; }
 .rp-day:hover { color: rgb(var(--ink)); }
 .rp-day.is-on { color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: 0 4px 12px -6px rgb(var(--brand) / .8); }
+
+/* branding: the game theme cards */
+.gt-card { border-radius: var(--r-lg, 20px); border: 1px solid rgb(var(--line)); background: rgb(var(--card)); padding: 8px; text-align: left; transition: box-shadow .15s ease; }
+.gt-card:hover { box-shadow: var(--shadow-1); }
+.gt-card.is-on { border-color: transparent; box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 4px rgb(var(--ink)); }
+.gt-art { display: flex; align-items: flex-end; height: 64px; padding: 8px; border-radius: 14px; background-size: cover; background-position: center; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -67437,7 +67801,7 @@ export { useTween, AnimatedNumber, Burst } from './ui/motion';
 export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
 export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
-export { ThemeToggle, applyDefaultTheme } from './ui/theme';
+export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
 export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
@@ -68716,6 +69080,13 @@ export function applyDefaultTheme(def: Theme) {
   paint(def);
   subs.forEach((f) => f(def));
 }
+
+/** pick a theme from elsewhere (the Ctrl+K palette): the same as the header button, which follows */
+export function setThemeChoice(t: Theme) {
+  applyTheme(t);
+  subs.forEach((f) => f(t));
+}
+export const currentTheme = (): Theme => readTheme();
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(readTheme);

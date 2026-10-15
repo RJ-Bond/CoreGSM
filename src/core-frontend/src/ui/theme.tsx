@@ -48,6 +48,13 @@ export function applyDefaultTheme(def: Theme) {
   subs.forEach((f) => f(def));
 }
 
+/** pick a theme from elsewhere (the Ctrl+K palette): the same as the header button, which follows */
+export function setThemeChoice(t: Theme) {
+  applyTheme(t);
+  subs.forEach((f) => f(t));
+}
+export const currentTheme = (): Theme => readTheme();
+
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(readTheme);
   useEffect(() => {

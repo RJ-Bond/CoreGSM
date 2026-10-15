@@ -99,6 +99,7 @@ const errorsEn: Record<string, string> = {
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
   counter_exists: 'This channel is already a counter',
+  config_bad_file: 'This is not a CoreGSM settings file, or it is damaged',
   rcon_password_required: 'Enter the RCON password',
   rcon_not_configured: 'Save the RCON port and password first',
   gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
