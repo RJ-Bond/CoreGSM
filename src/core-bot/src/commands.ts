@@ -3,6 +3,7 @@ import type { AutocompleteInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 
 export const COMMANDS = [
@@ -20,6 +21,7 @@ export const COMMANDS = [
     options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40, autocomplete: true }],
   },
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
+  ...INFO_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -66,8 +68,9 @@ async function handleAutocomplete(i: AutocompleteInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isAutocomplete()) return handleAutocomplete(i);
+  if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
+  if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
   // Discord wants an answer within 3 seconds: acknowledge first, do the work after, and log how long it took
