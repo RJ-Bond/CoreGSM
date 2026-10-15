@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fdf4a55de206"
+COREGSM_BUILD="95c65aff82b7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8611,6 +8611,7 @@ import { router as serversRouter } from './routes/servers.js';
 import { router as analyticsRouter } from './routes/analytics.js';
 import { router as communityRouter } from './routes/community.js';
 import { router as discordExtrasRouter } from './routes/discordExtras.js';
+import { router as seasonsRouter } from './seasons.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8648,6 +8649,7 @@ app.use(serversRouter);
 app.use(analyticsRouter);
 app.use(communityRouter);
 app.use(discordExtrasRouter);
+app.use(seasonsRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -11354,11 +11356,14 @@ interface Achievement {
   earnedAt: number | null;
 }
 
-export function achievementsOf(userId: number): Achievement[] {
-  const nick = playerOf(userId).gameNick;
-  const now = Date.now();
-  const tz = prefsOf(userId).timezone;
-  const sess = sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000).filter((s) => (s.left_at ?? now) > s.joined_at);
+export type { Achievement };
+
+/**
+ * The achievements earned by playing (hours, streaks, night and morning sessions, servers), from the visits of one
+ * player. Shared by the account's profile and the public card of any nick.
+ */
+export function playAchievements(visits: { server_id: number; joined_at: number; left_at: number | null }[], tz: string, now = Date.now()): Achievement[] {
+  const sess = visits.filter((s) => (s.left_at ?? now) > s.joined_at).sort((x, y) => x.joined_at - y.joined_at);
 
   let totalMs = 0;
   let longestMs = 0;
@@ -11416,16 +11421,7 @@ export function achievementsOf(userId: number): Achievement[] {
     if (run === 7 && at7 === null) at7 = dayEnd.get(k) ?? null;
   }
 
-  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
-  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
-  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
-  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
   const r1 = (n: number) => Math.round(n * 10) / 10;
-
-  const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
-    const earned = progress >= target;
-    return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
-  };
   const domosedEarned = share >= 0.8 && hours >= 10;
 
   return [
@@ -11439,6 +11435,25 @@ export function achievementsOf(userId: number): Achievement[] {
     mk('homebody', 'Домосед', 'Проведите 80% времени на одном сервере (не менее 10 часов всего)', 'heart', domosedEarned ? 100 : Math.min(99, Math.round(share * 100)), 100, domosedEarned ? now : null),
     mk('traveller', 'Путешественник', 'Поиграйте на 3 разных серверах', 'server', perServer.size, 3, perServer.size >= 3 ? now : null),
     mk('marathon', 'Марафонец', 'Одна сессия длиннее 4 часов', 'crown', r1(longestMs / HOUR), 4, marathonAt),
+  ];
+}
+
+export const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
+  const earned = progress >= target;
+  return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
+};
+
+export function achievementsOf(userId: number): Achievement[] {
+  const nick = playerOf(userId).gameNick;
+  const now = Date.now();
+  const tz = prefsOf(userId).timezone;
+  const play = playAchievements(sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000), tz, now);
+  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
+  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
+  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
+  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
+  return [
+    ...play,
     mk('profile-complete', 'Профиль заполнен', 'Аватар, электронная почта и игровой ник', 'calendar', profileParts, 3),
     mk('secured', 'Защищён', 'Пароль, электронная почта и привязанный Discord', 'shield', protectedParts, 3),
   ];
@@ -12585,7 +12600,8 @@ import express from 'express';
 import { viewer } from '../auth.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../localTime.js';
-import { vrRankIdFor } from '../profile.js';
+import { playAchievements, vrRankIdFor } from '../profile.js';
+import { seasonAchievements } from '../seasons.js';
 
 export const router = express.Router();
 
@@ -12723,6 +12739,7 @@ export function playerCard(nick: string, now = Date.now()) {
       .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
       .sort((a, b) => b.hours - a.hours),
     recent: visits.slice(-8).reverse().filter((v) => names.has(v.server_id)).map((v) => ({ serverId: v.server_id, serverName: names.get(v.server_id)!.name, from: v.joined_at, to: v.live ? null : v.left_at })),
+    achievements: [...playAchievements(visits.map((v) => ({ server_id: v.server_id, joined_at: v.joined_at, left_at: v.live ? null : v.left_at })), zone, now), ...seasonAchievements(name, now)],
     ...(game ? { rankId: vrRankIdFor(name) } : {}),
   };
 }
@@ -14031,6 +14048,133 @@ router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   removeAvatar(id);
   removeBanner(id);
   res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/seasons.ts" << '__COREGSM_EOF__'
+/**
+ * Seasons (usually one per wipe): the admin starts a new season, the previous one ends at that moment.
+ *   GET    /api/seasons          the current season with its leaderboard, the finished ones with their podium
+ *                               (the «Зал славы»)
+ *   POST   /api/seasons          start a new season (admin)
+ *   PUT    /api/seasons/:id      rename (admin)
+ *   DELETE /api/seasons/:id      remove (admin); the season before it stays as it was
+ *
+ * seasonAchievements(nick) adds the season badges to a player's card: the first visitor of a new season, a place
+ * on the podium of a finished season and its champion.
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin, viewer } from './auth.js';
+import { db } from './db.js';
+import { mk, type Achievement } from './profile.js';
+import { topPlayers } from './routes/community.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS seasons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  starts_at INTEGER NOT NULL,
+  ends_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_seasons_start ON seasons(starts_at);
+`);
+
+interface SeasonRow { id: number; name: string; starts_at: number; ends_at: number | null }
+
+const all = () => db.prepare('SELECT * FROM seasons ORDER BY starts_at').all() as SeasonRow[];
+
+/** the end of a season: its own end, else the start of the next one, else now (the current season) */
+function endOf(s: SeasonRow, list: SeasonRow[], now: number): number {
+  if (s.ends_at) return s.ends_at;
+  const next = list.find((x) => x.starts_at > s.starts_at);
+  return next ? next.starts_at : now;
+}
+
+/** the first visitor after the start of a season (null when nobody came) */
+function firstOf(s: SeasonRow, end: number): { name: string; at: number } | null {
+  const r = db.prepare('SELECT name, joined_at FROM player_sessions WHERE joined_at >= ? AND joined_at < ? ORDER BY joined_at LIMIT 1').get(s.starts_at, end) as { name: string; joined_at: number } | undefined;
+  return r ? { name: r.name, at: r.joined_at } : null;
+}
+
+export function seasonsView(now = Date.now()) {
+  const list = all();
+  const current = [...list].reverse().find((s) => !s.ends_at && s.starts_at <= now) ?? null;
+  const finished = list.filter((s) => s !== current && s.starts_at <= now).reverse();
+  return {
+    current: current
+      ? { id: current.id, name: current.name, startsAt: current.starts_at, top: topPlayers(current.starts_at, now, 10), first: firstOf(current, now) }
+      : null,
+    past: finished.map((s) => {
+      const end = endOf(s, list, now);
+      return { id: s.id, name: s.name, startsAt: s.starts_at, endsAt: end, podium: topPlayers(s.starts_at, end, 3), first: firstOf(s, end) };
+    }),
+  };
+}
+
+/** the season badges of a nick */
+export function seasonAchievements(nick: string, now = Date.now()): Achievement[] {
+  const key = nick.toLowerCase();
+  const list = all().filter((s) => s.starts_at <= now);
+  let firstAt: number | null = null;
+  let podiumAt: number | null = null;
+  let champAt: number | null = null;
+  let podiums = 0;
+  let titles = 0;
+  for (const s of list) {
+    const end = endOf(s, list, now);
+    const first = firstOf(s, end);
+    if (first && first.name.toLowerCase() === key) firstAt ??= first.at;
+    // a podium counts only when the season is over
+    if (end >= now) continue;
+    const podium = topPlayers(s.starts_at, end, 3).map((p) => p.name.toLowerCase());
+    const place = podium.indexOf(key);
+    if (place >= 0) { podiums++; podiumAt ??= end; }
+    if (place === 0) { titles++; champAt ??= end; }
+  }
+  return [
+    mk('season-first', 'Первопроходец', 'Зайдите первым после старта нового сезона', 'star', firstAt ? 1 : 0, 1, firstAt),
+    mk('season-podium', 'Призёр сезона', 'Войдите в тройку самых активных игроков сезона', 'crown', Math.min(podiums, 1), 1, podiumAt),
+    mk('season-champion', 'Чемпион сезона', 'Наиграйте больше всех часов за сезон', 'crown', Math.min(titles, 1), 1, champAt),
+  ];
+}
+
+router.get('/api/seasons', viewer, (_req, res) => res.json(seasonsView()));
+
+const nameSchema = z.string().trim().min(1).max(60);
+
+router.post('/api/seasons', admin, (req, res) => {
+  const b = z.object({ name: nameSchema, startsAt: z.number().int().positive().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const at = Math.min(b.data.startsAt ?? Date.now(), Date.now() + 365 * 86_400_000);
+  const id = db.transaction(() => {
+    // the open season ends where the new one starts
+    db.prepare('UPDATE seasons SET ends_at = ? WHERE ends_at IS NULL AND starts_at < ?').run(at, at);
+    return Number(db.prepare('INSERT INTO seasons (name, starts_at) VALUES (?, ?)').run(b.data.name, at).lastInsertRowid);
+  })();
+  res.json({ id, ...seasonsView() });
+});
+
+router.put('/api/seasons/:id(\\d+)', admin, (req, res) => {
+  const b = z.object({ name: nameSchema }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const r = db.prepare('UPDATE seasons SET name = ? WHERE id = ?').run(b.data.name, Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json(seasonsView());
+});
+
+router.delete('/api/seasons/:id(\\d+)', admin, (req, res) => {
+  const id = Number(req.params.id);
+  const s = db.prepare('SELECT * FROM seasons WHERE id = ?').get(id) as SeasonRow | undefined;
+  if (!s) return res.status(404).json({ error: 'Не найдено' });
+  db.transaction(() => {
+    db.prepare('DELETE FROM seasons WHERE id = ?').run(id);
+    // removing the current season reopens the one before it
+    if (!s.ends_at) db.prepare('UPDATE seasons SET ends_at = NULL WHERE id = (SELECT id FROM seasons WHERE starts_at < ? ORDER BY starts_at DESC LIMIT 1) AND ends_at = ?').run(s.starts_at, s.starts_at);
+  })();
+  res.json(seasonsView());
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -39473,6 +39617,7 @@ const ADMIN_TITLES: Record<string, string> = {
   news: 'Новости',
   alerts: 'Оповещения',
   cards: 'Карточки',
+  community: 'Сообщество',
   users: 'Пользователи',
   journal: 'Журнал',
   system: 'Система',
@@ -46616,7 +46761,7 @@ export function useAchievements() {
 
 const pct = (a: Achievement) => (a.target > 0 ? Math.max(0, Math.min(100, (a.progress / a.target) * 100)) : a.earned ? 100 : 0);
 
-function Card({ a }: { a: Achievement }) {
+export function AchievementCard({ a }: { a: Achievement }) {
   return (
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
       <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /></span>
@@ -46650,7 +46795,7 @@ export function AchievementsGrid() {
     <Section title={t('pf.ach.title')} description={data ? t('pf.ach.count', { done, total: list.length }) : undefined}>
       {data === undefined && <div className="skeleton h-32 rounded-2xl bg-soft" />}
       {data && list.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.none')}</p>}
-      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <Card key={a.id} a={a} />)}</ul>}
+      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <AchievementCard key={a.id} a={a} />)}</ul>}
     </Section>
   );
 }
@@ -52861,6 +53006,7 @@ export const IconTrend = make(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />);
 export const IconBars = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
 export const IconBolt = make(<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />);
 export const IconPlug = make(<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v5" />);
+export const IconTrophy = make(<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/index.css" << '__COREGSM_EOF__'
@@ -55708,6 +55854,7 @@ import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, Load
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
+import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
@@ -55839,6 +55986,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'alerts' && <AlertsPage />}
         {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}
+        {!home && current === 'community' && <AdminCommunity sub={tail} />}
         {!home && current === 'users' && <UsersTab />}
         {!home && current === 'journal' && <JournalPage />}
         {!home && current === 'system' && <SystemPage />}
@@ -56051,6 +56199,100 @@ function ServersManage({ sub }: { sub: string }) {
         />
       )}
     </PageStack>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/AdminCommunity.tsx" << '__COREGSM_EOF__'
+/** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers, the screenshot gallery. */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog, promptDialog } from '../confirm';
+import { AdminPage, Button, ErrorLine, Field, IconEdit, IconTrash, IconTrophy, PageHead, Section, fmtDate, plural, toast } from '../ui';
+import type { Seasons } from './Community';
+
+export const COMMUNITY_TABS = [
+  { id: 'seasons', label: 'Сезоны' },
+] as const;
+
+export default function AdminCommunity({ sub = '' }: { sub?: string }) {
+  const tab = COMMUNITY_TABS.find((t) => t.id === sub.split('/')[0])?.id ?? 'seasons';
+  return (
+    <AdminPage head={<PageHead icon={<IconTrophy />} title="Сообщество" subtitle="Сезоны и зал славы, отзывы о серверах, галерея скриншотов" />}>
+      {COMMUNITY_TABS.length > 1 && (
+        <nav className="seg" aria-label="Разделы сообщества">
+          {COMMUNITY_TABS.map((t) => <a key={t.id} href={`/admin/community/${t.id}`} className="seg-item" aria-current={tab === t.id ? 'page' : undefined}>{t.label}</a>)}
+        </nav>
+      )}
+      {tab === 'seasons' && <SeasonsAdmin />}
+    </AdminPage>
+  );
+}
+
+const toLocalInput = (ts: number) => {
+  const d = new Date(ts - new Date().getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+};
+
+function SeasonsAdmin() {
+  const [s, setS] = useState<Seasons | null>(null);
+  const [error, setError] = useState('');
+  const [name, setName] = useState('');
+  const [start, setStart] = useState(() => toLocalInput(Date.now()));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<Seasons>('/seasons').then(setS).catch((e: Error) => setError(e.message)); }, []);
+
+  const count = (s?.past.length ?? 0) + (s?.current ? 1 : 0);
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    const at = new Date(start).getTime();
+    if (s?.current && !(await confirmDialog({ title: `Завершить «${s.current.name}»?`, text: 'Текущий сезон закончится, его тройка лучших попадёт в зал славы, а таблица нового сезона начнётся с нуля.', confirmLabel: 'Начать новый сезон' }))) return;
+    setBusy(true);
+    await api<Seasons>('/seasons', 'POST', { name: name.trim() || `Сезон ${count + 1}`, startsAt: Number.isFinite(at) ? at : undefined })
+      .then((v) => { setS(v); setName(''); setError(''); toast('Новый сезон начался'); })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+  const rename = async (id: number, old: string) => {
+    const v = await promptDialog({ title: 'Название сезона', label: 'Название', value: old, confirmLabel: 'Сохранить' });
+    if (!v || v.trim() === old) return;
+    await api<Seasons>(`/seasons/${id}`, 'PUT', { name: v.trim() }).then(setS).catch((err: Error) => setError(err.message));
+  };
+  const remove = async (id: number, n: string, current: boolean) => {
+    if (!(await confirmDialog({ title: `Удалить «${n}»?`, text: current ? 'Предыдущий сезон снова станет текущим.' : 'Сезон пропадёт из зала славы. Игровая статистика не удаляется.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api<Seasons>(`/seasons/${id}`, 'DELETE').then(setS).catch((err: Error) => setError(err.message));
+  };
+
+  const rows = s ? [...(s.current ? [{ ...s.current, endsAt: null as number | null, podium: s.current.top.slice(0, 3), isCurrent: true }] : []), ...s.past.map((p) => ({ ...p, isCurrent: false }))] : [];
+  return (
+    <>
+      <Section title="Новый сезон" description="Начните сезон, например, в день вайпа. Таблица сезона на странице «Сообщество» считает часы с его начала, а когда начнётся следующий, тройка лучших попадёт в зал славы и получит достижения.">
+        <form onSubmit={create} className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[12rem] flex-1"><Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={`Сезон ${count + 1}`} /></Field></div>
+          <div className="min-w-[12rem]"><Field label="Начало"><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
+          <Button loading={busy}>Начать сезон</Button>
+        </form>
+        <ErrorLine text={error} />
+      </Section>
+
+      <Section title="Сезоны" description={rows.length ? `${rows.length} ${plural(rows.length, ['сезон', 'сезона', 'сезонов'])}` : 'Сезонов пока нет'}>
+        <ul className="grid gap-2">
+          {rows.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2 font-extrabold">{r.name}{r.isCurrent && <span className="pill pill-ok">идёт</span>}</span>
+                <span className="block text-sm font-semibold text-mute">
+                  {fmtDate(r.startsAt)}{r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}
+                  {r.podium.length > 0 && ` · ${r.isCurrent ? 'лидирует' : 'чемпион'} ${r.podium[0].name} (${r.podium[0].hours} ч)`}
+                </span>
+              </span>
+              <button type="button" className="row-act" aria-label="Переименовать" title="Переименовать" onClick={() => void rename(r.id, r.name)}><IconEdit /></button>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void remove(r.id, r.name, r.isCurrent)}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      </Section>
+    </>
   );
 }
 __COREGSM_EOF__
@@ -56969,9 +57211,10 @@ __COREGSM_EOF__
  * «Сообщество»: the public showcase. Players online now and the record, how many people play, when the community
  * plays, the live feed of arrivals, the most active players of the week and the month, and the servers by players.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../api';
 import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
-import { AnimatedNumber, GameAvatar, PageHead, fmtDateTime, plural } from '../ui';
+import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
 
@@ -56980,6 +57223,75 @@ const IconPeople = () => (
     <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
   </svg>
 );
+
+interface Top { name: string; hours: number; servers: number }
+export interface Seasons {
+  current: { id: number; name: string; startsAt: number; top: Top[]; first: { name: string; at: number } | null } | null;
+  past: { id: number; name: string; startsAt: number; endsAt: number; podium: Top[]; first: { name: string; at: number } | null }[];
+}
+
+const MEDALS = ['🥇', '🥈', '🥉'];
+const playerHref = (n: string) => `/player/${encodeURIComponent(n)}`;
+
+/** the current season's leaderboard and the hall of fame of the finished ones */
+function SeasonBlocks() {
+  const [s, setS] = useState<Seasons | null>(null);
+  useEffect(() => { api<Seasons>('/seasons').then(setS).catch(() => undefined); }, []);
+  if (!s || (!s.current && s.past.length === 0)) return null;
+  const cur = s.current;
+  const days = cur ? Math.max(1, Math.ceil((Date.now() - cur.startsAt) / 86_400_000)) : 0;
+  const maxH = Math.max(1, ...(cur?.top ?? []).map((p) => p.hours));
+  return (
+    <>
+      {cur && (
+        <section className="tile cm-season fade-in p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-extrabold">🏁 {cur.name}</h2>
+            <span className="text-sm font-bold text-mute">идёт {days} {plural(days, ['день', 'дня', 'дней'])}, с {fmtDate(cur.startsAt)}</span>
+          </div>
+          {cur.top.length === 0 ? <p className="cm-sub">В этом сезоне ещё никто не играл: станьте первым.</p> : (
+            <ol className="an-top">
+              {cur.top.map((p, i) => (
+                <li key={p.name}>
+                  <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <a href={playerHref(p.name)} className="block truncate font-extrabold hover:text-link">{p.name}</a>
+                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn))' }} /></span>
+                  </span>
+                  <span className="shrink-0 font-extrabold tabular-nums">{p.hours} ч</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          {cur.first && <p className="cm-sub">Первым в сезоне зашёл <a href={playerHref(cur.first.name)} className="text-ink hover:text-link">{cur.first.name}</a>, {fmtDateTime(cur.first.at)}</p>}
+        </section>
+      )}
+      {s.past.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">🏆 Зал славы</h2>
+          <ul className="cm-fame">
+            {s.past.map((x) => (
+              <li key={x.id} className="cm-fame-i">
+                <div className="font-extrabold">{x.name}</div>
+                <div className="text-xs font-bold text-mute">{fmtDate(x.startsAt)} – {fmtDate(x.endsAt)}</div>
+                <ol className="mt-2 grid gap-1">
+                  {x.podium.map((p, i) => (
+                    <li key={p.name} className="flex items-center gap-2">
+                      <span aria-label={`${i + 1} место`}>{MEDALS[i]}</span>
+                      <a href={playerHref(p.name)} className="min-w-0 flex-1 truncate font-bold hover:text-link">{p.name}</a>
+                      <span className="text-sm font-extrabold tabular-nums text-mute">{p.hours} ч</span>
+                    </li>
+                  ))}
+                  {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">Никто не играл</li>}
+                </ol>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
+  );
+}
 
 export default function CommunityPage() {
   const c = useCommunity();
@@ -57016,6 +57328,8 @@ export default function CommunityPage() {
           <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
         </dl>
       </section>
+
+      <SeasonBlocks />
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
@@ -59199,10 +59513,12 @@ __COREGSM_EOF__
  * time of day, the streak of days in a row and the latest visits. Works without signing in on a public panel.
  */
 import { useEffect, useState } from 'react';
-import { api, ApiError } from '../api';
+import { api, ApiError, type Achievement } from '../api';
+import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural } from '../ui';
 import '../styles/community.css';
+import '../styles/profile.css';
 
 interface PlayerCard {
   name: string;
@@ -59218,6 +59534,7 @@ interface PlayerCard {
   servers: { id: number; name: string; game: string; hours: number; visits: number; last: number }[];
   recent: { serverId: number; serverName: string; from: number; to: number | null }[];
   rankId?: string;
+  achievements?: Achievement[];
 }
 
 const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
@@ -59297,6 +59614,18 @@ export default function PlayerPage({ name }: { name: string }) {
           </ul>
         </section>
       </div>
+
+      {p.achievements && p.achievements.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-extrabold">Достижения</h2>
+            <span className="text-sm font-bold text-mute">{p.achievements.filter((a) => a.earned).length} из {p.achievements.length}</span>
+          </div>
+          <ul className="pf-ach-grid">
+            {[...p.achievements].sort((x, y) => Number(y.earned) - Number(x.earned) || (y.earnedAt ?? 0) - (x.earnedAt ?? 0)).map((a) => <AchievementCard key={a.id} a={a} />)}
+          </ul>
+        </section>
+      )}
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Последние визиты</h2>
@@ -62454,7 +62783,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
-import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
+import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -62482,6 +62811,7 @@ const S = {
   alerts: { id: 'alerts', label: 'Оповещения', icon: IconBell, desc: 'Сообщение в Discord, если игровой сервер упал или вернулся.', keywords: 'упал недоступен уведомление падение упоминание here everyone' },
   maintenance: { id: 'maintenance', label: 'Обслуживание', icon: IconWrench, desc: 'Окна технических работ: во время них падение сервера не считается сбоем.', keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
   cards: { id: 'cards', label: 'Карточки', icon: IconCards, desc: 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.', keywords: 'картинка баннер ссылка png' },
+  community: { id: 'community', label: 'Сообщество', icon: IconTrophy, desc: 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов игроков.', keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
   users: { id: 'users', label: 'Пользователи', icon: IconUsers, desc: 'Аккаунты, роли, регистрация и правила сообщества.', keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
   journal: { id: 'journal', label: 'Журнал', icon: IconJournal, desc: 'Кто и что менял в панели, с датой и временем.', keywords: 'аудит история действия изменения кто менял лог' },
   system: { id: 'system', label: 'Система', icon: IconSystem, desc: 'Здоровье панели: версия, диск, бот, сертификат, диагностика.', keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
@@ -62493,7 +62823,7 @@ export interface AdminGroup { title: string; sections: AdminSection[] }
 export const ADMIN_GROUPS: AdminGroup[] = [
   { title: 'Основное', sections: [S.servers, S.discord, S.news] },
   { title: 'Мониторинг', sections: [S.alerts, S.maintenance, S.cards] },
-  { title: 'Люди', sections: [S.users, S.journal] },
+  { title: 'Люди', sections: [S.community, S.users, S.journal] },
   { title: 'Система', sections: [S.system, S.settings] },
 ];
 
@@ -64098,6 +64428,11 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .pl-hour { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
 .pl-hour i { display: block; width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, rgb(var(--link)), rgb(var(--brand))); }
 .pl-hour b { height: 14px; font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* seasons */
+.cm-season { background: radial-gradient(120% 140% at 100% 0%, rgb(var(--warn) / .12), transparent 55%), rgb(var(--card)); }
+.cm-fame { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+.cm-fame-i { border-radius: 18px; background: rgb(var(--soft)); padding: 12px 14px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'

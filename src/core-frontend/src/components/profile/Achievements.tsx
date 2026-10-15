@@ -10,7 +10,7 @@ export function useAchievements() {
 
 const pct = (a: Achievement) => (a.target > 0 ? Math.max(0, Math.min(100, (a.progress / a.target) * 100)) : a.earned ? 100 : 0);
 
-function Card({ a }: { a: Achievement }) {
+export function AchievementCard({ a }: { a: Achievement }) {
   return (
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
       <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /></span>
@@ -44,7 +44,7 @@ export function AchievementsGrid() {
     <Section title={t('pf.ach.title')} description={data ? t('pf.ach.count', { done, total: list.length }) : undefined}>
       {data === undefined && <div className="skeleton h-32 rounded-2xl bg-soft" />}
       {data && list.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.none')}</p>}
-      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <Card key={a.id} a={a} />)}</ul>}
+      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <AchievementCard key={a.id} a={a} />)}</ul>}
     </Section>
   );
 }

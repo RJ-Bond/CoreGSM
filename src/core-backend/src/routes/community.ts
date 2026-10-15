@@ -16,7 +16,8 @@ import express from 'express';
 import { viewer } from '../auth.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../localTime.js';
-import { vrRankIdFor } from '../profile.js';
+import { playAchievements, vrRankIdFor } from '../profile.js';
+import { seasonAchievements } from '../seasons.js';
 
 export const router = express.Router();
 
@@ -154,6 +155,7 @@ export function playerCard(nick: string, now = Date.now()) {
       .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
       .sort((a, b) => b.hours - a.hours),
     recent: visits.slice(-8).reverse().filter((v) => names.has(v.server_id)).map((v) => ({ serverId: v.server_id, serverName: names.get(v.server_id)!.name, from: v.joined_at, to: v.live ? null : v.left_at })),
+    achievements: [...playAchievements(visits.map((v) => ({ server_id: v.server_id, joined_at: v.joined_at, left_at: v.live ? null : v.left_at })), zone, now), ...seasonAchievements(name, now)],
     ...(game ? { rankId: vrRankIdFor(name) } : {}),
   };
 }

@@ -3,10 +3,12 @@
  * time of day, the streak of days in a row and the latest visits. Works without signing in on a public panel.
  */
 import { useEffect, useState } from 'react';
-import { api, ApiError } from '../api';
+import { api, ApiError, type Achievement } from '../api';
+import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural } from '../ui';
 import '../styles/community.css';
+import '../styles/profile.css';
 
 interface PlayerCard {
   name: string;
@@ -22,6 +24,7 @@ interface PlayerCard {
   servers: { id: number; name: string; game: string; hours: number; visits: number; last: number }[];
   recent: { serverId: number; serverName: string; from: number; to: number | null }[];
   rankId?: string;
+  achievements?: Achievement[];
 }
 
 const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
@@ -101,6 +104,18 @@ export default function PlayerPage({ name }: { name: string }) {
           </ul>
         </section>
       </div>
+
+      {p.achievements && p.achievements.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-extrabold">Достижения</h2>
+            <span className="text-sm font-bold text-mute">{p.achievements.filter((a) => a.earned).length} из {p.achievements.length}</span>
+          </div>
+          <ul className="pf-ach-grid">
+            {[...p.achievements].sort((x, y) => Number(y.earned) - Number(x.earned) || (y.earnedAt ?? 0) - (x.earnedAt ?? 0)).map((a) => <AchievementCard key={a.id} a={a} />)}
+          </ul>
+        </section>
+      )}
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Последние визиты</h2>

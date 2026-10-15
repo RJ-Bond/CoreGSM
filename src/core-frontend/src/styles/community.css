@@ -71,3 +71,8 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .pl-hour { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
 .pl-hour i { display: block; width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, rgb(var(--link)), rgb(var(--brand))); }
 .pl-hour b { height: 14px; font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* seasons */
+.cm-season { background: radial-gradient(120% 140% at 100% 0%, rgb(var(--warn) / .12), transparent 55%), rgb(var(--card)); }
+.cm-fame { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+.cm-fame-i { border-radius: 18px; background: rgb(var(--soft)); padding: 12px 14px; }
