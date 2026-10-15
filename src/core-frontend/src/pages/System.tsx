@@ -176,7 +176,7 @@ export default function SystemPage() {
           <h2 className="text-lg font-black">Резервные копии</h2>
           <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
         </div>
-        <GoLink href="#/admin/settings/updates">Обновления и копии</GoLink>
+        <GoLink href="/admin/settings/updates">Обновления и копии</GoLink>
       </Strip>
     </AdminPage>
   );

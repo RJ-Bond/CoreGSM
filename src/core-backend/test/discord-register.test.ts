@@ -73,7 +73,7 @@ describe('Discord registration over the internal API', () => {
     assert.equal(r.status, 200);
     assert.equal(r.body.status, 'created');
     assert.equal(r.body.username, 'DarkLord');
-    assert.match(r.body.profileUrl, /#\/profile$/);
+    assert.match(r.body.profileUrl, /^[^#]*\/profile$/);
     const u = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(id(10)) as any;
     assert.equal(u.role, 'player');
     assert.equal(u.status, 'active');
@@ -153,7 +153,7 @@ describe('Discord registration over the internal API', () => {
     assert.equal(typeof p.body.achievements, 'number');
     assert.equal(typeof p.body.rank.name, 'string');
     assert.equal(p.body.rank.hours, 0);
-    assert.match(p.body.profileUrl, /#\/profile$/);
+    assert.match(p.body.profileUrl, /^[^#]*\/profile$/);
     const none = await api.call('GET', `/internal/discord/profile?discordId=${id(998)}`, { headers: H });
     assert.equal(none.body.found, false);
     assert.equal(none.body.rank, null);

@@ -97,7 +97,7 @@ export function UsersTab() {
           hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
           help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
         >
-          <a className="btn btn-soft" href="#/admin/journal">Журнал: кто что менял</a>
+          <a className="btn btn-soft" href="/admin/journal">Журнал: кто что менял</a>
         </PageHead>
       )}
     >
@@ -179,7 +179,7 @@ export function UsersTab() {
             </li>
           ))}
         </ul>
-        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="#/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
+        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
       </Section>
     </AdminPage>
   );

@@ -11,7 +11,7 @@ import { UpdateCard } from './settings/UpdateCard';
 export { BotPill } from './settings/BotCard';
 export { UsersTab } from './settings/UsersTab';
 
-// the ids stay the canonical hashes (#/admin/settings/bot|brand|security|updates); only the labels are friendlier
+// the ids stay the canonical hashes (/admin/settings/bot|brand|security|updates); only the labels are friendlier
 const TABS = SETTINGS_TABS;
 
 const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
@@ -54,7 +54,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         {TABS.map((t) => (
           <a
             key={t.id}
-            href={`#/admin/settings/${t.id}`}
+            href={`/admin/settings/${t.id}`}
             aria-current={tab === t.id ? 'page' : undefined}
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-1' : 'text-mute hover:text-ink'}`}
           >
@@ -73,8 +73,8 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
             <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
             <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1">
-              <GoLink href="#/admin/users">Пользователи и доступ</GoLink>
-              <GoLink href="#/profile">Мои сеансы в профиле</GoLink>
+              <GoLink href="/admin/users">Пользователи и доступ</GoLink>
+              <GoLink href="/profile">Мои сеансы в профиле</GoLink>
             </div>
           </Section>
           <p className="font-semibold text-mute">

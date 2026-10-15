@@ -56,15 +56,15 @@ export interface AdminLink { label: string; hint: string; href: string; keywords
 
 /** deeper places found only by searching (Ctrl+K) */
 export const ADMIN_LINKS: AdminLink[] = [
-  ...SETTINGS_TABS.map((t) => ({ label: `Настройки: ${t.label}`, hint: 'Настройки', href: `#/admin/settings/${t.id}`, keywords: t.keywords, icon: IconSettings })),
-  { label: 'Резервные копии', hint: 'Настройки · Обновления и копии', href: '#/admin/settings/updates', keywords: 'резервная копия бэкап backup восстановить скачать расписание', icon: IconSettings },
-  { label: 'Откат обновления', hint: 'Настройки · Обновления и копии', href: '#/admin/settings/updates', keywords: 'откатить вернуть предыдущую версию rollback', icon: IconSettings },
-  { label: 'Токен Discord-бота', hint: 'Настройки · Бот и Discord', href: '#/admin/settings/bot', keywords: 'токен прокси proxy бот developer portal', icon: IconSettings },
-  { label: 'Пароль администратора', hint: 'Настройки · Безопасность', href: '#/admin/settings/security', keywords: 'сменить пароль безопасность', icon: IconSettings },
-  { label: 'Сертификат HTTPS', hint: 'Система', href: '#/admin/system', keywords: 'ssl срок сертификат истекает домен', icon: IconSystem },
-  { label: 'Диагностика', hint: 'Система', href: '#/admin/system', keywords: 'проверка здоровье состояние', icon: IconSystem },
-  { label: 'Роли и доступ', hint: 'Пользователи', href: '#/admin/users', keywords: 'роли модератор администратор регистрация правила заявки публичная панель', icon: IconUsers },
-  { label: 'Написать новость', hint: 'Новости', href: '#/admin/news/new', keywords: 'новость объявление шаблон опубликовать запланировать', icon: IconNews },
-  { label: 'Привязать канал Discord', hint: 'Discord', href: '#/admin/discord/new', keywords: 'привязка канал сообщение бот', icon: IconDiscord },
-  { label: 'Добавить сервер', hint: 'Серверы', href: '#/admin/servers/new', keywords: 'новый игровой сервер игра адрес', icon: IconServers },
+  ...SETTINGS_TABS.map((t) => ({ label: `Настройки: ${t.label}`, hint: 'Настройки', href: `/admin/settings/${t.id}`, keywords: t.keywords, icon: IconSettings })),
+  { label: 'Резервные копии', hint: 'Настройки · Обновления и копии', href: '/admin/settings/updates', keywords: 'резервная копия бэкап backup восстановить скачать расписание', icon: IconSettings },
+  { label: 'Откат обновления', hint: 'Настройки · Обновления и копии', href: '/admin/settings/updates', keywords: 'откатить вернуть предыдущую версию rollback', icon: IconSettings },
+  { label: 'Токен Discord-бота', hint: 'Настройки · Бот и Discord', href: '/admin/settings/bot', keywords: 'токен прокси proxy бот developer portal', icon: IconSettings },
+  { label: 'Пароль администратора', hint: 'Настройки · Безопасность', href: '/admin/settings/security', keywords: 'сменить пароль безопасность', icon: IconSettings },
+  { label: 'Сертификат HTTPS', hint: 'Система', href: '/admin/system', keywords: 'ssl срок сертификат истекает домен', icon: IconSystem },
+  { label: 'Диагностика', hint: 'Система', href: '/admin/system', keywords: 'проверка здоровье состояние', icon: IconSystem },
+  { label: 'Роли и доступ', hint: 'Пользователи', href: '/admin/users', keywords: 'роли модератор администратор регистрация правила заявки публичная панель', icon: IconUsers },
+  { label: 'Написать новость', hint: 'Новости', href: '/admin/news/new', keywords: 'новость объявление шаблон опубликовать запланировать', icon: IconNews },
+  { label: 'Привязать канал Discord', hint: 'Discord', href: '/admin/discord/new', keywords: 'привязка канал сообщение бот', icon: IconDiscord },
+  { label: 'Добавить сервер', hint: 'Серверы', href: '/admin/servers/new', keywords: 'новый игровой сервер игра адрес', icon: IconServers },
 ];

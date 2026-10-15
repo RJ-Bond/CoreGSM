@@ -108,7 +108,7 @@ function Thumbs({ c, href }: { c: Card; href: string }) {
 }
 
 function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
-  const href = `#/news/${c.id}`;
+  const href = `/news/${c.id}`;
   return (
     <article className="nf-hero nw-hero" style={{ ['--nf-accent' as string]: c.accent }}>
       <NewsCover c={c} servers={servers} href={href} />
@@ -131,7 +131,7 @@ function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined })
 }
 
 function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
-  const href = `#/news/${c.id}`;
+  const href = `/news/${c.id}`;
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
       <a className="nf-thumb nw-thumb" href={href} style={coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1} />

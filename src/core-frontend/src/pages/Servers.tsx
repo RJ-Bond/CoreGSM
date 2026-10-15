@@ -4,7 +4,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
@@ -21,7 +21,7 @@ export default function ServersPage({ sub }: { sub: string }) {
   const id = Number(idPart);
   const tab = (SERVER_TABS as readonly string[]).includes(tabPart) ? tabPart : '';
   if (idPart && /^\d+$/.test(idPart) && Number.isInteger(id) && id > 0 && (!tabPart || tab)) return <ServerDetail id={id} tab={tab} />;
-  // "#/servers/abc" or an unknown tab: not a server page
+  // "/servers/abc" or an unknown tab: not a server page
   if (sub) return <NotFound kind="server" />;
   return <ServerList />;
 }
@@ -94,8 +94,8 @@ function ServerList() {
   const [updatedAt, setUpdatedAt] = useState(0);
   const [filter, setFilterState] = useState<Filter>(() => {
     try {
-      // deep link: #/servers?filter=online
-      const q = window.location.hash.match(/[?&]filter=(\w+)/)?.[1];
+      // deep link: /servers?filter=online
+      const q = routeQuery().get('filter') ?? undefined;
       const v = q ?? localStorage.getItem(FILTER_KEY);
       return v === 'online' || v === 'offline' || v === 'fav' ? v : 'all';
     } catch {
@@ -182,7 +182,7 @@ function ServerList() {
     ? { on: true, has: (id) => sel.includes(id), toggle: (id) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id])) }
     : undefined;
 
-  const open = (s: Server) => { window.location.hash = `#/servers/${s.id}`; };
+  const open = (s: Server) => { navigate(`/servers/${s.id}`); };
 
   const tileProps = (s: Server, idx: number) => ({
     rx,
@@ -202,7 +202,7 @@ function ServerList() {
         icon={<IconServers />}
       >
         <LiveBadge at={updatedAt} />
-        {isAdmin && <a className="btn btn-soft" href="#/admin/servers" data-magnetic>Управление серверами</a>}
+        {isAdmin && <a className="btn btn-soft" href="/admin/servers" data-magnetic>Управление серверами</a>}
       </PageHead>
 
       {loaded && servers.length > 0 && (
@@ -345,7 +345,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
-            <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
+            <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
             <span>{gameLabel(s.game)}</span>
@@ -412,7 +412,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="px-1.5">
         <h3 className="line-clamp-2 break-words text-[16.5px] font-extrabold leading-tight" title={s.name}>
-          <a href={`#/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}

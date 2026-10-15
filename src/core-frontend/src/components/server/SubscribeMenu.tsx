@@ -25,7 +25,7 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
       {!discordLinked && (
         <p className="rounded-2xl bg-soft px-4 py-2.5 text-sm font-semibold text-mute" role="note">
           {t('sub.discordNote')}.{' '}
-          <a href="#/profile/security" className="font-extrabold text-link hover:underline">{t('sub.linkDiscord')}</a>
+          <a href="/profile/security" className="font-extrabold text-link hover:underline">{t('sub.linkDiscord')}</a>
         </p>
       )}
     </div>

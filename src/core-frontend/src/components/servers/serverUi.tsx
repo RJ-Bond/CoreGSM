@@ -133,7 +133,7 @@ export function NoServersState({ isAdmin }: { isAdmin: boolean }) {
       title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'}
       text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже: список появится здесь.'}
     >
-      {isAdmin && <a className="btn" href="#/admin/servers" data-magnetic>Добавить сервер</a>}
+      {isAdmin && <a className="btn" href="/admin/servers" data-magnetic>Добавить сервер</a>}
     </EmptyState>
   );
 }

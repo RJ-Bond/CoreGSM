@@ -6,7 +6,7 @@ export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
 
 /** hash of a server page tab: '' = overview */
-export const tabHref = (id: number, tab: TabId) => `#/servers/${id}${tab ? `/${tab}` : ''}`;
+export const tabHref = (id: number, tab: TabId) => `/servers/${id}${tab ? `/${tab}` : ''}`;
 
 /** re-renders the caller every `ms` and returns the current time */
 export function useNow(ms: number): number {

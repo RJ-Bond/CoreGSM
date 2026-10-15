@@ -47,7 +47,7 @@ export default function Hero({
           {freeSlot === 'subscribed' ? (
             <p className="srv-hero-sub"><IconBell size={16} />{t('srv.freeSlot.subscribed')}</p>
           ) : freeSlot === 'guest' ? (
-            <a className="btn-glass" href="#/login"><IconBell size={18} />{t('srv.freeSlot.login')}</a>
+            <a className="btn-glass" href="/login"><IconBell size={18} />{t('srv.freeSlot.login')}</a>
           ) : (
             <button type="button" className="btn-glass" onClick={onNotify} aria-haspopup="dialog"><IconBell size={18} />{t('srv.freeSlot.button')}</button>
           )}

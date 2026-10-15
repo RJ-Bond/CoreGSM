@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useAuth } from '../auth';
 import { useDialogFocus } from '../confirm';
+import { currentPath, navigate } from '../ui/route';
 
 /**
  * First-run guided tour for administrators: a short list of coach-marks that walks through the admin area.
@@ -26,32 +27,32 @@ const STEPS: Step[] = [
   {
     title: 'Добавьте игровой сервер',
     text: 'Добро пожаловать! Прогресс всегда виден в «Админка → Начало работы». Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
-    route: '#/admin/servers',
-    anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="#/admin/servers"]`],
+    route: '/admin/servers',
+    anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="/admin/servers"]`],
   },
   {
     title: 'Подключите Discord-бота',
     text: 'В «Настройки → Бот и Discord» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
-    route: '#/admin/settings/bot',
-    anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="#/admin/settings/bot"]`],
+    route: '/admin/settings/bot',
+    anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="/admin/settings/bot"]`],
   },
   {
     title: 'Привяжите канал',
     text: 'В разделе «Discord» выберите канал, куда бот будет публиковать карточку сервера. Сообщение обновляется по таймеру само.',
-    route: '#/admin/discord',
-    anchors: ['[data-tour="bind-channel"]', `${ADMIN_NAV} a[href="#/admin/discord"]`],
+    route: '/admin/discord',
+    anchors: ['[data-tour="bind-channel"]', `${ADMIN_NAV} a[href="/admin/discord"]`],
   },
   {
     title: 'Пишите новости',
     text: 'В «Новости» можно подготовить запись с картинкой, отправить её в Discord сразу или по расписанию и повторять по расписанию.',
-    route: '#/admin/news',
-    anchors: ['[data-tour="news-new"]', `${ADMIN_NAV} a[href="#/admin/news"]`],
+    route: '/admin/news',
+    anchors: ['[data-tour="news-new"]', `${ADMIN_NAV} a[href="/admin/news"]`],
   },
   {
     title: 'Настройте оформление',
     text: 'В «Настройки → Оформление» задайте название сообщества, логотип и фирменный цвет. На этом всё: подсказки можно показать снова в профиле.',
-    route: '#/admin/settings/brand',
-    anchors: ['[data-tour="brand"]', `${SETTINGS_NAV} a[href="#/admin/settings/brand"]`],
+    route: '/admin/settings/brand',
+    anchors: ['[data-tour="brand"]', `${SETTINGS_NAV} a[href="/admin/settings/brand"]`],
   },
 ];
 
@@ -135,9 +136,9 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
 
   // open the step's page, then wait for the anchor to appear (pages load their data first)
   useEffect(() => {
-    if (window.location.hash !== step.route) {
+    if (currentPath() !== step.route) {
       // replace, not push: the back button should not walk through the tour
-      window.location.replace(`${window.location.pathname}${window.location.search}${step.route}`);
+      navigate(step.route, { replace: true });
     }
     setRect(null);
     let tries = 0;

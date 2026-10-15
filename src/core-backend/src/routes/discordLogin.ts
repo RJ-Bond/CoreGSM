@@ -17,8 +17,9 @@ export const router = express.Router();
 // ---------- sign in with Discord (OAuth2, identify scope) ----------
 const oauthStates = new Map<string, { mode: 'login' | 'link'; userId: number; exp: number }>();
 const redirectUri = (req: Request) => `${publicBase() ?? baseOf(req)}/api/auth/discord/callback`;
-const toHash = (res: Response, hash: string) => res.redirect(302, `/#/${hash}`);
-const failTo = (res: Response, msg: string) => toHash(res, `login/${encodeURIComponent(msg)}`);
+// back to a page of the panel; the session token travels in the #/ form (a fragment never reaches the server)
+const toPanel = (res: Response, path: string) => res.redirect(302, path.startsWith('auth/') ? `/#/${path}` : `/${path}`);
+const failTo = (res: Response, msg: string) => toPanel(res, `login/${encodeURIComponent(msg)}`);
 
 router.get('/api/auth/discord/start', rateLimit(30), (req, res) => {
   const clientId = bot.status.clientId ?? clientIdFromToken(getSetting('discord_token'));
@@ -71,10 +72,10 @@ router.get(
     const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
 
     if (st.mode === 'link') {
-      if (owner && owner.id !== st.userId) return toHash(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
+      if (owner && owner.id !== st.userId) return toPanel(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
       db.prepare('UPDATE users SET discord_id = ?, discord_name = ?, discord_avatar = ? WHERE id = ?').run(me.id, dname, me.avatar ?? null, st.userId);
       logAccount(req, st.userId, 'discord_linked', dname);
-      return toHash(res, 'profile');
+      return toPanel(res, 'profile');
     }
 
     if (owner) {
@@ -84,7 +85,7 @@ router.get(
       noteLogin(req, owner.id, brand().name);
       const tok = issueToken(owner, req);
       setSessionCookie(req, res, tok);
-      return toHash(res, `auth/${tok}`);
+      return toPanel(res, `auth/${tok}`);
     }
 
     // first sign-in with this Discord account: register it (when registration is open)
@@ -103,6 +104,6 @@ router.get(
     const tok = issueToken({ id, username: name }, req);
     setSessionCookie(req, res, tok);
     noteLogin(req, id, brand().name);
-    toHash(res, `auth/${tok}`);
+    toPanel(res, `auth/${tok}`);
   }),
 );
