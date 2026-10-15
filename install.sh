@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5dbfd5ec5f25"
+COREGSM_BUILD="2adb42e0cb1e"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -39255,7 +39255,7 @@ export default function App() {
       </a>
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
-          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px]">
+          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-[15rem] md:shrink-0">
             <Logo size={34} alt="" />
             <Wordmark className="min-w-0 truncate" />
           </a>
@@ -39278,8 +39278,8 @@ export default function App() {
               title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hidden md:inline">{t('hdr.search')}</span>
-              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute md:inline">Ctrl K</kbd>
+              <span className="hidden lg:inline">{t('hdr.search')}</span>
+              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute lg:inline">Ctrl K</kbd>
             </button>
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
@@ -39297,12 +39297,11 @@ export default function App() {
                 </a>
                 <button
                   onClick={() => void logout()}
-                  className="btn-ghost btn-sm"
+                  className="btn-icon-ghost max-sm:!hidden"
                   aria-label={t('hdr.logout')}
                   title={t('hdr.logout')}
                 >
-                  <span className="sm:hidden"><IconLogout /></span>
-                  <span className="hidden sm:inline">{t('hdr.logout')}</span>
+                  <IconLogout />
                 </button>
               </>
             ) : (
@@ -49061,17 +49060,18 @@ export function SectionChips({ defs, state }: { defs: SectionDef[]; state: Secti
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ServerTabs.tsx" << '__COREGSM_EOF__'
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { IconBars, IconBolt, IconGrid, IconPlug, IconTrend, IconUsers, type IconProps } from '../../icons';
 import { navigate } from '../../ui/route';
 import { tabHref, type TabId } from './helpers';
 
-export const TAB_LIST: { id: TabId; label: string }[] = [
-  { id: '', label: 'Обзор' },
-  { id: 'players', label: 'Игроки' },
-  { id: 'history', label: 'История' },
-  { id: 'stats', label: 'Аналитика' },
-  { id: 'events', label: 'События' },
-  { id: 'connect', label: 'Подключение' },
+export const TAB_LIST: { id: TabId; label: string; icon: ComponentType<IconProps> }[] = [
+  { id: '', label: 'Обзор', icon: IconGrid },
+  { id: 'players', label: 'Игроки', icon: IconUsers },
+  { id: 'history', label: 'История', icon: IconTrend },
+  { id: 'stats', label: 'Аналитика', icon: IconBars },
+  { id: 'events', label: 'События', icon: IconBolt },
+  { id: 'connect', label: 'Подключение', icon: IconPlug },
 ];
 
 export const tabDomId = (id: TabId) => `srv-tab-${id || 'overview'}`;
@@ -49157,6 +49157,7 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
                 tabIndex={on ? 0 : -1}
                 className={`seg-item shrink-0 ${on ? 'on' : ''}`}
               >
+                <t.icon size={17} className="srv-tab-i" />
                 {t.label}
                 {n != null && n > 0 && <span className="tab-count">{n}</span>}
               </a>
@@ -52123,6 +52124,11 @@ export const ICON_SET: [string, (p: IconProps) => ReactNode][] = [
   ['Info', IconInfo], ['Warn', IconWarn], ['Error', IconError], ['Ok', IconOk],
   ['Disk', IconDisk], ['Memory', IconMemory], ['Database', IconDatabase], ['Shield', IconShield], ['Clock', IconClock], ['Bot', IconBot], ['Wrench', IconWrench],
 ];
+export const IconGrid = make(<><rect x="3" y="3" width="7.5" height="7.5" rx="2" /><rect x="13.5" y="3" width="7.5" height="7.5" rx="2" /><rect x="3" y="13.5" width="7.5" height="7.5" rx="2" /><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2" /></>);
+export const IconTrend = make(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />);
+export const IconBars = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
+export const IconBolt = make(<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />);
+export const IconPlug = make(<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v5" />);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/index.css" << '__COREGSM_EOF__'
@@ -52578,8 +52584,10 @@ html { background-color: rgb(var(--page)); }
   content: ''; position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none;
   width: var(--ind-w); height: var(--ind-h); transform: translate(var(--ind-x), var(--ind-y));
   border-radius: 9999px; background: rgb(var(--seg-on));
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-1), inset 0 0 0 1px rgb(var(--line) / .7), inset 0 1px 0 rgb(255 255 255 / .07);
 }
+/* the other tabs answer the pointer with a faint wash */
+.seg > .seg-item:not(.on):not([aria-pressed='true']):not([aria-current='page']):hover { background: rgb(var(--ink) / .05); }
 .seg[data-ind-anim]::before { transition: transform .38s cubic-bezier(.34, 1.3, .5, 1), width .3s cubic-bezier(.2, .8, .2, 1), height .2s ease; }
 .seg[data-ind] > .seg-item[aria-pressed='true'], .seg[data-ind] > .seg-item[aria-current='page'], .seg[data-ind] > .seg-item.on { background: transparent; box-shadow: none; }
 
@@ -52842,6 +52850,11 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 .hint-help ul { list-style: disc; }
 
 /* admin sidebar groups */
+.adm-ic { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 10px; background: rgb(var(--soft)); transition: background-color .15s ease, color .15s ease, transform .25s cubic-bezier(.34, 1.56, .64, 1); }
+.adm-ic > svg { width: 18px; height: 18px; }
+.adm-link:hover .adm-ic { background: rgb(var(--brand) / .14); color: rgb(var(--link)); transform: scale(1.06); }
+.adm-link.is-on .adm-ic, .adm-link.is-on:hover .adm-ic { background: rgb(255 255 255 / .18); color: #fff; box-shadow: inset 0 1px 0 rgb(255 255 255 / .2); }
+@media (prefers-reduced-motion: reduce) { .adm-ic { transition: none; } }
 .adm-group-title { padding: 10px 14px 4px; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: rgb(var(--mute)); }
 
 /* ---------- black-square safeguard (Chrome) ----------
@@ -55033,9 +55046,9 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       key={s.id}
       href={`/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
-      className={`flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] px-3.5 py-2 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+      className={`adm-link flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] py-1.5 pl-1.5 pr-3.5 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'is-on bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
-      {s.icon()}
+      <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
       {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
     </a>
@@ -63431,24 +63444,29 @@ __COREGSM_EOF__
    «Ещё» menu, players / events / connect tabs, phone bar, game accent
    ====================================================================== */
 
-/* ---------- game accent: a thin line under the tabs and under the active tab ---------- */
+/* ---------- tabs: icons, and the active pill tinted with the game accent (glows a little) ---------- */
 .srv-page { --srv-acc: var(--srv-accent, rgb(var(--brand))); }
-.srv-tabbar::after {
-  content: ''; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; border-radius: 2px;
-  background: var(--srv-acc); opacity: .55; pointer-events: none;
+.srv-tabs { padding: 4px; gap: 2px; box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.srv-tabs > .seg-item { padding: .5rem 1rem .5rem .85rem; }
+.srv-tab-i { flex: none; opacity: .65; transition: transform .25s cubic-bezier(.34, 1.56, .64, 1), opacity .15s ease, color .15s ease; }
+.srv-tabs > .seg-item:hover .srv-tab-i { opacity: 1; transform: translateY(-1px) scale(1.08); }
+.srv-tabs > .seg-item.on .srv-tab-i { opacity: 1; color: var(--srv-acc); }
+.srv-tabs.seg[data-ind]::before,
+.srv-tabs:not([data-ind]) > .seg-item.on {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--srv-acc) 24%, rgb(var(--seg-on))), color-mix(in srgb, var(--srv-acc) 9%, rgb(var(--seg-on))));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--srv-acc) 50%, transparent), inset 0 1px 0 rgb(255 255 255 / .1), 0 8px 20px -10px var(--srv-acc);
 }
-@media (min-width: 640px) { .srv-tabbar::after { left: 24px; right: 24px; } }
-.srv-tabs > .seg-item.on::after {
-  content: ''; position: absolute; left: 16px; right: 16px; bottom: 3px; height: 3px; border-radius: 3px; background: var(--srv-acc);
-}
+.srv-tabs > .seg-item.on .tab-count { background: color-mix(in srgb, var(--srv-acc) 30%, transparent); color: rgb(var(--ink)); }
+@media (prefers-reduced-motion: reduce) { .srv-tab-i { transition: none; } }
 
 /* tabs as scrollable chips with snapping on phones */
 @media (max-width: 639px) {
-  .srv-tabs { width: 100%; gap: 8px; padding: 0; background: transparent; scroll-snap-type: x proximity; scroll-padding-inline: 12px; }
+  .srv-tabs { width: 100%; gap: 8px; padding: 0; background: transparent; box-shadow: none; scroll-snap-type: x proximity; scroll-padding-inline: 12px; }
   .srv-tabs.seg[data-ind]::before { display: none; }
   .srv-tabs > .seg-item { flex: none; scroll-snap-align: center; background: rgb(var(--soft)); }
   .srv-tabs > .seg-item.on, .srv-tabs.seg[data-ind] > .seg-item.on {
-    background: rgb(var(--seg-on)); box-shadow: 0 0 0 1px rgb(var(--line));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--srv-acc) 24%, rgb(var(--seg-on))), color-mix(in srgb, var(--srv-acc) 9%, rgb(var(--seg-on))));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--srv-acc) 50%, transparent);
   }
   .srv-page { padding-bottom: 4.5rem; }
 }

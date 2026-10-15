@@ -115,3 +115,8 @@ export const ICON_SET: [string, (p: IconProps) => ReactNode][] = [
   ['Info', IconInfo], ['Warn', IconWarn], ['Error', IconError], ['Ok', IconOk],
   ['Disk', IconDisk], ['Memory', IconMemory], ['Database', IconDatabase], ['Shield', IconShield], ['Clock', IconClock], ['Bot', IconBot], ['Wrench', IconWrench],
 ];
+export const IconGrid = make(<><rect x="3" y="3" width="7.5" height="7.5" rx="2" /><rect x="13.5" y="3" width="7.5" height="7.5" rx="2" /><rect x="3" y="13.5" width="7.5" height="7.5" rx="2" /><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2" /></>);
+export const IconTrend = make(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />);
+export const IconBars = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
+export const IconBolt = make(<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />);
+export const IconPlug = make(<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v5" />);
