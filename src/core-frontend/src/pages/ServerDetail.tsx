@@ -27,6 +27,10 @@ import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/serve
 import {
   countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
+import { lazyPage, PageFrame } from '../lazyPage';
+
+// the analytics tab and its charts load when it is opened
+const AnalyticsTab = lazyPage(() => import('../components/server/AnalyticsTab'));
 
 export { SERVER_TABS } from '../components/server/helpers';
 
@@ -328,6 +332,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
       </div>
     );
+  } else if (tab === 'stats') {
+    panel = <PageFrame><AnalyticsTab id={id} /></PageFrame>;
   } else if (tab === 'events') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
