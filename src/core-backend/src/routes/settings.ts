@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { admin, publicPanel, registrationOpen } from '../auth.js';
 import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
 import { getSetting, setSetting } from '../db.js';
-import { maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE } from '../proxyInput.js';
+import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
 
 export const router = express.Router();
@@ -43,6 +43,7 @@ router.put('/api/settings', admin, (req, res) => {
   if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
   const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
   if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
+  if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });
   if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
   if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
   if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);

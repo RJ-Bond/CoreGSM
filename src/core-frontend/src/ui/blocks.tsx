@@ -8,6 +8,7 @@ import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
 import { t } from '../i18n';
 import { IconClose, IconCopy } from '../icons';
 import { Burst } from './motion';
+import { noAutofill } from './noAutofill';
 
 // ---------- building blocks ----------
 /**
@@ -267,7 +268,7 @@ export function ProxyField({
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
-          autoComplete="off"
+          {...noAutofill()}
           placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
         />
       </div>

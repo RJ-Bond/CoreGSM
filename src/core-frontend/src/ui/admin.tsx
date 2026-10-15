@@ -3,6 +3,7 @@ import { type ReactNode, useId } from 'react';
 import type { SaveStatus } from '../autosave';
 import { IconCheck } from '../icons';
 import { FieldError, Spinner } from './authParts';
+import { noAutofill } from './noAutofill';
 
 // ---------- admin page grid: one rhythm for every page of the admin area ----------
 
@@ -70,11 +71,13 @@ export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?
  * Label + input + message under the field. `error` (validation) is red and replaces the hint; `save` shows the
  * autosave state on the label row. Pass the rest of the input attributes through.
  */
-export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, ...rest }: {
+export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, noAutofill: guard, ...rest }: {
   id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: ReactNode;
   save?: { status: SaveStatus; error?: string; retry?: () => void }; className?: string; multiline?: boolean;
   type?: string; placeholder?: string; maxLength?: number; disabled?: boolean; autoComplete?: string; rows?: number;
   onBlur?: () => void; inputMode?: 'text' | 'url' | 'numeric'; spellCheck?: boolean;
+  /** a field next to or holding a secret that is not the panel's own password: no browser autofill (noAutofill.ts) */
+  noAutofill?: boolean;
 }) {
   const describedBy = [error ? `${id}-err` : '', hint && !error ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
   const common = {
@@ -85,6 +88,7 @@ export function TextField({ id, label, value, onChange, error, hint, save, class
     'aria-invalid': error ? true : undefined,
     'aria-describedby': describedBy,
     ...rest,
+    ...(guard ? noAutofill(rest.type === 'password') : {}),
   };
   return (
     <div>

@@ -84,7 +84,7 @@ export default function SmtpCard() {
     >
       <form onSubmit={save} className="space-y-3.5">
         <div className="grid gap-3.5 sm:grid-cols-[minmax(0,1fr)_7rem]">
-          <TextField id="smtp-host" label="Сервер SMTP" value={host} onChange={setHost} placeholder="smtp.example.com" autoComplete="off" />
+          <TextField id="smtp-host" label="Сервер SMTP" value={host} onChange={setHost} placeholder="smtp.example.com" noAutofill />
           <TextField id="smtp-port" label="Порт" value={port} onChange={setPort} inputMode="numeric" error={portErr} autoComplete="off" />
         </div>
         <label className="flex cursor-pointer items-center gap-2.5 font-bold text-mute">
@@ -92,14 +92,14 @@ export default function SmtpCard() {
           Шифрование с первого байта (SSL/TLS, обычно порт 465). Иначе используется STARTTLS.
         </label>
         <div className="grid gap-3.5 sm:grid-cols-2">
-          <TextField id="smtp-user" label="Логин" value={user} onChange={setUser} autoComplete="off" />
+          <TextField id="smtp-user" label="Логин" value={user} onChange={setUser} noAutofill />
           <TextField
             id="smtp-pass"
             label={info?.passwordSet ? 'Пароль (сохранён, оставьте пустым чтобы не менять)' : 'Пароль'}
             type="password"
             value={password}
             onChange={setPassword}
-            autoComplete="new-password"
+            noAutofill
           />
         </div>
         <TextField id="smtp-from" label="Адрес отправителя" value={from} onChange={setFrom} placeholder="CoreGSM <no-reply@example.com>" autoComplete="off" />
