@@ -42,6 +42,32 @@ router.get('/api/servers', viewer, (req, res) => {
   res.json(isAdmin(req) ? list : list.map(publicServer));
 });
 
+/**
+ * The sparklines of the server list in one request: for every server the player count over the last `hours`,
+ * cut into `SPARK_POINTS` buckets (the busiest moment of each), and which buckets had the server down.
+ * An empty bucket (no poll in it) is null.
+ */
+const SPARK_POINTS = 48;
+router.get('/api/servers/sparks', viewer, (req, res) => {
+  const hours = Math.min(168, Math.max(1, Number(req.query.hours) || 24));
+  const now = Date.now();
+  const since = now - hours * 3600_000;
+  const bucket = Math.ceil((hours * 3600_000) / SPARK_POINTS);
+  const rows = db
+    .prepare(
+      `SELECT server_id AS id, MIN(CAST((ts - ?) / ? AS INTEGER), ${SPARK_POINTS - 1}) AS b, MAX(players) AS p, MIN(online) AS o
+       FROM history WHERE ts > ? GROUP BY server_id, b`,
+    )
+    .all(since, bucket, since) as { id: number; b: number; p: number; o: number }[];
+  const out: Record<number, { players: (number | null)[]; down: boolean[] }> = {};
+  for (const r of rows) {
+    const s = (out[r.id] ??= { players: Array(SPARK_POINTS).fill(null), down: Array(SPARK_POINTS).fill(false) });
+    s.players[r.b] = r.p;
+    if (!r.o) s.down[r.b] = true;
+  }
+  res.set('Cache-Control', 'no-cache').json({ hours, points: SPARK_POINTS, from: since, to: now, servers: out });
+});
+
 router.post(
   '/api/servers',
   admin,

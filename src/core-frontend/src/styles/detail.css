@@ -115,17 +115,8 @@
 @media (min-width: 640px) { .srv-hero-n { font-size: 56px; } .srv-hero-max { font-size: 26px; } }
 
 /* ---------- compact passport ---------- */
-.pp.pp-main { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.pp-main .pp-i:last-child { grid-column: 1 / -1; }
-@media (min-width: 640px) {
-  .pp.pp-main { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:last-child { grid-column: span 2; }
-  .pp-main .pp-i:nth-child(n + 4) { grid-column: span 3; }
-}
-@media (min-width: 1024px) {
-  .pp.pp-main { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .pp-main .pp-i, .pp-main .pp-i:nth-child(n + 4), .pp-main .pp-i:last-child { grid-column: span 1; }
-}
+/* up to five facts, only those the server reports: the cells share the row whatever their number */
+.pp.pp-main { grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr)); }
 .pp-more-btn {
   display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 36px; padding: 0 14px; border-radius: 9999px;
   font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, 0.95); background: rgba(8, 10, 20, 0.22); transition: background-color .15s ease;

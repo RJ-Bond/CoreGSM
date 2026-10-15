@@ -56,12 +56,11 @@ export default function Passport({ d }: { d: PassportData }) {
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
       <dl className="pp pp-main">
         <Item k="Игра"><span>{d.game}</span></Item>
-        <Item k="Карта"><span title={d.map ?? undefined}>{d.map && d.online ? d.map : '–'}</span></Item>
-        <Item k="Версия"><span>{d.version ? `v${d.version.replace(/^v/i, '')}` : '–'}</span></Item>
-        <Item k="Страна"><span>{d.country ? `${d.flag} ${d.country}`.trim() : '–'}</span></Item>
-        <Item k="Пинг">
-          {pt && d.ping != null ? <span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span> : <span>–</span>}
-        </Item>
+        {/* a fact the server does not report is left out instead of showing a dash */}
+        {d.map && d.online && <Item k="Карта"><span title={d.map}>{d.map}</span></Item>}
+        {d.version && <Item k="Версия"><span>{`v${d.version.replace(/^v/i, '')}`}</span></Item>}
+        {d.country && <Item k="Страна"><span>{`${d.flag} ${d.country}`.trim()}</span></Item>}
+        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span></Item>}
       </dl>
       <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
         {open ? t('srv.pp.less') : t('srv.pp.more')}

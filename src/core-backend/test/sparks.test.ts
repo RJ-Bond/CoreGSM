@@ -1,0 +1,51 @@
+/** The server list's sparklines in one request: GET /api/servers/sparks. */
+import assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
+import Database from 'better-sqlite3';
+import { setupAdmin, startBackend, type Api } from './harness.ts';
+
+describe('api: sparklines of all servers', () => {
+  let api: Api;
+  let a = 0;
+  let b = 0;
+  before(async () => {
+    api = await startBackend();
+    await setupAdmin(api);
+    const db = new Database(api.dbPath);
+    const now = Date.now();
+    const add = (name: string) => Number(db.prepare("INSERT INTO servers (name, game, host, port, created_at) VALUES (?, 'minecraft', '127.0.0.1', 25565, ?)").run(name, now).lastInsertRowid);
+    a = add('Alpha');
+    b = add('Beta');
+    const h = db.prepare('INSERT INTO history (server_id, ts, online, players) VALUES (?, ?, ?, ?)');
+    // Alpha: busy an hour ago, down 10 minutes ago; Beta: one old sample outside the window
+    h.run(a, now - 4_500_000, 1, 4); // the middle of a 30-minute bucket, away from its edges
+    h.run(a, now - 4_490_000, 1, 9);
+    h.run(a, now - 600_000, 0, 0);
+    h.run(b, now - 30 * 3_600_000, 1, 5);
+    db.close();
+  });
+  after(async () => { await api.stop(); });
+
+  it('48 buckets per server: the busiest moment of each, empty buckets null, outages marked', async () => {
+    const r = await api.call('GET', '/api/servers/sparks?hours=24');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.points, 48);
+    const s = r.body.servers[a] as { players: (number | null)[]; down: boolean[] };
+    assert.equal(s.players.length, 48);
+    assert.equal(s.down.length, 48);
+    assert.ok(s.players.includes(9), 'the bucket keeps its maximum');
+    assert.ok(!s.players.includes(4));
+    assert.equal(s.players.filter((v) => v != null).length, 2);
+    assert.equal(s.down.filter(Boolean).length, 1);
+    assert.equal(s.down[47] || s.down[46], true, 'the outage is at the end');
+    assert.equal(r.body.servers[b], undefined, 'samples older than the window are not shown');
+  });
+
+  it('a private panel hides them from guests', async () => {
+    const db = new Database(api.dbPath);
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('public_panel', '0')").run();
+    db.close();
+    const r = await api.call('GET', '/api/servers/sparks');
+    assert.equal(r.status, 401);
+  });
+});
