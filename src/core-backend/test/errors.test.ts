@@ -85,9 +85,10 @@ describe('error catalogue', () => {
 
 describe('error answers carry the code', () => {
   let api: Api;
+  let admin = '';
   before(async () => {
     api = await startBackend();
-    await setupAdmin(api);
+    admin = await setupAdmin(api);
   });
   after(async () => {
     await api.stop();
@@ -116,6 +117,20 @@ describe('error answers carry the code', () => {
     const r = await api.call('POST', '/api/auth/login', { raw: '{', headers: { 'content-type': 'application/json' } });
     assert.equal(r.status, 400);
     assert.equal(r.body.code, 'bad_json');
+  });
+
+  it('a password autofilled into the bot token is refused and the saved token stays', async () => {
+    // shaped like a bot token, built from parts so that secret scanners do not take it for a real one
+    const token = ['t'.repeat(24), 'x'.repeat(6), 'k'.repeat(27)].join('.');
+    assert.equal((await api.call('PUT', '/api/settings', { token: admin, body: { discordToken: token } })).status, 200);
+    const r = await api.call('PUT', '/api/settings', { token: admin, body: { discordToken: ADMIN.password, proxyUrl: ADMIN.username } });
+    assert.equal(r.status, 400);
+    assert.ok(r.body.code === 'proxy_format' || r.body.code === 'bad_bot_token', r.body.code);
+    const r2 = await api.call('PUT', '/api/settings', { token: admin, body: { discordToken: ADMIN.password } });
+    assert.equal(r2.body.code, 'bad_bot_token');
+    const cfg = await api.call('GET', '/internal/config', { headers: { 'x-internal-token': 'i'.repeat(48) } });
+    assert.equal(cfg.body.discordToken, token);
+    assert.equal(cfg.body.proxyUrl, '');
   });
 
   it('a normal answer is left alone', async () => {

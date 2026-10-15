@@ -2,7 +2,7 @@
 import { type FormEvent, useState } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { CopyButton, ErrorLine, Field, FieldError, InviteButton, ProxyField, type ProxyType, Section, toast, usePoll } from '../../ui';
+import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll } from '../../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -100,7 +100,7 @@ export function BotCard() {
           type="password"
           value={token}
           onChange={(e) => setTokenValue(e.target.value)}
-          autoComplete="off"
+          {...noAutofill(true)}
           placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
           aria-invalid={tokenWarn ? true : undefined}
           aria-describedby={tokenWarn ? 'set-token-err' : undefined}
@@ -144,7 +144,7 @@ export function BotCard() {
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
-            autoComplete="off"
+            {...noAutofill(true)}
             placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
           />
         </Field>
@@ -174,7 +174,7 @@ export function BotCard() {
       )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
       <p className="text-sm font-semibold text-mute">Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».</p>
-      <button className="btn" disabled={busy || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
+      <button className="btn" disabled={busy || !!tokenWarn || !!proxyWarn || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
     </form>
     </Section>
   );

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { AuthBrand, AuthShell, Button, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
+import { AuthBrand, AuthShell, Button, ErrorLine, Field, noAutofill, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -91,7 +91,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           <form onSubmit={(e) => { e.preventDefault(); void finish(false); }} className="space-y-3.5">
             <p className="font-semibold text-mute">Бот публикует карточки серверов в Discord. Это можно настроить и позже, в разделе «Настройки».</p>
             <Field label="Токен Discord-бота">
-              <input id="setup-token" className="input font-mono" type="password" value={discordToken} onChange={(e) => setDiscordToken(e.target.value)} autoComplete="off" placeholder="необязательно" />
+              <input id="setup-token" className="input font-mono" type="password" value={discordToken} onChange={(e) => setDiscordToken(e.target.value)} {...noAutofill(true)} placeholder="необязательно" />
             </Field>
             <Field label="Прокси для Discord">
               <ProxyField id="setup-proxy" value={proxyUrl} type={proxyType} onChange={setProxyUrl} onType={setProxyType} />

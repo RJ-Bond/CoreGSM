@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="20e40db93376"
+COREGSM_BUILD="cf8aad366ccb"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6975,6 +6975,7 @@ export const ERRORS = {
 
   // ---- settings, branding, updates ----
   proxy_format: 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port',
+  bad_bot_token: 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).',
   branding_format: 'Название до 32 символов, цвет в виде #RRGGBB',
   players_shown_range: 'Число ников: от 0 до 20',
   poll_settings_range: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32',
@@ -11270,7 +11271,7 @@ export async function discordFetch(url: string, init: { method?: string; headers
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/proxyInput.ts" << '__COREGSM_EOF__'
-/** The proxy address an administrator types in: normalised to a URL and validated. */
+/** What an administrator types into the bot settings: the proxy address (normalised to a URL) and the bot token. */
 
 export const PROXY_RE = /^(socks5h?|http|https):\/\/([^@/\s]+@)?[^@/:\s]+:\d{1,5}\/?$/;
 export const maskProxy = (u: string) => u.replace(/\/\/([^:@/]+):[^@/]*@/, '//$1:***@');
@@ -11317,6 +11318,11 @@ export function normalizeProxy(raw: string, type: ProxyType): string {
 }
 
 export const PROXY_HELP = 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port';
+
+/** a Discord bot token: three base64url parts joined by dots (the same check as the form in the panel) */
+export const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/;
+// a browser that autofills the panel's own password into the token field must not overwrite a working token
+export const TOKEN_HELP = 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/ranks.ts" << '__COREGSM_EOF__'
@@ -11377,7 +11383,7 @@ import { SETUP_TOKEN } from '../config.js';
 import { db, setSetting } from '../db.js';
 import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile.js';
-import { normalizeProxy, PROXY_HELP, PROXY_RE } from '../proxyInput.js';
+import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security.js';
 import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../site.js';
 import { unreadNotifications } from '../subscriptions.js';
@@ -11451,6 +11457,7 @@ router.post(
     if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
     const proxyUrl = normalizeProxy(b.data.proxyUrl ?? '', b.data.proxyType ?? 'socks5');
     if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
+    if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });
 
     const hash = await bcrypt.hash(b.data.password, 12);
     let userId = 0;
@@ -12320,7 +12327,7 @@ import { z } from 'zod';
 import { admin, publicPanel, registrationOpen } from '../auth.js';
 import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
 import { getSetting, setSetting } from '../db.js';
-import { maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE } from '../proxyInput.js';
+import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
 
 export const router = express.Router();
@@ -12356,6 +12363,7 @@ router.put('/api/settings', admin, (req, res) => {
   if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
   const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
   if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
+  if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });
   if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
   if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
   if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);
@@ -41214,7 +41222,7 @@ export default function SmtpCard() {
     >
       <form onSubmit={save} className="space-y-3.5">
         <div className="grid gap-3.5 sm:grid-cols-[minmax(0,1fr)_7rem]">
-          <TextField id="smtp-host" label="Сервер SMTP" value={host} onChange={setHost} placeholder="smtp.example.com" autoComplete="off" />
+          <TextField id="smtp-host" label="Сервер SMTP" value={host} onChange={setHost} placeholder="smtp.example.com" noAutofill />
           <TextField id="smtp-port" label="Порт" value={port} onChange={setPort} inputMode="numeric" error={portErr} autoComplete="off" />
         </div>
         <label className="flex cursor-pointer items-center gap-2.5 font-bold text-mute">
@@ -41222,14 +41230,14 @@ export default function SmtpCard() {
           Шифрование с первого байта (SSL/TLS, обычно порт 465). Иначе используется STARTTLS.
         </label>
         <div className="grid gap-3.5 sm:grid-cols-2">
-          <TextField id="smtp-user" label="Логин" value={user} onChange={setUser} autoComplete="off" />
+          <TextField id="smtp-user" label="Логин" value={user} onChange={setUser} noAutofill />
           <TextField
             id="smtp-pass"
             label={info?.passwordSet ? 'Пароль (сохранён, оставьте пустым чтобы не менять)' : 'Пароль'}
             type="password"
             value={password}
             onChange={setPassword}
-            autoComplete="new-password"
+            noAutofill
           />
         </div>
         <TextField id="smtp-from" label="Адрес отправителя" value={from} onChange={setFrom} placeholder="CoreGSM <no-reply@example.com>" autoComplete="off" />
@@ -51724,6 +51732,7 @@ const errorsEn: Record<string, string> = {
 
   // ---- settings, branding, updates ----
   proxy_format: 'Proxy: host:port:login:password, socks5://login:password@host:port or http://host:port',
+  bad_bot_token: 'This does not look like a bot token: it has three parts joined by dots. Copy the whole token in the Discord Developer Portal (Bot → Reset Token).',
   branding_format: 'Name up to 32 characters, colour as #RRGGBB',
   players_shown_range: 'Number of nicknames: 0 to 20',
   poll_settings_range: 'Outage confirmation: 1 to 5 polls, concurrency: 1 to 32',
@@ -58145,7 +58154,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Setup.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { AuthBrand, AuthShell, Button, ErrorLine, Field, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
+import { AuthBrand, AuthShell, Button, ErrorLine, Field, noAutofill, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -58236,7 +58245,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           <form onSubmit={(e) => { e.preventDefault(); void finish(false); }} className="space-y-3.5">
             <p className="font-semibold text-mute">Бот публикует карточки серверов в Discord. Это можно настроить и позже, в разделе «Настройки».</p>
             <Field label="Токен Discord-бота">
-              <input id="setup-token" className="input font-mono" type="password" value={discordToken} onChange={(e) => setDiscordToken(e.target.value)} autoComplete="off" placeholder="необязательно" />
+              <input id="setup-token" className="input font-mono" type="password" value={discordToken} onChange={(e) => setDiscordToken(e.target.value)} {...noAutofill(true)} placeholder="необязательно" />
             </Field>
             <Field label="Прокси для Discord">
               <ProxyField id="setup-proxy" value={proxyUrl} type={proxyType} onChange={setProxyUrl} onType={setProxyType} />
@@ -59200,7 +59209,7 @@ __COREGSM_EOF__
 import { type FormEvent, useState } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { CopyButton, ErrorLine, Field, FieldError, InviteButton, ProxyField, type ProxyType, Section, toast, usePoll } from '../../ui';
+import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll } from '../../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -59298,7 +59307,7 @@ export function BotCard() {
           type="password"
           value={token}
           onChange={(e) => setTokenValue(e.target.value)}
-          autoComplete="off"
+          {...noAutofill(true)}
           placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
           aria-invalid={tokenWarn ? true : undefined}
           aria-describedby={tokenWarn ? 'set-token-err' : undefined}
@@ -59342,7 +59351,7 @@ export function BotCard() {
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
-            autoComplete="off"
+            {...noAutofill(true)}
             placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
           />
         </Field>
@@ -59372,7 +59381,7 @@ export function BotCard() {
       )}
       {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
       <p className="text-sm font-semibold text-mute">Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».</p>
-      <button className="btn" disabled={busy || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
+      <button className="btn" disabled={busy || !!tokenWarn || !!proxyWarn || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
     </form>
     </Section>
   );
@@ -61479,6 +61488,7 @@ export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, OrDivider } from './ui/authParts';
 export { AdminPage, Section, Strip, SaveBadge, TextField } from './ui/admin';
+export { noAutofill } from './ui/noAutofill';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/admin.tsx" << '__COREGSM_EOF__'
@@ -61487,6 +61497,7 @@ import { type ReactNode, useId } from 'react';
 import type { SaveStatus } from '../autosave';
 import { IconCheck } from '../icons';
 import { FieldError, Spinner } from './authParts';
+import { noAutofill } from './noAutofill';
 
 // ---------- admin page grid: one rhythm for every page of the admin area ----------
 
@@ -61554,11 +61565,13 @@ export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?
  * Label + input + message under the field. `error` (validation) is red and replaces the hint; `save` shows the
  * autosave state on the label row. Pass the rest of the input attributes through.
  */
-export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, ...rest }: {
+export function TextField({ id, label, value, onChange, error, hint, save, className = '', multiline = false, noAutofill: guard, ...rest }: {
   id: string; label: string; value: string; onChange: (v: string) => void; error?: string; hint?: ReactNode;
   save?: { status: SaveStatus; error?: string; retry?: () => void }; className?: string; multiline?: boolean;
   type?: string; placeholder?: string; maxLength?: number; disabled?: boolean; autoComplete?: string; rows?: number;
   onBlur?: () => void; inputMode?: 'text' | 'url' | 'numeric'; spellCheck?: boolean;
+  /** a field next to or holding a secret that is not the panel's own password: no browser autofill (noAutofill.ts) */
+  noAutofill?: boolean;
 }) {
   const describedBy = [error ? `${id}-err` : '', hint && !error ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
   const common = {
@@ -61569,6 +61582,7 @@ export function TextField({ id, label, value, onChange, error, hint, save, class
     'aria-invalid': error ? true : undefined,
     'aria-describedby': describedBy,
     ...rest,
+    ...(guard ? noAutofill(rest.type === 'password') : {}),
   };
   return (
     <div>
@@ -61881,6 +61895,7 @@ import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
 import { t } from '../i18n';
 import { IconClose, IconCopy } from '../icons';
 import { Burst } from './motion';
+import { noAutofill } from './noAutofill';
 
 // ---------- building blocks ----------
 /**
@@ -62140,7 +62155,7 @@ export function ProxyField({
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
-          autoComplete="off"
+          {...noAutofill()}
           placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
         />
       </div>
@@ -62502,6 +62517,24 @@ export function Burst({ count = 8, radius = 17 }: { count?: number; radius?: num
     </span>
   );
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/noAutofill.ts" << '__COREGSM_EOF__'
+/**
+ * Attributes for fields that hold a secret of something else (the Discord bot token, the Client Secret, the SMTP
+ * password) and the fields next to them (proxy, SMTP login). Browsers ignore autocomplete="off" on a password
+ * field: they put the panel's own saved login into the text field before it and the panel's password into the
+ * field, and saving the form then overwrote the token and the proxy with them. "new-password" stops the browser
+ * from filling saved passwords; the data-* attributes do the same for 1Password, LastPass and Bitwarden.
+ */
+export const noAutofill = (secret = false) =>
+  ({
+    autoComplete: secret ? 'new-password' : 'off',
+    'data-1p-ignore': 'true',
+    'data-lpignore': 'true',
+    'data-bwignore': 'true',
+    'data-form-type': 'other',
+  }) as const;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/poll.ts" << '__COREGSM_EOF__'
