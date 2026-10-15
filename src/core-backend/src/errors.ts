@@ -104,6 +104,7 @@ export const ERRORS = {
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
   counter_exists: 'Этот канал уже стал счётчиком',
+  config_bad_file: 'Это не файл настроек CoreGSM или он повреждён',
   rcon_password_required: 'Укажите пароль RCON',
   rcon_not_configured: 'Сначала сохраните порт и пароль RCON',
   gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',

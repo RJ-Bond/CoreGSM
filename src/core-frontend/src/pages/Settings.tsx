@@ -1,4 +1,5 @@
 import BackupsCard from './Backups';
+import ConfigTransfer from '../components/ConfigTransfer';
 import SmtpCard from '../components/SmtpCard';
 import PollSettingsCard from '../components/PollSettingsCard';
 import type { ReactNode } from 'react';
@@ -86,6 +87,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         <>
           <UpdateCard />
           <BackupsCard />
+          <ConfigTransfer />
         </>
       )}
     </AdminPage>

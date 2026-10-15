@@ -1,3 +1,4 @@
+import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
@@ -77,6 +78,8 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
 function useBrand(b: Access['brand']) {
   // the community's default theme, for visitors who have not picked one
   useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
+  // a game theme also tints the page glow and lays the game's picture across the top
+  useEffect(() => { paintGameTheme(b.preset); }, [b.preset]);
   useEffect(() => {
     const root = document.documentElement;
     // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»

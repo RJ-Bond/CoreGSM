@@ -41,6 +41,7 @@ import { router as reviewsRouter } from './reviews.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as probesRouter } from './probes.js';
+import { router as configRouter } from './configExport.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -61,6 +62,7 @@ app.use('/api', csrfGuard);
 // public player pages: a coarse per-address ceiling on top of the route's own limiter
 app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
+app.use('/api/config/import', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 installAudit(app);
 
@@ -83,6 +85,7 @@ app.use(reviewsRouter);
 app.use(galleryRouter);
 app.use(restartsRouter);
 app.use(probesRouter);
+app.use(configRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
