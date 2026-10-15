@@ -86,6 +86,7 @@ export const ERRORS = {
 
   // ---- settings, branding, updates ----
   proxy_format: 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port',
+  bad_bot_token: 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).',
   branding_format: 'Название до 32 символов, цвет в виде #RRGGBB',
   players_shown_range: 'Число ников: от 0 до 20',
   poll_settings_range: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32',

@@ -8,7 +8,7 @@ import { SETUP_TOKEN } from '../config.js';
 import { db, setSetting } from '../db.js';
 import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile.js';
-import { normalizeProxy, PROXY_HELP, PROXY_RE } from '../proxyInput.js';
+import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security.js';
 import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../site.js';
 import { unreadNotifications } from '../subscriptions.js';
@@ -82,6 +82,7 @@ router.post(
     if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
     const proxyUrl = normalizeProxy(b.data.proxyUrl ?? '', b.data.proxyType ?? 'socks5');
     if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
+    if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });
 
     const hash = await bcrypt.hash(b.data.password, 12);
     let userId = 0;
