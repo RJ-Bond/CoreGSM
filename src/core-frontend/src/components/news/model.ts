@@ -1,6 +1,7 @@
 import { getToken, type NewsCategory, type NewsChangeKind, type NewsEmbed, type NewsPayload } from '../../api';
 import { isHttpsUrl, isChangeKind, normCategory } from './newsLogic';
 import { GAMES } from '../../games';
+import { errorText } from '../../apiErrors';
 
 // ---------- limits (Discord) ----------
 export const LIMITS = {
@@ -242,7 +243,7 @@ export async function uploadImage(file: File): Promise<string> {
   if (file.size > MAX_UPLOAD) throw new Error('Файл больше 8 МБ');
   const res = await fetch('/api/news/images', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken()}` }, body: file });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Ошибка ${res.status}`);
+  if (!res.ok) throw new Error(errorText(data, `Ошибка ${res.status}`));
   return (data as { name: string }).name;
 }
 
