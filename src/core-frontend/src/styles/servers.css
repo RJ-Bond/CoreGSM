@@ -263,6 +263,12 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 /* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
 .srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
 .srv-tile { min-width: 0; }
+/* a full server glows in its game's colour (--fill 0..1); a server that is down steps back */
+.srv-tile { box-shadow: var(--shadow-2), 0 14px 34px -18px color-mix(in srgb, var(--gc, transparent) calc(var(--fill, 0) * 90%), transparent); }
+.srv-tile.is-busy { box-shadow: var(--shadow-2), 0 0 0 2px color-mix(in srgb, var(--gc) 55%, transparent), 0 16px 40px -14px color-mix(in srgb, var(--gc) 70%, transparent); }
+.srv-tile.is-down { filter: saturate(.55); opacity: .9; }
+.srv-tile.is-down:hover { filter: none; opacity: 1; }
+.tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
 
 /* news card in «Что нового»: the title and the foot are links, the text carries live links */
 .srv-new-news-title { font-weight: 800; color: rgb(var(--ink)); }

@@ -38,6 +38,7 @@ const ru = {
   'nav.servers': 'Серверы',
   'nav.news': 'Новости',
   'nav.status': 'Статус',
+  'nav.community': 'Сообщество',
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'nav.skip': 'Перейти к содержимому',

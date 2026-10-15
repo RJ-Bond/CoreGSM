@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cc274d3b7702"
+COREGSM_BUILD="46a6d7ce8c71"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7344,6 +7344,7 @@ export const ERRORS = {
 
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Сервер не найден',
+  player_not_found: 'Игрок не найден',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',
@@ -8467,6 +8468,7 @@ import { router as usersRouter } from './routes/users.js';
 import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
 import { router as analyticsRouter } from './routes/analytics.js';
+import { router as communityRouter } from './routes/community.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8502,6 +8504,7 @@ app.use(usersRouter);
 app.use(discordLoginRouter);
 app.use(serversRouter);
 app.use(analyticsRouter);
+app.use(communityRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -12420,6 +12423,171 @@ router.delete('/api/bindings/:id', admin, (req, res) => {
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/community.ts" << '__COREGSM_EOF__'
+/**
+ * The community as a whole, for the main page and the public «Сообщество» page, and the card of one player.
+ *
+ * GET /api/community
+ *   now       players online on all servers, servers online
+ *   record    the most players online at once in the last 30 days (5-minute buckets) and when
+ *   heatmap   average players on all servers per weekday x hour (panel time zone), the busiest hour
+ *   players   unique players in the last 24 h / 7 days / 30 days, new players this week
+ *   feed      the latest arrivals: who came to which server, newcomers marked
+ *   top       the players with the most hours this week and this month
+ *   servers   the servers by players now
+ *
+ * GET /api/players/:name   one player by the nick the game servers report: where and when they play
+ */
+import express from 'express';
+import { viewer } from '../auth.js';
+import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
+import { localParts } from '../localTime.js';
+import { vrRankIdFor } from '../profile.js';
+
+export const router = express.Router();
+
+const DAY = 86_400_000;
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+interface ServerName { id: number; name: string; game: string }
+const serverNames = () =>
+  new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
+
+function community(now = Date.now()) {
+  const names = serverNames();
+  const live = db.prepare('SELECT s.id, st.online, st.players, st.max_players FROM servers s LEFT JOIN status st ON st.server_id = s.id').all() as { id: number; online: number | null; players: number | null; max_players: number | null }[];
+
+  // the most players at once: per 5-minute bucket the busiest moment of each server, summed
+  const buckets = new Map<number, number>();
+  for (const r of db
+    .prepare('SELECT ts / 300000 AS b, server_id, MAX(players) AS p FROM history WHERE ts > ? AND online = 1 GROUP BY b, server_id')
+    .iterate(now - 30 * DAY) as Iterable<{ b: number; p: number }>) buckets.set(r.b, (buckets.get(r.b) ?? 0) + r.p);
+  let record: { players: number; at: number } | null = null;
+  for (const [b, p] of buckets) if (!record || p > record.players) record = { players: p, at: b * 300_000 };
+
+  // weekday x hour of the whole community: the hourly totals averaged
+  const hourly = new Map<number, number>();
+  for (const r of db
+    .prepare('SELECT ts / 3600000 AS h, server_id, AVG(players) AS a FROM history WHERE ts > ? GROUP BY h, server_id')
+    .iterate(now - 30 * DAY) as Iterable<{ h: number; a: number }>) hourly.set(r.h, (hourly.get(r.h) ?? 0) + r.a);
+  const sum = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const cnt = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const zone = tz();
+  for (const [h, total] of hourly) {
+    const p = localParts(h * 3600_000, zone);
+    sum[p.dow][p.hour] += total;
+    cnt[p.dow][p.hour]++;
+  }
+  const cells = sum.map((row, d) => row.map((v, h) => (cnt[d][h] ? Math.round((v / cnt[d][h]) * 10) / 10 : null)));
+  let busiest: { dow: number; hour: number; avg: number } | null = null;
+  cells.forEach((row, dow) => row.forEach((avg, hour) => { if (avg != null && (!busiest || avg > busiest.avg)) busiest = { dow, hour, avg }; }));
+
+  const uniq = (since: number) => (db.prepare('SELECT COUNT(DISTINCT ulower(name)) AS n FROM player_sessions WHERE COALESCE(left_at, ?) > ?').get(now, since) as { n: number }).n;
+  const firstSeen = db.prepare('SELECT MIN(joined_at) AS t FROM player_sessions WHERE ulower(name) = ulower(?)');
+  const newWeek = (db.prepare('SELECT COUNT(*) AS n FROM (SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions GROUP BY k) WHERE t > ?').get(now - 7 * DAY) as { n: number }).n;
+
+  const feed = (db.prepare('SELECT server_id, name, joined_at, left_at FROM player_sessions ORDER BY joined_at DESC LIMIT 14').all() as { server_id: number; name: string; joined_at: number; left_at: number | null }[])
+    .filter((r) => names.has(r.server_id))
+    .map((r) => ({
+      name: r.name,
+      serverId: r.server_id,
+      serverName: names.get(r.server_id)!.name,
+      game: names.get(r.server_id)!.game,
+      at: r.joined_at,
+      online: r.left_at == null,
+      newcomer: (firstSeen.get(r.name) as { t: number }).t === r.joined_at,
+    }));
+
+  const topSince = (since: number) =>
+    (db
+      .prepare(
+        `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+         FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY k ORDER BY h DESC LIMIT 10`,
+      )
+      .all(now, now, since, now, since) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+
+  const servers = live
+    .filter((s) => names.has(s.id))
+    .map((s) => ({ id: s.id, name: names.get(s.id)!.name, game: names.get(s.id)!.game, online: !!s.online, players: s.online ? s.players ?? 0 : 0, maxPlayers: s.max_players ?? 0 }))
+    .sort((a, b) => b.players - a.players);
+
+  return {
+    now: { players: servers.reduce((n, s) => n + s.players, 0), online: servers.filter((s) => s.online).length, servers: servers.length },
+    record,
+    heatmap: { cells, busiest },
+    players: { day: uniq(now - DAY), week: uniq(now - 7 * DAY), month: uniq(now - 30 * DAY), newWeek },
+    feed,
+    top: { week: topSince(now - 7 * DAY), month: topSince(now - 30 * DAY) },
+    servers,
+  };
+}
+
+let cached: { at: number; v: ReturnType<typeof community> } | null = null;
+router.get('/api/community', viewer, (_req, res) => {
+  if (!cached || Date.now() - cached.at > 30_000) cached = { at: Date.now(), v: community() };
+  res.json(cached.v);
+});
+
+/** one player: the visits of a nick (any case) on every server in the 90 days the panel keeps */
+export function playerCard(nick: string, now = Date.now()) {
+  const visits = db
+    .prepare('SELECT server_id, name, joined_at, COALESCE(left_at, ?) AS left_at, left_at IS NULL AS live FROM player_sessions WHERE ulower(name) = ulower(?) ORDER BY joined_at')
+    .all(now, nick) as { server_id: number; name: string; joined_at: number; left_at: number; live: number }[];
+  if (!visits.length) return null;
+  const names = serverNames();
+  const zone = tz();
+  const hours = (v: { joined_at: number; left_at: number }) => (v.left_at - v.joined_at) / 3600_000;
+  const per = new Map<number, { hours: number; visits: number; last: number }>();
+  const byHour = Array<number>(24).fill(0);
+  const days = new Set<string>();
+  for (const v of visits) {
+    const p = per.get(v.server_id) ?? { hours: 0, visits: 0, last: 0 };
+    p.hours += hours(v);
+    p.visits++;
+    p.last = Math.max(p.last, v.left_at);
+    per.set(v.server_id, p);
+    // the hours of the day the player is on, counted in quarter-hour steps
+    for (let t = v.joined_at; t < v.left_at; t += 900_000) byHour[localParts(t, zone).hour] += 0.25;
+    days.add(localParts(v.joined_at, zone).day);
+  }
+  // the streak: days in a row with a visit, up to today (or yesterday)
+  let streak = 0;
+  for (let k = 0; k < 90; k++) {
+    const d = localParts(now - k * DAY, zone).day;
+    if (days.has(d)) streak++;
+    else if (k > 0) break;
+  }
+  const name = visits[visits.length - 1].name;
+  const game = [...per.keys()].map((id) => names.get(id)?.game).find((g) => g === 'vrising');
+  const total = visits.reduce((n, v) => n + hours(v), 0);
+  return {
+    name,
+    firstSeen: visits[0].joined_at,
+    lastSeen: visits.some((v) => v.live) ? null : visits[visits.length - 1].left_at,
+    online: visits.some((v) => v.live),
+    hours: Math.round(total * 10) / 10,
+    visits: visits.length,
+    days: days.size,
+    streak,
+    usualHour: byHour.some((v) => v > 0) ? byHour.indexOf(Math.max(...byHour)) : null,
+    byHour: byHour.map((v) => Math.round(v * 10) / 10),
+    servers: [...per]
+      .filter(([id]) => names.has(id))
+      .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
+      .sort((a, b) => b.hours - a.hours),
+    recent: visits.slice(-8).reverse().filter((v) => names.has(v.server_id)).map((v) => ({ serverId: v.server_id, serverName: names.get(v.server_id)!.name, from: v.joined_at, to: v.live ? null : v.left_at })),
+    ...(game ? { rankId: vrRankIdFor(name) } : {}),
+  };
+}
+
+router.get('/api/players/:name', viewer, (req, res) => {
+  const nick = String(req.params.name).slice(0, 64);
+  const card = playerCard(nick);
+  if (!card) return res.status(404).json({ error: 'Игрок не найден' });
+  res.json(card);
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/discordLogin.ts" << '__COREGSM_EOF__'
 /** Sign in with Discord (OAuth2, identify scope): login, linking and registration of new players. */
 import express from 'express';
@@ -13173,6 +13341,12 @@ router.put(
     res.json(brand());
   },
 );
+router.put('/api/branding/theme', admin, (req, res) => {
+  const b = z.object({ theme: z.enum(['auto', 'light', 'dark']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  setSetting('default_theme', b.data.theme);
+  res.json(brand());
+});
 router.delete('/api/branding/logo', admin, (_req, res) => {
   const old = logoFile();
   if (old) fs.rmSync(old, { force: true });
@@ -14208,6 +14382,8 @@ export const brand = () => ({
   color: getSetting('brand_color') || '#4f46e5',
   color2: getSetting('brand_color2') || '',
   preset: getSetting('brand_preset') || '',
+  // the theme for visitors who have not picked one themselves
+  theme: (['auto', 'light', 'dark'].includes(getSetting('default_theme') ?? '') ? getSetting('default_theme') : 'dark') as 'auto' | 'light' | 'dark',
   hasLogo: !!logoFile(),
   logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
 });
@@ -16699,9 +16875,9 @@ __COREGSM_EOF__
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>CoreGSM</title>
     <script>
-      // apply the saved theme before first paint to avoid a flash
+      // apply the visitor's theme (or the community's default) before first paint to avoid a flash
       try {
-        var t = localStorage.getItem('coregsm_theme');
+        var t = localStorage.getItem('coregsm_theme') || localStorage.getItem('coregsm_theme_default') || 'dark';
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
       } catch (e) {}
     </script>
@@ -16744,7 +16920,7 @@ server {
   add_header X-Frame-Options "DENY" always;
   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
   add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
 
   location /assets/ {
     expires 30d;
@@ -16753,7 +16929,7 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
   }
 
   # the service worker must be revalidated on every start so that updates reach people
@@ -16782,7 +16958,7 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-SWJrFg3Dh/gdz3ClCPRIXAy9fZ0Prtdfn2mtHZ4rF+c='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
   }
 }
 __COREGSM_EOF__
@@ -38558,7 +38734,7 @@ import Register from './pages/Register';
 import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, navigate, parseRoute, toast, useRoute } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
 const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
@@ -38567,6 +38743,8 @@ const ProfilePage = lazyPage(() => import('./pages/Profile'));
 const PublicProfilePage = lazyPage(() => import('./pages/PublicProfile'));
 const StatusPage = lazyPage(() => import('./pages/Status'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
+const CommunityPage = lazyPage(() => import('./pages/Community'));
+const PlayerPage = lazyPage(() => import('./pages/Player'));
 // rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
 const Setup = lazyPage(() => import('./pages/Setup'));
 const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
@@ -38574,6 +38752,12 @@ const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
 const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
 const Tour = lazyPage(() => import('./components/Tour'));
 const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
+
+const IconCommunity = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
+  </svg>
+);
 
 const IconStatus = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -38588,6 +38772,7 @@ const PAGES: PageDef[] = [
   { id: 'servers', label: 'nav.servers', icon: IconServers },
   { id: 'news', label: 'nav.news', icon: IconNews },
   { id: 'status', label: 'nav.status', icon: IconStatus },
+  { id: 'community', label: 'nav.community', icon: IconCommunity },
   { id: 'admin', label: 'nav.admin', icon: IconSettings, admin: true },
 ];
 
@@ -38612,6 +38797,8 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
  * keeps >= 4.5:1 on the card and soft surfaces of the current theme (darkened in light, lightened in dark).
  */
 function useBrand(b: Access['brand']) {
+  // the community's default theme, for visitors who have not picked one
+  useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
   useEffect(() => {
     const root = document.documentElement;
     // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
@@ -38744,7 +38931,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -38810,11 +38997,11 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
-  if (page === 'u') {
+  if (page === 'u' || page === 'player') {
     try { publicName = decodeURIComponent(sub.split('/')[0]); } catch { publicName = sub.split('/')[0]; }
   }
   const sectionTitle = boot.needsSetup
@@ -38825,7 +39012,7 @@ export default function App() {
         ? 'UI-кит'
         : page === '404'
         ? t('title.notfound')
-        : page === 'u'
+        : page === 'u' || page === 'player'
         ? publicName
         : page === 'profile'
         ? t('hdr.profile')
@@ -39000,6 +39187,8 @@ export default function App() {
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}
             {page === 'status' && <StatusPage />}
+            {page === 'community' && <CommunityPage />}
+            {page === 'player' && <PlayerPage name={publicName} />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}
             {page === 'u' && <PublicProfilePage username={publicName} />}
@@ -39814,6 +40003,8 @@ export interface Brand {
   color2?: string;
   /** id of the chosen theme preset ('' = custom colour) */
   preset?: string;
+  /** the theme of visitors who have not picked one (set by the administrator) */
+  theme?: 'auto' | 'light' | 'dark';
   hasLogo: boolean;
   logoV: number;
 }
@@ -49026,6 +49217,79 @@ export default function SubscribeMenu({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/coverAccent.ts" << '__COREGSM_EOF__'
+/**
+ * The accent of a server page taken from its cover: the picture is shrunk to 32x32 and the hue of its colourful
+ * pixels (weighted by saturation and brightness, dark and washed-out ones ignored) becomes the colour of the
+ * charts, bars and glows. The result is tuned to stay readable and cached per picture for the visit.
+ */
+import { useEffect, useState } from 'react';
+
+const cache = new Map<string, string | null>();
+
+function accentOf(img: HTMLImageElement): string | null {
+  const N = 32;
+  const cv = document.createElement('canvas');
+  cv.width = N;
+  cv.height = N;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, N, N);
+  let data: Uint8ClampedArray;
+  try {
+    data = ctx.getImageData(0, 0, N, N).data;
+  } catch {
+    return null; // a picture from another origin taints the canvas
+  }
+  let sx = 0;
+  let sy = 0;
+  let sw = 0;
+  let sat = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i] / 255;
+    const g = data[i + 1] / 255;
+    const b = data[i + 2] / 255;
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const d = mx - mn;
+    if (data[i + 3] < 200 || mx < 0.18 || d < 0.12) continue;
+    const s = d / mx;
+    const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    const a = (h * Math.PI) / 3;
+    const w = s * s * mx;
+    sx += Math.cos(a) * w;
+    sy += Math.sin(a) * w;
+    sw += w;
+    sat += s * w;
+  }
+  if (sw < 2) return null; // grey or nearly black picture: keep the game's colour
+  const hue = ((Math.atan2(sy, sx) * 180) / Math.PI + 360) % 360;
+  const s = Math.round(Math.min(78, Math.max(48, (sat / sw) * 100)));
+  return `hsl(${Math.round(hue)} ${s}% 52%)`;
+}
+
+/** the cover's accent, or `fallback` until it is known (and for pictures without a clear colour) */
+export function useCoverAccent(url: string | null | undefined, fallback: string): string {
+  const [c, setC] = useState<string | null>(() => (url ? cache.get(url) ?? null : null));
+  useEffect(() => {
+    if (!url) { setC(null); return; }
+    if (cache.has(url)) { setC(cache.get(url) ?? null); return; }
+    let alive = true;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      const v = accentOf(img);
+      cache.set(url, v);
+      if (alive) setC(v);
+    };
+    img.onerror = () => cache.set(url, null);
+    img.src = url;
+    return () => { alive = false; };
+  }, [url]);
+  return c ?? fallback;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/helpers.ts" << '__COREGSM_EOF__'
 import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react';
 import { COUNTRIES } from '../../countries';
@@ -49415,6 +49679,141 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
       </div>
       {dialog && <MaintenanceDialog servers={selected} onClose={() => setDialog(false)} onDone={() => { setDialog(false); onReload(); }} />}
     </>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/CommunityBento.tsx" << '__COREGSM_EOF__'
+/**
+ * The top of the main page: the community at a glance. Players online now against the 30-day record (a new record
+ * gets a small celebration), when the community usually plays, and the latest arrivals.
+ */
+import { useEffect, useRef, useState } from 'react';
+import { api } from '../../api';
+import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll } from '../../ui';
+import '../../styles/community.css';
+
+export interface Community {
+  now: { players: number; online: number; servers: number };
+  record: { players: number; at: number } | null;
+  heatmap: { cells: (number | null)[][]; busiest: { dow: number; hour: number; avg: number } | null };
+  players: { day: number; week: number; month: number; newWeek: number };
+  feed: { name: string; serverId: number; serverName: string; game: string; at: number; online: boolean; newcomer: boolean }[];
+  top: { week: { name: string; hours: number; servers: number }[]; month: { name: string; hours: number; servers: number }[] };
+  servers: { id: number; name: string; game: string; online: boolean; players: number; maxPlayers: number }[];
+}
+
+export const DOW_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const DOW_IN = ['по понедельникам', 'по вторникам', 'по средам', 'по четвергам', 'по пятницам', 'по субботам', 'по воскресеньям'];
+const RECORD_KEY = 'coregsm_record_seen';
+
+export function useCommunity(): Community | null {
+  const [data, setData] = useState<Community | null>(null);
+  usePoll(() => api<Community>('/community').then(setData).catch(() => undefined), 30_000);
+  return data;
+}
+
+/** weekday x hour of the whole community, small */
+export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; big?: boolean }) {
+  const max = Math.max(1, ...cells.flat().map((v) => v ?? 0));
+  return (
+    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label="Когда играет сообщество: по дням недели и часам">
+      {cells.map((row, d) => (
+        <div key={d} className="contents">
+          <span className="cm-heat-d">{DOW_SHORT[d]}</span>
+          {row.map((v, h) => (
+            <span key={h} className="cm-heat-c" style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${v}`} />
+          ))}
+        </div>
+      ))}
+      <span />
+      {Array.from({ length: 24 }, (_, h) => <span key={h} className="cm-heat-h">{h % 6 === 0 ? h : ''}</span>)}
+    </div>
+  );
+}
+
+export function busiestText(b: Community['heatmap']['busiest']) {
+  return b ? `Больше всего игроков ${DOW_IN[b.dow]} около ${String(b.hour).padStart(2, '0')}:00` : 'Данных пока мало';
+}
+
+export function FeedItem({ f }: { f: Community['feed'][number] }) {
+  return (
+    <li className="cm-feed-i">
+      <GameAvatar game={f.game} size={30} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm">
+          <a href={`/player/${encodeURIComponent(f.name)}`} className="font-extrabold hover:text-link">{f.name}</a>
+          <span className="text-mute"> зашёл на </span>
+          <a href={`/servers/${f.serverId}`} className="font-bold hover:text-link">{f.serverName}</a>
+        </span>
+        <span className="flex items-center gap-2 text-xs font-bold text-mute">
+          {ago(f.at)}
+          {f.online && <span className="cm-live">в игре</span>}
+          {f.newcomer && <span className="cm-new">новичок</span>}
+        </span>
+      </span>
+    </li>
+  );
+}
+
+export default function CommunityBento() {
+  const c = useCommunity();
+  const [celebrate, setCelebrate] = useState(false);
+  const shown = useRef(false);
+
+  // a new record (higher than any the visitor has already celebrated): confetti once
+  useEffect(() => {
+    if (!c?.record || shown.current) return;
+    const isRecord = c.now.players > 0 && c.now.players >= c.record.players;
+    if (!isRecord) return;
+    let seen = 0;
+    try { seen = Number(localStorage.getItem(RECORD_KEY)) || 0; } catch { /* no storage */ }
+    if (c.now.players > seen) {
+      shown.current = true;
+      setCelebrate(true);
+      try { localStorage.setItem(RECORD_KEY, String(c.now.players)); } catch { /* not remembered */ }
+      window.setTimeout(() => setCelebrate(false), 4000);
+    }
+  }, [c]);
+
+  if (!c) return <div className="cm-bento" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-44" /><div className="tile skeleton h-44" /></div>;
+  const rec = c.record;
+  const toRecord = rec ? Math.max(0, Math.min(1, c.now.players / Math.max(1, rec.players))) : 0;
+  const isRecord = !!rec && c.now.players > 0 && c.now.players >= rec.players;
+  return (
+    <div className="cm-bento fade-in">
+      <section className={`tile cm-now ${isRecord ? 'is-record' : ''}`} aria-label="Сейчас играют">
+        <div className="cm-k">Сейчас играют</div>
+        <div className="relative inline-flex items-baseline gap-2">
+          <AnimatedNumber value={c.now.players} className="cm-big" pulse />
+          <span className="font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])}</span>
+          {celebrate && <Burst count={14} radius={46} />}
+        </div>
+        <div className="cm-meter" aria-hidden><span style={{ width: `${toRecord * 100}%` }} /></div>
+        <p className="cm-sub">
+          {isRecord ? '🎉 Это рекорд за 30 дней!' : rec ? `Рекорд за 30 дней: ${rec.players} (${fmtDateTime(rec.at)})` : 'Рекорд появится, когда накопится история'}
+        </p>
+        <dl className="cm-mini">
+          <div><dt>Серверов в сети</dt><dd>{c.now.online} из {c.now.servers}</dd></div>
+          <div><dt>Игроков за неделю</dt><dd>{c.players.week}</dd></div>
+          <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
+        </dl>
+      </section>
+
+      <section className="tile cm-when" aria-label="Когда играет сообщество">
+        <div className="cm-k">Когда играет сообщество</div>
+        <MiniHeat cells={c.heatmap.cells} />
+        <p className="cm-sub">{busiestText(c.heatmap.busiest)}</p>
+      </section>
+
+      <section className="tile cm-feed" aria-label="Живая лента">
+        <div className="flex items-center justify-between gap-2">
+          <div className="cm-k">Живая лента</div>
+          <a href="/community" className="text-xs font-extrabold text-link hover:underline">Сообщество →</a>
+        </div>
+        {c.feed.length ? <ul className="cm-feed-list">{c.feed.slice(0, 5).map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
+      </section>
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -51063,6 +51462,12 @@ __COREGSM_EOF__
 /** Games that ship a default cover (files in public/games/covers: <game>.jpg 1280x720 and <game>@s.jpg 640x360). */
 const DEFAULT_COVERS = new Set(['vrising', 'icarus']);
 
+/** the picture of a server: its uploaded cover, else the default cover of its game, else null (small = the 640px one) */
+export function coverUrlOf(coverUrl: string | null | undefined, game: string, small = true): string | null {
+  if (coverUrl) return small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
+  return DEFAULT_COVERS.has(game) ? `/games/covers/${game}${small ? '@s' : ''}.jpg` : null;
+}
+
 /**
  * CSS `background` for a server cover: the uploaded picture (or the default cover of the game) with a dark
  * gradient on top (white text stays readable), the game gradient underneath as a fallback while the picture loads.
@@ -52684,6 +53089,7 @@ const en: Record<keyof typeof ru, string> = {
   'nav.servers': 'Servers',
   'nav.news': 'News',
   'nav.status': 'Status',
+  'nav.community': 'Community',
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'nav.skip': 'Skip to content',
@@ -53418,6 +53824,7 @@ const errorsEn: Record<string, string> = {
 
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Server not found',
+  player_not_found: 'Player not found',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
@@ -53543,6 +53950,7 @@ const ru = {
   'nav.servers': 'Серверы',
   'nav.news': 'Новости',
   'nav.status': 'Статус',
+  'nav.community': 'Сообщество',
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'nav.skip': 'Перейти к содержимому',
@@ -55673,6 +56081,121 @@ export default function CardsPage() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Community.tsx" << '__COREGSM_EOF__'
+/**
+ * «Сообщество»: the public showcase. Players online now and the record, how many people play, when the community
+ * plays, the live feed of arrivals, the most active players of the week and the month, and the servers by players.
+ */
+import { useState } from 'react';
+import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
+import { AnimatedNumber, GameAvatar, PageHead, fmtDateTime, plural } from '../ui';
+import '../styles/analytics.css';
+import '../styles/community.css';
+
+const IconPeople = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
+  </svg>
+);
+
+export default function CommunityPage() {
+  const c = useCommunity();
+  const [period, setPeriod] = useState<'week' | 'month'>('week');
+  if (!c) {
+    return (
+      <div className="space-y-5" aria-busy="true">
+        <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где" />
+        <div className="tile skeleton h-56" />
+        <div className="tile skeleton h-72" />
+      </div>
+    );
+  }
+  const top = c.top[period];
+  const maxH = Math.max(1, ...top.map((p) => p.hours));
+  const maxP = Math.max(1, ...c.servers.map((s) => s.players));
+  return (
+    <div className="space-y-5">
+      <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где: живые цифры всех серверов" />
+
+      <section className="tile cm-hero fade-in">
+        <div className="cm-hero-main">
+          <div className="cm-k">Сейчас в игре</div>
+          <div className="flex items-baseline gap-3">
+            <AnimatedNumber value={c.now.players} className="cm-hero-n" pulse />
+            <span className="text-lg font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])} на {c.now.online} {plural(c.now.online, ['сервере', 'серверах', 'серверах'])}</span>
+          </div>
+          {c.record && <p className="cm-sub">Рекорд за 30 дней: <b className="text-ink">{c.record.players}</b>, {fmtDateTime(c.record.at)}</p>}
+        </div>
+        <dl className="cm-hero-stats">
+          <div><dt>За сутки</dt><dd>{c.players.day}</dd></div>
+          <div><dt>За неделю</dt><dd>{c.players.week}</dd></div>
+          <div><dt>За месяц</dt><dd>{c.players.month}</dd></div>
+          <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
+        </dl>
+      </section>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
+        <MiniHeat cells={c.heatmap.cells} big />
+        <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам.</p>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="tile p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-extrabold">Самые активные</h2>
+            <div className="seg" role="group" aria-label="Период">
+              <button type="button" className="seg-item" aria-pressed={period === 'week'} onClick={() => setPeriod('week')}>Неделя</button>
+              <button type="button" className="seg-item" aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>Месяц</button>
+            </div>
+          </div>
+          {top.length === 0 ? <p className="cm-sub">Пока никто не играл.</p> : (
+            <ol className="an-top">
+              {top.map((p, i) => (
+                <li key={p.name}>
+                  <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <a href={`/player/${encodeURIComponent(p.name)}`} className="block truncate font-extrabold hover:text-link">{p.name}</a>
+                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+                    <span className="block text-xs font-bold text-mute">{p.servers} {plural(p.servers, ['сервер', 'сервера', 'серверов'])}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">Живая лента</h2>
+          {c.feed.length ? <ul className="cm-feed-list">{c.feed.map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
+        </section>
+      </div>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Где играют сейчас</h2>
+        <ul className="grid gap-2.5">
+          {c.servers.map((s) => (
+            <li key={s.id}>
+              <a href={`/servers/${s.id}`} className="cm-srv">
+                <GameAvatar game={s.game} size={36} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-extrabold">{s.name}</span>
+                  <span className="cm-srv-bar"><span style={{ width: `${(s.players / maxP) * 100}%` }} /></span>
+                </span>
+                <span className="shrink-0 text-right font-extrabold tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : <span className="text-bad">не в сети</span>}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Discord.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
@@ -57785,6 +58308,130 @@ export default function NewsFeed({ sub = '' }: { sub?: string }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Player.tsx" << '__COREGSM_EOF__'
+/**
+ * The card of a player by the nick the game servers report (/player/<nick>): where they play, how much, at what
+ * time of day, the streak of days in a row and the latest visits. Works without signing in on a public panel.
+ */
+import { useEffect, useState } from 'react';
+import { api, ApiError } from '../api';
+import { rankById } from '../vrisingRanks';
+import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural } from '../ui';
+import '../styles/community.css';
+
+interface PlayerCard {
+  name: string;
+  firstSeen: number;
+  lastSeen: number | null;
+  online: boolean;
+  hours: number;
+  visits: number;
+  days: number;
+  streak: number;
+  usualHour: number | null;
+  byHour: number[];
+  servers: { id: number; name: string; game: string; hours: number; visits: number; last: number }[];
+  recent: { serverId: number; serverName: string; from: number; to: number | null }[];
+  rankId?: string;
+}
+
+const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
+
+export default function PlayerPage({ name }: { name: string }) {
+  const [p, setP] = useState<PlayerCard | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setP(null);
+    setMissing(false);
+    api<PlayerCard>(`/players/${encodeURIComponent(name)}`)
+      .then(setP)
+      .catch((e: Error) => (e instanceof ApiError && e.status === 404 ? setMissing(true) : setError(e.message)));
+  }, [name]);
+
+  if (missing) return <Empty title="Такого игрока не видели" text={`Ник «${name}» не появлялся на серверах за последние 90 дней.`}><a href="/community" className="btn mt-2">К сообществу</a></Empty>;
+  if (error) return <ErrorLine text={error} />;
+  if (!p) return <div className="space-y-4" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-60" /></div>;
+
+  const rank = p.rankId ? rankById(p.rankId) : null;
+  const maxH = Math.max(1, ...p.byHour);
+  const maxS = Math.max(1, ...p.servers.map((s) => s.hours));
+  return (
+    <div className="space-y-5">
+      <a href="/community" className="ml-1 inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Сообщество</a>
+      <section className="tile pl-hero fade-in">
+        <span className="pl-ava" aria-hidden>{p.name.slice(0, 1).toUpperCase()}</span>
+        <div className="min-w-0 flex-1">
+          <h1 className="text-3xl font-black leading-tight">{p.name}</h1>
+          <p className="mt-1 flex flex-wrap items-center gap-2 font-bold text-mute">
+            {p.online ? <span className="cm-live">сейчас в игре</span> : p.lastSeen ? <span>был {ago(p.lastSeen)}</span> : null}
+            {rank && <span className="pl-rank">{rank.name}</span>}
+            <span>впервые {fmtDateTime(p.firstSeen)}</span>
+          </p>
+        </div>
+        <dl className="pl-stats">
+          <div><dt>Часов</dt><dd>{p.hours}</dd></div>
+          <div><dt>Визитов</dt><dd>{p.visits}</dd></div>
+          <div><dt>Дней в игре</dt><dd>{p.days}</dd></div>
+          <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>Подряд</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{p.streak} {plural(p.streak, ['день', 'дня', 'дней'])}</dd></div>
+        </dl>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-1 text-lg font-extrabold">Когда играет</h2>
+          <p className="mb-3 text-sm font-semibold text-mute">{p.usualHour != null ? `Чаще всего ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : 'Пока мало данных'}</p>
+          <div className="pl-hours" role="img" aria-label="Часы в игре по времени суток">
+            {p.byHour.map((v, h) => (
+              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${v} ч`}>
+                <i style={{ height: `${(v / maxH) * 100}%` }} />
+                <b>{h % 3 === 0 ? h : ''}</b>
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">Где играет</h2>
+          <ul className="grid gap-2.5">
+            {p.servers.map((s) => (
+              <li key={s.id}>
+                <a href={`/servers/${s.id}`} className="cm-srv">
+                  <GameAvatar game={s.game} size={34} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-extrabold">{s.name}</span>
+                    <span className="cm-srv-bar"><span style={{ width: `${(s.hours / maxS) * 100}%` }} /></span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className="block font-extrabold tabular-nums">{s.hours} ч</span>
+                    <span className="block text-xs font-bold text-mute">{s.visits} {plural(s.visits, ['визит', 'визита', 'визитов'])}</span>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Последние визиты</h2>
+        <ul className="divide-y divide-line">
+          {p.recent.map((v) => (
+            <li key={`${v.serverId}-${v.from}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <a href={`/servers/${v.serverId}`} className="min-w-0 flex-1 truncate font-bold hover:text-link">{v.serverName}</a>
+              <span className="text-sm font-semibold text-mute">
+                {fmtDateTime(v.from)} – {v.to ? fmtTime(v.to) : 'сейчас'}
+                {v.to ? ` · ${Math.max(1, Math.round((v.to - v.from) / 60_000))} мин` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Profile.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
@@ -58617,6 +59264,8 @@ import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
+import { useCoverAccent } from '../components/server/coverAccent';
+import { coverUrlOf } from '../cover';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
@@ -58788,6 +59437,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
 
+  // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
+  const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
+
   if (missing) return <NotFound kind="server" />;
 
   const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
@@ -58808,7 +59460,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   }
 
   const { server: s, stats, events, points } = data;
-  const accent = gameAccent(s.game);
+  const accent = coverAccentOrGame;
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
@@ -59322,6 +59974,7 @@ import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
+import CommunityBento from '../components/servers/CommunityBento';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -59523,6 +60176,8 @@ function ServerList() {
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
       )}
 
+      {loaded && servers.length > 0 && !selOn && <CommunityBento />}
+
       {servers.length > 0 && (
         <div className="srv-bar">
           {servers.length > 1 ? (
@@ -59719,8 +60374,9 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
   const r = reactionOf(rx, s.id);
   return (
     <article
-      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''}`}
-      style={stagger(idx)}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
+      // the fuller the server, the stronger its glow in the game's colour
+      style={{ ...stagger(idx), ['--gc' as string]: gameColor(s.game), ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
@@ -61308,6 +61964,24 @@ export function BrandCard() {
       actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
       data-tour="brand"
     >
+      <div>
+        <label htmlFor="brand-theme" className="label">Тема для посетителей</label>
+        <select
+          id="brand-theme"
+          className="input"
+          value={b.theme ?? 'dark'}
+          onChange={(e) => {
+            void api('/branding/theme', 'PUT', { theme: e.target.value })
+              .then(() => { toast('Тема по умолчанию сохранена'); return reload(); })
+              .catch((err: Error) => toast(err.message, 'err'));
+          }}
+        >
+          <option value="dark">Тёмная (обложки игр смотрятся лучше всего)</option>
+          <option value="light">Светлая</option>
+          <option value="auto">Как в системе посетителя</option>
+        </select>
+        <p className="mt-1 text-sm font-semibold text-mute">Действует для тех, кто сам не выбирал тему кнопкой в шапке.</p>
+      </div>
       <TextField
         id="brand-name"
         label="Название"
@@ -62465,6 +63139,82 @@ html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-d
 @media (max-width: 767px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/community.css" << '__COREGSM_EOF__'
+/* community: the bento at the top of the main page and the «Сообщество» page */
+.cm-bento { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.25fr) minmax(0, 1fr); }
+@media (max-width: 1099px) { .cm-bento { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .cm-feed { grid-column: 1 / -1; } }
+@media (max-width: 699px) { .cm-bento { grid-template-columns: minmax(0, 1fr); } }
+.cm-bento > .tile { padding: 16px 18px; min-width: 0; }
+.cm-k { font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); margin-bottom: 8px; }
+.cm-sub { margin-top: 8px; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+
+.cm-now { position: relative; overflow: hidden; }
+.cm-now::before {
+  content: ''; position: absolute; inset: -40% -30% auto auto; width: 70%; aspect-ratio: 1; border-radius: 9999px; pointer-events: none;
+  background: radial-gradient(circle, rgb(var(--brand) / .18), transparent 70%);
+}
+.cm-now.is-record::before { background: radial-gradient(circle, rgb(var(--warn) / .32), transparent 70%); }
+.cm-big { font-size: 64px; font-weight: 800; line-height: .95; letter-spacing: -0.045em; }
+.cm-meter { margin-top: 10px; height: 8px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.cm-meter > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); transition: width .8s cubic-bezier(.2, .8, .2, 1); }
+.cm-now.is-record .cm-meter > span { background: linear-gradient(90deg, #f6b73c, #ff7a59); }
+.cm-mini { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cm-mini > div { border-radius: 14px; background: rgb(var(--soft)); padding: 6px 10px; }
+.cm-mini dt { font-size: 11px; font-weight: 800; color: rgb(var(--mute)); line-height: 1.2; }
+.cm-mini dd { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+.cm-heat { display: grid; grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
+.cm-heat.is-big { gap: 3px; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); }
+.cm-heat-d { font-size: 11px; font-weight: 800; color: rgb(var(--mute)); }
+.cm-heat-h { font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+.cm-heat-c { height: 15px; border-radius: 3px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
+.cm-heat.is-big .cm-heat-c { height: clamp(14px, 2.4vw, 26px); border-radius: 5px; }
+
+.cm-feed-list { margin-top: 2px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.cm-feed-i { display: flex; align-items: center; gap: 10px; }
+.cm-live, .cm-new { border-radius: 9999px; padding: 0 7px; font-size: 11px; font-weight: 800; }
+.cm-live { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.cm-new { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
+.cm-feed-i { animation: cm-in .5s cubic-bezier(.2, .8, .2, 1) both; }
+.cm-feed-i:nth-child(2) { animation-delay: .05s; } .cm-feed-i:nth-child(3) { animation-delay: .1s; } .cm-feed-i:nth-child(4) { animation-delay: .15s; } .cm-feed-i:nth-child(5) { animation-delay: .2s; }
+@keyframes cm-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .cm-feed-i { animation: none; } .cm-meter > span { transition: none; } }
+html[data-motion='reduce'] .cm-feed-i { animation: none; }
+
+/* «Сообщество» page */
+.cm-hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 18px; padding: 22px 24px; position: relative; overflow: hidden;
+  background: radial-gradient(120% 140% at 0% 0%, rgb(var(--brand) / .14), transparent 55%), rgb(var(--card)); }
+.cm-hero-n { font-size: 84px; font-weight: 800; line-height: .9; letter-spacing: -0.05em; }
+@media (max-width: 639px) { .cm-hero-n { font-size: 60px; } }
+.cm-hero-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 639px) { .cm-hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; } }
+.cm-hero-stats > div { min-width: 6.5rem; border-radius: 16px; background: rgb(var(--soft)); padding: 8px 12px; }
+.cm-hero-stats dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.cm-hero-stats dd { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.cm-srv { display: flex; align-items: center; gap: 12px; border-radius: 16px; padding: 8px 10px; transition: background-color .15s ease; }
+.cm-srv:hover { background: rgb(var(--soft)); }
+.cm-srv-bar { display: block; margin-top: 5px; height: 6px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.cm-srv-bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); }
+
+/* player card */
+.pl-hero { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 20px; padding: 22px 24px;
+  background: radial-gradient(120% 160% at 100% 0%, rgb(var(--link) / .14), transparent 55%), rgb(var(--card)); }
+.pl-ava { display: grid; place-items: center; width: 72px; height: 72px; flex: none; border-radius: 22px; font-size: 32px; font-weight: 900; color: #fff;
+  background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--link))); box-shadow: 0 12px 30px -12px rgb(var(--brand) / .7); }
+.pl-rank { border-radius: 9999px; padding: 1px 10px; font-size: 12.5px; background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+.pl-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 639px) { .pl-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; } }
+.pl-stats > div { min-width: 6rem; border-radius: 16px; background: rgb(var(--soft)); padding: 8px 12px; }
+.pl-stats > div.is-hot { background: linear-gradient(135deg, #ffe7c2, #ffd0b5); color: #5a2a00; }
+.pl-stats dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.pl-stats .is-hot dt { color: inherit; opacity: .8; }
+.pl-stats dd { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pl-hours { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
+.pl-hour { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
+.pl-hour i { display: block; width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, rgb(var(--link)), rgb(var(--brand))); }
+.pl-hour b { height: 14px; font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
 /* detail: styles owned by the server page workstream (see main.tsx)
    Rules: no transform transitions on blocks, no infinite animations, entrance = fill-mode backwards,
@@ -63300,6 +64050,12 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 /* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
 .srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
 .srv-tile { min-width: 0; }
+/* a full server glows in its game's colour (--fill 0..1); a server that is down steps back */
+.srv-tile { box-shadow: var(--shadow-2), 0 14px 34px -18px color-mix(in srgb, var(--gc, transparent) calc(var(--fill, 0) * 90%), transparent); }
+.srv-tile.is-busy { box-shadow: var(--shadow-2), 0 0 0 2px color-mix(in srgb, var(--gc) 55%, transparent), 0 16px 40px -14px color-mix(in srgb, var(--gc) 70%, transparent); }
+.srv-tile.is-down { filter: saturate(.55); opacity: .9; }
+.srv-tile.is-down:hover { filter: none; opacity: 1; }
+.tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
 
 /* news card in «Что нового»: the title and the foot are links, the text carries live links */
 .srv-new-news-title { font-weight: 800; color: rgb(var(--ink)); }
@@ -63473,7 +64229,7 @@ export { useTween, AnimatedNumber, Burst } from './ui/motion';
 export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
 export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
-export { ThemeToggle } from './ui/theme';
+export { ThemeToggle, applyDefaultTheme } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
 export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
@@ -64704,7 +65460,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/theme.tsx" << '__COREGSM_EOF__'
 /** Light / dark / auto theme. */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { t } from '../i18n';
 import { IconAuto, IconMoon, IconSun } from '../icons';
 import { revealTransition } from '../useMotion';
@@ -64712,28 +65468,53 @@ import { revealTransition } from '../useMotion';
 // ---------- theme ----------
 type Theme = 'auto' | 'light' | 'dark';
 const THEME_KEY = 'coregsm_theme';
-const readTheme = (): Theme => {
+// the community's default, remembered so that the inline script of index.html can apply it before the first paint
+const DEFAULT_KEY = 'coregsm_theme_default';
+const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark';
+const read = (key: string): Theme | null => {
   try {
-    const t = localStorage.getItem(THEME_KEY);
-    return t === 'light' || t === 'dark' ? t : 'auto';
+    const t = localStorage.getItem(key);
+    return valid(t) ? t : null;
   } catch {
-    return 'auto';
+    return null;
   }
 };
-function applyTheme(t: Theme) {
+/** the visitor's own choice, else the community's default */
+const readTheme = (): Theme => read(THEME_KEY) ?? read(DEFAULT_KEY) ?? 'dark';
+const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', t);
+};
+function applyTheme(t: Theme) {
+  paint(t);
   try {
-    if (t === 'auto') localStorage.removeItem(THEME_KEY);
-    else localStorage.setItem(THEME_KEY, t);
+    // 'auto' is stored too: it is a choice, and the community default must not override it
+    localStorage.setItem(THEME_KEY, t);
   } catch {
     /* private mode: the theme just is not remembered */
   }
 }
+const subs = new Set<(t: Theme) => void>();
+
+/** the administrator's default theme: applies to everyone who has not picked a theme in the header */
+export function applyDefaultTheme(def: Theme) {
+  try {
+    localStorage.setItem(DEFAULT_KEY, def);
+  } catch {
+    /* not remembered: applied for this visit only */
+  }
+  if (read(THEME_KEY)) return;
+  paint(def);
+  subs.forEach((f) => f(def));
+}
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(readTheme);
+  useEffect(() => {
+    subs.add(setTheme);
+    return () => { subs.delete(setTheme); };
+  }, []);
   const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
   const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') };
   return (

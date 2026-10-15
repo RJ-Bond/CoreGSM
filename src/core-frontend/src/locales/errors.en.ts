@@ -96,6 +96,7 @@ const errorsEn: Record<string, string> = {
 
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Server not found',
+  player_not_found: 'Player not found',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',

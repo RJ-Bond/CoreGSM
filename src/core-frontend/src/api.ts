@@ -623,6 +623,8 @@ export interface Brand {
   color2?: string;
   /** id of the chosen theme preset ('' = custom colour) */
   preset?: string;
+  /** the theme of visitors who have not picked one (set by the administrator) */
+  theme?: 'auto' | 'light' | 'dark';
   hasLogo: boolean;
   logoV: number;
 }
