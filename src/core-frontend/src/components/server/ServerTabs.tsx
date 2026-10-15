@@ -6,6 +6,7 @@ export const TAB_LIST: { id: TabId; label: string }[] = [
   { id: '', label: 'Обзор' },
   { id: 'players', label: 'Игроки' },
   { id: 'history', label: 'История' },
+  { id: 'stats', label: 'Аналитика' },
   { id: 'events', label: 'События' },
   { id: 'connect', label: 'Подключение' },
 ];

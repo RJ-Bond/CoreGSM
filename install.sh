@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6aae4b9550a3"
+COREGSM_BUILD="f679a7079559"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8024,6 +8024,7 @@ import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
 import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
+import { router as analyticsRouter } from './routes/analytics.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8058,6 +8059,7 @@ app.use(updatesRouter);
 app.use(usersRouter);
 app.use(discordLoginRouter);
 app.use(serversRouter);
+app.use(analyticsRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -11663,6 +11665,213 @@ router.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
   db.prepare('UPDATE users SET discord_id = NULL, discord_name = NULL, discord_avatar = NULL WHERE id = ?').run(req.user!.id);
   logAccount(req, req.user!.id, 'discord_unlinked');
   res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/analytics.ts" << '__COREGSM_EOF__'
+/**
+ * Player analytics of one server, from what the poller already stores: the poll history (30 days) and the visits of
+ * players (player_sessions, 90 days). Days, hours and weekdays are those of the panel's time zone.
+ *
+ * GET /api/servers/:id/analytics?days=7|30|90
+ *   heatmap   average players per weekday x hour (Monday first), the busiest and the quietest hour
+ *   summary   unique players (24 h / 7 d / 30 d), new players, visits, average and median visit, player-hours
+ *   daily     per day: unique players, new ones, player-hours, peak
+ *   sessions  visit lengths in six buckets
+ *   cohorts   weekly retention: of the players first seen in a week, the share that came back in the weeks after
+ *   top       the ten players with the most time on the server in the period
+ */
+import express from 'express';
+import { viewer } from '../auth.js';
+import { db, getSetting } from '../db.js';
+import { vrRankIdFor } from '../profile.js';
+
+export const router = express.Router();
+
+const DAY = 86_400_000;
+const WEEK = 7 * DAY;
+export const SESSION_BUCKETS = [
+  { key: 'lt15', label: 'до 15 мин', max: 15 },
+  { key: 'lt30', label: '15–30 мин', max: 30 },
+  { key: 'lt60', label: '30–60 мин', max: 60 },
+  { key: 'lt120', label: '1–2 ч', max: 120 },
+  { key: 'lt240', label: '2–4 ч', max: 240 },
+  { key: 'more', label: '4 ч и больше', max: Infinity },
+] as const;
+
+const timeZone = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+const fmtCache = new Map<string, Intl.DateTimeFormat>();
+/** weekday (0 = Monday), hour and the day key "YYYY-MM-DD" of a moment in the panel's time zone */
+export function localParts(ts: number, tz: string): { dow: number; hour: number; day: string } {
+  let f = fmtCache.get(tz);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
+    } catch {
+      f = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' });
+    }
+    fmtCache.set(tz, f);
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday);
+  return { dow: Math.max(0, dow), hour: Number(p.hour) % 24, day: `${p.year}-${p.month}-${p.day}` };
+}
+
+const median = (xs: number[]) => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+const round1 = (v: number) => Math.round(v * 10) / 10;
+
+interface Visit { name: string; key: string; joined: number; left: number }
+
+export function analyticsFor(serverId: number, days: number, now = Date.now()) {
+  const tz = timeZone();
+  const since = now - days * DAY;
+
+  // ---- weekday x hour: the average of hourly averages (history is kept for 30 days) ----
+  const heatSince = now - Math.min(days, 30) * DAY;
+  const hourly = db
+    .prepare('SELECT ts / 3600000 AS h, AVG(players) AS a, MAX(players) AS m FROM history WHERE server_id = ? AND ts > ? GROUP BY h')
+    .all(serverId, heatSince) as { h: number; a: number; m: number }[];
+  const sum = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const cnt = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  const peak = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  for (const r of hourly) {
+    const { dow, hour } = localParts(r.h * 3600_000, tz);
+    sum[dow][hour] += r.a;
+    cnt[dow][hour] += 1;
+    peak[dow][hour] = Math.max(peak[dow][hour], r.m);
+  }
+  const cells = sum.map((row, d) => row.map((v, h) => (cnt[d][h] ? round1(v / cnt[d][h]) : null)));
+  let busiest: { dow: number; hour: number; avg: number } | null = null;
+  let quietest: { dow: number; hour: number; avg: number } | null = null;
+  cells.forEach((row, dow) => row.forEach((avg, hour) => {
+    if (avg == null) return;
+    if (!busiest || avg > busiest.avg) busiest = { dow, hour, avg };
+    if (!quietest || avg < quietest.avg) quietest = { dow, hour, avg };
+  }));
+  // the hour of the day with the fewest players on average over the week: the suggested restart time
+  const byHour = Array.from({ length: 24 }, (_, h) => {
+    const xs = cells.map((row) => row[h]).filter((v): v is number => v != null);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  });
+  let restartHour: number | null = null;
+  byHour.forEach((v, h) => { if (v != null && (restartHour == null || v < (byHour[restartHour] ?? Infinity))) restartHour = h; });
+
+  // ---- visits ----
+  const firstSeen = new Map(
+    (db.prepare('SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions WHERE server_id = ? GROUP BY k').all(serverId) as { k: string; t: number }[]).map((r) => [r.k, r.t]),
+  );
+  // the cohorts look six weeks back whatever the period
+  const from = Math.min(since, now - 6 * WEEK);
+  const visits: Visit[] = (
+    db.prepare('SELECT name, joined_at, COALESCE(left_at, ?) AS left_at FROM player_sessions WHERE server_id = ? AND COALESCE(left_at, ?) > ? ORDER BY joined_at')
+      .all(now, serverId, now, from) as { name: string; joined_at: number; left_at: number }[]
+  ).map((r) => ({ name: r.name, key: r.name.toLowerCase(), joined: r.joined_at, left: Math.max(r.joined_at, r.left_at) }));
+  const inPeriod = visits.filter((v) => v.left > since);
+
+  const uniqueSince = (t: number) => new Set(visits.filter((v) => v.left > t).map((v) => v.key)).size;
+  const minutes = inPeriod.map((v) => (Math.min(v.left, now) - Math.max(v.joined, since)) / 60_000).filter((m) => m > 0);
+  const newPlayers = new Set(inPeriod.filter((v) => (firstSeen.get(v.key) ?? 0) > since).map((v) => v.key));
+  const players = new Set(inPeriod.map((v) => v.key));
+
+  // ---- per day ----
+  const dayKeys: string[] = [];
+  for (let t = now - (days - 1) * DAY; t <= now; t += DAY) dayKeys.push(localParts(t, tz).day);
+  const dayIdx = new Map(dayKeys.map((d, i) => [d, i]));
+  const daily = dayKeys.map((day) => ({ day, players: new Set<string>(), fresh: new Set<string>(), hours: 0, peak: 0 }));
+  for (const v of inPeriod) {
+    const i = dayIdx.get(localParts(Math.max(v.joined, since), tz).day);
+    if (i == null) continue;
+    daily[i].players.add(v.key);
+    const fs = firstSeen.get(v.key);
+    if (fs != null && localParts(fs, tz).day === daily[i].day) daily[i].fresh.add(v.key);
+    daily[i].hours += (Math.min(v.left, now) - Math.max(v.joined, since)) / 3600_000;
+  }
+  for (const r of db.prepare('SELECT ts, players FROM history WHERE server_id = ? AND ts > ?').iterate(serverId, since) as Iterable<{ ts: number; players: number }>) {
+    const i = dayIdx.get(localParts(r.ts, tz).day);
+    if (i != null && r.players > daily[i].peak) daily[i].peak = r.players;
+  }
+
+  // ---- visit lengths ----
+  const sessions = SESSION_BUCKETS.map((b) => ({ key: b.key, label: b.label, count: 0 }));
+  for (const m of minutes) sessions[SESSION_BUCKETS.findIndex((b) => m < b.max)].count++;
+
+  // ---- weekly retention: cohort c = players first seen c weeks ago ----
+  const weekOf = (t: number) => Math.floor((now - t) / WEEK);
+  const activeWeeks = new Map<string, Set<number>>();
+  for (const v of visits) {
+    const s = activeWeeks.get(v.key) ?? new Set<number>();
+    for (let w = weekOf(v.left); w <= weekOf(v.joined); w++) s.add(w);
+    activeWeeks.set(v.key, s);
+  }
+  const cohorts = [5, 4, 3, 2, 1, 0].map((c) => {
+    const members = [...firstSeen].filter(([, t]) => weekOf(t) === c).map(([k]) => k);
+    const rates: number[] = [];
+    for (let k = 1; k <= c; k++) {
+      const back = members.filter((m) => activeWeeks.get(m)?.has(c - k)).length;
+      rates.push(members.length ? Math.round((back / members.length) * 100) : 0);
+    }
+    return { start: now - (c + 1) * WEEK, size: members.length, rates };
+  });
+
+  // ---- top players ----
+  const per = new Map<string, { name: string; minutes: number; visits: number; last: number }>();
+  for (const v of inPeriod) {
+    const p = per.get(v.key) ?? { name: v.name, minutes: 0, visits: 0, last: 0 };
+    p.minutes += (Math.min(v.left, now) - Math.max(v.joined, since)) / 60_000;
+    p.visits++;
+    if (v.left >= p.last) { p.last = v.left; p.name = v.name; }
+    per.set(v.key, p);
+  }
+  const game = (db.prepare('SELECT game FROM servers WHERE id = ?').get(serverId) as { game: string } | undefined)?.game;
+  const top = [...per.values()]
+    .sort((a, b) => b.minutes - a.minutes)
+    .slice(0, 10)
+    .map((p) => ({ name: p.name, hours: round1(p.minutes / 60), visits: p.visits, lastSeen: p.last >= now - 60_000 ? null : p.last, ...(game === 'vrising' ? { rankId: vrRankIdFor(p.name) } : {}) }));
+
+  return {
+    days,
+    timeZone: tz,
+    heatmap: { days: Math.min(days, 30), cells, peak, busiest, quietest, restartHour },
+    summary: {
+      players: players.size,
+      dau: uniqueSince(now - DAY),
+      wau: uniqueSince(now - WEEK),
+      mau: uniqueSince(now - 30 * DAY),
+      newPlayers: newPlayers.size,
+      returning: players.size - newPlayers.size,
+      visits: inPeriod.length,
+      avgMinutes: minutes.length ? Math.round(minutes.reduce((a, b) => a + b, 0) / minutes.length) : null,
+      medianMinutes: minutes.length ? Math.round(median(minutes)!) : null,
+      playerHours: Math.round(minutes.reduce((a, b) => a + b, 0) / 60),
+    },
+    daily: daily.map((d) => ({ day: d.day, players: d.players.size, newPlayers: d.fresh.size, hours: round1(d.hours), peak: d.peak })),
+    sessions,
+    cohorts,
+    top,
+  };
+}
+
+// one computation per server and period per minute: the page polls and several people may look at once
+const cache = new Map<string, { at: number; v: ReturnType<typeof analyticsFor> }>();
+
+router.get('/api/servers/:id(\\d+)/analytics', viewer, (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const asked = Number(req.query.days);
+  const days = asked === 7 || asked === 90 ? asked : 30;
+  const key = `${id}|${days}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return res.json(hit.v);
+  const v = analyticsFor(id, days);
+  if (cache.size > 200) cache.clear();
+  cache.set(key, { at: Date.now(), v });
+  res.json(v);
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
@@ -45884,6 +46093,285 @@ export const isArray = (v: unknown) => Array.isArray(v);
 export const isObject = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/AnalyticsTab.tsx" << '__COREGSM_EOF__'
+/**
+ * «Аналитика» of a server: who plays and when. Everything comes from GET /api/servers/:id/analytics (the poll history
+ * and the players' visits the panel already keeps). The charts are plain SVG/CSS in the colour of the game.
+ */
+import { useEffect, useMemo, useState } from 'react';
+import '../../styles/analytics.css';
+import { api } from '../../api';
+import { rankById } from '../../vrisingRanks';
+import { ago, ErrorLine, fmtDate, plural } from '../../ui';
+
+interface Analytics {
+  days: number;
+  timeZone: string;
+  heatmap: {
+    days: number;
+    cells: (number | null)[][];
+    peak: number[][];
+    busiest: { dow: number; hour: number; avg: number } | null;
+    quietest: { dow: number; hour: number; avg: number } | null;
+    restartHour: number | null;
+  };
+  summary: {
+    players: number; dau: number; wau: number; mau: number; newPlayers: number; returning: number; visits: number;
+    avgMinutes: number | null; medianMinutes: number | null; playerHours: number;
+  };
+  daily: { day: string; players: number; newPlayers: number; hours: number; peak: number }[];
+  sessions: { key: string; label: string; count: number }[];
+  cohorts: { start: number; size: number; rates: number[] }[];
+  top: { name: string; hours: number; visits: number; lastSeen: number | null; rankId?: string }[];
+}
+
+const DOW = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const DOW_LONG = ['в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу', 'в субботу', 'в воскресенье'];
+const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
+const minutesText = (m: number | null) => (m == null ? '–' : m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60 ? `${m % 60} мин` : ''}`.trim());
+const dayLabel = (d: string) => {
+  const [, m, day] = d.split('-');
+  return `${Number(day)}.${m}`;
+};
+
+function PeriodSwitch({ days, onChange }: { days: number; onChange: (d: number) => void }) {
+  return (
+    <div className="seg" role="group" aria-label="Период">
+      {[7, 30, 90].map((d) => (
+        <button key={d} type="button" className="seg-item" aria-pressed={days === d} onClick={() => onChange(d)}>{d} дн</button>
+      ))}
+    </div>
+  );
+}
+
+function Kpi({ k, v, hint }: { k: string; v: string | number; hint?: string }) {
+  return (
+    <div className="an-kpi">
+      <div className="an-kpi-k">{k}</div>
+      <div className="an-kpi-v">{v}</div>
+      {hint && <div className="an-kpi-h">{hint}</div>}
+    </div>
+  );
+}
+
+/** weekday x hour: the darker the cell, the more players on average */
+function Heatmap({ h }: { h: Analytics['heatmap'] }) {
+  const [hover, setHover] = useState<{ dow: number; hour: number } | null>(null);
+  const max = Math.max(1, ...h.cells.flat().map((v) => v ?? 0));
+  const cur = hover ? { avg: h.cells[hover.dow][hover.hour], peak: h.peak[hover.dow][hover.hour] } : null;
+  return (
+    <div>
+      <div className="an-heat" role="img" aria-label={h.busiest ? `Больше всего игроков ${DOW_LONG[h.busiest.dow]} в ${hh(h.busiest.hour)}` : 'Пока мало данных'} onMouseLeave={() => setHover(null)}>
+        <span />
+        {Array.from({ length: 24 }, (_, i) => <span key={i} className="an-heat-hour">{i % 3 === 0 ? i : ''}</span>)}
+        {h.cells.map((row, dow) => (
+          <div key={dow} className="contents">
+            <span className="an-heat-dow">{DOW[dow]}</span>
+            {row.map((v, hour) => (
+              <span
+                key={hour}
+                className={`an-heat-cell ${v == null ? 'is-empty' : ''} ${hover?.dow === dow && hover.hour === hour ? 'is-hover' : ''}`}
+                style={v == null ? undefined : { ['--a' as string]: (0.1 + 0.9 * (v / max)).toFixed(3) }}
+                onMouseEnter={() => setHover({ dow, hour })}
+                title={v == null ? 'нет данных' : `${DOW[dow]} ${hh(hour)}: в среднем ${v}, максимум ${h.peak[dow][hour]}`}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="an-heat-foot">
+        <span className="an-heat-scale" aria-hidden>
+          меньше <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> больше
+        </span>
+        <span className="font-bold text-ink" aria-live="polite">
+          {hover && cur ? (cur.avg == null ? `${DOW[hover.dow]} ${hh(hover.hour)}: нет данных` : `${DOW[hover.dow]} ${hh(hover.hour)}: в среднем ${cur.avg}, максимум ${cur.peak}`) : `средние за ${h.days} ${plural(h.days, ['день', 'дня', 'дней'])}`}
+        </span>
+      </div>
+      <div className="an-facts">
+        {h.busiest && <p><b>Пик</b> {DOW_LONG[h.busiest.dow]} в {hh(h.busiest.hour)}: в среднем {h.busiest.avg} {plural(Math.round(h.busiest.avg), ['игрок', 'игрока', 'игроков'])}</p>}
+        {h.quietest && <p><b>Тише всего</b> {DOW_LONG[h.quietest.dow]} в {hh(h.quietest.hour)}</p>}
+        {h.restartHour != null && <p><b>Рестарт</b> лучше всего в {hh(h.restartHour)}: в это время меньше всего игроков в любой день</p>}
+      </div>
+    </div>
+  );
+}
+
+/** unique players per day: returning (accent) and new (lighter) stacked */
+function DailyBars({ daily }: { daily: Analytics['daily'] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const max = Math.max(1, ...daily.map((d) => d.players));
+  const d = hover != null ? daily[hover] : null;
+  const step = Math.ceil(daily.length / 8);
+  return (
+    <div>
+      <div className="an-bars" role="img" aria-label={`Уникальных игроков в день: до ${max}`} onMouseLeave={() => setHover(null)}>
+        {daily.map((x, i) => (
+          <div key={x.day} className={`an-bar ${hover === i ? 'is-hover' : ''}`} onMouseEnter={() => setHover(i)} title={`${dayLabel(x.day)}: ${x.players} игроков, новых ${x.newPlayers}`}>
+            <span className="an-bar-new" style={{ height: `${(x.newPlayers / max) * 100}%` }} />
+            <span className="an-bar-old" style={{ height: `${((x.players - x.newPlayers) / max) * 100}%` }} />
+          </div>
+        ))}
+      </div>
+      <div className="an-bars-axis" aria-hidden>
+        {/* every step-th day; the last one only when it does not run into the label before it */}
+        {daily.map((x, i) => <span key={x.day}>{i % step === 0 || (i === daily.length - 1 && i % step >= step / 2) ? dayLabel(x.day) : ''}</span>)}
+      </div>
+      <div className="an-heat-foot">
+        <span className="flex flex-wrap gap-3">
+          <span className="an-legend"><i className="an-bar-old" />вернулись</span>
+          <span className="an-legend"><i className="an-bar-new" />новые</span>
+        </span>
+        <span className="font-bold text-ink" aria-live="polite">
+          {d ? `${dayLabel(d.day)}: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}, новых ${d.newPlayers}, ${d.hours} ч в игре, пик ${d.peak}` : 'наведите на столбец'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function SessionBars({ sessions }: { sessions: Analytics['sessions'] }) {
+  const total = sessions.reduce((a, b) => a + b.count, 0);
+  const max = Math.max(1, ...sessions.map((s) => s.count));
+  return (
+    <ul className="space-y-2">
+      {sessions.map((s) => (
+        <li key={s.key} className="an-hbar">
+          <span className="an-hbar-k">{s.label}</span>
+          <span className="an-hbar-track"><span style={{ width: `${(s.count / max) * 100}%` }} /></span>
+          <span className="an-hbar-v">{total ? Math.round((s.count / total) * 100) : 0}%</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** of the players first seen in a week, the share that came back 1, 2 ... weeks later */
+function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
+  const width = Math.max(1, ...cohorts.map((c) => c.rates.length));
+  if (!cohorts.some((c) => c.size > 0)) return <p className="text-sm font-semibold text-mute">Новых игроков за шесть недель не было.</p>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="an-cohorts">
+        <thead>
+          <tr>
+            <th scope="col">Неделя первого входа</th>
+            <th scope="col">Игроков</th>
+            {Array.from({ length: width }, (_, i) => <th key={i} scope="col">+{i + 1} нед</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {cohorts.map((c) => (
+            <tr key={c.start}>
+              <th scope="row">с {fmtDate(c.start)}</th>
+              <td className="font-extrabold">{c.size}</td>
+              {Array.from({ length: width }, (_, i) => {
+                const v = c.rates[i];
+                return v == null || !c.size
+                  ? <td key={i} className="is-empty" />
+                  : <td key={i} style={{ ['--a' as string]: (0.08 + 0.92 * (v / 100)).toFixed(3) }} className={v >= 55 ? 'is-strong' : ''}>{v}%</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TopPlayers({ top }: { top: Analytics['top'] }) {
+  const max = Math.max(1, ...top.map((p) => p.hours));
+  if (!top.length) return <p className="text-sm font-semibold text-mute">За этот период никто не играл.</p>;
+  return (
+    <ol className="an-top">
+      {top.map((p, i) => {
+        const rank = p.rankId ? rankById(p.rankId) : null;
+        return (
+          <li key={p.name}>
+            <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-baseline gap-2">
+                <span className="truncate font-extrabold">{p.name}</span>
+                {rank && <span className="truncate text-xs font-bold text-mute">{rank.name}</span>}
+              </span>
+              <span className="an-top-bar"><span style={{ width: `${(p.hours / max) * 100}%` }} /></span>
+            </span>
+            <span className="shrink-0 text-right">
+              <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+              <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+export default function AnalyticsTab({ id }: { id: number }) {
+  const [days, setDays] = useState(30);
+  const [data, setData] = useState<Analytics | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setError('');
+    api<Analytics>(`/servers/${id}/analytics?days=${days}`)
+      .then((d) => { if (alive) setData(d); })
+      .catch((e: Error) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [id, days]);
+
+  const s = data?.summary;
+  const newShare = useMemo(() => (s && s.players ? Math.round((s.newPlayers / s.players) * 100) : 0), [s]);
+
+  if (error) return <ErrorLine text={error} />;
+  if (!data || !s) return <div className="tile skeleton h-72" aria-label="Загрузка аналитики" role="status" />;
+
+  return (
+    <div className="an space-y-3.5">
+      <section className="tile tile-in p-4 sm:p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-extrabold">Игроки за {days} {plural(days, ['день', 'дня', 'дней'])}</h2>
+          <PeriodSwitch days={days} onChange={setDays} />
+        </div>
+        <div className="an-kpis">
+          <Kpi k="Уникальных игроков" v={s.players} hint={`сегодня ${s.dau} · за неделю ${s.wau} · за месяц ${s.mau}`} />
+          <Kpi k="Новых" v={s.newPlayers} hint={s.players ? `${newShare}% от всех, вернулись ${s.returning}` : undefined} />
+          <Kpi k="Обычный визит" v={minutesText(s.medianMinutes)} hint={s.avgMinutes != null ? `в среднем ${minutesText(s.avgMinutes)} · ${s.visits} ${plural(s.visits, ['визит', 'визита', 'визитов'])}` : undefined} />
+          <Kpi k="Часов в игре" v={s.playerHours.toLocaleString('ru-RU')} hint="все игроки вместе" />
+        </div>
+      </section>
+
+      <section className="tile tile-in p-4 sm:p-5">
+        <h2 className="mb-3 text-base font-extrabold">Когда играют</h2>
+        <Heatmap h={data.heatmap} />
+      </section>
+
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
+          <h2 className="mb-3 text-base font-extrabold">Игроки по дням</h2>
+          <DailyBars daily={data.daily} />
+        </section>
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
+          <h2 className="mb-3 text-base font-extrabold">Сколько длится визит</h2>
+          <SessionBars sessions={data.sessions} />
+        </section>
+      </div>
+
+      <div className="grid gap-3.5 lg:grid-cols-12">
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
+          <h2 className="mb-1 text-base font-extrabold">Возвращаются ли новички</h2>
+          <p className="mb-3 text-sm font-semibold text-mute">Доля игроков, впервые зашедших в эту неделю, которые вернулись через одну, две и больше недель.</p>
+          <Cohorts cohorts={data.cohorts} />
+        </section>
+        <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
+          <h2 className="mb-3 text-base font-extrabold">Больше всех в игре</h2>
+          <TopPlayers top={data.top} />
+        </section>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useRef, useState } from 'react';
 import { applyConnectTemplates, connectGuide } from '../../connectGuides';
@@ -47327,6 +47815,7 @@ export const TAB_LIST: { id: TabId; label: string }[] = [
   { id: '', label: 'Обзор' },
   { id: 'players', label: 'Игроки' },
   { id: 'history', label: 'История' },
+  { id: 'stats', label: 'Аналитика' },
   { id: 'events', label: 'События' },
   { id: 'connect', label: 'Подключение' },
 ];
@@ -47611,7 +48100,7 @@ import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react'
 import { COUNTRIES } from '../../countries';
 import { getPrefs } from '../../i18n';
 
-export const SERVER_TABS = ['players', 'history', 'events', 'connect'] as const;
+export const SERVER_TABS = ['players', 'history', 'stats', 'events', 'connect'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
 
 /** hash of a server page tab: '' = overview */
@@ -56954,6 +57443,10 @@ import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/serve
 import {
   countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
+import { lazyPage, PageFrame } from '../lazyPage';
+
+// the analytics tab and its charts load when it is opened
+const AnalyticsTab = lazyPage(() => import('../components/server/AnalyticsTab'));
 
 export { SERVER_TABS } from '../components/server/helpers';
 
@@ -57255,6 +57748,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
       </div>
     );
+  } else if (tab === 'stats') {
+    panel = <PageFrame><AnalyticsTab id={id} /></PageFrame>;
   } else if (tab === 'events') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
@@ -60241,6 +60736,76 @@ export function downsample(values: (number | null)[], max: number): (number | nu
   }
   return out;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
+/* «Аналитика» tab of a server page. The colour is the game's (--srv-accent, set on .srv-page); --a is a cell's weight. */
+.an { --an: var(--srv-accent, rgb(var(--brand))); }
+
+.an-kpis { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); }
+@media (max-width: 639px) { .an-kpi-v { font-size: 24px; } }
+.an-kpi { border-radius: var(--r-lg, 18px); background: rgb(var(--soft)); padding: 12px 14px; }
+.an-kpi-k { font-size: 13px; font-weight: 800; color: rgb(var(--mute)); }
+.an-kpi-v { margin-top: 2px; font-size: 30px; font-weight: 800; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.an-kpi-h { margin-top: 4px; font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* weekday x hour */
+.an-heat { display: grid; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); gap: 3px; align-items: center; }
+.an-heat-hour { font-size: 11px; font-weight: 700; color: rgb(var(--mute)); text-align: left; }
+.an-heat-dow { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
+.an-heat-cell {
+  height: clamp(12px, 2.6vw, 28px); border-radius: 5px;
+  background: color-mix(in srgb, var(--an) calc(var(--a, 0) * 100%), rgb(var(--soft)));
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.an-heat-cell.is-empty { background: repeating-linear-gradient(135deg, rgb(var(--soft)) 0 4px, transparent 4px 8px); }
+.an-heat-cell.is-hover { transform: scale(1.18); box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 4px var(--an); position: relative; z-index: 1; }
+@media (max-width: 639px) { .an-heat { gap: 2px; grid-template-columns: 1.8rem repeat(24, minmax(0, 1fr)); } .an-heat-cell { border-radius: 3px; } }
+.an-heat-foot { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+.an-heat-scale { display: inline-flex; align-items: center; gap: 4px; }
+.an-heat-scale i { width: 14px; height: 14px; border-radius: 4px; background: color-mix(in srgb, var(--an) calc(var(--a) * 100%), rgb(var(--soft))); }
+.an-facts { margin-top: 12px; display: grid; gap: 6px 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); font-size: 14px; font-weight: 600; }
+.an-facts p { border-left: 3px solid var(--an); padding: 2px 0 2px 10px; }
+.an-facts b { display: block; font-size: 12px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; color: rgb(var(--mute)); }
+
+/* players per day */
+.an-bars { display: flex; align-items: flex-end; gap: 3px; height: 180px; }
+.an-bar { flex: 1 1 0; min-width: 2px; height: 100%; display: flex; flex-direction: column-reverse; border-radius: 6px 6px 2px 2px; overflow: hidden; cursor: default; }
+.an-bar > span { display: block; width: 100%; transition: height .4s cubic-bezier(.2, .8, .2, 1); }
+.an-bar-old { background: var(--an); }
+.an-bar-new { background: color-mix(in srgb, var(--an) 40%, rgb(var(--card))); }
+.an-bar.is-hover > span { filter: brightness(1.12) saturate(1.1); }
+.an-bars-axis { display: flex; gap: 3px; margin-top: 6px; }
+.an-bars-axis span { flex: 1 1 0; min-width: 2px; font-size: 11px; font-weight: 700; color: rgb(var(--mute)); white-space: nowrap; overflow: visible; }
+.an-legend { display: inline-flex; align-items: center; gap: 6px; }
+.an-legend i { width: 12px; height: 12px; border-radius: 4px; }
+
+/* visit lengths */
+.an-hbar { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) 3rem; align-items: center; gap: 10px; font-size: 14px; }
+.an-hbar-k { font-weight: 700; color: rgb(var(--mute)); }
+.an-hbar-track { height: 12px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.an-hbar-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in srgb, var(--an) 55%, rgb(var(--card))), var(--an)); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
+.an-hbar-v { text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* retention cohorts */
+.an-cohorts { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: 13px; }
+.an-cohorts th { font-weight: 800; color: rgb(var(--mute)); text-align: left; white-space: nowrap; padding: 4px 6px; }
+.an-cohorts td { min-width: 3.4rem; border-radius: 8px; padding: 7px 6px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--an) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
+.an-cohorts td.is-strong { color: #fff; }
+.an-cohorts td.is-empty { background: transparent; }
+
+/* top players */
+.an-top { display: grid; gap: 10px; }
+.an-top li { display: flex; align-items: center; gap: 10px; }
+.an-top-n { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 9999px; background: rgb(var(--soft)); font-size: 13px; font-weight: 800; color: rgb(var(--mute)); }
+.an-top-n.is-1 { background: linear-gradient(135deg, #f6d365, #fda085); color: #5a3200; }
+.an-top-n.is-2 { background: linear-gradient(135deg, #e0e6ee, #b6c2d1); color: #2b3442; }
+.an-top-n.is-3 { background: linear-gradient(135deg, #f3c39b, #c98a5a); color: #4a2408; }
+.an-top-bar { display: block; margin-top: 5px; height: 6px; border-radius: 9999px; background: rgb(var(--soft)); overflow: hidden; }
+.an-top-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--an); }
+
+@media (prefers-reduced-motion: reduce) { .an-bar > span, .an-hbar-track > span, .an-heat-cell { transition: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'

@@ -32,6 +32,7 @@ import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
 import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
+import { router as analyticsRouter } from './routes/analytics.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -66,6 +67,7 @@ app.use(updatesRouter);
 app.use(usersRouter);
 app.use(discordLoginRouter);
 app.use(serversRouter);
+app.use(analyticsRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
