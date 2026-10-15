@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2adb42e0cb1e"
+COREGSM_BUILD="fdf4a55de206"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5277,6 +5277,10 @@ export interface BotGuild {
   /** text channels the bot can see but not write to */
   hidden?: number;
   channels: { id: string; name: string; missing?: string[] }[];
+  /** roles the bot can give (below its own role, not managed by an integration) */
+  roles?: { id: string; name: string; color: number }[];
+  /** voice channels the bot can rename (live counters) */
+  voice?: { id: string; name: string }[];
 }
 
 // persisted, so a backend restart does not leave the channel picker empty until the bot reports again
@@ -5303,8 +5307,8 @@ export function channelInfo(channelId: string): { channelName: string | null; gu
   return { channelName: null, guildName: null, guildId: null };
 }
 
-// View Channel + Send Messages + Embed Links + Attach Files
-const BOT_PERMISSIONS = 52224;
+// View Channel + Send Messages + Embed Links + Attach Files + Manage Channels (counters) + Manage Roles (autoroles)
+const BOT_PERMISSIONS = 52224 + 16 + 268435456;
 
 /** The first segment of a bot token is the base64 of the bot user id (= application id). */
 export function clientIdFromToken(token: string | null): string | null {
@@ -5325,6 +5329,10 @@ export const BOT_COMMANDS = [
   { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
   { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
   { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
+  { name: '/online', description: 'Кто сейчас играет: онлайн всех серверов' },
+  { name: '/status', description: 'Карточка сервера с графиком за сутки. Параметр: server' },
+  { name: '/player', description: 'Карточка игрока: часы, серия дней, где и когда играет. Параметр: nick' },
+  { name: '/top', description: 'Самые активные игроки недели или месяца' },
 ];
 
 export function invitePayload() {
@@ -7477,6 +7485,7 @@ export const ERRORS = {
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
+  counter_exists: 'Этот канал уже стал счётчиком',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',
@@ -8601,6 +8610,7 @@ import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
 import { router as analyticsRouter } from './routes/analytics.js';
 import { router as communityRouter } from './routes/community.js';
+import { router as discordExtrasRouter } from './routes/discordExtras.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8637,6 +8647,7 @@ app.use(discordLoginRouter);
 app.use(serversRouter);
 app.use(analyticsRouter);
 app.use(communityRouter);
+app.use(discordExtrasRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -12585,6 +12596,16 @@ interface ServerName { id: number; name: string; game: string }
 const serverNames = () =>
   new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
 
+/** the players with the most hours since `since` (any case of a nick counts as one player) */
+export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number }[] {
+  return (db
+    .prepare(
+      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+       FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ? ${serverId ? 'AND server_id = ?' : ''} GROUP BY k ORDER BY h DESC LIMIT ?`,
+    )
+    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+}
+
 function community(now = Date.now()) {
   const names = serverNames();
   const live = db.prepare('SELECT s.id, st.online, st.players, st.max_players FROM servers s LEFT JOIN status st ON st.server_id = s.id').all() as { id: number; online: number | null; players: number | null; max_players: number | null }[];
@@ -12630,13 +12651,7 @@ function community(now = Date.now()) {
       newcomer: (firstSeen.get(r.name) as { t: number }).t === r.joined_at,
     }));
 
-  const topSince = (since: number) =>
-    (db
-      .prepare(
-        `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
-         FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY k ORDER BY h DESC LIMIT 10`,
-      )
-      .all(now, now, since, now, since) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+  const topSince = (since: number) => topPlayers(since, now);
 
   const servers = live
     .filter((s) => names.has(s.id))
@@ -12717,6 +12732,264 @@ router.get('/api/players/:name', viewer, (req, res) => {
   const card = playerCard(nick);
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
   res.json(card);
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/discordExtras.ts" << '__COREGSM_EOF__'
+/**
+ * The bot beyond status messages and news:
+ *   autoroles    Discord roles the bot gives and takes away by themselves: «Сейчас в игре», «Игрок недели»,
+ *                «Ветеран N ч». Only accounts with a linked Discord and a game nick get them.
+ *   counters     voice channels the bot renames into a live counter, «🟢 Онлайн: 42»
+ *   commands     data for /online, /status, /player and /top
+ *
+ * The bot asks GET /internal/discord/sync every tick: for each autorole whom to add and whom to remove (the
+ * difference between who should have it and who got it from the bot), and for each counter the name it should
+ * have. It reports what it applied, so a role given by hand is never taken away.
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin, internal } from '../auth.js';
+import { bot } from '../botState.js';
+import { db, EFFECTIVE_NAME } from '../db.js';
+import { publicBase } from '../site.js';
+import { playerCard, topPlayers } from './community.js';
+
+export const router = express.Router();
+
+const DAY = 86_400_000;
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS autoroles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  threshold INTEGER NOT NULL DEFAULT 0,
+  server_id INTEGER REFERENCES servers(id) ON DELETE CASCADE,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS autorole_members (
+  rule_id INTEGER NOT NULL REFERENCES autoroles(id) ON DELETE CASCADE,
+  discord_id TEXT NOT NULL,
+  PRIMARY KEY (rule_id, discord_id)
+);
+CREATE TABLE IF NOT EXISTS voice_counters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL UNIQUE,
+  template TEXT NOT NULL,
+  server_id INTEGER REFERENCES servers(id) ON DELETE CASCADE,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+);
+`);
+
+export const AUTOROLE_KINDS = ['online', 'week_top', 'hours'] as const;
+type Kind = (typeof AUTOROLE_KINDS)[number];
+
+interface RuleRow { id: number; guild_id: string; role_id: string; kind: Kind; threshold: number; server_id: number | null; last_error: string | null; created_at: number }
+interface CounterRow { id: number; channel_id: string; template: string; server_id: number | null; last_error: string | null; created_at: number }
+
+/** linked accounts: Discord id and game nick (lower case) */
+function linked(): { discordId: string; nick: string }[] {
+  return (db
+    .prepare("SELECT u.discord_id AS d, p.game_nick AS n FROM users u JOIN user_player p ON p.user_id = u.id WHERE u.discord_id IS NOT NULL AND p.game_nick != ''")
+    .all() as { d: string; n: string }[]).map((r) => ({ discordId: r.d, nick: r.n.toLowerCase() }));
+}
+
+/** the Discord ids that should have the role of a rule right now */
+export function wanted(rule: Pick<RuleRow, 'kind' | 'threshold' | 'server_id'>, now = Date.now()): Set<string> {
+  const people = linked();
+  const srv = rule.server_id ? ' AND server_id = ?' : '';
+  const args = rule.server_id ? [rule.server_id] : [];
+  let nicks: Set<string>;
+  if (rule.kind === 'online') {
+    nicks = new Set((db.prepare(`SELECT DISTINCT ulower(name) AS k FROM player_sessions WHERE left_at IS NULL${srv}`).all(...args) as { k: string }[]).map((r) => r.k));
+  } else if (rule.kind === 'week_top') {
+    nicks = new Set(topPlayers(now - 7 * DAY, now, Math.max(1, rule.threshold || 1), rule.server_id ?? undefined).map((p) => p.name.toLowerCase()));
+  } else {
+    const rows = db
+      .prepare(`SELECT ulower(name) AS k, SUM(COALESCE(left_at, ?) - joined_at) / 3600000.0 AS h FROM player_sessions WHERE 1 = 1${srv} GROUP BY k`)
+      .all(now, ...args) as { k: string; h: number }[];
+    nicks = new Set(rows.filter((r) => r.h >= Math.max(1, rule.threshold)).map((r) => r.k));
+  }
+  return new Set(people.filter((p) => nicks.has(p.nick)).map((p) => p.discordId));
+}
+
+/** the name a counter channel should have */
+export function counterName(c: Pick<CounterRow, 'template' | 'server_id'>): string {
+  const rows = db
+    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, st.online, st.players, st.max_players FROM servers s LEFT JOIN status st ON st.server_id = s.id`)
+    .all() as { id: number; name: string; online: number | null; players: number | null; max_players: number | null }[];
+  const list = c.server_id ? rows.filter((r) => r.id === c.server_id) : rows;
+  const up = list.filter((r) => r.online);
+  const vars: Record<string, string> = {
+    players: String(up.reduce((n, r) => n + (r.players ?? 0), 0)),
+    max: String(up.reduce((n, r) => n + (r.max_players ?? 0), 0)),
+    online: String(up.length),
+    servers: String(list.length),
+    status: list.length && up.length === list.length ? '🟢' : up.length ? '🟡' : '🔴',
+    name: c.server_id ? list[0]?.name ?? '' : '',
+  };
+  // Discord: channel names are 1..100 characters
+  return c.template.replace(/\{(\w+)\}/g, (m, k: string) => vars[k] ?? m).slice(0, 100).trim() || '—';
+}
+
+// ---------- the bot ----------
+
+router.get('/internal/discord/sync', internal, (_req, res) => {
+  const rules = db.prepare('SELECT * FROM autoroles').all() as RuleRow[];
+  const held = db.prepare('SELECT discord_id FROM autorole_members WHERE rule_id = ?');
+  const autoroles = rules.map((r) => {
+    const want = wanted(r);
+    const have = new Set((held.all(r.id) as { discord_id: string }[]).map((x) => x.discord_id));
+    return {
+      ruleId: r.id,
+      guildId: r.guild_id,
+      roleId: r.role_id,
+      // a few at a time: Discord limits role changes, the rest goes on the next ticks
+      add: [...want].filter((id) => !have.has(id)).slice(0, 10),
+      remove: [...have].filter((id) => !want.has(id)).slice(0, 10),
+    };
+  });
+  const counters = (db.prepare('SELECT * FROM voice_counters').all() as CounterRow[]).map((c) => ({ id: c.id, channelId: c.channel_id, name: counterName(c) }));
+  res.json({ autoroles, counters });
+});
+
+router.post('/internal/discord/autoroles/:id(\\d+)', internal, (req, res) => {
+  const b = z
+    .object({ added: z.array(z.string().max(30)).max(50), removed: z.array(z.string().max(30)).max(50), error: z.string().max(300).nullable().optional() })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM autoroles WHERE id = ?').get(id)) return res.status(404).json({ error: 'Не найдено' });
+  db.transaction(() => {
+    for (const d of b.data.added) db.prepare('INSERT OR IGNORE INTO autorole_members (rule_id, discord_id) VALUES (?, ?)').run(id, d);
+    for (const d of b.data.removed) db.prepare('DELETE FROM autorole_members WHERE rule_id = ? AND discord_id = ?').run(id, d);
+    db.prepare('UPDATE autoroles SET last_error = ? WHERE id = ?').run(b.data.error ?? null, id);
+  })();
+  res.json({ ok: true });
+});
+
+router.post('/internal/discord/counters/:id(\\d+)', internal, (req, res) => {
+  const b = z.object({ error: z.string().max(300).nullable() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  db.prepare('UPDATE voice_counters SET last_error = ? WHERE id = ?').run(b.data.error, Number(req.params.id));
+  res.json({ ok: true });
+});
+
+/** /online: every server, online first */
+router.get('/internal/discord/online', internal, (_req, res) => {
+  const rows = db
+    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game, st.online, st.players, st.max_players, st.map FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`)
+    .all() as { id: number; name: string; game: string; online: number | null; players: number | null; max_players: number | null; map: string | null }[];
+  const servers = rows
+    .map((r) => ({ id: r.id, name: r.name, game: r.game, online: !!r.online, players: r.online ? r.players ?? 0 : 0, maxPlayers: r.max_players ?? 0, map: r.online ? r.map : null }))
+    .sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players);
+  res.json({ players: servers.reduce((n, s) => n + s.players, 0), servers, url: publicBase() });
+});
+
+/** /status and /player autocomplete: servers or nicks matching what was typed */
+router.get('/internal/discord/suggest', internal, (req, res) => {
+  const what = String(req.query.what ?? '');
+  const q = String(req.query.q ?? '').slice(0, 60).toLowerCase();
+  if (what === 'server') {
+    const rows = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string }[];
+    return res.json({ items: rows.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 25).map((r) => ({ name: r.name.slice(0, 100), value: String(r.id) })) });
+  }
+  const rows = db
+    .prepare('SELECT MIN(name) AS name, MAX(joined_at) AS t FROM player_sessions WHERE ulower(name) LIKE ? GROUP BY ulower(name) ORDER BY t DESC LIMIT 25')
+    .all(`%${q.replace(/[%_]/g, '')}%`) as { name: string }[];
+  res.json({ items: rows.map((r) => ({ name: r.name.slice(0, 100), value: r.name.slice(0, 100) })) });
+});
+
+router.get('/internal/discord/player', internal, (req, res) => {
+  const card = playerCard(String(req.query.nick ?? '').slice(0, 64));
+  if (!card) return res.status(404).json({ error: 'Игрок не найден' });
+  const base = publicBase();
+  res.json({ ...card, url: base ? `${base}/player/${encodeURIComponent(card.name)}` : null });
+});
+
+router.get('/internal/discord/top', internal, (req, res) => {
+  const month = req.query.period === 'month';
+  const base = publicBase();
+  res.json({ period: month ? 'month' : 'week', top: topPlayers(Date.now() - (month ? 30 : 7) * DAY, Date.now(), 10), url: base ? `${base}/community` : null });
+});
+
+// ---------- the panel ----------
+
+const roleOf = (guildId: string, roleId: string) => bot.guilds.find((g) => g.id === guildId)?.roles?.find((r) => r.id === roleId) ?? null;
+const voiceOf = (channelId: string) => {
+  for (const g of bot.guilds) {
+    const v = g.voice?.find((c) => c.id === channelId);
+    if (v) return { guildName: g.name, name: v.name };
+  }
+  return null;
+};
+
+router.get('/api/discord/extras', admin, (_req, res) => {
+  const count = db.prepare('SELECT COUNT(*) AS n FROM autorole_members WHERE rule_id = ?');
+  const autoroles = (db.prepare('SELECT * FROM autoroles ORDER BY id').all() as RuleRow[]).map((r) => ({
+    id: r.id,
+    guildId: r.guild_id,
+    roleId: r.role_id,
+    roleName: roleOf(r.guild_id, r.role_id)?.name ?? null,
+    roleColor: roleOf(r.guild_id, r.role_id)?.color ?? 0,
+    kind: r.kind,
+    threshold: r.threshold,
+    serverId: r.server_id,
+    members: (count.get(r.id) as { n: number }).n,
+    error: r.last_error,
+  }));
+  const counters = (db.prepare('SELECT * FROM voice_counters ORDER BY id').all() as CounterRow[]).map((c) => ({
+    id: c.id,
+    channelId: c.channel_id,
+    channelName: voiceOf(c.channel_id)?.name ?? null,
+    guildName: voiceOf(c.channel_id)?.guildName ?? null,
+    template: c.template,
+    serverId: c.server_id,
+    preview: counterName(c),
+    error: c.last_error,
+  }));
+  const guilds = bot.guilds.map((g) => ({ id: g.id, name: g.name, roles: g.roles ?? [], voice: g.voice ?? [] }));
+  res.json({ autoroles, counters, guilds });
+});
+
+const serverIdOk = (id: number | null | undefined) => id == null || !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
+const snowflake = z.string().regex(/^\d{15,25}$/);
+
+router.post('/api/discord/autoroles', admin, (req, res) => {
+  const b = z
+    .object({ guildId: snowflake, roleId: snowflake, kind: z.enum(AUTOROLE_KINDS), threshold: z.number().int().min(0).max(10_000).default(0), serverId: z.number().int().positive().nullable().optional() })
+    .safeParse(req.body);
+  if (!b.success || !serverIdOk(b.data.serverId)) return res.status(400).json({ error: 'Неверные данные' });
+  const { guildId, roleId, kind, threshold, serverId } = b.data;
+  const t = kind === 'hours' ? Math.max(1, threshold) : kind === 'week_top' ? Math.min(25, Math.max(1, threshold || 1)) : 0;
+  const r = db.prepare('INSERT INTO autoroles (guild_id, role_id, kind, threshold, server_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(guildId, roleId, kind, t, serverId ?? null, Date.now());
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+
+/** removing a rule forgets its holders; the roles already given stay (the admin removes them in Discord if needed) */
+router.delete('/api/discord/autoroles/:id(\\d+)', admin, (req, res) => {
+  db.prepare('DELETE FROM autoroles WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+router.post('/api/discord/counters', admin, (req, res) => {
+  const b = z.object({ channelId: snowflake, template: z.string().trim().min(1).max(100), serverId: z.number().int().positive().nullable().optional() }).safeParse(req.body);
+  if (!b.success || !serverIdOk(b.data.serverId)) return res.status(400).json({ error: 'Неверные данные' });
+  try {
+    const r = db.prepare('INSERT INTO voice_counters (channel_id, template, server_id, created_at) VALUES (?, ?, ?, ?)').run(b.data.channelId, b.data.template, b.data.serverId ?? null, Date.now());
+    res.json({ id: Number(r.lastInsertRowid) });
+  } catch {
+    res.status(409).json({ error: 'Этот канал уже стал счётчиком' });
+  }
+});
+
+router.delete('/api/discord/counters/:id(\\d+)', admin, (req, res) => {
+  db.prepare('DELETE FROM voice_counters WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
@@ -12887,6 +13160,8 @@ router.post('/internal/bot-guilds', internal, (req, res) => {
         name: z.string().max(120),
         hidden: z.number().int().min(0).optional(),
         channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
+        roles: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), color: z.number().int().min(0).max(0xffffff) })).max(250).optional(),
+        voice: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(250).optional(),
       }),
     )
     .max(60)
@@ -15929,6 +16204,7 @@ import { setGatewayAgent } from './gateway.js';
 import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
 import { parseProxy } from './proxy.js';
+import { syncDiscord } from './sync.js';
 
 const TICK_MS = 10_000;
 const LOGIN_RETRY_MS = 60_000;
@@ -15978,7 +16254,14 @@ const PERM_LABELS: Record<string, string> = {
 /** Text channels per Discord server. A channel is listed when the bot can see it and write to it;
  *  missing "soft" permissions are reported as warnings instead of hiding the channel. */
 function collectGuilds(c: Client) {
-  const out: { id: string; name: string; hidden: number; channels: { id: string; name: string; pos: number; missing: string[] }[] }[] = [];
+  const out: {
+    id: string;
+    name: string;
+    hidden: number;
+    channels: { id: string; name: string; pos: number; missing: string[] }[];
+    roles: { id: string; name: string; color: number }[];
+    voice: { id: string; name: string }[];
+  }[] = [];
   for (const g of c.guilds.cache.values()) {
     const me = g.members.me;
     const channels: { id: string; name: string; pos: number; missing: string[] }[] = [];
@@ -15991,7 +16274,19 @@ function collectGuilds(c: Client) {
       channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition, missing });
     }
     channels.sort((x, y) => x.pos - y.pos);
-    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250) });
+    // roles the bot may give: below its own highest role, not @everyone, not owned by an integration
+    const roles = [...g.roles.cache.values()]
+      .filter((r) => r.id !== g.id && !r.managed && r.editable)
+      .sort((x, y) => y.position - x.position)
+      .slice(0, 200)
+      .map((r) => ({ id: r.id, name: r.name, color: r.color }));
+    // voice channels the bot may rename (live counters)
+    const voice = [...g.channels.cache.values()]
+      .filter((ch) => (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) && (!me || ch.permissionsFor(me)?.has(['ViewChannel', 'ManageChannels'])))
+      .sort((x, y) => ('rawPosition' in x && 'rawPosition' in y ? x.rawPosition - y.rawPosition : 0))
+      .slice(0, 200)
+      .map((ch) => ({ id: ch.id, name: ch.name }));
+    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250), roles, voice });
   }
   return out.slice(0, 50);
 }
@@ -16003,6 +16298,8 @@ async function publishGuilds(): Promise<void> {
     name: g.name,
     hidden: g.hidden,
     channels: g.channels.map(({ id, name, missing }) => ({ id, name, ...(missing.length ? { missing } : {}) })),
+    roles: g.roles,
+    voice: g.voice,
   }));
   const json = JSON.stringify(list);
   // send on change, and every minute so a restarted backend learns the list again
@@ -16280,6 +16577,7 @@ async function tick(): Promise<void> {
     await updateBindings();
     await processNews();
     await processDeliveries();
+    if (client && state === 'online') await syncDiscord(client, () => stopping);
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {
@@ -16317,6 +16615,7 @@ import type { AutocompleteInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 
 export const COMMANDS = [
@@ -16334,6 +16633,7 @@ export const COMMANDS = [
     options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40, autocomplete: true }],
   },
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
+  ...INFO_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -16380,8 +16680,9 @@ async function handleAutocomplete(i: AutocompleteInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isAutocomplete()) return handleAutocomplete(i);
+  if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
+  if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
   // Discord wants an answer within 3 seconds: acknowledge first, do the work after, and log how long it took
@@ -16578,6 +16879,174 @@ for (const sig of ['SIGTERM', 'SIGINT'] as const) {
   });
 }
 bot.start();
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/info.ts" << '__COREGSM_EOF__'
+/** Public slash commands: /online, /status, /player and /top. The answers are seen by everybody in the channel. */
+import { AttachmentBuilder, EmbedBuilder, type AutocompleteInteraction, type ChatInputCommandInteraction } from 'discord.js';
+import { backend, backendJson } from './backend.js';
+import { log } from './log.js';
+import { COLORS, hoursText, replyEmbed } from './replies.js';
+
+export const INFO_COMMANDS = [
+  { name: 'online', description: 'Кто сейчас играет: онлайн всех серверов' },
+  {
+    name: 'status',
+    description: 'Карточка сервера с графиком за сутки',
+    options: [{ type: 3, name: 'server', description: 'Сервер', required: true, autocomplete: true }],
+  },
+  {
+    name: 'player',
+    description: 'Карточка игрока: часы, серия дней, где и когда играет',
+    options: [{ type: 3, name: 'nick', description: 'Ник в игре', required: true, min_length: 1, max_length: 64, autocomplete: true }],
+  },
+  {
+    name: 'top',
+    description: 'Самые активные игроки',
+    options: [{ type: 3, name: 'period', description: 'За какой срок', required: false, choices: [{ name: 'неделя', value: 'week' }, { name: 'месяц', value: 'month' }] }],
+  },
+];
+export const INFO_NAMES = new Set(INFO_COMMANDS.map((c) => c.name));
+
+export interface OnlineData {
+  players: number;
+  servers: { id: number; name: string; game: string; online: boolean; players: number; maxPlayers: number; map: string | null }[];
+  url: string | null;
+}
+export interface PlayerData {
+  name: string;
+  online: boolean;
+  lastSeen: number | null;
+  hours: number;
+  visits: number;
+  days: number;
+  streak: number;
+  usualHour: number | null;
+  servers: { name: string; hours: number }[];
+  url: string | null;
+}
+export interface TopData { period: 'week' | 'month'; top: { name: string; hours: number; servers: number }[]; url: string | null }
+
+const plural = (n: number, f: [string, string, string]) => {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  return a > 10 && a < 20 ? f[2] : b > 1 && b < 5 ? f[1] : b === 1 ? f[0] : f[2];
+};
+const bar = (p: number) => {
+  const n = Math.max(0, Math.min(8, Math.round(p * 8)));
+  return '█'.repeat(n) + '░'.repeat(8 - n);
+};
+
+export function onlineEmbed(d: OnlineData): EmbedBuilder {
+  const up = d.servers.filter((s) => s.online);
+  const lines = d.servers.slice(0, 20).map((s) =>
+    s.online
+      ? `🟢 **${s.name}** — ${s.players}${s.maxPlayers ? `/${s.maxPlayers}` : ''} ${s.maxPlayers ? bar(s.players / s.maxPlayers) : ''}${s.map ? ` · ${s.map}` : ''}`
+      : `🔴 **${s.name}** — не в сети`,
+  );
+  const e = new EmbedBuilder()
+    .setTitle(`🎮 Сейчас играют: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}`)
+    .setDescription((lines.join('\n') || 'Серверов пока нет.').slice(0, 3900))
+    .setColor(up.length ? COLORS.ok : COLORS.bad)
+    .setFooter({ text: `Серверов в сети: ${up.length} из ${d.servers.length} · CoreGSM` });
+  if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
+  return e;
+}
+
+const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
+
+export function playerEmbed(p: PlayerData): EmbedBuilder {
+  const status = p.online ? '🟢 Сейчас в игре' : p.lastSeen ? `Был в игре <t:${Math.floor(p.lastSeen / 1000)}:R>` : '';
+  const e = new EmbedBuilder()
+    .setTitle(`👤 ${p.name}`.slice(0, 250))
+    .setDescription([status, p.usualHour != null ? `Обычно играет ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : ''].filter(Boolean).join('\n') || ' ')
+    .setColor(p.online ? COLORS.ok : COLORS.info)
+    .addFields(
+      { name: 'Часов', value: hoursText(p.hours), inline: true },
+      { name: 'Визитов', value: String(p.visits), inline: true },
+      { name: 'Подряд', value: `${p.streak >= 3 ? '🔥 ' : ''}${p.streak} ${plural(p.streak, ['день', 'дня', 'дней'])}`, inline: true },
+    )
+    .setFooter({ text: 'За последние 90 дней · CoreGSM' });
+  if (p.servers.length) e.addFields({ name: 'Где играет', value: p.servers.slice(0, 5).map((s) => `${s.name} — ${hoursText(s.hours)} ч`).join('\n').slice(0, 1000) });
+  if (p.url && /^https?:\/\//.test(p.url)) e.setURL(p.url);
+  return e;
+}
+
+export function topEmbed(d: TopData): EmbedBuilder {
+  const medals = ['🥇', '🥈', '🥉'];
+  const lines = d.top.map((p, i) => `${medals[i] ?? `\`${String(i + 1).padStart(2, ' ')}\``} **${p.name}** — ${hoursText(p.hours)} ч`);
+  const e = new EmbedBuilder()
+    .setTitle(d.period === 'month' ? '🏆 Самые активные за месяц' : '🏆 Самые активные за неделю')
+    .setDescription((lines.join('\n') || 'Пока никто не играл.').slice(0, 3900))
+    .setColor(COLORS.warn)
+    .setFooter({ text: 'CoreGSM' });
+  if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
+  return e;
+}
+
+/** autocomplete of /status server and /player nick; answers within 3 s and never throws */
+export async function infoAutocomplete(i: AutocompleteInteraction): Promise<void> {
+  let items: { name: string; value: string }[] = [];
+  try {
+    const what = i.commandName === 'status' ? 'server' : 'nick';
+    const q = new URLSearchParams({ what, q: String(i.options.getFocused()).slice(0, 60) });
+    const r = await backend(`/internal/discord/suggest?${q.toString()}`, { signal: AbortSignal.timeout(2000) });
+    const d = (await r.json()) as { items?: { name: string; value: string }[] };
+    if (Array.isArray(d.items)) items = d.items.filter((x) => typeof x?.name === 'string' && typeof x?.value === 'string' && x.name.length > 0).slice(0, 25);
+  } catch {
+    items = [];
+  }
+  try {
+    await i.respond(items);
+  } catch (e) {
+    log('autocomplete failed:', (e as Error).message);
+  }
+}
+
+export async function handleInfo(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply();
+  } catch (e) {
+    log(`/${i.commandName}: could not acknowledge:`, (e as Error).message);
+    return;
+  }
+  const reply = async (p: Parameters<typeof i.editReply>[0]) => {
+    try {
+      await i.editReply(p);
+    } catch (e) {
+      log('reply failed:', (e as Error).message);
+    }
+  };
+  const down = () => reply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad));
+  try {
+    if (i.commandName === 'online') {
+      const { data } = await backendJson<OnlineData>('/internal/discord/online');
+      return void (await (data ? reply({ embeds: [onlineEmbed(data)] }) : down()));
+    }
+    if (i.commandName === 'top') {
+      const period = i.options.getString('period') === 'month' ? 'month' : 'week';
+      const { data } = await backendJson<TopData>(`/internal/discord/top?period=${period}`);
+      return void (await (data ? reply({ embeds: [topEmbed(data)] }) : down()));
+    }
+    if (i.commandName === 'player') {
+      const nick = i.options.getString('nick', true);
+      const { status, data } = await backendJson<PlayerData>(`/internal/discord/player?nick=${encodeURIComponent(nick)}`);
+      if (status === 404) return void (await reply(replyEmbed('Игрок не найден', `Ник «${nick.slice(0, 64)}» не появлялся на серверах за последние 90 дней.`, COLORS.warn)));
+      return void (await (data ? reply({ embeds: [playerEmbed(data)] }) : down()));
+    }
+    // /status: the same picture card as in the status messages
+    const id = Number(i.options.getString('server', true));
+    if (!Number.isInteger(id) || id <= 0) return void (await reply(replyEmbed('Выберите сервер', 'Начните вводить название и выберите сервер из списка.', COLORS.warn)));
+    const r = await backend(`/internal/card/${id}.png`);
+    if (r.status === 404) return void (await reply(replyEmbed('Сервер не найден', 'Выберите сервер из списка подсказок.', COLORS.warn)));
+    if (!r.ok) return void (await down());
+    const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
+    await reply({ files: [file] });
+  } catch (e) {
+    log(`/${i.commandName} failed:`, (e as Error).message);
+    await down();
+  }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/log.ts" << '__COREGSM_EOF__'
@@ -16951,6 +17420,95 @@ export function cardReply(
     );
   }
   return { embeds: [e], components };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/sync.ts" << '__COREGSM_EOF__'
+/**
+ * Autoroles and voice counters: the panel says whom to give a role and whom to take it from, and what name each
+ * counter channel should have; the bot applies it and reports back.
+ *
+ * Discord allows renaming a channel only twice per 10 minutes, so a counter is renamed at most every 5 minutes
+ * and only when its name actually changed.
+ */
+import type { Client } from 'discord.js';
+import { backend, backendJson } from './backend.js';
+import { humanDiscordError } from './errors.js';
+import { log } from './log.js';
+
+interface SyncData {
+  autoroles: { ruleId: number; guildId: string; roleId: string; add: string[]; remove: string[] }[];
+  counters: { id: number; channelId: string; name: string }[];
+}
+
+export const RENAME_GAP_MS = 5 * 60_000;
+const lastRename = new Map<string, number>();
+
+/** true when a counter should be renamed now */
+export function renameDue(current: string, wanted: string, last: number | undefined, now = Date.now()): boolean {
+  return current !== wanted && (last === undefined || now - last >= RENAME_GAP_MS);
+}
+
+/** Discord «Unknown Member»: the person left the server, nothing to give or take */
+const gone = (e: unknown) => (e as { code?: number }).code === 10007;
+
+async function post(path: string, body: unknown) {
+  try {
+    await backend(path, { method: 'POST', body: JSON.stringify(body) });
+  } catch (e) {
+    log('sync report failed', (e as Error).message);
+  }
+}
+
+export async function syncDiscord(c: Client, stopping: () => boolean): Promise<void> {
+  const { ok, data } = await backendJson<SyncData>('/internal/discord/sync');
+  if (!ok || !data) return;
+
+  for (const r of data.autoroles) {
+    if (stopping()) return;
+    if (!r.add.length && !r.remove.length) continue;
+    const added: string[] = [];
+    const removed: string[] = [];
+    let error: string | null = null;
+    const guild = c.guilds.cache.get(r.guildId);
+    if (!guild) {
+      error = 'Бот не состоит в этом Discord-сервере';
+    } else {
+      for (const [ids, give] of [[r.add, true], [r.remove, false]] as const) {
+        for (const id of ids) {
+          try {
+            const member = await guild.members.fetch(id);
+            if (give) await member.roles.add(r.roleId, 'CoreGSM: автороль');
+            else await member.roles.remove(r.roleId, 'CoreGSM: автороль');
+            (give ? added : removed).push(id);
+          } catch (e) {
+            // a person who left: count as done, so the panel does not try every tick
+            if (gone(e)) (give ? added : removed).push(id);
+            else error = humanDiscordError(e);
+          }
+        }
+      }
+    }
+    if (added.length || removed.length) log(`autorole ${r.ruleId}: +${added.length} −${removed.length}`);
+    await post(`/internal/discord/autoroles/${r.ruleId}`, { added, removed, error });
+  }
+
+  for (const k of data.counters) {
+    if (stopping()) return;
+    try {
+      const ch = await c.channels.fetch(k.channelId);
+      if (!ch || !('setName' in ch) || !('name' in ch)) throw Object.assign(new Error('Канал не найден'), { code: 10003 });
+      if (!renameDue(String(ch.name), k.name, lastRename.get(k.channelId))) continue;
+      await ch.setName(k.name, 'CoreGSM: счётчик онлайна');
+      lastRename.set(k.channelId, Date.now());
+      log(`counter ${k.id}: «${k.name}»`);
+      await post(`/internal/discord/counters/${k.id}`, { error: null });
+    } catch (e) {
+      // wait the full gap before the next attempt, so a missing permission does not hammer Discord
+      lastRename.set(k.channelId, Date.now());
+      await post(`/internal/discord/counters/${k.id}`, { error: humanDiscordError(e) });
+    }
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot"
@@ -41327,6 +41885,180 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DiscordExtras.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Discord: roles the bot gives by itself (autoroles) and voice channels it renames into a live counter.
+ */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Server } from '../api';
+import { confirmDialog } from '../confirm';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast } from '../ui';
+
+interface Extras {
+  autoroles: { id: number; guildId: string; roleId: string; roleName: string | null; roleColor: number; kind: Kind; threshold: number; serverId: number | null; members: number; error: string | null }[];
+  counters: { id: number; channelId: string; channelName: string | null; guildName: string | null; template: string; serverId: number | null; preview: string; error: string | null }[];
+  guilds: { id: string; name: string; roles: { id: string; name: string; color: number }[]; voice: { id: string; name: string }[] }[];
+}
+type Kind = 'online' | 'week_top' | 'hours';
+
+const KIND_TEXT: Record<Kind, (t: number) => string> = {
+  online: () => 'Сейчас в игре',
+  week_top: (t) => (t > 1 ? `Топ-${t} недели по часам` : 'Игрок недели (больше всех часов за 7 дней)'),
+  hours: (t) => `Наиграл ${t} ч и больше`,
+};
+const TEMPLATES = ['🟢 Онлайн: {players}', '{status} Онлайн: {players}/{max}', '🎮 Игроков: {players} · серверов {online}/{servers}'];
+
+const roleDot = (color: number) => (color ? `#${color.toString(16).padStart(6, '0')}` : 'rgb(var(--mute))');
+
+export default function DiscordExtras({ servers }: { servers: Server[] }) {
+  const [x, setX] = useState<Extras | null>(null);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState<'role' | 'counter' | null>(null);
+  const load = () => api<Extras>('/discord/extras').then(setX).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+
+  const serverName = (id: number | null) => (id ? servers.find((s) => s.id === id)?.name ?? `#${id}` : 'все серверы');
+  const del = async (what: 'autoroles' | 'counters', id: number, text: string) => {
+    if (!(await confirmDialog({ title: 'Удалить?', text, confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/discord/${what}/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+
+  const noRoles = !!x && x.guilds.every((g) => g.roles.length === 0);
+  const noVoice = !!x && x.guilds.every((g) => g.voice.length === 0);
+  return (
+    <>
+      <Section
+        title="Автороли"
+        description="Бот сам выдаёт и снимает роли в Discord: «Сейчас в игре», «Игрок недели», «Ветеран 100 ч». Роли получают только игроки, которые связали Discord с игровым ником (команда /register)."
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('role')} disabled={!x || noRoles}>Добавить роль</button>}
+      >
+        <ErrorLine text={error} />
+        {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.</p>}
+        {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">Пока нет ни одной автороли.</p>}
+        <ul className="grid gap-2">
+          {x?.autoroles.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: roleDot(r.roleColor) }} aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block font-extrabold">@{r.roleName ?? r.roleId}</span>
+                <span className="block text-sm font-semibold text-mute">{KIND_TEXT[r.kind](r.threshold)} · {serverName(r.serverId)} · сейчас у {r.members} {plural(r.members, ['игрока', 'игроков', 'игроков'])}</span>
+                {r.error && <span className="mt-1 block text-sm font-bold text-bad">{r.error}</span>}
+              </span>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить автороль" title="Удалить" onClick={() => void del('autoroles', r.id, 'Бот перестанет выдавать эту роль. Уже выданные роли останутся у игроков.')}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <Section
+        title="Счётчик онлайна в голосовом канале"
+        description="Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут."
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>Добавить счётчик</button>}
+      >
+        {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.</p>}
+        <ul className="grid gap-2">
+          {x?.counters.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block font-extrabold">🔊 {c.preview}</span>
+                <span className="block text-sm font-semibold text-mute">Канал «{c.channelName ?? c.channelId}»{c.guildName ? ` на «${c.guildName}»` : ''} · {serverName(c.serverId)} · шаблон <code>{c.template}</code></span>
+                {c.error && <span className="mt-1 block text-sm font-bold text-bad">{c.error}</span>}
+              </span>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить счётчик" title="Удалить" onClick={() => void del('counters', c.id, 'Бот перестанет обновлять название этого канала.')}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      {form && x && <ExtraForm kind={form} extras={x} servers={servers} onClose={() => setForm(null)} onSaved={() => { setForm(null); void load(); toast(form === 'role' ? 'Автороль добавлена: бот начнёт выдавать её в течение минуты' : 'Счётчик добавлен: бот переименует канал в течение минуты'); }} />}
+    </>
+  );
+}
+
+function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' | 'counter'; extras: Extras; servers: Server[]; onClose: () => void; onSaved: () => void }) {
+  const guilds = extras.guilds.filter((g) => (kind === 'role' ? g.roles.length : g.voice.length) > 0);
+  const [guildId, setGuildId] = useState(guilds[0]?.id ?? '');
+  const g = guilds.find((x) => x.id === guildId);
+  const [target, setTarget] = useState('');
+  const [rule, setRule] = useState<Kind>('online');
+  const [threshold, setThreshold] = useState(100);
+  const [template, setTemplate] = useState(TEMPLATES[0]);
+  const [serverId, setServerId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      if (kind === 'role') await api('/discord/autoroles', 'POST', { guildId, roleId: target, kind: rule, threshold: rule === 'hours' ? threshold : rule === 'week_top' ? Math.max(1, Math.min(25, threshold)) : 0, serverId });
+      else await api('/discord/counters', 'POST', { channelId: target, template, serverId });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={kind === 'role' ? 'Новая автороль' : 'Новый счётчик'} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3.5">
+        {guilds.length > 1 && (
+          <Field label="Сервер Discord">
+            <select className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); setTarget(''); }}>
+              {guilds.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </Field>
+        )}
+        <Field label={kind === 'role' ? 'Роль' : 'Голосовой канал'}>
+          <select className="input" value={target} onChange={(e) => setTarget(e.target.value)} required>
+            <option value="" disabled>Выберите…</option>
+            {kind === 'role' ? g?.roles.map((r) => <option key={r.id} value={r.id}>@{r.name}</option>) : g?.voice.map((v) => <option key={v.id} value={v.id}>🔊 {v.name}</option>)}
+          </select>
+        </Field>
+        {kind === 'role' ? (
+          <>
+            <Field label="Кому выдавать">
+              <select className="input" value={rule} onChange={(e) => { const k = e.target.value as Kind; setRule(k); setThreshold(k === 'hours' ? 100 : 1); }}>
+                <option value="online">Тем, кто сейчас в игре (снимается при выходе)</option>
+                <option value="week_top">Самым активным за 7 дней</option>
+                <option value="hours">Наигравшим N часов (за последние 90 дней)</option>
+              </select>
+            </Field>
+            {rule !== 'online' && (
+              <Field label={rule === 'hours' ? 'Сколько часов' : 'Сколько игроков из топа'}>
+                <input className="input" type="number" min={1} max={rule === 'hours' ? 10000 : 25} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} required />
+              </Field>
+            )}
+          </>
+        ) : (
+          <>
+            <Field label="Название канала">
+              <input className="input" value={template} onChange={(e) => setTemplate(e.target.value)} maxLength={100} required list="counter-templates" />
+            </Field>
+            <datalist id="counter-templates">{TEMPLATES.map((t) => <option key={t} value={t} />)}</datalist>
+            <p className="-mt-2 text-sm font-semibold text-mute">{'{players}'} игроков, {'{max}'} мест, {'{online}'} серверов в сети, {'{servers}'} всего, {'{status}'} 🟢/🟡/🔴, {'{name}'} название сервера</p>
+          </>
+        )}
+        <Field label="Считать по серверу">
+          <select className="input" value={serverId ?? ''} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : null)}>
+            <option value="">Все серверы</option>
+            {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </Field>
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <Button loading={busy}>Добавить</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/DiscordWizard.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import type { Binding, BotStatus, DiscordGuild } from '../api';
@@ -53974,6 +54706,7 @@ const errorsEn: Record<string, string> = {
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
+  counter_exists: 'This channel is already a counter',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
@@ -56351,6 +57084,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
+import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
@@ -56638,6 +57372,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       </div>
 
       <PlayersShownCard />
+      {loaded && <DiscordExtras servers={servers} />}
       <DeliveryList />
 
       {draft && (

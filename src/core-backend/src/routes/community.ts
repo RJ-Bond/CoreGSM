@@ -27,6 +27,16 @@ interface ServerName { id: number; name: string; game: string }
 const serverNames = () =>
   new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
 
+/** the players with the most hours since `since` (any case of a nick counts as one player) */
+export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number }[] {
+  return (db
+    .prepare(
+      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+       FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ? ${serverId ? 'AND server_id = ?' : ''} GROUP BY k ORDER BY h DESC LIMIT ?`,
+    )
+    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+}
+
 function community(now = Date.now()) {
   const names = serverNames();
   const live = db.prepare('SELECT s.id, st.online, st.players, st.max_players FROM servers s LEFT JOIN status st ON st.server_id = s.id').all() as { id: number; online: number | null; players: number | null; max_players: number | null }[];
@@ -72,13 +82,7 @@ function community(now = Date.now()) {
       newcomer: (firstSeen.get(r.name) as { t: number }).t === r.joined_at,
     }));
 
-  const topSince = (since: number) =>
-    (db
-      .prepare(
-        `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
-         FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY k ORDER BY h DESC LIMIT 10`,
-      )
-      .all(now, now, since, now, since) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+  const topSince = (since: number) => topPlayers(since, now);
 
   const servers = live
     .filter((s) => names.has(s.id))

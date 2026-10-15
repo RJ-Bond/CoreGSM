@@ -102,6 +102,7 @@ export const ERRORS = {
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
+  counter_exists: 'Этот канал уже стал счётчиком',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',
