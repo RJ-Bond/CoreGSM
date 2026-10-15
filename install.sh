@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="95c65aff82b7"
+COREGSM_BUILD="3d0fe951209d"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4620,8 +4620,8 @@ const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
 const MAGIC = Buffer.from('CGSMENC1');
 const HEADER_LEN = 8 + 16 + 12;
 const NAME_RE = /^coregsm-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual)\.tar\.gz(\.enc)?$/;
-const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png|banners|banners\/\d{1,9}\.jpg)$/;
-const DIR_ENTRIES = new Set(['news', 'covers', 'avatars', 'banners']);
+const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png|banners|banners\/\d{1,9}\.jpg|gallery|gallery\/\d{1,9}(@s)?\.jpg)$/;
+const DIR_ENTRIES = new Set(['news', 'covers', 'avatars', 'banners', 'gallery']);
 
 /** user-facing error (message is shown in the panel) */
 export class BackupError extends Error {
@@ -4796,6 +4796,7 @@ export async function buildArchive(dest: string, passphrase: string | null): Pro
       ['covers', /^\d{1,9}(@s)?\.jpg$/],
       ['avatars', /^\d{1,9}\.png$/],
       ['banners', /^\d{1,9}\.jpg$/],
+      ['gallery', /^\d{1,9}(@s)?\.jpg$/],
     ] as const) {
       const src = path.join(DATA_DIR, dir);
       if (!fs.existsSync(src)) continue;
@@ -5956,6 +5957,7 @@ if (fs.existsSync(pendingDir)) {
         ['covers', /^\d{1,9}(@s)?\.jpg$/],
         ['avatars', /^\d{1,9}\.png$/],
         ['banners', /^\d{1,9}\.jpg$/],
+        ['gallery', /^\d{1,9}(@s)?\.jpg$/],
       ] as const) {
         const src = path.join(pendingDir, dir);
         if (!fs.existsSync(src)) continue;
@@ -7486,6 +7488,8 @@ export const ERRORS = {
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
   counter_exists: 'Этот канал уже стал счётчиком',
+  gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',
+  gallery_queue_full: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',
@@ -7610,6 +7614,176 @@ export const errorCodes: RequestHandler = (_req, res, next) => {
   };
   next();
 };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/gallery.ts" << '__COREGSM_EOF__'
+/**
+ * The screenshot gallery: signed-in players upload screenshots from the game, the staff approve them, the best ones
+ * get a star and go to the top of the gallery.
+ *
+ * A picture is re-encoded as JPEG (the original never reaches other people): up to 1920 px wide for viewing and
+ * 640 px for the grid, in <data dir>/gallery/<id>.jpg and <id>@s.jpg. Pictures of the staff are approved at once.
+ *
+ *   GET    /api/gallery                  approved pictures (?serverId, ?featured=1, ?limit)
+ *   GET    /api/gallery/mine             the visitor's own pictures with their state
+ *   POST   /api/gallery                  upload (raw image body; ?serverId, ?caption)
+ *   GET    /api/gallery/queue            waiting and recent pictures (staff)
+ *   PATCH  /api/gallery/:id              approve, reject, star (staff)
+ *   DELETE /api/gallery/:id              delete (the author or the staff)
+ *   GET    /api/gallery/img/:id.jpg      the picture (?s=1 the small one); waiting ones only for the author and staff
+ */
+import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import skia from 'skia-canvas';
+import { z } from 'zod';
+import { auth, type AuthedRequest, isStaff, loadUser, rateLimit, staff, viewer } from './auth.js';
+import { db, EFFECTIVE_NAME } from './db.js';
+
+const { Canvas, loadImage } = skia;
+
+export const router = express.Router();
+
+const DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'gallery');
+fs.mkdirSync(DIR, { recursive: true });
+const fileOf = (id: number, small = false) => path.join(DIR, `${Math.trunc(id)}${small ? '@s' : ''}.jpg`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS gallery (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
+  caption TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  featured INTEGER NOT NULL DEFAULT 0,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gallery_status ON gallery(status, created_at);
+`);
+
+/** pictures waiting for the staff, per author */
+export const PENDING_MAX = 5;
+const TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+interface Row { id: number; user_id: number | null; server_id: number | null; caption: string; status: 'pending' | 'approved' | 'rejected'; featured: number; width: number; height: number; created_at: number; author: string | null; server_name: string | null }
+
+const SELECT = `SELECT g.*, u.username AS author, (SELECT ${EFFECTIVE_NAME} FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = g.server_id) AS server_name
+  FROM gallery g LEFT JOIN users u ON u.id = g.user_id`;
+const out = (r: Row) => ({
+  id: r.id,
+  url: `/api/gallery/img/${r.id}.jpg`,
+  thumb: `/api/gallery/img/${r.id}.jpg?s=1`,
+  caption: r.caption,
+  author: r.author,
+  serverId: r.server_id,
+  serverName: r.server_name,
+  status: r.status,
+  featured: !!r.featured,
+  width: r.width,
+  height: r.height,
+  createdAt: r.created_at,
+});
+
+async function encode(img: Awaited<ReturnType<typeof loadImage>>, maxW: number): Promise<{ buf: Buffer; w: number; h: number }> {
+  const k = Math.min(1, maxW / img.width);
+  const w = Math.max(1, Math.round(img.width * k));
+  const h = Math.max(1, Math.round(img.height * k));
+  const canvas = new Canvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  return { buf: await canvas.toBuffer('jpeg', { quality: 0.85 }), w, h };
+}
+
+router.get('/api/gallery', viewer, (req, res) => {
+  const serverId = Number(req.query.serverId) || 0;
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 60));
+  const rows = db
+    .prepare(`${SELECT} WHERE g.status = 'approved' ${serverId ? 'AND g.server_id = ?' : ''} ${req.query.featured === '1' ? 'AND g.featured = 1' : ''} ORDER BY g.featured DESC, g.created_at DESC LIMIT ?`)
+    .all(...(serverId ? [serverId] : []), limit) as Row[];
+  res.json(rows.map(out));
+});
+
+router.get('/api/gallery/mine', auth, (req: AuthedRequest, res) => {
+  res.json((db.prepare(`${SELECT} WHERE g.user_id = ? ORDER BY g.created_at DESC LIMIT 100`).all(req.user!.id) as Row[]).map(out));
+});
+
+router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limit: '8mb' }), async (req: AuthedRequest, res) => {
+  const q = z.object({ serverId: z.coerce.number().int().positive().optional(), caption: z.string().trim().max(140).default('') }).safeParse(req.query);
+  if (!q.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (q.data.serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(q.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
+  const body = req.body as Buffer;
+  if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 8 МБ' });
+  const trusted = isStaff(req);
+  const waiting = (db.prepare("SELECT COUNT(*) AS n FROM gallery WHERE user_id = ? AND status = 'pending'").get(req.user!.id) as { n: number }).n;
+  if (!trusted && waiting >= PENDING_MAX) return res.status(429).json({ error: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.' });
+  let big: { buf: Buffer; w: number; h: number };
+  let small: { buf: Buffer };
+  try {
+    const img = await loadImage(body);
+    if (!img.width || !img.height || img.width > 12000 || img.height > 12000) throw new Error('size');
+    big = await encode(img, 1920);
+    small = await encode(img, 640);
+  } catch {
+    return res.status(400).json({ error: 'Не удалось прочитать картинку: выберите PNG, JPG или WebP' });
+  }
+  const id = Number(
+    db
+      .prepare('INSERT INTO gallery (user_id, server_id, caption, status, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(req.user!.id, q.data.serverId ?? null, q.data.caption, trusted ? 'approved' : 'pending', big.w, big.h, Date.now()).lastInsertRowid,
+  );
+  fs.writeFileSync(fileOf(id), big.buf, { mode: 0o644 });
+  fs.writeFileSync(fileOf(id, true), small.buf, { mode: 0o644 });
+  res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
+});
+
+router.get('/api/gallery/queue', staff, (_req, res) => {
+  const rows = db.prepare(`${SELECT} ORDER BY g.status = 'pending' DESC, g.created_at DESC LIMIT 200`).all() as Row[];
+  res.json(rows.map(out));
+});
+
+router.patch('/api/gallery/:id(\\d+)', staff, (req, res) => {
+  const b = z.object({ status: z.enum(['approved', 'rejected', 'pending']).optional(), featured: z.boolean().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM gallery WHERE id = ?').get(id)) return res.status(404).json({ error: 'Не найдено' });
+  if (b.data.status) db.prepare('UPDATE gallery SET status = ? WHERE id = ?').run(b.data.status, id);
+  // only an approved picture can be starred
+  if (b.data.featured !== undefined) db.prepare("UPDATE gallery SET featured = ? WHERE id = ? AND (status = 'approved' OR ? = 0)").run(b.data.featured ? 1 : 0, id, b.data.featured ? 1 : 0);
+  if (b.data.status && b.data.status !== 'approved') db.prepare('UPDATE gallery SET featured = 0 WHERE id = ?').run(id);
+  res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
+});
+
+router.delete('/api/gallery/:id(\\d+)', auth, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT user_id FROM gallery WHERE id = ?').get(id) as { user_id: number | null } | undefined;
+  if (!row) return res.status(404).json({ error: 'Не найдено' });
+  if (row.user_id !== req.user!.id && !isStaff(req)) return res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
+  db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
+  fs.rmSync(fileOf(id), { force: true });
+  fs.rmSync(fileOf(id, true), { force: true });
+  res.json({ ok: true });
+});
+
+router.get('/api/gallery/img/:file', (req, res) => {
+  const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
+  if (!m) return res.status(404).end();
+  const id = Number(m[1]);
+  const row = db.prepare('SELECT user_id, status FROM gallery WHERE id = ?').get(id) as { user_id: number | null; status: string } | undefined;
+  if (!row) return res.status(404).end();
+  if (row.status !== 'approved') {
+    // a picture not approved yet: only its author and the staff see it
+    const u = loadUser(req);
+    if (!u || (u.id !== row.user_id && u.role !== 'admin' && u.role !== 'moderator')) return res.status(404).end();
+  }
+  const f = fileOf(id, req.query.s === '1');
+  if (!fs.existsSync(f)) return res.status(404).end();
+  res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gameIcons.ts" << '__COREGSM_EOF__'
@@ -8612,6 +8786,8 @@ import { router as analyticsRouter } from './routes/analytics.js';
 import { router as communityRouter } from './routes/community.js';
 import { router as discordExtrasRouter } from './routes/discordExtras.js';
 import { router as seasonsRouter } from './seasons.js';
+import { router as reviewsRouter } from './reviews.js';
+import { router as galleryRouter } from './gallery.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8650,6 +8826,8 @@ app.use(analyticsRouter);
 app.use(communityRouter);
 app.use(discordExtrasRouter);
 app.use(seasonsRouter);
+app.use(reviewsRouter);
+app.use(galleryRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -12012,6 +12190,106 @@ export function rankProgress(hours: number): number {
 export function rankById(id: string): VrRank | undefined {
   return VR_RANKS.find((x) => x.id === id);
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/reviews.ts" << '__COREGSM_EOF__'
+/**
+ * Reviews of the servers: a signed-in user gives 1–5 stars and a few words, one review per server (editing replaces
+ * it). A review is shown at once; the staff can hide or delete it.
+ *   GET    /api/servers/:id/reviews        the average, the spread of stars, the shown reviews and the visitor's own
+ *   PUT    /api/servers/:id/reviews        write or edit one's own review
+ *   DELETE /api/servers/:id/reviews/mine   remove one's own review
+ *   GET    /api/reviews                    the latest reviews of all servers, hidden ones included (staff)
+ *   PATCH  /api/reviews/:id                hide or show (staff)
+ *   DELETE /api/reviews/:id                delete (staff)
+ */
+import express from 'express';
+import { z } from 'zod';
+import { auth, type AuthedRequest, rateLimit, staff, viewer } from './auth.js';
+import { db, EFFECTIVE_NAME } from './db.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS server_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  stars INTEGER NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  hidden INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (server_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_server ON server_reviews(server_id, hidden);
+`);
+
+interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; username: string; discord_id: string | null; discord_avatar: string | null }
+
+const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar FROM server_reviews r JOIN users u ON u.id = r.user_id`;
+const avatar = (r: Row) => (r.discord_id && r.discord_avatar ? `https://cdn.discordapp.com/avatars/${r.discord_id}/${r.discord_avatar}.png?size=64` : null);
+const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at });
+
+/** the score of a server: the average of the shown reviews and how many gave each number of stars */
+export function scoreOf(serverId: number): { avg: number | null; count: number; dist: number[] } {
+  const rows = db.prepare('SELECT stars, COUNT(*) AS n FROM server_reviews WHERE server_id = ? AND hidden = 0 GROUP BY stars').all(serverId) as { stars: number; n: number }[];
+  const dist = [0, 0, 0, 0, 0];
+  for (const r of rows) dist[r.stars - 1] = r.n;
+  const count = dist.reduce((a, b) => a + b, 0);
+  const avg = count ? Math.round((dist.reduce((a, n, i) => a + n * (i + 1), 0) / count) * 10) / 10 : null;
+  return { avg, count, dist };
+}
+
+const serverExists = (id: number) => Number.isInteger(id) && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
+
+router.get('/api/servers/:id(\\d+)/reviews', viewer, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const items = (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.hidden = 0 ORDER BY r.updated_at DESC LIMIT 50`).all(id) as Row[]).map(out);
+  const mine = req.user ? (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user.id) as Row | undefined) : undefined;
+  res.json({ ...scoreOf(id), items, mine: mine ? out(mine) : null });
+});
+
+router.put('/api/servers/:id(\\d+)/reviews', auth, rateLimit(20), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ stars: z.number().int().min(1).max(5), text: z.string().trim().max(1000).default('') }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const now = Date.now();
+  // editing keeps a hidden review hidden: the staff decided, not the author
+  db.prepare(
+    `INSERT INTO server_reviews (server_id, user_id, stars, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(server_id, user_id) DO UPDATE SET stars = excluded.stars, text = excluded.text, updated_at = excluded.updated_at`,
+  ).run(id, req.user!.id, b.data.stars, b.data.text, now, now);
+  const mine = db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user!.id) as Row;
+  res.json({ ...scoreOf(id), mine: out(mine) });
+});
+
+router.delete('/api/servers/:id(\\d+)/reviews/mine', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM server_reviews WHERE server_id = ? AND user_id = ?').run(Number(req.params.id), req.user!.id);
+  res.json({ ok: true });
+});
+
+router.get('/api/reviews', staff, (_req, res) => {
+  const rows = db
+    .prepare(`SELECT r.*, u.username, u.discord_id, u.discord_avatar, ${EFFECTIVE_NAME} AS server_name FROM server_reviews r JOIN users u ON u.id = r.user_id JOIN servers s ON s.id = r.server_id LEFT JOIN status st ON st.server_id = s.id ORDER BY r.updated_at DESC LIMIT 200`)
+    .all() as (Row & { server_name: string })[];
+  res.json(rows.map((r) => ({ ...out(r), serverName: r.server_name })));
+});
+
+router.patch('/api/reviews/:id(\\d+)', staff, (req, res) => {
+  const b = z.object({ hidden: z.boolean() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const r = db.prepare('UPDATE server_reviews SET hidden = ? WHERE id = ?').run(b.data.hidden ? 1 : 0, Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json({ ok: true });
+});
+
+router.delete('/api/reviews/:id(\\d+)', staff, (req, res) => {
+  db.prepare('DELETE FROM server_reviews WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/account.ts" << '__COREGSM_EOF__'
@@ -39579,6 +39857,7 @@ const StatusPage = lazyPage(() => import('./pages/Status'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
 const CommunityPage = lazyPage(() => import('./pages/Community'));
 const PlayerPage = lazyPage(() => import('./pages/Player'));
+const GalleryPage = lazyPage(() => import('./pages/Gallery'));
 // rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
 const Setup = lazyPage(() => import('./pages/Setup'));
 const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
@@ -39766,7 +40045,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'gallery' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -39832,8 +40111,8 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player', 'gallery'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'gallery' ? 'gallery' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
   if (page === 'u' || page === 'player') {
@@ -39849,6 +40128,8 @@ export default function App() {
         ? t('title.notfound')
         : page === 'u' || page === 'player'
         ? publicName
+        : page === 'gallery'
+        ? 'Галерея'
         : page === 'profile'
         ? t('hdr.profile')
         : page === 'admin'
@@ -40023,6 +40304,7 @@ export default function App() {
             {page === 'status' && <StatusPage />}
             {page === 'community' && <CommunityPage />}
             {page === 'player' && <PlayerPage name={publicName} />}
+            {page === 'gallery' && <GalleryPage />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}
             {page === 'u' && <PublicProfilePage username={publicName} />}
@@ -49770,6 +50052,144 @@ export default function QrCode({ text, label }: { text: string; label: string })
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Reviews.tsx" << '__COREGSM_EOF__'
+/** Reviews of a server: the average with the spread of stars, the reviews, and the visitor's own one to write or edit. */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { Button, ErrorLine, UserAvatar, ago, plural, toast } from '../../ui';
+
+export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number }
+interface Reviews { avg: number | null; count: number; dist: number[]; items: Review[]; mine: Review | null }
+
+export function Stars({ value, size = 16 }: { value: number; size?: number }) {
+  return (
+    <span className="rv-stars" role="img" aria-label={`${value} из 5`} style={{ fontSize: size }}>
+      {[1, 2, 3, 4, 5].map((n) => <span key={n} className={n <= Math.round(value) ? 'on' : ''} aria-hidden>★</span>)}
+    </span>
+  );
+}
+
+function StarPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [hover, setHover] = useState(0);
+  const shown = hover || value;
+  return (
+    <span className="rv-pick" role="radiogroup" aria-label="Оценка" onMouseLeave={() => setHover(0)}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          role="radio"
+          aria-checked={value === n}
+          aria-label={`${n} из 5`}
+          className={n <= shown ? 'on' : ''}
+          onMouseEnter={() => setHover(n)}
+          onClick={() => onChange(n)}
+        >★</button>
+      ))}
+    </span>
+  );
+}
+
+export default function ServerReviews({ serverId }: { serverId: number }) {
+  const { me } = useAuth();
+  const [r, setR] = useState<Reviews | null>(null);
+  const [stars, setStars] = useState(0);
+  const [text, setText] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = () => api<Reviews>(`/servers/${serverId}/reviews`).then((v) => { setR(v); setStars(v.mine?.stars ?? 0); setText(v.mine?.text ?? ''); }).catch(() => undefined);
+  useEffect(() => { void load(); }, [serverId]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!stars) return setError('Поставьте оценку: от 1 до 5 звёзд');
+    setBusy(true);
+    setError('');
+    await api(`/servers/${serverId}/reviews`, 'PUT', { stars, text })
+      .then(() => { toast(r?.mine ? 'Отзыв обновлён' : 'Спасибо за отзыв!'); setEditing(false); void load(); })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+  const remove = async () => {
+    await api(`/servers/${serverId}/reviews/mine`, 'DELETE').then(() => { toast('Отзыв удалён'); setEditing(false); void load(); }).catch((err: Error) => setError(err.message));
+  };
+
+  if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
+  const formOpen = !!me && (editing || !r.mine);
+  const others = r.items.filter((x) => x.id !== r.mine?.id);
+  return (
+    <div className="rv">
+      <div className="rv-score">
+        <div className="text-center">
+          <div className="rv-avg">{r.avg != null ? r.avg.toFixed(1).replace('.', ',') : '—'}</div>
+          <Stars value={r.avg ?? 0} size={18} />
+          <div className="mt-1 text-sm font-bold text-mute">{r.count} {plural(r.count, ['отзыв', 'отзыва', 'отзывов'])}</div>
+        </div>
+        <ul className="rv-dist" aria-label="Оценки">
+          {[5, 4, 3, 2, 1].map((n) => (
+            <li key={n}>
+              <span className="w-3 text-right">{n}</span>
+              <span className="rv-dist-bar"><span style={{ width: `${r.count ? (r.dist[n - 1] / r.count) * 100 : 0}%` }} /></span>
+              <span className="w-6 text-right tabular-nums">{r.dist[n - 1]}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {r.mine && !editing && (
+        <div className="rv-item is-mine">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-extrabold">Ваш отзыв</span>
+            <Stars value={r.mine.stars} />
+            {r.mine.hidden && <span className="pill pill-mute">скрыт модератором</span>}
+            <span className="ml-auto flex gap-3">
+              <button type="button" className="btn-link btn-xs" onClick={() => setEditing(true)}>Изменить</button>
+              <button type="button" className="btn-link btn-link-danger btn-xs" onClick={() => void remove()}>Удалить</button>
+            </span>
+          </div>
+          {r.mine.text && <p className="mt-1 whitespace-pre-line font-semibold">{r.mine.text}</p>}
+        </div>
+      )}
+
+      {formOpen && (
+        <form onSubmit={submit} className="rv-form">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-extrabold">{r.mine ? 'Изменить отзыв' : 'Как вам сервер?'}</span>
+            <StarPicker value={stars} onChange={setStars} />
+          </div>
+          <textarea className="input min-h-[5rem]" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
+          <ErrorLine text={error} />
+          <div className="flex justify-end gap-2">
+            {editing && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>}
+            <Button loading={busy} className="btn-sm">{r.mine ? 'Сохранить' : 'Оставить отзыв'}</Button>
+          </div>
+        </form>
+      )}
+      {!me && <p className="text-sm font-semibold text-mute"><a href="/login" className="font-extrabold text-link hover:underline">Войдите</a>, чтобы оставить отзыв.</p>}
+
+      {others.length > 0 && (
+        <ul className="grid gap-2.5">
+          {others.map((x) => (
+            <li key={x.id} className="rv-item">
+              <div className="flex flex-wrap items-center gap-2">
+                <UserAvatar name={x.author} url={x.avatarUrl} size={28} />
+                <span className="font-extrabold">{x.author}</span>
+                <Stars value={x.stars} />
+                <span className="ml-auto text-xs font-bold text-mute">{ago(x.updatedAt)}</span>
+              </div>
+              {x.text && <p className="mt-1.5 whitespace-pre-line font-semibold">{x.text}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/Sections.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { IconChevronDown } from '../../icons';
@@ -54853,6 +55273,8 @@ const errorsEn: Record<string, string> = {
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
   counter_exists: 'This channel is already a counter',
+  gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
+  gallery_queue_full: 'You already have 5 screenshots waiting for review. Wait until they are checked.',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
@@ -55872,7 +56294,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const { isAdmin } = useAuth();
   const [section, ...rest] = sub.split('/');
   // a moderator sees only the news section; everything else is for administrators
-  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
+  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news' || s.id === 'community');
   const known = sections.some((s) => s.id === section);
   // bare /admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
   const home = isAdmin && !known;
@@ -56208,23 +56630,33 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { AdminPage, Button, ErrorLine, Field, IconEdit, IconTrash, IconTrophy, PageHead, Section, fmtDate, plural, toast } from '../ui';
+import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, plural, toast } from '../ui';
 import type { Seasons } from './Community';
+import { useAuth } from '../auth';
+import { Stars, type Review } from '../components/server/Reviews';
+import { Lightbox, type Shot } from './Gallery';
+import '../styles/gallery.css';
 
 export const COMMUNITY_TABS = [
-  { id: 'seasons', label: 'Сезоны' },
+  { id: 'seasons', label: 'Сезоны', admin: true },
+  { id: 'reviews', label: 'Отзывы', admin: false },
+  { id: 'gallery', label: 'Галерея', admin: false },
 ] as const;
 
 export default function AdminCommunity({ sub = '' }: { sub?: string }) {
-  const tab = COMMUNITY_TABS.find((t) => t.id === sub.split('/')[0])?.id ?? 'seasons';
+  const { me } = useAuth();
+  const tabs = COMMUNITY_TABS.filter((t) => !t.admin || me?.role === 'admin');
+  const tab = tabs.find((t) => t.id === sub.split('/')[0])?.id ?? tabs[0].id;
   return (
     <AdminPage head={<PageHead icon={<IconTrophy />} title="Сообщество" subtitle="Сезоны и зал славы, отзывы о серверах, галерея скриншотов" />}>
-      {COMMUNITY_TABS.length > 1 && (
+      {tabs.length > 1 && (
         <nav className="seg" aria-label="Разделы сообщества">
-          {COMMUNITY_TABS.map((t) => <a key={t.id} href={`/admin/community/${t.id}`} className="seg-item" aria-current={tab === t.id ? 'page' : undefined}>{t.label}</a>)}
+          {tabs.map((t) => <a key={t.id} href={`/admin/community/${t.id}`} className="seg-item" aria-current={tab === t.id ? 'page' : undefined}>{t.label}</a>)}
         </nav>
       )}
       {tab === 'seasons' && <SeasonsAdmin />}
+      {tab === 'reviews' && <ReviewsAdmin />}
+      {tab === 'gallery' && <GalleryAdmin />}
     </AdminPage>
   );
 }
@@ -56293,6 +56725,84 @@ function SeasonsAdmin() {
         </ul>
       </Section>
     </>
+  );
+}
+
+function ReviewsAdmin() {
+  const [list, setList] = useState<(Review & { serverId: number; serverName: string })[] | null>(null);
+  const [error, setError] = useState('');
+  const load = () => api<(Review & { serverId: number; serverName: string })[]>('/reviews').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+  const hide = (id: number, hidden: boolean) => api(`/reviews/${id}`, 'PATCH', { hidden }).then(() => { toast(hidden ? 'Отзыв скрыт' : 'Отзыв снова виден'); void load(); }).catch((e: Error) => setError(e.message));
+  const del = async (id: number) => {
+    if (!(await confirmDialog({ title: 'Удалить отзыв?', text: 'Автор сможет написать новый.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/reviews/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+  return (
+    <Section title="Отзывы о серверах" description="Отзывы видны сразу. Скрытый отзыв не учитывается в оценке сервера, автор видит пометку «скрыт модератором».">
+      <ErrorLine text={error} />
+      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">Отзывов пока нет.</p> : (
+        <ul className="grid gap-2">
+          {list.map((r) => (
+            <li key={r.id} className={`flex flex-wrap items-start gap-3 rounded-2xl bg-soft px-3 py-2.5 ${r.hidden ? 'opacity-60' : ''}`}>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="font-extrabold">{r.author}</span>
+                  <Stars value={r.stars} />
+                  <a href={`/servers/${r.serverId}`} className="text-sm font-bold text-link hover:underline">{r.serverName}</a>
+                  <span className="text-xs font-bold text-mute">{ago(r.updatedAt)}</span>
+                  {r.hidden && <span className="pill pill-mute">скрыт</span>}
+                </span>
+                {r.text && <span className="mt-1 block whitespace-pre-line text-sm font-semibold">{r.text}</span>}
+              </span>
+              <button type="button" className="row-act" aria-label={r.hidden ? 'Показать' : 'Скрыть'} title={r.hidden ? 'Показать' : 'Скрыть'} onClick={() => void hide(r.id, !r.hidden)}>{r.hidden ? <IconEye /> : <IconEyeOff />}</button>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void del(r.id)}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function GalleryAdmin() {
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState<number | null>(null);
+  const load = () => api<Shot[]>('/gallery/queue').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+  const patch = (id: number, body: { status?: Shot['status']; featured?: boolean }, done: string) =>
+    api(`/gallery/${id}`, 'PATCH', body).then(() => { toast(done); void load(); }).catch((e: Error) => setError(e.message));
+  const del = async (id: number) => {
+    if (!(await confirmDialog({ title: 'Удалить скриншот?', text: 'Картинка будет удалена насовсем.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/gallery/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+  const waiting = list?.filter((s) => s.status === 'pending').length ?? 0;
+  return (
+    <Section title="Галерея" description={waiting ? `Ждут проверки: ${waiting}` : 'Новых скриншотов на проверке нет.'}>
+      <ErrorLine text={error} />
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title="Скриншотов пока нет" text="Игроки загружают их на странице «Галерея»." /> : (
+        <ul className="ga-grid">
+          {list.map((s, i) => (
+            <li key={s.id} className={`ga-card is-${s.status}`}>
+              <button type="button" className="ga-img" onClick={() => setOpen(i)} aria-label="Открыть"><img src={s.thumb} alt="" loading="lazy" /></button>
+              <div className="ga-meta">
+                <span className="block truncate font-extrabold">{s.caption || 'Без подписи'}</span>
+                <span className="block truncate text-xs font-bold text-mute">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
+              </div>
+              <div className="ga-acts">
+                {s.status !== 'approved' && <button type="button" className="btn btn-success btn-xs" onClick={() => void patch(s.id, { status: 'approved' }, 'Скриншот опубликован')}>Одобрить</button>}
+                {s.status === 'pending' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, 'Скриншот отклонён')}>Отклонить</button>}
+                {s.status === 'approved' && <button type="button" className={`btn btn-xs ${s.featured ? 'btn-warn' : 'btn-soft'}`} onClick={() => void patch(s.id, { featured: !s.featured }, s.featured ? 'Звезда снята' : 'Скриншот в лучших')}>{s.featured ? '★ В лучших' : '☆ В лучшие'}</button>}
+                {s.status === 'approved' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, 'Скриншот снят с публикации')}>Снять</button>}
+                <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void del(s.id)}><IconTrash /></button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -57217,6 +57727,8 @@ import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/ser
 import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
+import '../styles/gallery.css';
+import { Lightbox, ShotGrid, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -57290,6 +57802,23 @@ function SeasonBlocks() {
         </section>
       )}
     </>
+  );
+}
+
+/** the latest screenshots, the starred ones first */
+function GalleryStrip() {
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => { api<Shot[]>('/gallery?limit=6').then(setList).catch(() => setList([])); }, []);
+  return (
+    <section className="tile p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-extrabold">📸 Галерея</h2>
+        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
+      </div>
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <p className="cm-sub">Скриншотов пока нет: поделитесь первым.</p> : <ShotGrid list={list} onOpen={setOpen} />}
+      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
+    </section>
   );
 }
 
@@ -57370,6 +57899,8 @@ export default function CommunityPage() {
           {c.feed.length ? <ul className="cm-feed-list">{c.feed.map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
         </section>
       </div>
+
+      <GalleryStrip />
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Где играют сейчас</h2>
@@ -58145,6 +58676,212 @@ export default function ForgotPassword() {
         <Button className="w-full" loading={busy}>{busy ? t('forgot.sending') : t('forgot.submit')}</Button>
       </form>
     </AuthFlow>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Gallery.tsx" << '__COREGSM_EOF__'
+/**
+ * The screenshot gallery (/gallery): pictures from the players, the starred ones first. A click opens the picture
+ * full size (arrows and Esc work). Signed-in players upload their own; until the staff approve a picture only its
+ * author sees it, under «Мои скриншоты».
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api, getToken, type Server } from '../api';
+import { errorText } from '../apiErrors';
+import { useAuth } from '../auth';
+import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast } from '../ui';
+import '../styles/gallery.css';
+
+export interface Shot {
+  id: number;
+  url: string;
+  thumb: string;
+  caption: string;
+  author: string | null;
+  serverId: number | null;
+  serverName: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  featured: boolean;
+  width: number;
+  height: number;
+  createdAt: number;
+}
+
+const IconImage = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.6" /><path d="M21 16l-5-5-8 8" />
+  </svg>
+);
+
+/** the full-size viewer over the page */
+export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; index: number; onClose: () => void; onIndex: (i: number) => void }) {
+  const s = list[index];
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') onIndex((index + 1) % list.length);
+      else if (e.key === 'ArrowLeft') onIndex((index - 1 + list.length) % list.length);
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [index, list.length, onClose, onIndex]);
+  if (!s) return null;
+  return (
+    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || 'Скриншот'} onClick={onClose}>
+      <figure className="gl-box-fig" onClick={(e) => e.stopPropagation()}>
+        <img src={s.url} alt={s.caption || 'Скриншот'} width={s.width} height={s.height} />
+        <figcaption>
+          <span className="min-w-0 flex-1">
+            {s.caption && <span className="block font-extrabold">{s.caption}</span>}
+            <span className="block text-sm font-semibold opacity-75">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
+          </span>
+          <span className="text-sm font-bold opacity-75">{index + 1} / {list.length}</span>
+        </figcaption>
+      </figure>
+      {list.length > 1 && (
+        <>
+          <button type="button" className="gl-box-nav is-prev" aria-label="Предыдущий" onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
+          <button type="button" className="gl-box-nav is-next" aria-label="Следующий" onClick={(e) => { e.stopPropagation(); onIndex((index + 1) % list.length); }}>›</button>
+        </>
+      )}
+      <button type="button" className="gl-box-close" aria-label="Закрыть" onClick={onClose}>✕</button>
+    </div>
+  );
+}
+
+export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: number) => void; badge?: (s: Shot) => string | null }) {
+  return (
+    <ul className="gl-grid">
+      {list.map((s, i) => (
+        <li key={s.id} className="gl-cell">
+          <button type="button" className="gl-shot" onClick={() => onOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
+            <img src={s.thumb} alt="" loading="lazy" width={640} height={Math.round((640 * s.height) / s.width)} />
+            {s.featured && <span className="gl-star" title="Лучшее">★</span>}
+            {badge?.(s) && <span className="gl-badge">{badge(s)}</span>}
+            {(s.caption || s.author) && (
+              <span className="gl-cap">
+                {s.caption && <span className="block truncate font-extrabold">{s.caption}</span>}
+                <span className="block truncate text-xs font-bold opacity-80">{[s.author, s.serverName].filter(Boolean).join(' · ')}</span>
+              </span>
+            )}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function UploadForm({ servers, onClose, onDone }: { servers: Server[]; onClose: () => void; onDone: (s: Shot) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState('');
+  const [caption, setCaption] = useState('');
+  const [serverId, setServerId] = useState<number | ''>('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!file) return;
+    const u = URL.createObjectURL(file);
+    setPreview(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  const send = async () => {
+    if (!file) return;
+    setBusy(true);
+    setError('');
+    try {
+      const q = new URLSearchParams({ caption: caption.trim() });
+      if (serverId) q.set('serverId', String(serverId));
+      const r = await fetch(`/api/gallery?${q.toString()}`, { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      const j = (await r.json().catch(() => null)) as (Shot & { error?: string }) | null;
+      if (!r.ok || !j) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)'));
+      onDone(j);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Новый скриншот" onClose={onClose}>
+      <div className="space-y-3.5">
+        <label className={`gl-drop ${preview ? 'has-file' : ''}`}>
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {preview ? <img src={preview} alt="" /> : <span className="font-extrabold text-mute">Выберите картинку: PNG, JPG или WebP до 8 МБ</span>}
+        </label>
+        <Field label="Подпись (необязательно)"><input className="input" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} placeholder="Например: закат над замком" /></Field>
+        <Field label="Сервер">
+          <select className="input" value={serverId} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : '')}>
+            <option value="">Не указывать</option>
+            {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </Field>
+        <p className="text-sm font-semibold text-mute">Скриншот появится в галерее после проверки модератором.</p>
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <Button loading={busy} disabled={!file} onClick={() => void send()} type="button">Отправить</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+const STATUS: Record<Shot['status'], string | null> = { pending: 'на проверке', rejected: 'отклонён', approved: null };
+
+export default function GalleryPage() {
+  const { me } = useAuth();
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [mine, setMine] = useState<Shot[]>([]);
+  const [servers, setServers] = useState<Server[]>([]);
+  const [open, setOpen] = useState<{ list: Shot[]; i: number } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const topRef = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(() => {
+    api<Shot[]>('/gallery?limit=200').then(setList).catch((e: Error) => setError(e.message));
+    if (me) api<Shot[]>('/gallery/mine').then((m) => setMine(m.filter((s) => s.status !== 'approved'))).catch(() => undefined);
+  }, [me]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (me) api<Server[]>('/servers').then(setServers).catch(() => undefined); }, [me]);
+
+  return (
+    <div className="space-y-5" ref={topRef}>
+      <PageHead
+        icon={<IconImage />}
+        title="Галерея"
+        subtitle="Скриншоты игроков с наших серверов"
+      >
+        {me ? <button type="button" className="btn" onClick={() => setUploading(true)}>Загрузить скриншот</button> : <a href="/login" className="btn btn-soft">Войдите, чтобы загрузить</a>}
+      </PageHead>
+      <ErrorLine text={error} />
+      {mine.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">Мои скриншоты на проверке</h2>
+          <ShotGrid list={mine} onOpen={(i) => setOpen({ list: mine, i })} badge={(s) => STATUS[s.status]} />
+        </section>
+      )}
+      {list === null ? (
+        <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
+      ) : list.length === 0 ? (
+        <Empty title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки." />
+      ) : (
+        <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
+      )}
+      {open && <Lightbox list={open.list} index={open.i} onClose={() => setOpen(null)} onIndex={(i) => setOpen({ ...open, i })} />}
+      {uploading && (
+        <UploadForm
+          servers={servers}
+          onClose={() => setUploading(false)}
+          onDone={(s) => {
+            setUploading(false);
+            toast(s.status === 'approved' ? 'Скриншот опубликован' : 'Скриншот отправлен на проверку');
+            load();
+          }}
+        />
+      )}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -60455,6 +61192,7 @@ export default function ResetPassword({ token }: { token: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
+import ServerReviews from '../components/server/Reviews';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
@@ -60505,6 +61243,7 @@ const OVERVIEW_SECTIONS: SectionDef[] = [
   { id: 'ov-chart', label: 'График' },
   { id: 'ov-events', label: 'События', secondary: true },
   { id: 'ov-players', label: 'Игроки' },
+  { id: 'ov-reviews', label: 'Отзывы', secondary: true },
 ];
 const HISTORY_SECTIONS: SectionDef[] = [
   { id: 'hi-chart', label: 'График' },
@@ -60820,6 +61559,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
+        <SectionCard id="ov-reviews" state={sections} style={stagger(4)} title="Отзывы игроков">
+          <ServerReviews serverId={id} />
+        </SectionCard>
       </div>
     );
   }
@@ -64678,6 +65420,68 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .hc-over { margin-top: 8px; border-radius: 12px; overflow: hidden; background: rgb(var(--soft)); }
 .hc-over-dim { fill: rgb(var(--card)); fill-opacity: .55; }
 .hc-over-win { fill: none; stroke: var(--srv-accent, rgb(var(--brand))); stroke-width: 2; rx: 6; }
+
+/* ---------- reviews ---------- */
+.rv { display: grid; gap: 14px; }
+.rv-score { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: center; border-radius: 18px; background: rgb(var(--soft)); padding: 14px 18px; }
+.rv-avg { font-size: 44px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
+.rv-stars { display: inline-flex; gap: 1px; color: rgb(var(--line)); line-height: 1; }
+.rv-stars .on { color: #f6b73c; }
+.rv-dist { display: grid; gap: 4px; font-size: 12.5px; font-weight: 800; color: rgb(var(--mute)); }
+.rv-dist li { display: flex; align-items: center; gap: 8px; }
+.rv-dist-bar { flex: 1; height: 8px; border-radius: 9999px; background: rgb(var(--card)); overflow: hidden; }
+.rv-dist-bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #f6b73c, #ff9a3c); }
+.rv-pick { display: inline-flex; gap: 2px; }
+.rv-pick button { font-size: 26px; line-height: 1; color: rgb(var(--line)); transition: transform .15s cubic-bezier(.34, 1.56, .64, 1), color .1s ease; }
+.rv-pick button.on { color: #f6b73c; }
+.rv-pick button:hover { transform: scale(1.18); }
+.rv-form { display: grid; gap: 10px; border-radius: 18px; padding: 14px; box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.rv-item { border-radius: 16px; background: rgb(var(--soft)); padding: 10px 14px; }
+.rv-item.is-mine { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .4); }
+@media (prefers-reduced-motion: reduce) { .rv-pick button { transition: none; } }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
+/* the screenshot gallery: a masonry of thumbnails and the full-size viewer */
+.gl-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); align-items: start; }
+.gl-cell { min-width: 0; }
+.gl-shot { position: relative; display: block; width: 100%; overflow: hidden; border-radius: 18px; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); cursor: zoom-in; }
+.gl-shot img { display: block; width: 100%; height: auto; transition: transform .5s cubic-bezier(.2, .8, .2, 1); }
+.gl-shot:hover img { transform: scale(1.04); }
+.gl-cap { position: absolute; inset: auto 0 0 0; padding: 26px 12px 10px; text-align: left; color: #fff; background: linear-gradient(180deg, transparent, rgba(8, 10, 20, .8)); opacity: 0; transform: translateY(6px); transition: opacity .2s ease, transform .2s ease; }
+.gl-shot:hover .gl-cap, .gl-shot:focus-visible .gl-cap { opacity: 1; transform: none; }
+@media (hover: none) { .gl-cap { opacity: 1; transform: none; } }
+.gl-star { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9999px; color: #f6b73c; background: rgba(8, 10, 20, .55); font-size: 15px; }
+.gl-badge { position: absolute; top: 8px; right: 8px; border-radius: 9999px; padding: 2px 9px; font-size: 12px; font-weight: 800; color: #fff; background: rgba(8, 10, 20, .65); }
+
+.gl-box { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px 64px; background: rgba(6, 6, 14, .92); animation: gl-in .2s ease both; }
+@keyframes gl-in { from { opacity: 0; } }
+.gl-box-fig { max-width: min(1400px, 100%); display: grid; gap: 10px; color: #fff; }
+.gl-box-fig img { max-width: 100%; max-height: calc(100dvh - 140px); width: auto; height: auto; margin: 0 auto; border-radius: 14px; box-shadow: 0 30px 80px -20px #000; }
+.gl-box-fig figcaption { display: flex; gap: 12px; align-items: flex-end; }
+.gl-box-nav, .gl-box-close { position: absolute; display: grid; place-items: center; border-radius: 9999px; color: #fff; background: rgba(255, 255, 255, .1); transition: background .15s ease; }
+.gl-box-nav:hover, .gl-box-close:hover { background: rgba(255, 255, 255, .22); }
+.gl-box-nav { top: 50%; width: 46px; height: 46px; margin-top: -23px; font-size: 30px; line-height: 1; }
+.gl-box-nav.is-prev { left: 12px; } .gl-box-nav.is-next { right: 12px; }
+.gl-box-close { top: 14px; right: 14px; width: 40px; height: 40px; font-size: 18px; }
+@media (max-width: 639px) { .gl-box { padding: 56px 8px 16px; } .gl-box-nav { top: auto; bottom: 14px; } }
+
+.gl-drop { display: grid; place-items: center; min-height: 10rem; border-radius: 18px; border: 2px dashed rgb(var(--line)); cursor: pointer; overflow: hidden; text-align: center; padding: 12px; transition: border-color .15s ease; }
+.gl-drop:hover { border-color: rgb(var(--brand)); }
+.gl-drop.has-file { padding: 0; border-style: solid; }
+.gl-drop img { display: block; width: 100%; max-height: 18rem; object-fit: contain; background: #000; }
+@media (prefers-reduced-motion: reduce) { .gl-shot img, .gl-cap, .gl-box { transition: none; animation: none; } }
+
+/* admin: the moderation queue */
+.ga-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+.ga-card { display: grid; border-radius: 18px; overflow: hidden; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); }
+.ga-card.is-pending { box-shadow: 0 0 0 2px rgb(var(--warn) / .7); }
+.ga-card.is-rejected { opacity: .55; }
+.ga-img { display: block; aspect-ratio: 16 / 9; background: #000; cursor: zoom-in; }
+.ga-img img { width: 100%; height: 100%; object-fit: cover; }
+.ga-meta { padding: 8px 12px 0; min-width: 0; }
+.ga-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px 12px; }
+.ga-acts .row-act { margin-left: auto; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'

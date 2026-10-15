@@ -103,6 +103,8 @@ export const ERRORS = {
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
   counter_exists: 'Этот канал уже стал счётчиком',
+  gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',
+  gallery_queue_full: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',

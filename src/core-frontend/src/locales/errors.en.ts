@@ -98,6 +98,8 @@ const errorsEn: Record<string, string> = {
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
   counter_exists: 'This channel is already a counter',
+  gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
+  gallery_queue_full: 'You already have 5 screenshots waiting for review. Wait until they are checked.',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
