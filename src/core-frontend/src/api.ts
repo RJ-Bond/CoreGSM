@@ -330,6 +330,8 @@ export interface ServerDetails {
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   /** newest first; `players` is set for 'peak' */
   events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance'; players: number | null; name?: string }[];
+  /** the usual players per hour of the week (index = UTC weekday * 24 + hour) over the 4 weeks before; null = unknown */
+  baseline?: (number | null)[] | null;
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }

@@ -291,7 +291,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>

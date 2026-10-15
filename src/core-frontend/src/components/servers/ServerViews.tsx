@@ -7,13 +7,13 @@ import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../.
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
-export type ServersView = 'tiles' | 'list';
+export type ServersView = 'tiles' | 'list' | 'chart';
 export const VIEW_KEY = 'coregsm_servers_view';
 
 export function readView(): ServersView {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    return v === 'list' ? v : 'tiles';
+    return v === 'list' || v === 'chart' ? v : 'tiles';
   } catch {
     return 'tiles';
   }

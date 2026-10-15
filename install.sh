@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d4573ae846e0"
+COREGSM_BUILD="cc274d3b7702"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -12702,13 +12702,13 @@ router.get('/api/servers', viewer, (req, res) => {
 });
 
 /**
- * The sparklines of the server list in one request: for every server the player count over the last `hours`,
- * cut into `SPARK_POINTS` buckets (the busiest moment of each), and which buckets had the server down.
- * An empty bucket (no poll in it) is null.
+ * The sparklines of the server list (and the comparison chart) in one request: for every server the player count
+ * over the last `hours` (up to 14 days), cut into `points` buckets (48 by default, the busiest moment of each),
+ * and which buckets had the server down. An empty bucket (no poll in it) is null.
  */
-const SPARK_POINTS = 48;
 router.get('/api/servers/sparks', viewer, (req, res) => {
-  const hours = Math.min(168, Math.max(1, Number(req.query.hours) || 24));
+  const hours = Math.min(336, Math.max(1, Number(req.query.hours) || 24));
+  const SPARK_POINTS = Math.min(200, Math.max(12, Number(req.query.points) || 48));
   const now = Date.now();
   const since = now - hours * 3600_000;
   const bucket = Math.ceil((hours * 3600_000) / SPARK_POINTS);
@@ -12859,8 +12859,25 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
       peakAt: peak?.ts ?? null,
     },
     events,
+    // «обычно»: the average players per hour of the week (UTC weekday * 24 + hour) over the four weeks before the
+    // shown period, so the chart can show where today is unusual; null where there is not enough history
+    baseline: hours <= 168 ? usualWeek(id, since) : null,
   });
 });
+
+function usualWeek(serverId: number, before: number): (number | null)[] {
+  const out = Array<number | null>(168).fill(null);
+  const rows = db
+    .prepare(
+      `SELECT CAST(strftime('%w', ts / 1000, 'unixepoch') AS INTEGER) * 24 + CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS how,
+              AVG(players) AS a, COUNT(DISTINCT ts / 86400000) AS days
+       FROM history WHERE server_id = ? AND online = 1 AND ts > ? AND ts < ? GROUP BY how`,
+    )
+    .all(serverId, before - 28 * 86400_000, before) as { how: number; a: number; days: number }[];
+  // at least two different days behind an hour, otherwise one odd evening would be "usual"
+  for (const r of rows) if (r.days >= 2) out[r.how] = Math.round(r.a * 10) / 10;
+  return out;
+}
 
 router.post(
   '/api/servers/:id/refresh',
@@ -39504,6 +39521,8 @@ export interface ServerDetails {
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   /** newest first; `players` is set for 'peak' */
   events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance'; players: number | null; name?: string }[];
+  /** the usual players per hour of the week (index = UTC weekday * 24 + hour) over the 4 weeks before; null = unknown */
+  baseline?: (number | null)[] | null;
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }
@@ -47448,14 +47467,45 @@ const fullTime = (ts: number) =>
   new Date(ts).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /**
+ * the usual value at a moment: the backend gives one value per hour of the week (UTC); it stands for the middle of
+ * its hour and the curve goes straight from one middle to the next, so the band is smooth instead of steps
+ */
+const usualAt = (baseline: (number | null)[], ts: number) => {
+  const h = (ts - 1800_000) / 3600_000; // hours since the epoch, shifted so that :30 is a whole number
+  const i = Math.floor(h);
+  const f = h - i;
+  const at = (k: number) => {
+    const d = new Date(k * 3600_000 + 1800_000);
+    return baseline[d.getUTCDay() * 24 + d.getUTCHours()] ?? null;
+  };
+  const a = at(i);
+  const b = at(i + 1);
+  if (a == null || b == null) return a ?? b;
+  return a + (b - a) * f;
+};
+
+/**
  * Players (or ping) over time: smooth area, red bands where the server did not answer, a cursor with a tooltip
  * that follows the mouse / finger / pen and the arrow keys, Y axis that fits the data.
+ * On the players chart: a band of the usual level for that hour of the week (the four weeks before) and the ping
+ * as a thin line on a second axis. Dragging with the mouse zooms into a stretch; the overview strip under a long
+ * period shows where the zoom is and can be dragged too.
  */
 export default function HistoryChart({
-  points, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '',
-}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string }) {
+  points: allPoints, hours, max, color, series = 'players', loading = false, events = [], title = '', game = '', baseline = null,
+}: { points: Point[]; hours: number; max: number; color: string; series?: Series; loading?: boolean; events?: Ev[]; title?: string; game?: string; baseline?: (number | null)[] | null }) {
   useI18n();
-  const L = 38, R = 10, B = 28;
+  const [zoom, setZoom] = useState<[number, number] | null>(null);
+  const [showUsual, setShowUsual] = useState(true);
+  const [showPing, setShowPing] = useState(false);
+  const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
+  // a new period starts unzoomed
+  useEffect(() => { setZoom(null); }, [hours]);
+  const points = zoom ? allPoints.filter((p) => p.ts >= zoom[0] && p.ts <= zoom[1]) : allPoints;
+  const hasUsual = series === 'players' && !!baseline && baseline.some((v) => v != null);
+  const usualOn = hasUsual && showUsual;
+  const pingOn = series === 'players' && showPing && allPoints.some((p) => p.ping != null);
+  const L = 38, R = pingOn ? 46 : 10, B = 28;
   const [hover, setHover] = useState<number | null>(null);
   const [kbd, setKbd] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -47475,15 +47525,15 @@ export default function HistoryChart({
   }, []);
   const H = W < 520 ? 230 : 320;
 
-  const now = Date.now();
-  const winStart = now - hours * 3600_000;
+  const now = zoom ? zoom[1] : Date.now();
+  const winStart = zoom ? zoom[0] : now - hours * 3600_000;
   const first = points.length ? points[0].ts : now;
   const sparse = points.length < 20;
   // data may begin later than the window (new server, 30 days asked while 7 are kept)
   const late = points.length > 0 && first - winStart > hours * 3600_000 * 0.08;
   // with only a few samples the window shrinks to them instead of leaving a lonely tail on the right
   let t0 = winStart;
-  if (sparse || late) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
+  if (!zoom && (sparse || late)) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
   const span = now - t0;
   // vertical markers for outages, returns and the busiest moment
   const marks = events.filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
@@ -47495,10 +47545,37 @@ export default function HistoryChart({
     return series === 'ping' ? p.ping : p.players;
   };
   const vals = points.map(valueOf).filter((v): v is number => v != null);
-  const dataMax = Math.max(0, ...vals);
+  // the usual level along the shown stretch (about 120 steps), so that the scale leaves room for it
+  const usual: { ts: number; v: number | null }[] = [];
+  if (usualOn && baseline) for (let i = 0; i <= 120; i++) { const ts = t0 + (span * i) / 120; usual.push({ ts, v: usualAt(baseline, ts) }); }
+  const usualMax = Math.max(0, ...usual.map((u) => (u.v ?? 0) * 1.2));
+  const dataMax = Math.max(0, ...vals, usualMax);
   const scale = niceScale(dataMax, series === 'ping' ? 20 : 2);
   const yMax = scale.max;
   const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
+  // second axis: the ping, on the players chart
+  const pings = pingOn ? points.map((p) => (p.online ? p.ping : null)) : [];
+  const pScale = niceScale(Math.max(0, ...pings.filter((v): v is number => v != null)), 20);
+  const y2 = (v: number) => T + (1 - v / pScale.max) * (H - T - B);
+  const pingSegs: [number, number][][] = [];
+  if (pingOn) {
+    let run: [number, number][] = [];
+    points.forEach((p, i) => {
+      const v = pings[i];
+      if (v == null) { if (run.length) pingSegs.push(run); run = []; return; }
+      run.push([x(p.ts), y2(v)]);
+    });
+    if (run.length) pingSegs.push(run);
+  }
+  // the usual band: 80-120% of the usual value, broken where it is unknown
+  const usualRuns: { ts: number; v: number }[][] = [];
+  {
+    let run: { ts: number; v: number }[] = [];
+    for (const u of usual) {
+      if (u.v == null) { if (run.length) usualRuns.push(run); run = []; } else run.push({ ts: u.ts, v: u.v });
+    }
+    if (run.length) usualRuns.push(run);
+  }
 
   // continuous runs of answered samples are separate curves; a gap is much wider than the usual spacing
   const bucket = (hours * 3600_000) / 180;
@@ -47523,10 +47600,29 @@ export default function HistoryChart({
     points.forEach((p, i) => { if (Math.abs(x(p.ts) - vx) < Math.abs(x(points[best].ts) - vx)) best = i; });
     return best;
   };
+  const svgX = (clientX: number) => {
+    const r = svg.current?.getBoundingClientRect();
+    return r && r.width ? ((clientX - r.left) / r.width) * W : 0;
+  };
+  const tsAt = (vx: number) => t0 + ((Math.min(W - R, Math.max(L, vx)) - L) / (W - L - R)) * span;
   const onPointer = (e: ReactPointerEvent) => {
     setKbd(false);
+    if (drag && e.buttons === 1) setDrag({ ...drag, to: svgX(e.clientX) });
     const i = nearest(e.clientX);
     if (i != null) setHover(i);
+  };
+  const onDown = (e: ReactPointerEvent) => {
+    // only the mouse zooms: a finger scrolls the page and moves the cursor
+    if (e.pointerType === 'mouse' && e.button === 0) setDrag({ from: svgX(e.clientX), to: svgX(e.clientX) });
+    onPointer(e);
+  };
+  const onUp = () => {
+    if (drag && Math.abs(drag.to - drag.from) > 12) {
+      const a = tsAt(Math.min(drag.from, drag.to));
+      const b = tsAt(Math.max(drag.from, drag.to));
+      if (b - a > 10 * 60_000) { setZoom([a, b]); setHover(null); }
+    }
+    setDrag(null);
   };
   const onKey = (e: ReactKeyboardEvent) => {
     if (points.length === 0) return;
@@ -47547,7 +47643,8 @@ export default function HistoryChart({
   const hp = hover != null ? points[Math.min(hover, points.length - 1)] ?? null : null;
   const hv = hp ? valueOf(hp) : null;
   const lastSeg = segments[segments.length - 1];
-  const endPt = lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
+  // «now» only on the live chart: a zoomed stretch ends in the past
+  const endPt = !zoom && lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
   const unit = series === 'ping' ? 'мс' : '';
   const peak = findPeak(points.filter((p) => p.ts >= t0), series);
   const longRange = hours > 36;
@@ -47692,6 +47789,27 @@ export default function HistoryChart({
           {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}
+      {(hasUsual || series === 'players' || zoom) && (
+        <div className="hc-tools">
+          {hasUsual && (
+            <button type="button" className="hc-chip" aria-pressed={showUsual} onClick={() => setShowUsual((v) => !v)}>
+              <i className="hc-chip-usual" aria-hidden />обычный уровень
+            </button>
+          )}
+          {series === 'players' && allPoints.some((p) => p.ping != null) && (
+            <button type="button" className="hc-chip" aria-pressed={showPing} onClick={() => setShowPing((v) => !v)}>
+              <i className="hc-chip-ping" aria-hidden />пинг, мс (справа)
+            </button>
+          )}
+          {zoom ? (
+            <button type="button" className="hc-chip is-zoom" onClick={() => setZoom(null)}>
+              {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · показать весь период
+            </button>
+          ) : (
+            <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+          )}
+        </div>
+      )}
       <div className="hc-head">
         <span className="hc-cap">{series === 'ping' ? t('srv.chart.axisPing') : t('srv.chart.axisPlayers')}</span>
         <span className="hc-notes">
@@ -47719,10 +47837,11 @@ export default function HistoryChart({
           viewBox={`0 0 ${W} ${H}`}
           className="hc-fade block h-auto w-full touch-pan-y select-none"
           aria-hidden
-          onPointerDown={onPointer}
+          onPointerDown={onDown}
           onPointerMove={onPointer}
-          onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHover(null); }}
-          onPointerCancel={() => setHover(null)}
+          onPointerUp={onUp}
+          onPointerLeave={(e) => { if (e.pointerType === 'mouse') { setHover(null); setDrag(null); } }}
+          onPointerCancel={() => { setHover(null); setDrag(null); }}
         >
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
@@ -47745,6 +47864,17 @@ export default function HistoryChart({
             const bw = Math.max(3, ((W - L - R) * bucket) / span);
             return <rect key={p.ts} x={Math.max(L, x(p.ts) - bw / 2)} y={T} width={bw} height={H - T - B} className="fill-bad" opacity="0.2" />;
           })}
+          {usualRuns.map((run, i) => {
+            const hi = run.map((u): [number, number] => [x(u.ts), y(u.v * 1.2)]);
+            const lo = run.map((u): [number, number] => [x(u.ts), y(u.v * 0.8)]).reverse();
+            const mid = smoothPath(run.map((u): [number, number] => [x(u.ts), y(u.v)]));
+            return (
+              <g key={`u${i}`} className="hc-usual">
+                <path d={`${smoothPath(hi)} L${lo[0][0].toFixed(1)},${lo[0][1].toFixed(1)} ${smoothPath(lo).slice(1)} Z`} />
+                <path d={mid} fill="none" strokeDasharray="5 5" />
+              </g>
+            );
+          })}
           {segments.map((seg, i) => {
             const pts = seg.map((p): [number, number] => [x(p.ts), y(p.v)]);
             const d = smoothPath(pts);
@@ -47756,6 +47886,13 @@ export default function HistoryChart({
               </g>
             );
           })}
+          {pingSegs.map((run, i) => (run.length > 1 ? <path key={`p${i}`} d={smoothPath(run)} className="hc-ping" fill="none" /> : null))}
+          {pingOn && pScale.ticks.map((v) => (
+            <text key={`pt${v}`} x={W - R + 6} y={y2(v) + 4} className="hc-ping-tick" fontSize="11" fontWeight="700">{v}</text>
+          ))}
+          {drag && Math.abs(drag.to - drag.from) > 3 && (
+            <rect x={Math.max(L, Math.min(drag.from, drag.to))} y={T} width={Math.min(W - R, Math.max(drag.from, drag.to)) - Math.max(L, Math.min(drag.from, drag.to))} height={H - T - B} className="hc-drag" />
+          )}
           {peak && peak.ts >= t0 && (
             <circle cx={x(peak.ts)} cy={y(peak.value)} r="7" fill="none" style={{ stroke: color }} strokeWidth="2" opacity="0.9" />
           )}
@@ -47809,6 +47946,9 @@ export default function HistoryChart({
                   <span className="text-[15px] font-extrabold">{hp.players}</span>
                   {max > 0 && <span className="opacity-80"> / {max}</span>}
                 </div>
+                {usualOn && baseline && usualAt(baseline, hp.ts) != null && (
+                  <div className="whitespace-nowrap"><span className="opacity-80">Обычно </span><span className="font-extrabold">~{Math.round(usualAt(baseline, hp.ts)!)}</span></div>
+                )}
                 <div className="whitespace-nowrap">
                   <span className="opacity-80">Пинг </span>
                   {hp.ping != null ? <span className="text-[15px] font-extrabold">{hp.ping} мс</span> : <span className="opacity-70">нет данных</span>}
@@ -47824,6 +47964,9 @@ export default function HistoryChart({
         )}
         <span className="sr-only" aria-live="polite">{kbd && hp ? describe(hp) : ''}</span>
       </div>
+      {(hours > 24 || zoom) && allPoints.length > 1 && (
+        <Overview points={allPoints} hours={hours} color={color} zoom={zoom} onZoom={setZoom} />
+      )}
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <p className="text-xs font-bold text-mute">
         {t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}
@@ -47848,6 +47991,57 @@ export default function HistoryChart({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** the whole period in a thin strip: the zoomed stretch is lit; dragging on the strip picks another one */
+function Overview({ points, hours, color, zoom, onZoom }: { points: Point[]; hours: number; color: string; zoom: [number, number] | null; onZoom: (z: [number, number] | null) => void }) {
+  const ref = useRef<SVGSVGElement>(null);
+  const [sel, setSel] = useState<{ a: number; b: number } | null>(null);
+  const W = 1000;
+  const H = 44;
+  const end = Date.now();
+  const start = end - hours * 3600_000;
+  const x = (ts: number) => ((ts - start) / (end - start)) * W;
+  const top = Math.max(1, ...points.map((p) => p.players));
+  const pts = points.filter((p) => p.ts >= start).map((p): [number, number] => [x(p.ts), H - 4 - (p.online ? p.players / top : 0) * (H - 10)]);
+  const at = (clientX: number) => {
+    const r = ref.current?.getBoundingClientRect();
+    return r && r.width ? Math.min(1, Math.max(0, (clientX - r.left) / r.width)) : 0;
+  };
+  const toTs = (f: number) => start + f * (end - start);
+  const lit = sel ? [Math.min(sel.a, sel.b), Math.max(sel.a, sel.b)] : zoom ? [(zoom[0] - start) / (end - start), (zoom[1] - start) / (end - start)] : null;
+  return (
+    <div className="hc-over">
+      <svg
+        ref={ref}
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="block h-11 w-full cursor-crosshair touch-none select-none"
+        role="img"
+        aria-label="Весь период: потяните, чтобы выбрать участок"
+        onPointerDown={(e) => { (e.target as Element).setPointerCapture?.(e.pointerId); const f = at(e.clientX); setSel({ a: f, b: f }); }}
+        onPointerMove={(e) => { if (sel) setSel({ ...sel, b: at(e.clientX) }); }}
+        onPointerUp={() => {
+          if (sel) {
+            const [a, b] = [Math.min(sel.a, sel.b), Math.max(sel.a, sel.b)];
+            if (b - a > 0.01) onZoom([toTs(a), toTs(b)]);
+            else onZoom(null);
+          }
+          setSel(null);
+        }}
+      >
+        {pts.length > 1 && <path d={`${smoothPath(pts)} L${pts[pts.length - 1][0]},${H} L${pts[0][0]},${H} Z`} style={{ fill: color }} opacity="0.28" />}
+        {pts.length > 1 && <path d={smoothPath(pts)} fill="none" style={{ stroke: color }} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />}
+        {lit && (
+          <>
+            <rect x="0" y="0" width={lit[0] * W} height={H} className="hc-over-dim" />
+            <rect x={lit[1] * W} y="0" width={W - lit[1] * W} height={H} className="hc-over-dim" />
+            <rect x={lit[0] * W} y="1" width={(lit[1] - lit[0]) * W} height={H - 2} className="hc-over-win" vectorEffect="non-scaling-stroke" />
+          </>
+        )}
+      </svg>
     </div>
   );
 }
@@ -49225,6 +49419,226 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/CompareChart.tsx" << '__COREGSM_EOF__'
+/**
+ * All servers on one chart: players (or the share of slots taken) over a day or a week, a line per server in its
+ * game's colour, a cursor that lists every server at that moment, legend chips that hide a line, and a ranking:
+ * average, peak and the change against the period before.
+ */
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import type { Server } from '../../api';
+import { getToken } from '../../api';
+import { gameColor } from '../../games';
+import { GameAvatar, smoothPath } from '../../ui';
+
+interface Sparks { hours: number; points: number; from: number; to: number; servers: Record<number, { players: (number | null)[]; down: boolean[] }> }
+
+// distinct colours when two servers run the same game
+const SPARE = ['#2563eb', '#db2777', '#059669', '#d97706', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#c026d3', '#0d9488'];
+
+const PERIODS: [number, string][] = [[24, 'Сутки'], [168, 'Неделя']];
+
+/** distance between the hues of two '#rrggbb' colours, in degrees */
+function hueGap(a: string, b: string): number {
+  const hue = (hex: string) => {
+    const n = parseInt(hex.replace('#', '').slice(0, 6), 16);
+    if (Number.isNaN(n)) return 0;
+    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, bl = (n & 255) / 255;
+    const mx = Math.max(r, g, bl), mn = Math.min(r, g, bl), d = mx - mn;
+    if (!d) return 0;
+    const h = mx === r ? ((g - bl) / d) % 6 : mx === g ? (bl - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+  const d = Math.abs(hue(a) - hue(b));
+  return Math.min(d, 360 - d);
+}
+
+export default function CompareChart({ servers }: { servers: Server[] }) {
+  const [hours, setHours] = useState(24);
+  const [pct, setPct] = useState(false);
+  const [hidden, setHidden] = useState<Set<number>>(new Set());
+  const [data, setData] = useState<Sparks | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
+  const [W, setW] = useState(900);
+  const wrap = useRef<HTMLDivElement>(null);
+  const svg = useRef<SVGSVGElement>(null);
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setW(Math.max(300, Math.round(el.clientWidth))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // twice the period: the first half is the period before, for the change in the ranking
+  useEffect(() => {
+    let alive = true;
+    const token = getToken();
+    const points = hours <= 24 ? 96 : 168;
+    fetch(`/api/servers/sparks?hours=${hours * 2}&points=${points}`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
+      .then((r) => (r.ok ? (r.json() as Promise<Sparks>) : null))
+      .then((d) => { if (alive && d) setData(d); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [hours]);
+
+  // a line keeps its game's colour unless that hue is already taken by a line before it
+  const colors = useMemo(() => {
+    const used: string[] = [];
+    let spare = 0;
+    return new Map(servers.map((s) => {
+      let c = gameColor(s.game);
+      for (let k = 0; used.some((u) => hueGap(u, c) < 28) && k < SPARE.length; k++) c = SPARE[spare++ % SPARE.length];
+      used.push(c);
+      return [s.id, c];
+    }));
+  }, [servers]);
+
+  const series = useMemo(() => {
+    if (!data) return [];
+    const half = Math.floor(data.points / 2);
+    return servers.map((s) => {
+      const raw = data.servers[s.id]?.players ?? [];
+      const prevRaw = raw.slice(0, half);
+      const curRaw = raw.slice(half);
+      const known = (xs: (number | null)[]) => xs.filter((v): v is number => v != null);
+      const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+      const cur = known(curRaw);
+      const a = avg(cur);
+      const p = avg(known(prevRaw));
+      const scale = (v: number | null) => (v == null ? null : pct ? (s.maxPlayers > 0 ? Math.min(100, (v / s.maxPlayers) * 100) : null) : v);
+      return {
+        s,
+        color: colors.get(s.id)!,
+        values: curRaw.map(scale),
+        avg: a,
+        peak: cur.length ? Math.max(...cur) : null,
+        change: a != null && p != null && p > 0 ? Math.round(((a - p) / p) * 100) : null,
+      };
+    });
+  }, [data, servers, pct, colors]);
+
+  const shown = series.filter((x) => !hidden.has(x.s.id));
+  const n = shown[0]?.values.length ?? 0;
+  const L = 40;
+  const R = 12;
+  const T = 12;
+  const B = 26;
+  const H = W < 520 ? 240 : 320;
+  const top = pct ? 100 : Math.max(1, ...shown.flatMap((x) => x.values.filter((v): v is number => v != null)));
+  const step = top <= 5 ? 1 : top <= 10 ? 2 : top <= 50 ? 10 : top <= 100 ? 20 : 50;
+  const yMax = pct ? 100 : Math.ceil((top * 1.1) / step) * step;
+  const x = (i: number) => L + (i / Math.max(1, n - 1)) * (W - L - R);
+  const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
+  const from = data ? data.to - hours * 3600_000 : Date.now() - hours * 3600_000;
+  const tsOf = (i: number) => from + (i / Math.max(1, n - 1)) * hours * 3600_000;
+  const label = (ts: number) => (hours <= 24 ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : new Date(ts).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric' }));
+
+  const onMove = (e: ReactPointerEvent) => {
+    const r = svg.current?.getBoundingClientRect();
+    if (!r || !n) return;
+    const vx = ((e.clientX - r.left) / r.width) * W;
+    setHover(Math.min(n - 1, Math.max(0, Math.round(((vx - L) / (W - L - R)) * (n - 1)))));
+  };
+  const toggle = (id: number) => setHidden((h) => { const next = new Set(h); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const ranked = [...series].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+  const fmt = (v: number | null) => (v == null ? '–' : pct ? `${Math.round(v)}%` : String(Math.round(v * 10) / 10).replace('.', ','));
+
+  return (
+    <section className="tile tile-in p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-extrabold">Сравнение серверов</h2>
+        <div className="flex flex-wrap gap-2">
+          <div className="seg" role="group" aria-label="Что показывать">
+            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>Игроки</button>
+            <button type="button" className="seg-item" aria-pressed={pct} onClick={() => setPct(true)}>% мест</button>
+          </div>
+          <div className="seg" role="group" aria-label="Период">
+            {PERIODS.map(([h, l]) => <button key={h} type="button" className="seg-item" aria-pressed={hours === h} onClick={() => setHours(h)}>{l}</button>)}
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-2" aria-label="Показать или скрыть сервер">
+        {series.map((x) => (
+          <button key={x.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(x.s.id)} onClick={() => toggle(x.s.id)} style={{ ['--c' as string]: x.color }}>
+            <i aria-hidden />{x.s.name}
+          </button>
+        ))}
+      </div>
+
+      <div ref={wrap} className="relative">
+        {!data ? (
+          <div className="skeleton rounded-2xl bg-soft" style={{ height: H }} aria-label="Загрузка" role="status" />
+        ) : (
+          <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full touch-pan-y select-none" role="img" aria-label={`Игроки на серверах за ${hours <= 24 ? 'сутки' : 'неделю'}`} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
+            {Array.from({ length: Math.floor(yMax / (pct ? 25 : step)) + 1 }, (_, i) => i * (pct ? 25 : step)).map((v) => (
+              <g key={v}>
+                <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeDasharray={v ? '3 5' : undefined} />
+                <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{pct ? `${v}%` : v}</text>
+              </g>
+            ))}
+            {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
+              <text key={f} x={L + f * (W - L - R)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{label(from + f * hours * 3600_000)}</text>
+            ))}
+            {shown.map((x) => {
+              const runs: [number, number][][] = [];
+              let run: [number, number][] = [];
+              x.values.forEach((v, i) => { if (v == null) { if (run.length) runs.push(run); run = []; } else run.push([L + (i / Math.max(1, n - 1)) * (W - L - R), y(v)]); });
+              if (run.length) runs.push(run);
+              return runs.map((r, k) => <path key={`${x.s.id}-${k}`} d={smoothPath(r)} fill="none" stroke={x.color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" opacity={hover == null ? 0.95 : 0.85} />);
+            })}
+            {hover != null && (
+              <>
+                <line x1={x(hover)} x2={x(hover)} y1={T} y2={H - B} className="stroke-mute" strokeDasharray="3 3" />
+                {shown.map((s) => s.values[hover] != null && <circle key={s.s.id} cx={x(hover)} cy={y(s.values[hover]!)} r="4.5" fill={s.color} className="stroke-card" strokeWidth="2" />)}
+              </>
+            )}
+          </svg>
+        )}
+        {hover != null && data && (
+          <div className="pointer-events-none absolute top-1 z-10 min-w-[11rem] -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-[13px] font-bold text-page shadow-pop" style={{ left: Math.min(W - 100, Math.max(100, x(hover))) }}>
+            <div className="mb-1 text-[12px] font-semibold opacity-80">{new Date(tsOf(hover)).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+            {[...shown].sort((a, b) => (b.values[hover] ?? -1) - (a.values[hover] ?? -1)).map((s) => (
+              <div key={s.s.id} className="flex items-center gap-2 whitespace-nowrap">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
+                <span className="max-w-[10rem] truncate opacity-90">{s.s.name}</span>
+                <span className="ml-auto font-extrabold">{s.values[hover] == null ? '—' : fmt(s.values[hover])}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="cmp-rank">
+          <thead>
+            <tr><th scope="col">#</th><th scope="col">Сервер</th><th scope="col">В среднем</th><th scope="col">Пик</th><th scope="col">К прошлому периоду</th></tr>
+          </thead>
+          <tbody>
+            {ranked.map((r, i) => (
+              <tr key={r.s.id}>
+                <td className="font-extrabold text-mute">{i + 1}</td>
+                <td>
+                  <a href={`/servers/${r.s.id}`} className="flex items-center gap-2 font-extrabold hover:text-link">
+                    <GameAvatar game={r.s.game} size={26} />
+                    <span className="truncate">{r.s.name}</span>
+                  </a>
+                </td>
+                <td className="tabular-nums">{fmt(r.avg)}</td>
+                <td className="tabular-nums">{fmt(r.peak)}</td>
+                <td>{r.change == null ? <span className="text-mute">–</span> : <span className={`cmp-change ${r.change > 0 ? 'is-up' : r.change < 0 ? 'is-down' : ''}`}>{r.change > 0 ? '▲' : r.change < 0 ? '▼' : '•'} {Math.abs(r.change)}%</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/PulseStrip.tsx" << '__COREGSM_EOF__'
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
 import { useId } from 'react';
@@ -49354,13 +49768,13 @@ import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../.
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
-export type ServersView = 'tiles' | 'list';
+export type ServersView = 'tiles' | 'list' | 'chart';
 export const VIEW_KEY = 'coregsm_servers_view';
 
 export function readView(): ServersView {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    return v === 'list' ? v : 'tiles';
+    return v === 'list' || v === 'chart' ? v : 'tiles';
   } catch {
     return 'tiles';
   }
@@ -58473,7 +58887,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
@@ -58907,6 +59321,7 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import CompareChart from '../components/servers/CompareChart';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -59129,7 +59544,7 @@ function ServerList() {
               </button>
             )}
             <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список']] as [ServersView, string][]).map(([id, label]) => (
+              {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
                 <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
               ))}
             </div>
@@ -59162,6 +59577,8 @@ function ServerList() {
                 renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
               />
             )}
+
+            {effView === 'chart' && visible.length > 0 && <CompareChart servers={visible} />}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
               <div className="fade-in srv-grid">
@@ -62264,6 +62681,28 @@ __COREGSM_EOF__
 }
 html[data-motion='reduce'] .srv-more-pop { animation: none !important; }
 html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none !important; }
+
+/* ---------- history chart: tools, the usual band, the ping axis, zoom ---------- */
+.hc-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 8px; }
+.hc-chip {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 3px 12px; border-radius: 9999px;
+  font-size: 12.5px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+.hc-chip[aria-pressed='true'] { color: rgb(var(--ink)); background: rgb(var(--card)); box-shadow: 0 0 0 1.5px rgb(var(--line)), 0 1px 2px rgba(20, 24, 40, .06); }
+.hc-chip.is-zoom { color: rgb(var(--link)); background: rgb(var(--link) / .1); }
+.hc-chip i { width: 16px; height: 8px; border-radius: 4px; }
+.hc-chip-usual { background: repeating-linear-gradient(90deg, rgb(var(--mute) / .6) 0 4px, transparent 4px 7px), rgb(var(--mute) / .15); }
+.hc-chip-ping { background: rgb(var(--link)); height: 3px !important; }
+.hc-tip { font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
+@media (hover: none) { .hc-tip { display: none; } }
+.hc-usual path:first-child { fill: rgb(var(--mute) / .12); }
+.hc-usual path:last-child { stroke: rgb(var(--mute) / .55); stroke-width: 1.5; }
+.hc-ping { stroke: rgb(var(--link)); stroke-width: 1.6; opacity: .85; }
+.hc-ping-tick { fill: rgb(var(--link)); }
+.hc-drag { fill: var(--srv-accent, rgb(var(--brand))); fill-opacity: .12; stroke: var(--srv-accent, rgb(var(--brand))); stroke-opacity: .5; stroke-dasharray: 4 3; }
+.hc-over { margin-top: 8px; border-radius: 12px; overflow: hidden; background: rgb(var(--soft)); }
+.hc-over-dim { fill: rgb(var(--card)); fill-opacity: .55; }
+.hc-over-win { fill: none; stroke: var(--srv-accent, rgb(var(--brand))); stroke-width: 2; rx: 6; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
@@ -62867,6 +63306,23 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-new-news-title:hover { color: rgb(var(--link)); }
 .srv-new-news-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .srv-new-link { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+
+/* servers compared on one chart */
+.cmp-chip {
+  --c: rgb(var(--brand));
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; max-width: 16rem; padding: 3px 12px 3px 10px; border-radius: 9999px;
+  font-size: 13px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); transition: opacity .15s ease, background-color .15s ease;
+}
+.cmp-chip i { width: 10px; height: 10px; flex: none; border-radius: 9999px; background: var(--c); }
+.cmp-chip[aria-pressed='true'] { color: rgb(var(--ink)); background: color-mix(in srgb, var(--c) 14%, rgb(var(--card))); }
+.cmp-chip[aria-pressed='false'] { opacity: .55; text-decoration: line-through; }
+.cmp-rank { width: 100%; border-collapse: collapse; font-size: 14px; }
+.cmp-rank th { padding: 6px 8px; text-align: left; font-size: 12px; font-weight: 800; color: rgb(var(--mute)); white-space: nowrap; }
+.cmp-rank td { padding: 8px; border-top: 1px solid rgb(var(--line)); font-weight: 700; }
+.cmp-rank td:nth-child(2) { max-width: 18rem; }
+.cmp-change { display: inline-flex; align-items: center; gap: 4px; border-radius: 9999px; padding: 2px 9px; font-size: 12.5px; font-weight: 800; background: rgb(var(--soft)); color: rgb(var(--mute)); }
+.cmp-change.is-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.cmp-change.is-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'

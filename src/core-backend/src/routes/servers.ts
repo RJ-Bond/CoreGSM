@@ -44,13 +44,13 @@ router.get('/api/servers', viewer, (req, res) => {
 });
 
 /**
- * The sparklines of the server list in one request: for every server the player count over the last `hours`,
- * cut into `SPARK_POINTS` buckets (the busiest moment of each), and which buckets had the server down.
- * An empty bucket (no poll in it) is null.
+ * The sparklines of the server list (and the comparison chart) in one request: for every server the player count
+ * over the last `hours` (up to 14 days), cut into `points` buckets (48 by default, the busiest moment of each),
+ * and which buckets had the server down. An empty bucket (no poll in it) is null.
  */
-const SPARK_POINTS = 48;
 router.get('/api/servers/sparks', viewer, (req, res) => {
-  const hours = Math.min(168, Math.max(1, Number(req.query.hours) || 24));
+  const hours = Math.min(336, Math.max(1, Number(req.query.hours) || 24));
+  const SPARK_POINTS = Math.min(200, Math.max(12, Number(req.query.points) || 48));
   const now = Date.now();
   const since = now - hours * 3600_000;
   const bucket = Math.ceil((hours * 3600_000) / SPARK_POINTS);
@@ -201,8 +201,25 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
       peakAt: peak?.ts ?? null,
     },
     events,
+    // «обычно»: the average players per hour of the week (UTC weekday * 24 + hour) over the four weeks before the
+    // shown period, so the chart can show where today is unusual; null where there is not enough history
+    baseline: hours <= 168 ? usualWeek(id, since) : null,
   });
 });
+
+function usualWeek(serverId: number, before: number): (number | null)[] {
+  const out = Array<number | null>(168).fill(null);
+  const rows = db
+    .prepare(
+      `SELECT CAST(strftime('%w', ts / 1000, 'unixepoch') AS INTEGER) * 24 + CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS how,
+              AVG(players) AS a, COUNT(DISTINCT ts / 86400000) AS days
+       FROM history WHERE server_id = ? AND online = 1 AND ts > ? AND ts < ? GROUP BY how`,
+    )
+    .all(serverId, before - 28 * 86400_000, before) as { how: number; a: number; days: number }[];
+  // at least two different days behind an hour, otherwise one odd evening would be "usual"
+  for (const r of rows) if (r.days >= 2) out[r.how] = Math.round(r.a * 10) / 10;
+  return out;
+}
 
 router.post(
   '/api/servers/:id/refresh',

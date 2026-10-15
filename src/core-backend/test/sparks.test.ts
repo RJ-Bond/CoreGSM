@@ -41,6 +41,22 @@ describe('api: sparklines of all servers', () => {
     assert.equal(r.body.servers[b], undefined, 'samples older than the window are not shown');
   });
 
+  it('the server page gets the usual players per hour of the week (two days behind an hour at least)', async () => {
+    const db = new Database(api.dbPath);
+    const now = Date.now();
+    const h = db.prepare('INSERT INTO history (server_id, ts, online, players) VALUES (?, ?, 1, ?)');
+    // the same hour one and two weeks before the shown day: 10 and 20 players
+    h.run(a, now - 7 * 86_400_000 - 2 * 86_400_000, 10);
+    h.run(a, now - 14 * 86_400_000 - 2 * 86_400_000, 20);
+    db.close();
+    const d = (await api.call('GET', `/api/servers/${a}/details?hours=24`)).body;
+    assert.equal(d.baseline.length, 168);
+    const t = new Date(Date.now() - 2 * 86_400_000);
+    assert.equal(d.baseline[t.getUTCDay() * 24 + t.getUTCHours()], 15);
+    assert.equal(d.baseline.filter((v: number | null) => v != null).length, 1);
+    assert.equal((await api.call('GET', `/api/servers/${a}/details?hours=720`)).body.baseline, null, 'not for 30 days');
+  });
+
   it('a private panel hides them from guests', async () => {
     const db = new Database(api.dbPath);
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('public_panel', '0')").run();

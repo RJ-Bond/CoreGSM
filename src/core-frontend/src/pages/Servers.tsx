@@ -8,6 +8,7 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import CompareChart from '../components/servers/CompareChart';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -230,7 +231,7 @@ function ServerList() {
               </button>
             )}
             <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список']] as [ServersView, string][]).map(([id, label]) => (
+              {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
                 <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
               ))}
             </div>
@@ -263,6 +264,8 @@ function ServerList() {
                 renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
               />
             )}
+
+            {effView === 'chart' && visible.length > 0 && <CompareChart servers={visible} />}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
               <div className="fade-in srv-grid">
