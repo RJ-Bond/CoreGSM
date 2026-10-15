@@ -39,6 +39,7 @@ import { router as discordExtrasRouter } from './routes/discordExtras.js';
 import { router as seasonsRouter } from './seasons.js';
 import { router as reviewsRouter } from './reviews.js';
 import { router as galleryRouter } from './gallery.js';
+import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -79,6 +80,7 @@ app.use(discordExtrasRouter);
 app.use(seasonsRouter);
 app.use(reviewsRouter);
 app.use(galleryRouter);
+app.use(restartsRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -157,8 +159,10 @@ const server = app.listen(PORT, () => {
   startPoller(POLL_MS);
   startBackupTimer();
   startDigestTimer();
+  startRestartTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
+onShutdown('restarts', stopRestartTimer);
 installShutdown(server);
 
