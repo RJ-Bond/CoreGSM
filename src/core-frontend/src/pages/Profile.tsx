@@ -13,6 +13,7 @@ import { AchievementsGrid, AchievementsPreview } from '../components/profile/Ach
 import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
+import { PushCard } from '../components/profile/PushCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
@@ -158,6 +159,7 @@ function SecurityTab() {
         <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
         <DiscordCard onChanged={reload} />
+        <PushCard />
         <SessionsCard key={rev} />
       </div>
       <JournalCard onRevoked={() => setRev((x) => x + 1)} />

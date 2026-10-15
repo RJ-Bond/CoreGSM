@@ -136,12 +136,22 @@ router.get('/api/manifest.json', (_req, res) => {
   const b = brand();
   const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
   res.type('application/manifest+json').json({
+    id: '/',
     name: b.name,
     short_name: b.name.slice(0, 12),
-    start_url: '/',
+    description: 'Мониторинг игровых серверов: кто играет, доступность, новости',
+    start_url: '/servers',
+    scope: '/',
     display: 'standalone',
-    background_color: '#f4f5f7',
+    // the default theme is dark: the splash screen matches it
+    background_color: '#09090e',
     theme_color: b.color,
+    categories: ['games', 'utilities'],
+    shortcuts: [
+      { name: 'Серверы', url: '/servers' },
+      { name: 'Сообщество', url: '/community' },
+      { name: 'Статус', url: '/status' },
+    ],
     icons: [
       { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: b.hasLogo ? icon : '/logo-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

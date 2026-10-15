@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b3cf71f64080"
+COREGSM_BUILD="2ba941d9af3e"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8936,6 +8936,7 @@ import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as probesRouter } from './probes.js';
 import { router as configRouter } from './configExport.js';
+import { router as pushRouter } from './push.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8980,6 +8981,7 @@ app.use(galleryRouter);
 app.use(restartsRouter);
 app.use(probesRouter);
 app.use(configRouter);
+app.use(pushRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
@@ -12565,6 +12567,96 @@ export const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/;
 export const TOKEN_HELP = 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/push.ts" << '__COREGSM_EOF__'
+/**
+ * Notifications on the devices of signed-in players (the panel installed as an app, or the browser tab closed):
+ * the same notices as the in-panel inbox (a full server got a free slot, a server came back or went down).
+ *
+ *   GET    /api/push/key        the panel's public key, for subscribing in the browser
+ *   POST   /api/push/subscribe  remember this device (a signed-in user)
+ *   DELETE /api/push/subscribe  forget this device
+ *   POST   /api/push/test       send a test notification to all of the user's devices
+ */
+import express from 'express';
+import { z } from 'zod';
+import { auth, type AuthedRequest, rateLimit } from './auth.js';
+import { db } from './db.js';
+import { publicBase } from './site.js';
+import { sendPush, vapidKeys } from './webpush.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_ok INTEGER,
+  fails INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+`);
+
+/** devices are removed after this many failed sends in a row */
+const MAX_FAILS = 10;
+const subject = () => publicBase() ?? 'mailto:admin@coregsm.local';
+
+export interface PushMessage { title: string; body: string; url?: string; tag?: string }
+
+/** sends to every device of a user; never throws (the poller calls it) */
+export async function pushToUser(userId: number, m: PushMessage): Promise<number> {
+  const subs = db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId) as { id: number; endpoint: string; p256dh: string; auth: string }[];
+  let sent = 0;
+  for (const s of subs) {
+    const r = await sendPush(s, { ...m }, subject());
+    if (r === 'sent') {
+      sent++;
+      db.prepare('UPDATE push_subscriptions SET last_ok = ?, fails = 0 WHERE id = ?').run(Date.now(), s.id);
+    } else if (r === 'gone') {
+      db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(s.id);
+    } else {
+      db.prepare('UPDATE push_subscriptions SET fails = fails + 1 WHERE id = ?').run(s.id);
+      db.prepare('DELETE FROM push_subscriptions WHERE id = ? AND fails >= ?').run(s.id, MAX_FAILS);
+    }
+  }
+  return sent;
+}
+
+/** fire and forget, for code that must not wait */
+export const pushLater = (userId: number, m: PushMessage) => void pushToUser(userId, m).catch(() => undefined);
+
+router.get('/api/push/key', (_req, res) => res.json({ publicKey: vapidKeys().publicKey }));
+
+const subSchema = z.object({
+  endpoint: z.string().url().max(800).refine((u) => u.startsWith('https://') || u.startsWith('http://127.0.0.1') || u.startsWith('http://localhost')),
+  keys: z.object({ p256dh: z.string().regex(/^[A-Za-z0-9_-]{80,100}$/), auth: z.string().regex(/^[A-Za-z0-9_-]{16,40}$/) }),
+});
+
+router.post('/api/push/subscribe', auth, rateLimit(30), (req: AuthedRequest, res) => {
+  const b = subSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  db.prepare(
+    `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, fails = 0`,
+  ).run(req.user!.id, b.data.endpoint, b.data.keys.p256dh, b.data.keys.auth, Date.now());
+  res.json({ ok: true, devices: (db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(req.user!.id) as { n: number }).n });
+});
+
+router.delete('/api/push/subscribe', auth, (req: AuthedRequest, res) => {
+  const endpoint = String((req.body as { endpoint?: unknown } | undefined)?.endpoint ?? '');
+  db.prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').run(req.user!.id, endpoint);
+  res.json({ ok: true });
+});
+
+router.post('/api/push/test', auth, rateLimit(10), async (req: AuthedRequest, res) => {
+  const sent = await pushToUser(req.user!.id, { title: 'CoreGSM', body: 'Уведомления работают: сюда придут вести о ваших серверах.', url: '/profile', tag: 'test' });
+  res.json({ sent });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/query.ts" << '__COREGSM_EOF__'
 /** One query of a game server over its game protocol (GameDig). No database: the poller and the probes share it. */
 import { GameDig } from 'gamedig';
@@ -14957,12 +15049,22 @@ router.get('/api/manifest.json', (_req, res) => {
   const b = brand();
   const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
   res.type('application/manifest+json').json({
+    id: '/',
     name: b.name,
     short_name: b.name.slice(0, 12),
-    start_url: '/',
+    description: 'Мониторинг игровых серверов: кто играет, доступность, новости',
+    start_url: '/servers',
+    scope: '/',
     display: 'standalone',
-    background_color: '#f4f5f7',
+    // the default theme is dark: the splash screen matches it
+    background_color: '#09090e',
     theme_color: b.color,
+    categories: ['games', 'utilities'],
+    shortcuts: [
+      { name: 'Серверы', url: '/servers' },
+      { name: 'Сообщество', url: '/community' },
+      { name: 'Статус', url: '/status' },
+    ],
     icons: [
       { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: b.hasLogo ? icon : '/logo-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
@@ -16259,6 +16361,7 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from './db.js';
 import { enqueueDelivery } from './deliveries.js';
+import { pushLater } from './push.js';
 
 export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
 export type SubKind = (typeof SUB_KINDS)[number];
@@ -16365,6 +16468,8 @@ export function notifySubscribers(serverId: number, kind: SubKind, obs: Observat
     insert.run(s.user_id, now, kind, serverId, text);
     touch.run(now, s.user_id, serverId, kind);
     if (s.discord_id && canDm()) enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+    // and on the devices where the player turned notifications on
+    pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}` });
     n++;
   }
   if (n) db.prepare('DELETE FROM user_notifications WHERE ts < ?').run(now - 60 * 86400_000);
@@ -16443,6 +16548,96 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     }
     res.json({ ok: true, unread: unreadNotifications(uid) });
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/webpush.ts" << '__COREGSM_EOF__'
+/**
+ * Web Push without a library: the panel's VAPID keys (RFC 8292), the encryption of a message for one browser
+ * (RFC 8291, aes128gcm of RFC 8188) and the request to the browser's push service.
+ *
+ * The keys are made once and kept in the settings (the private one encrypted, like every *_secret).
+ */
+import crypto from 'node:crypto';
+import { getSetting, setSetting } from './db.js';
+
+const b64u = (b: Buffer) => b.toString('base64url');
+
+/** the panel's VAPID key pair: the public key as browsers want it (65 bytes, base64url) and the private one as PEM */
+export function vapidKeys(): { publicKey: string; privatePem: string } {
+  const pub = getSetting('push_vapid_public');
+  const priv = getSetting('push_vapid_secret');
+  if (pub && priv) return { publicKey: pub, privatePem: priv };
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const jwk = publicKey.export({ format: 'jwk' });
+  const raw = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x!, 'base64url'), Buffer.from(jwk.y!, 'base64url')]);
+  const keys = { publicKey: b64u(raw), privatePem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString() };
+  setSetting('push_vapid_public', keys.publicKey);
+  setSetting('push_vapid_secret', keys.privatePem);
+  return keys;
+}
+
+/** the VAPID header for one push service: a short ES256 token for its origin */
+export function vapidAuth(endpoint: string, keys: { publicKey: string; privatePem: string }, subject: string, now = Date.now()): string {
+  const aud = new URL(endpoint).origin;
+  const head = b64u(Buffer.from(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const body = b64u(Buffer.from(JSON.stringify({ aud, exp: Math.floor(now / 1000) + 12 * 3600, sub: subject })));
+  const sig = crypto.sign('sha256', Buffer.from(`${head}.${body}`), { key: keys.privatePem, dsaEncoding: 'ieee-p1363' });
+  return `vapid t=${head}.${body}.${b64u(sig)}, k=${keys.publicKey}`;
+}
+
+const hkdf = (salt: Buffer, ikm: Buffer, info: Buffer, len: number) => Buffer.from(crypto.hkdfSync('sha256', ikm, salt, info, len));
+
+/**
+ * Encrypts a message for one subscription (aes128gcm): the body is
+ * salt(16) | record size(4) | key id length(1) | the server's one-time public key(65) | ciphertext + tag.
+ */
+export function encryptPayload(plain: Buffer, p256dh: string, authSecret: string, opts: { salt?: Buffer; ecdh?: crypto.ECDH } = {}): Buffer {
+  const uaPublic = Buffer.from(p256dh, 'base64url');
+  const auth = Buffer.from(authSecret, 'base64url');
+  if (uaPublic.length !== 65 || auth.length < 16) throw new Error('bad subscription keys');
+  const ecdh = opts.ecdh ?? crypto.createECDH('prime256v1');
+  if (!opts.ecdh) ecdh.generateKeys();
+  const asPublic = ecdh.getPublicKey();
+  const shared = ecdh.computeSecret(uaPublic);
+  const ikm = hkdf(auth, shared, Buffer.concat([Buffer.from('WebPush: info\0'), uaPublic, asPublic]), 32);
+  const salt = opts.salt ?? crypto.randomBytes(16);
+  const cek = hkdf(salt, ikm, Buffer.from('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = hkdf(salt, ikm, Buffer.from('Content-Encoding: nonce\0'), 12);
+  const cipher = crypto.createCipheriv('aes-128-gcm', cek, nonce);
+  // one record: the message and the delimiter 0x02 (last record), no padding
+  const body = Buffer.concat([cipher.update(Buffer.concat([plain, Buffer.from([2])])), cipher.final(), cipher.getAuthTag()]);
+  const header = Buffer.alloc(21);
+  salt.copy(header, 0);
+  header.writeUInt32BE(4096, 16);
+  header.writeUInt8(asPublic.length, 20);
+  return Buffer.concat([header, asPublic, body]);
+}
+
+export interface PushTarget { endpoint: string; p256dh: string; auth: string }
+export type PushOutcome = 'sent' | 'gone' | 'failed';
+
+/** sends one message; 'gone' means the browser dropped the subscription (404/410) and it should be forgotten */
+export async function sendPush(t: PushTarget, message: Record<string, unknown>, subject: string): Promise<PushOutcome> {
+  try {
+    const keys = vapidKeys();
+    const res = await fetch(t.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: vapidAuth(t.endpoint, keys, subject),
+        'Content-Encoding': 'aes128gcm',
+        'Content-Type': 'application/octet-stream',
+        TTL: '86400',
+        Urgency: 'high',
+      },
+      body: new Uint8Array(encryptPayload(Buffer.from(JSON.stringify(message)), t.p256dh, t.auth)),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 404 || res.status === 410) return 'gone';
+    return res.ok ? 'sent' : 'failed';
+  } catch {
+    return 'failed';
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend"
@@ -31409,9 +31604,41 @@ EP4BeQojTBa++28AAAAASUVORK5CYII=
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
   cat > "$APP_DIR/core-frontend/public/sw.js" << '__COREGSM_EOF__'
-// Minimal service worker: lets the browser offer "install app". Nothing is cached and requests are not intercepted: the panel is always live.
+// Service worker: lets the browser offer "install app" and shows push notifications. Nothing is cached and
+// requests are not intercepted: the panel is always live.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+
+// a notification from the panel: { title, body, url, tag }
+self.addEventListener('push', (e) => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(m.title || 'CoreGSM', {
+    body: m.body || '',
+    icon: '/logo-192.png',
+    badge: '/logo-128.png',
+    tag: m.tag || undefined,
+    renotify: !!m.tag,
+    data: { url: m.url || '/' },
+  }));
+});
+
+// a click opens the page of the notification: an open tab of the panel is reused
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin).href;
+  e.waitUntil((async () => {
+    const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of tabs) {
+      if (new URL(c.url).origin === self.location.origin && 'focus' in c) {
+        await c.focus();
+        if ('navigate' in c) await c.navigate(url).catch(() => undefined);
+        return;
+      }
+    }
+    await self.clients.openWindow(url);
+  })());
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public/vrising/achievements"
   base64 -d > "$APP_DIR/core-frontend/public/vrising/achievements/vr-blood-bond-locked.png" << '__COREGSM_EOF__'
@@ -49166,6 +49393,110 @@ export function PlayerCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/PushCard.tsx" << '__COREGSM_EOF__'
+/** Profile → Безопасность: notifications on this device (Web Push), the same as the inbox in the header. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { Button, ErrorLine, Section, Switch, toast } from '../../ui';
+
+type State = 'unsupported' | 'denied' | 'off' | 'on' | 'loading';
+
+const b64ToBytes = (s: string) => {
+  const raw = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+};
+const supported = () => typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+interface InstallPrompt extends Event { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
+const installPrompt = () => (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt;
+
+export function PushCard() {
+  const [state, setState] = useState<State>('loading');
+  const [installable, setInstallable] = useState(() => !!installPrompt());
+  useEffect(() => {
+    const on = () => setInstallable(true);
+    window.addEventListener('coregsm:installable', on);
+    return () => window.removeEventListener('coregsm:installable', on);
+  }, []);
+  const install = async () => {
+    const p = installPrompt();
+    if (!p) return;
+    await p.prompt();
+    const { outcome } = await p.userChoice;
+    if (outcome === 'accepted') {
+      (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt = undefined;
+      setInstallable(false);
+    }
+  };
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!supported()) return setState('unsupported');
+    if (Notification.permission === 'denied') return setState('denied');
+    navigator.serviceWorker.ready.then((r) => r.pushManager.getSubscription()).then((s) => setState(s ? 'on' : 'off')).catch(() => setState('off'));
+  }, []);
+
+  const turnOn = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      if ((await Notification.requestPermission()) !== 'granted') return setState('denied');
+      const { publicKey } = await api<{ publicKey: string }>('/push/key');
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) }));
+      await api('/push/subscribe', 'POST', sub.toJSON());
+      setState('on');
+      toast('Уведомления на этом устройстве включены');
+    } catch (e) {
+      setError((e as Error).message || 'Браузер не разрешил уведомления');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const turnOff = async () => {
+    setBusy(true);
+    try {
+      const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (sub) {
+        await api('/push/subscribe', 'DELETE', { endpoint: sub.endpoint }).catch(() => undefined);
+        await sub.unsubscribe();
+      }
+      setState('off');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const test = async () => {
+    setBusy(true);
+    await api<{ sent: number }>('/push/test', 'POST').then((r) => toast(r.sent ? 'Тестовое уведомление отправлено' : 'Не получилось доставить: включите уведомления заново')).catch((e: Error) => setError(e.message)).finally(() => setBusy(false));
+  };
+
+  return (
+    <Section title="Уведомления на этом устройстве" description="Сервер упал или вернулся, на заполненном сервере освободилось место: придёт уведомление, даже если панель закрыта. Какие серверы — выбирается кнопкой «Подписаться» на странице сервера.">
+      {state === 'unsupported' && <p className="text-sm font-semibold text-mute">Этот браузер не умеет получать уведомления от сайтов. На iPhone сначала добавьте панель на экран «Домой».</p>}
+      {state === 'denied' && <p className="text-sm font-semibold text-warn">Уведомления запрещены в настройках браузера для этого сайта. Разрешите их там и обновите страницу.</p>}
+      {(state === 'on' || state === 'off') && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="flex cursor-pointer items-center gap-3 font-extrabold">
+            <Switch checked={state === 'on'} disabled={busy} onChange={(v) => void (v ? turnOn() : turnOff())} />
+            {state === 'on' ? 'Включены' : 'Выключены'}
+          </label>
+          {state === 'on' && <Button type="button" className="btn-soft btn-sm" loading={busy} onClick={() => void test()}>Проверить</Button>}
+        </div>
+      )}
+      {installable && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-soft px-3 py-2.5">
+          <span className="text-sm font-semibold">Установите панель как приложение: своя иконка, отдельное окно и уведомления как у приложений.</span>
+          <button type="button" className="btn btn-sm" onClick={() => void install()}>Установить</button>
+        </div>
+      )}
+      <ErrorLine text={error} />
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/Stats.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import type { MyStats } from '../../api';
@@ -57530,6 +57861,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 );
 
 // installable as an app (home screen on phones, window on desktop)
+// the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  (window as unknown as { __installPrompt?: Event }).__installPrompt = e;
+  window.dispatchEvent(new Event('coregsm:installable'));
+});
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
 }
@@ -61866,6 +62203,7 @@ import { AchievementsGrid, AchievementsPreview } from '../components/profile/Ach
 import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
+import { PushCard } from '../components/profile/PushCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
@@ -62011,6 +62349,7 @@ function SecurityTab() {
         <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
         <DiscordCard onChanged={reload} />
+        <PushCard />
         <SessionsCard key={rev} />
       </div>
       <JournalCard onRevoked={() => setRev((x) => x + 1)} />
