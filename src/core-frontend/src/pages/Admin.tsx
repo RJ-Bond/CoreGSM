@@ -7,6 +7,7 @@ import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, Load
 import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
+import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
@@ -138,6 +139,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'alerts' && <AlertsPage />}
         {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}
+        {!home && current === 'community' && <AdminCommunity sub={tail} />}
         {!home && current === 'users' && <UsersTab />}
         {!home && current === 'journal' && <JournalPage />}
         {!home && current === 'system' && <SystemPage />}

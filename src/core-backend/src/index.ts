@@ -36,6 +36,7 @@ import { router as serversRouter } from './routes/servers.js';
 import { router as analyticsRouter } from './routes/analytics.js';
 import { router as communityRouter } from './routes/community.js';
 import { router as discordExtrasRouter } from './routes/discordExtras.js';
+import { router as seasonsRouter } from './seasons.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -73,6 +74,7 @@ app.use(serversRouter);
 app.use(analyticsRouter);
 app.use(communityRouter);
 app.use(discordExtrasRouter);
+app.use(seasonsRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 

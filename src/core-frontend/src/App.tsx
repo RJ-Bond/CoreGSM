@@ -59,6 +59,7 @@ const ADMIN_TITLES: Record<string, string> = {
   news: 'Новости',
   alerts: 'Оповещения',
   cards: 'Карточки',
+  community: 'Сообщество',
   users: 'Пользователи',
   journal: 'Журнал',
   system: 'Система',

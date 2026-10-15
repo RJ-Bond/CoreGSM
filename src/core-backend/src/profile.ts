@@ -295,11 +295,14 @@ interface Achievement {
   earnedAt: number | null;
 }
 
-export function achievementsOf(userId: number): Achievement[] {
-  const nick = playerOf(userId).gameNick;
-  const now = Date.now();
-  const tz = prefsOf(userId).timezone;
-  const sess = sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000).filter((s) => (s.left_at ?? now) > s.joined_at);
+export type { Achievement };
+
+/**
+ * The achievements earned by playing (hours, streaks, night and morning sessions, servers), from the visits of one
+ * player. Shared by the account's profile and the public card of any nick.
+ */
+export function playAchievements(visits: { server_id: number; joined_at: number; left_at: number | null }[], tz: string, now = Date.now()): Achievement[] {
+  const sess = visits.filter((s) => (s.left_at ?? now) > s.joined_at).sort((x, y) => x.joined_at - y.joined_at);
 
   let totalMs = 0;
   let longestMs = 0;
@@ -357,16 +360,7 @@ export function achievementsOf(userId: number): Achievement[] {
     if (run === 7 && at7 === null) at7 = dayEnd.get(k) ?? null;
   }
 
-  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
-  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
-  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
-  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
   const r1 = (n: number) => Math.round(n * 10) / 10;
-
-  const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
-    const earned = progress >= target;
-    return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
-  };
   const domosedEarned = share >= 0.8 && hours >= 10;
 
   return [
@@ -380,6 +374,25 @@ export function achievementsOf(userId: number): Achievement[] {
     mk('homebody', 'Домосед', 'Проведите 80% времени на одном сервере (не менее 10 часов всего)', 'heart', domosedEarned ? 100 : Math.min(99, Math.round(share * 100)), 100, domosedEarned ? now : null),
     mk('traveller', 'Путешественник', 'Поиграйте на 3 разных серверах', 'server', perServer.size, 3, perServer.size >= 3 ? now : null),
     mk('marathon', 'Марафонец', 'Одна сессия длиннее 4 часов', 'crown', r1(longestMs / HOUR), 4, marathonAt),
+  ];
+}
+
+export const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
+  const earned = progress >= target;
+  return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
+};
+
+export function achievementsOf(userId: number): Achievement[] {
+  const nick = playerOf(userId).gameNick;
+  const now = Date.now();
+  const tz = prefsOf(userId).timezone;
+  const play = playAchievements(sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000), tz, now);
+  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
+  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
+  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
+  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
+  return [
+    ...play,
     mk('profile-complete', 'Профиль заполнен', 'Аватар, электронная почта и игровой ник', 'calendar', profileParts, 3),
     mk('secured', 'Защищён', 'Пароль, электронная почта и привязанный Discord', 'shield', protectedParts, 3),
   ];
