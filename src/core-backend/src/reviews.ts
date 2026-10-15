@@ -10,7 +10,9 @@
  */
 import express from 'express';
 import { z } from 'zod';
-import { auth, type AuthedRequest, rateLimit, staff, viewer } from './auth.js';
+import { allow, auth, type AuthedRequest, rateLimit, viewer } from './auth.js';
+
+const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
 
 export const router = express.Router();

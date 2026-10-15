@@ -476,6 +476,8 @@ export interface NewsSettings {
 export interface Me {
   username: string;
   role: 'admin' | 'moderator' | 'player';
+  /** what this account may do in the admin area (all for an administrator) */
+  perms?: Perm[];
   /** Discord CDN url */
   avatarUrl: string | null;
   /** where the picture comes from: an uploaded file wins over Discord */
@@ -643,10 +645,20 @@ export interface Access {
   discordLogin: boolean;
 }
 
+export type Perm = 'news' | 'moderation' | 'servers' | 'maintenance' | 'journal';
+export const PERM_LABELS: { id: Perm; label: string; hint: string }[] = [
+  { id: 'news', label: 'Новости', hint: 'писать, планировать и публиковать' },
+  { id: 'moderation', label: 'Модерация', hint: 'отзывы и галерея скриншотов' },
+  { id: 'servers', label: 'Серверы', hint: 'добавлять и изменять (удаляет только администратор)' },
+  { id: 'maintenance', label: 'Обслуживание', hint: 'окна технических работ' },
+  { id: 'journal', label: 'Журнал', hint: 'кто и что менял в панели' },
+];
+
 export interface UserRow {
   id: number;
   username: string;
   role: 'admin' | 'moderator' | 'player';
+  perms?: Perm[];
   createdAt: number | null;
   status: 'active' | 'pending';
   discordName: string | null;
