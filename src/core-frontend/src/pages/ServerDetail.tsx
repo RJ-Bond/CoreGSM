@@ -1,3 +1,4 @@
+import ServerReviews from '../components/server/Reviews';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
@@ -48,6 +49,7 @@ const OVERVIEW_SECTIONS: SectionDef[] = [
   { id: 'ov-chart', label: 'График' },
   { id: 'ov-events', label: 'События', secondary: true },
   { id: 'ov-players', label: 'Игроки' },
+  { id: 'ov-reviews', label: 'Отзывы', secondary: true },
 ];
 const HISTORY_SECTIONS: SectionDef[] = [
   { id: 'hi-chart', label: 'График' },
@@ -363,6 +365,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
+        <SectionCard id="ov-reviews" state={sections} style={stagger(4)} title="Отзывы игроков">
+          <ServerReviews serverId={id} />
+        </SectionCard>
       </div>
     );
   }

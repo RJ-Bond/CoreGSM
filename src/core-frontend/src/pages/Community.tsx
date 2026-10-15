@@ -8,6 +8,8 @@ import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/ser
 import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
+import '../styles/gallery.css';
+import { Lightbox, ShotGrid, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -81,6 +83,23 @@ function SeasonBlocks() {
         </section>
       )}
     </>
+  );
+}
+
+/** the latest screenshots, the starred ones first */
+function GalleryStrip() {
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => { api<Shot[]>('/gallery?limit=6').then(setList).catch(() => setList([])); }, []);
+  return (
+    <section className="tile p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-extrabold">📸 Галерея</h2>
+        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
+      </div>
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <p className="cm-sub">Скриншотов пока нет: поделитесь первым.</p> : <ShotGrid list={list} onOpen={setOpen} />}
+      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
+    </section>
   );
 }
 
@@ -161,6 +180,8 @@ export default function CommunityPage() {
           {c.feed.length ? <ul className="cm-feed-list">{c.feed.map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
         </section>
       </div>
+
+      <GalleryStrip />
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Где играют сейчас</h2>

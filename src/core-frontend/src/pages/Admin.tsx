@@ -25,7 +25,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const { isAdmin } = useAuth();
   const [section, ...rest] = sub.split('/');
   // a moderator sees only the news section; everything else is for administrators
-  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
+  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news' || s.id === 'community');
   const known = sections.some((s) => s.id === section);
   // bare /admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
   const home = isAdmin && !known;
