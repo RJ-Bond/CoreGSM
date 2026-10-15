@@ -40,6 +40,7 @@ import { router as seasonsRouter } from './seasons.js';
 import { router as reviewsRouter } from './reviews.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
+import { router as probesRouter } from './probes.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -81,6 +82,7 @@ app.use(seasonsRouter);
 app.use(reviewsRouter);
 app.use(galleryRouter);
 app.use(restartsRouter);
+app.use(probesRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
