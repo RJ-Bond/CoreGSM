@@ -28,6 +28,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 );
 
 // installable as an app (home screen on phones, window on desktop)
+// the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  (window as unknown as { __installPrompt?: Event }).__installPrompt = e;
+  window.dispatchEvent(new Event('coregsm:installable'));
+});
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
 }
