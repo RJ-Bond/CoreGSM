@@ -10,7 +10,7 @@ FILES="$(mktemp)"
 trap 'rm -f "$GEN" "$FILES"' EXIT
 
 find src -type f \
-    -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.*/*' -not -name 'package-lock.json' \
+    -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.*/*' \
     -not -path '*/data/*' -not -path '*/test/*' -not -name '*.db' -not -name '*.db-*' -not -name '*.log' \
   | LC_ALL=C sort > "$FILES"
 
