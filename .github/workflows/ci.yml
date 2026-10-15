@@ -23,9 +23,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: src/core-backend/package.json
-      # package-lock.json is not committed, so a plain install
-      - run: npm install --no-audit --no-fund
+          cache-dependency-path: src/core-backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
       - name: Typecheck
         run: npm run typecheck
       - name: API and embed tests
@@ -42,8 +41,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: src/core-frontend/package.json
-      - run: npm install --no-audit --no-fund
+          cache-dependency-path: src/core-frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests
@@ -62,8 +61,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: src/core-bot/package.json
-      - run: npm install --no-audit --no-fund
+          cache-dependency-path: src/core-bot/package-lock.json
+      - run: npm ci --no-audit --no-fund
       - name: Typecheck
         run: npx tsc --noEmit
 
