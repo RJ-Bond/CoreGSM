@@ -237,6 +237,7 @@
 .srv-new-chev { display: grid; place-items: center; color: rgb(var(--mute)); transition: transform .2s ease; }
 .srv-new-chev.open { transform: rotate(180deg); }
 .srv-new-body { display: flex; flex-direction: column; gap: 14px; padding: 4px 10px 12px; }
+.srv-new-quiet { margin: 0; padding: 2px 14px 14px; font-size: 13.5px; font-weight: 700; color: rgb(var(--mute)); }
 .srv-new-h { margin: 0 0 6px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
 .srv-new-news { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 16px; background: rgb(var(--soft) / .7); transition: background-color .15s ease; }
 .srv-new-news:hover { background: rgb(var(--soft)); }
