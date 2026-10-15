@@ -1,6 +1,6 @@
 name: ci
 
-# Typecheck everything, run the API tests against a real backend on a throwaway database,
+# Typecheck everything, run the API tests against a real backend on a throwaway database, the bot tests
 # and the frontend unit tests. The generated installer is checked by check-installer.yml.
 on:
   push:
@@ -64,7 +64,9 @@ jobs:
           cache-dependency-path: src/core-bot/package-lock.json
       - run: npm ci --no-audit --no-fund
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
 
   hygiene:
     runs-on: ubuntu-latest

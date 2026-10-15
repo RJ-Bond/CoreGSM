@@ -6,9 +6,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting, type BindingRow, type ServerRow, type StatusRow } from './db.js';
-import { queryServer, refreshServer, startPoller } from './gsm.js';
+import { queryServer, refreshServer, startPoller, stopPoller } from './gsm.js';
+import { installShutdown, onShutdown } from './shutdown.js';
 import { isKnownGame, renderCard, renderGameIcon } from './card.js';
-import { registerBackups, startBackupTimer } from './backup.js';
+import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { gameLabel } from './games.js';
 import { buildEmbed } from './embed.js';
 import { registerNews } from './news.js';
@@ -1791,7 +1792,7 @@ app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Re
   res.status(500).json({ error: 'Внутренняя ошибка сервера' });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`CoreGSM backend listening on :${PORT}`);
   if (needsSetup()) {
     console.log('First run: open the panel in a browser and create the administrator.');
@@ -1800,4 +1801,7 @@ app.listen(PORT, () => {
   startPoller(POLL_MS);
   startBackupTimer();
 });
+onShutdown('poller', stopPoller);
+onShutdown('backups', stopBackups);
+installShutdown(server);
 
