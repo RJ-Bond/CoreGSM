@@ -8,6 +8,7 @@ import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { gameLabel } from './games.js';
 import { inMaintenance } from './maintenance.js';
 import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
+import { SMART_KINDS, smartEnabled } from './smartAlerts.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS alert_state (
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 `);
 
-const settings = () => ({
+export const alertSettings = () => ({
   enabled: getSetting('alerts_enabled') === '1',
   channelId: getSetting('alerts_channel') ?? '',
   afterMin: Math.min(120, Math.max(1, Number(getSetting('alerts_after_min')) || 3)),
@@ -38,18 +39,21 @@ const settings = () => ({
 
 const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
 
-interface Payload {
+export interface Payload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
   embed: Record<string, unknown>;
 }
 
-function enqueue(kind: 'down' | 'up' | 'test', serverName: string, payload: Payload) {
-  const s = settings();
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest';
+
+export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
+  const s = alertSettings();
+  const target = channelId || s.channelId;
   const now = Date.now();
   // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
-  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, s.channelId, JSON.stringify(payload), now, now);
-  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target: s.channelId, payload });
+  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, target, JSON.stringify(payload), now, now);
+  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target, payload });
   db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
 }
 
@@ -74,7 +78,7 @@ const human = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min /
 
 /** Called after every poll of a server. */
 export function trackAlerts(serverId: number, online: boolean, error: string | null): void {
-  const s = settings();
+  const s = alertSettings();
   if (!s.enabled || !s.channelId) {
     db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
     return;
@@ -99,7 +103,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
       if (st.alerted) {
         const i = info();
         if (i) {
-          enqueue('up', i.n, {
+          enqueueAlert('up', i.n, {
             content: '',
             mention: 'none',
             embed: {
@@ -125,7 +129,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     const i = info();
     db.prepare('UPDATE alert_state SET alerted = 1 WHERE server_id = ?').run(serverId);
     if (!i) return;
-    enqueue('down', i.n, {
+    enqueueAlert('down', i.n, {
       content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
       mention: s.mention,
       embed: {
@@ -149,7 +153,7 @@ export function registerAlerts(deps: {
   const { app, admin, internal, channelInfo } = deps;
 
   const payload = () => {
-    const s = settings();
+    const s = alertSettings();
     const ch = s.channelId ? channelInfo(s.channelId) : { channelName: null, guildName: null };
     const recent = db.prepare('SELECT id, kind, server_name, status, error, created_at, sent_at FROM alerts ORDER BY id DESC LIMIT 30').all() as {
       id: number;
@@ -162,6 +166,7 @@ export function registerAlerts(deps: {
     }[];
     return {
       ...s,
+      smart: Object.fromEntries(SMART_KINDS.map((k) => [k, smartEnabled(k)])) as Record<(typeof SMART_KINDS)[number], boolean>,
       channelName: ch.channelName,
       guildName: ch.guildName,
       recent: recent.map((r) => ({ id: r.id, kind: r.kind, serverName: r.server_name, status: r.status, error: r.error, createdAt: r.created_at, sentAt: r.sent_at })),
@@ -177,6 +182,7 @@ export function registerAlerts(deps: {
         channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
         afterMin: z.number().int().min(1).max(120).optional(),
         mention: z.enum(['none', 'here', 'everyone']).optional(),
+        smart: z.object({ low: z.boolean().optional(), ping: z.boolean().optional(), full: z.boolean().optional() }).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
@@ -187,13 +193,14 @@ export function registerAlerts(deps: {
     if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
     if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
     if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
+    for (const k of SMART_KINDS) if (b.data.smart?.[k] !== undefined) setSetting(`alerts_smart_${k}`, b.data.smart[k] ? '1' : '0');
     res.json(payload());
   });
 
   app.post('/api/alerts/test', admin, (_req, res) => {
-    const s = settings();
+    const s = alertSettings();
     if (!s.channelId) return res.status(400).json({ error: 'Сначала выберите канал для оповещений' });
-    enqueue('test', 'Проверка', {
+    enqueueAlert('test', 'Проверка', {
       content: '',
       mention: 'none',
       embed: {

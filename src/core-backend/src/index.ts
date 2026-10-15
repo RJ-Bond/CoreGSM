@@ -11,6 +11,7 @@ import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
+import { registerDigest, startDigestTimer } from './digest.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -93,6 +94,7 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
+registerDigest({ app, admin });
 registerSecurity({
   app,
   admin,
@@ -144,6 +146,7 @@ const server = app.listen(PORT, () => {
   }
   startPoller(POLL_MS);
   startBackupTimer();
+  startDigestTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
