@@ -118,7 +118,10 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
           <span aria-hidden className={`srv-new-chev ${open ? 'open' : ''}`}><IconChevronDown /></span>
         </button>
       </h2>
-      {open && (
+      {open && news === null && maint.length === 0 && (
+        <p id={bodyId} className="srv-new-quiet">{t('srv.new.quiet')}</p>
+      )}
+      {open && !(news === null && maint.length === 0) && (
         <div id={bodyId} className="srv-new-body">
           <section>
             <h3 className="srv-new-h">{t('srv.new.news')}</h3>

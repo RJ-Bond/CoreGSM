@@ -468,6 +468,7 @@ const ru = {
   'srv.new.noNews': 'Новостей пока нет',
   'srv.new.maint': 'Обслуживание',
   'srv.new.noMaint': 'Работ не запланировано',
+  'srv.new.quiet': 'Тихо: новостей нет, работ не запланировано',
   'srv.new.until': 'идёт, до {time}',
   'srv.new.from': '{from} – {to}',
   'srv.new.events': 'События',

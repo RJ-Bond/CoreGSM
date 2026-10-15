@@ -467,6 +467,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.new.noNews': 'No news yet',
   'srv.new.maint': 'Maintenance',
   'srv.new.noMaint': 'No planned maintenance',
+  'srv.new.quiet': 'All quiet: no news, no planned maintenance',
   'srv.new.until': 'in progress, until {time}',
   'srv.new.from': '{from} – {to}',
   'srv.new.events': 'Events',

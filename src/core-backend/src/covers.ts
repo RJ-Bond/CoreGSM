@@ -26,6 +26,12 @@ export function coverUrl(serverId: number): string | null {
   }
 }
 
+/** the path of the server's cover file (the 640px one when `small`), or null without a cover */
+export function coverFile(serverId: number, small = false): string | null {
+  const f = fileOf(serverId, small);
+  return fs.existsSync(f) ? f : null;
+}
+
 export function removeCover(serverId: number): void {
   fs.rmSync(fileOf(serverId), { force: true });
   fs.rmSync(fileOf(serverId, true), { force: true });
