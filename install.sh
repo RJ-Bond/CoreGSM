@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2ba941d9af3e"
+COREGSM_BUILD="9e270dd8f6b7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -12582,6 +12582,7 @@ import { z } from 'zod';
 import { auth, type AuthedRequest, rateLimit } from './auth.js';
 import { db } from './db.js';
 import { publicBase } from './site.js';
+import { setPushHook } from './subscriptions.js';
 import { sendPush, vapidKeys } from './webpush.js';
 
 export const router = express.Router();
@@ -12627,6 +12628,7 @@ export async function pushToUser(userId: number, m: PushMessage): Promise<number
 
 /** fire and forget, for code that must not wait */
 export const pushLater = (userId: number, m: PushMessage) => void pushToUser(userId, m).catch(() => undefined);
+setPushHook(pushLater);
 
 router.get('/api/push/key', (_req, res) => res.json({ publicKey: vapidKeys().publicKey }));
 
@@ -16361,7 +16363,11 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from './db.js';
 import { enqueueDelivery } from './deliveries.js';
-import { pushLater } from './push.js';
+
+/** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
+type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
+let pushLater: PushHook = () => undefined;
+export const setPushHook = (fn: PushHook) => { pushLater = fn; };
 
 export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
 export type SubKind = (typeof SUB_KINDS)[number];

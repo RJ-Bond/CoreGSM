@@ -14,7 +14,11 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from './db.js';
 import { enqueueDelivery } from './deliveries.js';
-import { pushLater } from './push.js';
+
+/** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
+type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
+let pushLater: PushHook = () => undefined;
+export const setPushHook = (fn: PushHook) => { pushLater = fn; };
 
 export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
 export type SubKind = (typeof SUB_KINDS)[number];

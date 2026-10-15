@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { auth, type AuthedRequest, rateLimit } from './auth.js';
 import { db } from './db.js';
 import { publicBase } from './site.js';
+import { setPushHook } from './subscriptions.js';
 import { sendPush, vapidKeys } from './webpush.js';
 
 export const router = express.Router();
@@ -57,6 +58,7 @@ export async function pushToUser(userId: number, m: PushMessage): Promise<number
 
 /** fire and forget, for code that must not wait */
 export const pushLater = (userId: number, m: PushMessage) => void pushToUser(userId, m).catch(() => undefined);
+setPushHook(pushLater);
 
 router.get('/api/push/key', (_req, res) => res.json({ publicKey: vapidKeys().publicKey }));
 
