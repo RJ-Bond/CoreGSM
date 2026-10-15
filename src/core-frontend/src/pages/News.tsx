@@ -4,7 +4,6 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
-import { NewsArticlePage, NewsListPage } from '../components/news/NewsPublicPages';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
@@ -242,11 +241,4 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
   if (!e) return null;
   const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
   return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
-}
-
-/** read-only feed for players and guests: the list (/news) or one news item (/news/<id>) */
-export function NewsFeed({ sub = '' }: { sub?: string }) {
-  const id = Number(sub.split('/')[0]);
-  if (sub && Number.isInteger(id) && id > 0) return <NewsArticlePage id={id} />;
-  return <NewsListPage />;
 }

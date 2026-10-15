@@ -1,27 +1,31 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
-import CommandPalette from './components/CommandPalette';
 import NotificationBell from './components/NotificationBell';
 import NotFound from './components/NotFound';
-import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import Setup from './pages/Setup';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
-import VerifyEmail from './pages/VerifyEmail';
 import ServersPage from './pages/Servers';
-import { NewsFeed } from './pages/News';
-import AdminPage from './pages/Admin';
-import ProfilePage from './pages/Profile';
-import PublicProfilePage from './pages/PublicProfile';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
-import StatusPage from './pages/Status';
-import UiKitPage from './pages/UiKit';
+import { lazyPage, PageFrame } from './lazyPage';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, navigate, parseRoute, toast, useRoute } from './ui';
+
+// loaded on demand: the server list (the first screen) does not wait for these
+const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
+const AdminPage = lazyPage(() => import('./pages/Admin'));
+const ProfilePage = lazyPage(() => import('./pages/Profile'));
+const PublicProfilePage = lazyPage(() => import('./pages/PublicProfile'));
+const StatusPage = lazyPage(() => import('./pages/Status'));
+const UiKitPage = lazyPage(() => import('./pages/UiKit'));
+// rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
+const Setup = lazyPage(() => import('./pages/Setup'));
+const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
+const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
+const Tour = lazyPage(() => import('./components/Tour'));
+const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 
 const IconStatus = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -320,7 +324,9 @@ export default function App() {
   if (boot.needsSetup) {
     return (
       <AuthContext.Provider value={ctx}>
-        <Setup onDone={() => void load()} />
+        <PageFrame>
+          <Setup onDone={() => void load()} />
+        </PageFrame>
         <Toaster />
         <ConfirmHost />
       </AuthContext.Provider>
@@ -333,7 +339,9 @@ export default function App() {
     return (
       <AuthContext.Provider value={ctx}>
         <AuthShell>
-          {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+          <PageFrame>
+            {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+          </PageFrame>
         </AuthShell>
         <Toaster />
         <ConfirmHost />
@@ -440,20 +448,24 @@ export default function App() {
         </header>
 
         <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
-          {page === 'servers' && <ServersPage sub={sub} />}
-          {page === 'news' && <NewsFeed sub={sub} />}
-          {page === 'status' && <StatusPage />}
-          {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
-          {page === 'profile' && <ProfilePage />}
-          {page === 'u' && <PublicProfilePage username={publicName} />}
-          {page === '_ui' && <UiKitPage />}
-          {page === '404' && <NotFound />}
+          <PageFrame>
+            {page === 'servers' && <ServersPage sub={sub} />}
+            {page === 'news' && <NewsFeed sub={sub} />}
+            {page === 'status' && <StatusPage />}
+            {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
+            {page === 'profile' && <ProfilePage />}
+            {page === 'u' && <PublicProfilePage username={publicName} />}
+            {page === '_ui' && <UiKitPage />}
+            {page === '404' && <NotFound />}
+          </PageFrame>
         </main>
 
         <Toaster />
         <ConfirmHost />
-        {isAdmin && <Tour />}
-        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
+        <Suspense fallback={null}>
+          {isAdmin && <Tour />}
+          {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
+        </Suspense>
 
         <nav
           className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"

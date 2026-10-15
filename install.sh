@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="73510eae6d99"
+COREGSM_BUILD="357c093b3fd6"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -41103,30 +41103,34 @@ yf1/ATj8Z2cAmH+3X7v+CTu7zn+R1Z99zLSd8avbXybOaHr5Tw/AatHcXxUh+7l/fgZYWdlb/YeP
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
-import CommandPalette from './components/CommandPalette';
 import NotificationBell from './components/NotificationBell';
 import NotFound from './components/NotFound';
-import Tour from './components/Tour';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import Setup from './pages/Setup';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
-import VerifyEmail from './pages/VerifyEmail';
 import ServersPage from './pages/Servers';
-import { NewsFeed } from './pages/News';
-import AdminPage from './pages/Admin';
-import ProfilePage from './pages/Profile';
-import PublicProfilePage from './pages/PublicProfile';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
-import StatusPage from './pages/Status';
-import UiKitPage from './pages/UiKit';
+import { lazyPage, PageFrame } from './lazyPage';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, navigate, parseRoute, toast, useRoute } from './ui';
+
+// loaded on demand: the server list (the first screen) does not wait for these
+const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
+const AdminPage = lazyPage(() => import('./pages/Admin'));
+const ProfilePage = lazyPage(() => import('./pages/Profile'));
+const PublicProfilePage = lazyPage(() => import('./pages/PublicProfile'));
+const StatusPage = lazyPage(() => import('./pages/Status'));
+const UiKitPage = lazyPage(() => import('./pages/UiKit'));
+// rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
+const Setup = lazyPage(() => import('./pages/Setup'));
+const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
+const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
+const Tour = lazyPage(() => import('./components/Tour'));
+const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 
 const IconStatus = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -41425,7 +41429,9 @@ export default function App() {
   if (boot.needsSetup) {
     return (
       <AuthContext.Provider value={ctx}>
-        <Setup onDone={() => void load()} />
+        <PageFrame>
+          <Setup onDone={() => void load()} />
+        </PageFrame>
         <Toaster />
         <ConfirmHost />
       </AuthContext.Provider>
@@ -41438,7 +41444,9 @@ export default function App() {
     return (
       <AuthContext.Provider value={ctx}>
         <AuthShell>
-          {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+          <PageFrame>
+            {rawPage === 'forgot' ? <ForgotPassword /> : rawPage === 'reset' ? <ResetPassword token={token} /> : <VerifyEmail token={token} />}
+          </PageFrame>
         </AuthShell>
         <Toaster />
         <ConfirmHost />
@@ -41545,20 +41553,24 @@ export default function App() {
         </header>
 
         <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
-          {page === 'servers' && <ServersPage sub={sub} />}
-          {page === 'news' && <NewsFeed sub={sub} />}
-          {page === 'status' && <StatusPage />}
-          {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
-          {page === 'profile' && <ProfilePage />}
-          {page === 'u' && <PublicProfilePage username={publicName} />}
-          {page === '_ui' && <UiKitPage />}
-          {page === '404' && <NotFound />}
+          <PageFrame>
+            {page === 'servers' && <ServersPage sub={sub} />}
+            {page === 'news' && <NewsFeed sub={sub} />}
+            {page === 'status' && <StatusPage />}
+            {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
+            {page === 'profile' && <ProfilePage />}
+            {page === 'u' && <PublicProfilePage username={publicName} />}
+            {page === '_ui' && <UiKitPage />}
+            {page === '404' && <NotFound />}
+          </PageFrame>
         </main>
 
         <Toaster />
         <ConfirmHost />
-        {isAdmin && <Tour />}
-        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
+        <Suspense fallback={null}>
+          {isAdmin && <Tour />}
+          {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
+        </Suspense>
 
         <nav
           className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"
@@ -54312,6 +54324,75 @@ html[data-contrast='high'] .seg-item[aria-pressed='true'], html[data-contrast='h
 html[data-contrast='high'] .hint-strip { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
 html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline; text-underline-offset: 3px; }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/lazyPage.tsx" << '__COREGSM_EOF__'
+/**
+ * Pages loaded on demand: the first screen (the server list) does not wait for the admin area, the news editor or
+ * the profile. After an update of the panel an open tab may ask for a chunk that no longer exists: the page then
+ * reloads once to pick up the new build; a second failure shows a notice with a button instead of a blank screen.
+ */
+import { Component, lazy, Suspense, type ComponentType, type ReactNode } from 'react';
+import { t } from './i18n';
+import { Spinner } from './ui';
+
+const RELOADED = 'coregsm_chunk_reload';
+
+export function lazyPage<P extends object>(load: () => Promise<{ default: ComponentType<P> }>) {
+  return lazy(async (): Promise<{ default: ComponentType<P> }> => {
+    try {
+      const m = await load();
+      try { sessionStorage.removeItem(RELOADED); } catch { /* private mode */ }
+      return m;
+    } catch (e) {
+      let again = true;
+      try {
+        again = sessionStorage.getItem(RELOADED) === '1';
+        if (!again) sessionStorage.setItem(RELOADED, '1');
+      } catch {
+        /* no storage: do not risk a reload loop */
+      }
+      if (again) throw e;
+      window.location.reload();
+      return new Promise(() => undefined);
+    }
+  });
+}
+
+class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="grid min-h-[40vh] place-items-center text-center" role="alert">
+        <div className="space-y-3">
+          <p className="font-extrabold">{t('page.loadFailed')}</p>
+          <button type="button" className="btn" onClick={() => window.location.reload()}>{t('page.reload')}</button>
+        </div>
+      </div>
+    );
+  }
+}
+
+/** the frame around a lazy page: a quiet spinner while its code loads */
+export function PageFrame({ children }: { children: ReactNode }) {
+  return (
+    <PageBoundary>
+      <Suspense
+        fallback={
+          <div className="grid min-h-[40vh] place-items-center text-mute" role="status" aria-label={t('hdr.loading')}>
+            <Spinner className="h-6 w-6" />
+          </div>
+        }
+      >
+        {children}
+      </Suspense>
+    </PageBoundary>
+  );
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/locales"
   cat > "$APP_DIR/core-frontend/src/locales/en.ts" << '__COREGSM_EOF__'
 import type ru from './ru';
@@ -54325,6 +54406,8 @@ const en: Record<keyof typeof ru, string> = {
   'common.remove': 'Remove',
   'common.retry': 'Retry',
   'common.save': 'Save',
+  'page.loadFailed': 'The page could not be loaded. The panel may have just been updated.',
+  'page.reload': 'Reload the page',
   'toast.close': 'Dismiss notification',
   'ago.s': '{n}s ago',
   'ago.m': '{n} min ago',
@@ -55181,6 +55264,8 @@ const ru = {
   'common.remove': 'Убрать',
   'common.retry': 'Повторить',
   'common.save': 'Сохранить',
+  'page.loadFailed': 'Не удалось загрузить страницу. Возможно, панель только что обновилась.',
+  'page.reload': 'Обновить страницу',
   'toast.close': 'Закрыть уведомление',
   'ago.s': '{n} с назад',
   'ago.m': '{n} мин назад',
@@ -58481,7 +58566,6 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
-import { NewsArticlePage, NewsListPage } from '../components/news/NewsPublicPages';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
@@ -58719,13 +58803,6 @@ function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
   if (!e) return null;
   const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
   return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
-}
-
-/** read-only feed for players and guests: the list (/news) or one news item (/news/<id>) */
-export function NewsFeed({ sub = '' }: { sub?: string }) {
-  const id = Number(sub.split('/')[0]);
-  if (sub && Number.isInteger(id) && id > 0) return <NewsArticlePage id={id} />;
-  return <NewsListPage />;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
@@ -59413,6 +59490,18 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       )}
     </div>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/NewsFeed.tsx" << '__COREGSM_EOF__'
+import { NewsArticlePage, NewsListPage } from '../components/news/NewsPublicPages';
+
+/** read-only feed for players and guests: the list (/news) or one news item (/news/<id>); kept apart from the
+ *  admin's news pages so that players do not download the editor */
+export default function NewsFeed({ sub = '' }: { sub?: string }) {
+  const id = Number(sub.split('/')[0]);
+  if (sub && Number.isInteger(id) && id > 0) return <NewsArticlePage id={id} />;
+  return <NewsListPage />;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
@@ -65951,21 +66040,32 @@ function install() {
   now = parseRoute();
   window.addEventListener('popstate', notify);
   window.addEventListener('hashchange', notify);
-  // links to the panel's own pages open without a reload; everything else (API, files, new tabs) is left alone
-  document.addEventListener('click', (e) => {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = (e.target as Element | null)?.closest?.('a');
-    if (!a || !a.hasAttribute('href') || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
-    const href = a.getAttribute('href') ?? '';
-    if (href.startsWith('#') && !href.startsWith('#/')) return; // an anchor on the page
-    const url = new URL(a.href, window.location.href);
-    if (url.origin !== window.location.origin) return;
-    if (/^\/(api|go|s|assets)(\/|$)/.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname)) return;
-    e.preventDefault();
-    const target = href.startsWith('#/') ? href.slice(1) : `${url.pathname}${url.search}`;
-    if (target === `${window.location.pathname}${window.location.search}` && !window.location.hash) return;
-    navigate(target);
-  });
+  // links to the panel's own pages open without a reload; everything else (API, files, new tabs) is left alone.
+  // The listener sits on React's root container, added after React's own: a row that stops the click from
+  // bubbling further (so that a link inside it does not also trigger the row) does not hide the click from it,
+  // and a component that called preventDefault() is respected. The document listener covers portals.
+  const root = document.getElementById('root');
+  root?.addEventListener('click', onLinkClick);
+  document.addEventListener('click', onLinkClick);
+}
+
+const ROUTED = Symbol('routed');
+function onLinkClick(e: MouseEvent) {
+  const ev = e as MouseEvent & { [ROUTED]?: boolean };
+  if (ev[ROUTED]) return;
+  ev[ROUTED] = true;
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = (e.target as Element | null)?.closest?.('a');
+  if (!a || !a.hasAttribute('href') || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
+  const href = a.getAttribute('href') ?? '';
+  if (href.startsWith('#') && !href.startsWith('#/')) return; // an anchor on the page
+  const url = new URL(a.href, window.location.href);
+  if (url.origin !== window.location.origin) return;
+  if (/^\/(api|go|s|assets)(\/|$)/.test(url.pathname) || /\.[a-z0-9]+$/i.test(url.pathname)) return;
+  e.preventDefault();
+  const target = href.startsWith('#/') ? href.slice(1) : `${url.pathname}${url.search}`;
+  if (target === `${window.location.pathname}${window.location.search}` && !window.location.hash) return;
+  navigate(target);
 }
 
 export function useRoute(): Route {
@@ -66574,6 +66674,14 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: { proxy: { '/api': 'http://localhost:3000' } },
+  build: {
+    rollupOptions: {
+      output: {
+        // React changes rarely: its own file stays cached in the browser across updates of the panel
+        manualChunks: (id) => (/node_modules\/(react|react-dom|scheduler)\//.test(id) ? 'react' : undefined),
+      },
+    },
+  },
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/."
