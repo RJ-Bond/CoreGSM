@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import '../../styles/analytics.css';
 import { api } from '../../api';
 import { rankById } from '../../vrisingRanks';
-import { ago, ErrorLine, fmtDate, plural } from '../../ui';
+import { ago, ErrorLine, fmtDate, plural, num } from '../../ui';
 
 interface Analytics {
   days: number;
@@ -88,11 +88,11 @@ function Heatmap({ h }: { h: Analytics['heatmap'] }) {
           меньше <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> больше
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {hover && cur ? (cur.avg == null ? `${DOW[hover.dow]} ${hh(hover.hour)}: нет данных` : `${DOW[hover.dow]} ${hh(hover.hour)}: в среднем ${cur.avg}, максимум ${cur.peak}`) : `средние за ${h.days} ${plural(h.days, ['день', 'дня', 'дней'])}`}
+          {hover && cur ? (cur.avg == null ? `${DOW[hover.dow]} ${hh(hover.hour)}: нет данных` : `${DOW[hover.dow]} ${hh(hover.hour)}: в среднем ${num(cur.avg)}, максимум ${cur.peak}`) : `средние за ${h.days} ${plural(h.days, ['день', 'дня', 'дней'])}`}
         </span>
       </div>
       <div className="an-facts">
-        {h.busiest && <p><b>Пик</b> {DOW_LONG[h.busiest.dow]} в {hh(h.busiest.hour)}: в среднем {h.busiest.avg} {plural(Math.round(h.busiest.avg), ['игрок', 'игрока', 'игроков'])}</p>}
+        {h.busiest && <p><b>Пик</b> {DOW_LONG[h.busiest.dow]} в {hh(h.busiest.hour)}: в среднем {num(h.busiest.avg)} {plural(Math.round(h.busiest.avg), ['игрок', 'игрока', 'игроков'])}</p>}
         {h.quietest && <p><b>Тише всего</b> {DOW_LONG[h.quietest.dow]} в {hh(h.quietest.hour)}</p>}
         {h.restartHour != null && <p><b>Рестарт</b> лучше всего в {hh(h.restartHour)}: в это время меньше всего игроков в любой день</p>}
       </div>
@@ -126,7 +126,7 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
           <span className="an-legend"><i className="an-bar-new" />новые</span>
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {d ? `${dayLabel(d.day)}: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}, новых ${d.newPlayers}, ${d.hours} ч в игре, пик ${d.peak}` : 'наведите на столбец'}
+          {d ? `${dayLabel(d.day)}: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}, новых ${d.newPlayers}, ${num(d.hours)} ч в игре, пик ${d.peak}` : 'наведите на столбец'}
         </span>
       </div>
     </div>
@@ -200,7 +200,7 @@ function TopPlayers({ top }: { top: Analytics['top'] }) {
               <span className="an-top-bar"><span style={{ width: `${(p.hours / max) * 100}%` }} /></span>
             </span>
             <span className="shrink-0 text-right">
-              <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+              <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
               <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
             </span>
           </li>

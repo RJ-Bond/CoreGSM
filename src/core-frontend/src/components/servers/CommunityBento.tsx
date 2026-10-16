@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
-import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll } from '../../ui';
+import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll, num } from '../../ui';
 import '../../styles/community.css';
 
 export interface Community {
@@ -36,7 +36,7 @@ export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; b
         <div key={d} className="contents">
           <span className="cm-heat-d">{DOW_SHORT[d]}</span>
           {row.map((v, h) => (
-            <span key={h} className="cm-heat-c" style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${v}`} />
+            <span key={h} className="cm-heat-c" style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${num(v)}`} />
           ))}
         </div>
       ))}
@@ -107,6 +107,7 @@ export default function CommunityBento() {
         <p className="cm-sub">
           {isRecord ? '🎉 Это рекорд за 30 дней!' : rec ? `Рекорд за 30 дней: ${rec.players} (${fmtDateTime(rec.at)})` : 'Рекорд появится, когда накопится история'}
         </p>
+        <a href="/community" className="cm-more">Сообщество: кто и когда играет →</a>
         <dl className="cm-mini">
           <div><dt>Серверов в сети</dt><dd>{c.now.online} из {c.now.servers}</dd></div>
           <div><dt>Игроков за неделю</dt><dd>{c.players.week}</dd></div>

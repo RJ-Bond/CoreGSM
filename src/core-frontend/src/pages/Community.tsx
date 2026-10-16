@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
-import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural } from '../ui';
+import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
@@ -49,9 +49,9 @@ function SeasonBlocks() {
                   <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
                   <span className="min-w-0 flex-1">
                     <a href={playerHref(p.name)} className="block truncate font-extrabold hover:text-link">{p.name}</a>
-                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn))' }} /></span>
+                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn-fill))' }} /></span>
                   </span>
-                  <span className="shrink-0 font-extrabold tabular-nums">{p.hours} ч</span>
+                  <span className="shrink-0 font-extrabold tabular-nums">{num(p.hours)} ч</span>
                 </li>
               ))}
             </ol>
@@ -72,7 +72,7 @@ function SeasonBlocks() {
                     <li key={p.name} className="flex items-center gap-2">
                       <span aria-label={`${i + 1} место`}>{MEDALS[i]}</span>
                       <a href={playerHref(p.name)} className="min-w-0 flex-1 truncate font-bold hover:text-link">{p.name}</a>
-                      <span className="text-sm font-extrabold tabular-nums text-mute">{p.hours} ч</span>
+                      <span className="text-sm font-extrabold tabular-nums text-mute">{num(p.hours)} ч</span>
                     </li>
                   ))}
                   {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">Никто не играл</li>}
@@ -166,7 +166,7 @@ export default function CommunityPage() {
                     <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
                   </span>
                   <span className="shrink-0 text-right">
-                    <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+                    <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
                     <span className="block text-xs font-bold text-mute">{p.servers} {plural(p.servers, ['сервер', 'сервера', 'серверов'])}</span>
                   </span>
                 </li>

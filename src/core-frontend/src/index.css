@@ -30,6 +30,10 @@
   --badbg: 254 226 226;
   --badsolid: 185 40 40;
   --oksolid: 21 128 61;
+  /* fills (bars, dots, meters): bright in both themes; the text colours above stay dark in the light theme for contrast */
+  --ok-fill: 34 197 94;
+  --warn-fill: 245 158 11;
+  --bad-fill: 239 68 68;
   --seg-on: 255 255 255;
   --tile-border: rgb(231 233 240);
   --glass: rgb(255 255 255 / 0.74);
@@ -61,7 +65,7 @@
     --card: 18 20 27;
     --raised: 27 30 40;
     --ink: 226 228 236;
-    --mute: 148 154 170;
+    --mute: 160 166 182;
     --line: 38 41 53;
     --field: 112 118 136;
     --soft: 30 33 44;
@@ -76,6 +80,9 @@
     --bad: 248 113 113;
     --badbg: 58 25 30;
     --badsolid: 214 48 48;
+    --ok-fill: 74 222 128;
+    --warn-fill: 251 191 36;
+    --bad-fill: 248 113 113;
     --seg-on: 44 48 64;
     --tile-border: rgb(255 255 255 / 0.07);
     --glass: rgb(20 22 30 / 0.72);
@@ -96,7 +103,7 @@
   --card: 18 20 27;
   --raised: 27 30 40;
   --ink: 226 228 236;
-  --mute: 148 154 170;
+  --mute: 160 166 182;
   --line: 38 41 53;
   --field: 112 118 136;
   --soft: 30 33 44;
@@ -111,6 +118,9 @@
   --bad: 248 113 113;
   --badbg: 58 25 30;
   --badsolid: 214 48 48;
+    --ok-fill: 74 222 128;
+    --warn-fill: 251 191 36;
+    --bad-fill: 248 113 113;
   --seg-on: 44 48 64;
   --tile-border: rgb(255 255 255 / 0.07);
   --glass: rgb(20 22 30 / 0.72);
@@ -345,8 +355,8 @@ main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #000
 .meter > i { display: block; height: 100%; border-radius: 9999px; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--brand-2, var(--brand)))); transition: width 1.1s cubic-bezier(.2, .8, .2, 1); animation: meter-in 1.1s cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes meter-in { from { width: 0; } }
 
-.live-dot { position: relative; width: 8px; height: 8px; border-radius: 9999px; background: rgb(var(--ok)); }
-.live-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: rgb(var(--ok)); animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+.live-dot { position: relative; width: 8px; height: 8px; border-radius: 9999px; background: rgb(var(--ok-fill)); }
+.live-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: rgb(var(--ok-fill)); animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 @keyframes live-ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
 
 .offline-cover { opacity: .78; }
@@ -570,6 +580,10 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 
 /* ---------- skeletons: same shapes as the content; content fades in when it arrives ---------- */
 .fade-in { animation: fade-in .4s ease-out both; }
+.view-swap { animation: view-swap .32s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes view-swap { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .view-swap { animation: none; } }
+html[data-motion='reduce'] .view-swap { animation: none; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .skel-line { height: 12px; border-radius: 9999px; }
 
@@ -692,9 +706,9 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .tab-count { margin-left: 6px; border-radius: 9999px; padding: 0 6px; font-size: 12px; font-weight: 800; background: rgb(var(--ink) / 0.08); font-variant-numeric: tabular-nums; }
 
-.meter.m-ok > i { background: rgb(var(--ok)); }
-.meter.m-warn > i { background: rgb(var(--warn)); }
-.meter.m-bad > i { background: rgb(var(--bad)); }
+.meter.m-ok > i { background: rgb(var(--ok-fill)); }
+.meter.m-warn > i { background: rgb(var(--warn-fill)); }
+.meter.m-bad > i { background: rgb(var(--bad-fill)); }
 
 .avatar-hue { background: hsl(var(--h) 72% 88%); color: hsl(var(--h) 62% 24%); }
 :root[data-theme='dark'] .avatar-hue { background: hsl(var(--h) 42% 26%); color: hsl(var(--h) 90% 86%); }
@@ -1003,3 +1017,8 @@ html[data-contrast='high'] .seg { box-shadow: inset 0 0 0 1px rgb(var(--field));
 html[data-contrast='high'] .seg-item[aria-pressed='true'], html[data-contrast='high'] .seg-item[aria-current='page'], html[data-contrast='high'] .seg-item.on { box-shadow: inset 0 0 0 2px rgb(var(--ink)); }
 html[data-contrast='high'] .hint-strip { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
 html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline; text-underline-offset: 3px; }
+
+/* status colours as fills (dots, legend squares, strength bars) use the bright fill tokens */
+.bg-ok { background-color: rgb(var(--ok-fill)); }
+.bg-warn { background-color: rgb(var(--warn-fill)); }
+.bg-bad { background-color: rgb(var(--bad-fill)); }

@@ -6,7 +6,7 @@ import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameGradient, gameLabel } from '../games';
-import { coverBackground } from '../cover';
+import { coverBackground, coverUrlOf, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
 import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
@@ -24,7 +24,6 @@ import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { useCoverAccent } from '../components/server/coverAccent';
-import { coverUrlOf } from '../cover';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
@@ -116,6 +115,16 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   // editing a server: administrators and moderators given «Серверы»
   const canEdit = isAdmin || !!me?.perms?.includes('servers');
   const probes = useProbes(id);
+  // the phone bar shows once the banner's buttons are scrolled out of sight
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const [barOn, setBarOn] = useState(false);
+  useEffect(() => {
+    const el = actionsRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([e]) => setBarOn(!e.isIntersecting && e.boundingClientRect.top < 0), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  });
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -409,7 +418,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <article
         className={`srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
-        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true, game: s.game }) }}
+        style={{ background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
         {...depth}
       >
         {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
@@ -466,9 +475,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         )}
 
         {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
-            On phones «Подключиться» and «Подписаться» are in the bottom bar. */}
-        <div className="relative mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-          <a className="btn-cta max-sm:hidden" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+            On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
+            (and «Подписаться») floats above the bottom navigation. */}
+        <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
+          <a className="btn-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>{connectLabel}</a>
           <CopyButton text={s.address} label={t('srv.act.copyAddr')} tone="glass" />
           {canSub && (
             <button type="button" className="btn-glass max-sm:hidden" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
@@ -496,10 +506,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <SubscribeMenu serverId={id} serverName={s.name} subs={subs} open={subOpen} onOpenChange={setSubOpen} preselect={subPre} hideButton />
       )}
 
-      <div className="srv-mbar" role="region" aria-label={t('srv.bar.label')}>
-        <a className="btn" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+      <div className={`srv-mbar ${barOn ? 'is-on' : ''}`} role="region" aria-label={t('srv.bar.label')} aria-hidden={!barOn}>
+        <a className="btn" href={connectHref} onClick={onConnect} tabIndex={barOn ? undefined : -1}>{connectLabel}</a>
         {canSub && (
-          <button type="button" className="btn btn-soft" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+          <button type="button" className="btn btn-soft" tabIndex={barOn ? undefined : -1} onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
             <IconBell size={18} />
             {subLabel}
           </button>

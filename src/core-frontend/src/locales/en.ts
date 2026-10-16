@@ -661,6 +661,8 @@ const en: Record<keyof typeof ru, string> = {
   'nw.react.error': 'Could not save the reaction',
   'nw.empty.title': 'No news yet',
   'nw.empty.text': 'Once an administrator publishes something, it will show up here.',
+  'nw.empty.write': 'Write the first news',
+  'nw.empty.servers': 'Go to servers',
   'nw.emptyRubric.title': 'Nothing in this category',
   'nw.emptyRubric.text': 'Try another category or show all news.',
   'nw.showAll': 'Show all',
