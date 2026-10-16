@@ -1,6 +1,7 @@
 /** Users: registration and access settings, pending requests, roles and passwords. */
 import { useEffect, useRef, useState } from 'react';
-import { type Access, api, type UserRow } from '../../api';
+import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../api';
+import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { confirmDialog, promptDialog } from '../../confirm';
@@ -64,6 +65,9 @@ export function UsersTab() {
       void reload();
     },
   });
+  const setPerms = async (u: UserRow, perms: Perm[]) => {
+    await api(`/users/${u.id}`, 'PUT', { role: u.role, perms }).then(() => { toast('Права модератора сохранены'); void load(); }).catch((e) => setError(e.message));
+  };
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
     load();
@@ -176,6 +180,20 @@ export function UsersTab() {
               </select>
               <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
               <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
+              {u.role === 'moderator' && (
+                <fieldset className="us-perms basis-full">
+                  <legend className="sr-only">Права модератора {u.username}</legend>
+                  {PERM_LABELS.map((p) => {
+                    const on = (u.perms ?? []).includes(p.id);
+                    return (
+                      <label key={p.id} className={`us-perm ${on ? 'is-on' : ''}`} title={p.hint}>
+                        <input type="checkbox" checked={on} onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
+                        <span><b>{p.label}</b> <span className="text-mute">· {p.hint}</span></span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              )}
             </li>
           ))}
         </ul>

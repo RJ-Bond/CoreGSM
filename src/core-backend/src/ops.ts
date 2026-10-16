@@ -2,6 +2,7 @@
  * Operations for administrators: action log, bulk actions on Discord bindings,
  * system health and diagnostics, database backup and restore.
  */
+import { allow } from './auth.js';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import fs from 'node:fs';
 import tls from 'node:tls';
@@ -189,7 +190,7 @@ export function checkCert(force = false): Promise<CertInfo> {
 
 export function registerOps({ app, admin, getBot, guildCount, version, pollMs, publicBase }: Ctx): void {
   // ----- log -----
-  app.get('/api/audit', admin, (req, res) => {
+  app.get('/api/audit', allow('journal'), (req, res) => {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
     res.json(db.prepare('SELECT id, ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT ?').all(limit));
   });

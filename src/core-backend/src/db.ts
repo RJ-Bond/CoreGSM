@@ -35,6 +35,7 @@ if (fs.existsSync(pendingDir)) {
         ['covers', /^\d{1,9}(@s)?\.jpg$/],
         ['avatars', /^\d{1,9}\.png$/],
         ['banners', /^\d{1,9}\.jpg$/],
+        ['gallery', /^\d{1,9}(@s)?\.jpg$/],
       ] as const) {
         const src = path.join(pendingDir, dir);
         if (!fs.existsSync(src)) continue;

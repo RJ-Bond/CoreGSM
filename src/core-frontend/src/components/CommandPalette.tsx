@@ -3,8 +3,9 @@ import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
-import { ADMIN_LINKS, ADMIN_SECTIONS } from '../pages/adminNav';
-import { GameAvatar, IconNews, IconServers, toast, useDensity, navigate } from '../ui';
+import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
+import { confirmDialog } from '../confirm';
+import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, currentTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -53,7 +54,8 @@ const sectionItem = (key: string, label: string, hint: string, href: string, ico
  * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
  */
 export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
-  const { me } = useAuth();
+  const { me, logout } = useAuth();
+  const perms = me?.perms ?? (isAdmin ? ['news', 'moderation', 'servers', 'maintenance', 'journal'] : []);
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -91,17 +93,51 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-servers', 'Серверы', 'Список серверов', '/servers', <IconServers />),
       sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
+      sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
+      sectionItem('p-gallery', 'Галерея', 'Скриншоты игроков', '/gallery', <IconCards />, 'скриншоты картинки фото загрузить', true),
     );
     if (isStaff) {
-      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
+      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => SECTION_PERM[x.id] && perms.includes(SECTION_PERM[x.id]!));
       for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
       if (isAdmin) {
         ADMIN_LINKS.forEach((l, i) => out.push(sectionItem(`l-${i}`, l.label, `Админка · ${l.hint}`, l.href, l.icon(), `${l.keywords} админка`, true)));
-      } else {
+      } else if (perms.includes('news')) {
         out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '/admin/news/new', <IconNews />, 'новость объявление', true));
       }
     }
     if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '/profile', <IconUser />));
+    // actions on a server, found by typing its name: copy the address, poll it now, restart it
+    const act = (key: string, label: string, hint: string, words: string, icon: ReactNode, run: () => void) =>
+      out.push({ key, group: 'Действия', label, hint, href: '', run, icon, hay: norm(`${label} ${hint} ${words}`), searchOnly: true });
+    for (const s of servers ?? []) {
+      act(`copy-${s.id}`, `Скопировать адрес: ${s.name}`, s.address, 'адрес ip подключиться копировать', <IconCopy />, () => {
+        void navigator.clipboard?.writeText(s.address).then(() => toast('Адрес скопирован'));
+      });
+      if (perms.includes('servers')) {
+        act(`poll-${s.id}`, `Опросить сейчас: ${s.name}`, 'Свежие онлайн, карта и пинг', 'обновить опросить проверить', <IconRefresh />, () => {
+          void api(`/servers/${s.id}/refresh`, 'POST').then(() => toast(`«${s.name}» опрошен`)).catch((e: Error) => toast(e.message, 'err'));
+        });
+      }
+      if (perms.includes('maintenance')) {
+        act(`restart-${s.id}`, `Перезапустить: ${s.name}`, 'Окно обслуживания и команда по RCON', 'перезапуск рестарт restart', <IconWrench />, () => {
+          void confirmDialog({ title: `Перезапустить «${s.name}» сейчас?`, text: 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.', confirmLabel: 'Перезапустить', danger: true }).then((ok) => {
+            if (ok) void api<{ lastResult: string | null }>(`/servers/${s.id}/restart/now`, 'POST').then((r) => toast(r.lastResult ?? 'Готово')).catch((e: Error) => toast(e.message, 'err'));
+          });
+        });
+      }
+    }
+    if (isAdmin) {
+      act('act-digest', 'Отправить итоги недели сейчас', 'Картинка с итогами в канал Discord', 'дайджест итоги неделя отчёт', <IconNews />, () => {
+        void api('/digest/send', 'POST').then(() => toast('Итоги недели поставлены в очередь')).catch((e: Error) => toast(e.message, 'err'));
+      });
+      act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
+    }
+    const theme = currentTheme();
+    for (const [t, label, icon] of [['dark', 'Тёмная тема', <IconMoon key="m" />], ['light', 'Светлая тема', <IconSun key="s" />], ['auto', 'Тема как в системе', <IconSun key="a" />]] as const) {
+      if (t === theme) continue;
+      out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
+    }
+    if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
     const compact = density === 'compact';
     out.push({
       key: 'act-density',
@@ -114,7 +150,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
-  }, [servers, isStaff, isAdmin, me, density]);
+  }, [servers, isStaff, isAdmin, me, density, perms, logout]);
 
   const results = useMemo(() => {
     const words = norm(q).split(/\s+/).filter(Boolean);

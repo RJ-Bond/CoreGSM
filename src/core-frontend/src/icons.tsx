@@ -120,3 +120,4 @@ export const IconTrend = make(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />);
 export const IconBars = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
 export const IconBolt = make(<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />);
 export const IconPlug = make(<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v5" />);
+export const IconTrophy = make(<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />);

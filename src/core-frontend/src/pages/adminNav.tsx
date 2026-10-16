@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
+import type { Perm } from '../api';
+import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -27,18 +28,22 @@ const S = {
   alerts: { id: 'alerts', label: 'Оповещения', icon: IconBell, desc: 'Сообщение в Discord, если игровой сервер упал или вернулся.', keywords: 'упал недоступен уведомление падение упоминание here everyone' },
   maintenance: { id: 'maintenance', label: 'Обслуживание', icon: IconWrench, desc: 'Окна технических работ: во время них падение сервера не считается сбоем.', keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
   cards: { id: 'cards', label: 'Карточки', icon: IconCards, desc: 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.', keywords: 'картинка баннер ссылка png' },
+  community: { id: 'community', label: 'Сообщество', icon: IconTrophy, desc: 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов игроков.', keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
   users: { id: 'users', label: 'Пользователи', icon: IconUsers, desc: 'Аккаунты, роли, регистрация и правила сообщества.', keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
   journal: { id: 'journal', label: 'Журнал', icon: IconJournal, desc: 'Кто и что менял в панели, с датой и временем.', keywords: 'аудит история действия изменения кто менял лог' },
   system: { id: 'system', label: 'Система', icon: IconSystem, desc: 'Здоровье панели: версия, диск, бот, сертификат, диагностика.', keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
   settings: { id: 'settings', label: 'Настройки', icon: IconSettings, desc: 'Токен бота, оформление, пароль, обновления и резервные копии.', keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
 } satisfies Record<string, AdminSection>;
 
+/** the permission that opens a section to a moderator (sections not listed are for administrators only) */
+export const SECTION_PERM: Partial<Record<string, Perm>> = { news: 'news', community: 'moderation', servers: 'servers', maintenance: 'maintenance', journal: 'journal' };
+
 export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
   { title: 'Основное', sections: [S.servers, S.discord, S.news] },
   { title: 'Мониторинг', sections: [S.alerts, S.maintenance, S.cards] },
-  { title: 'Люди', sections: [S.users, S.journal] },
+  { title: 'Люди', sections: [S.community, S.users, S.journal] },
   { title: 'Система', sections: [S.system, S.settings] },
 ];
 

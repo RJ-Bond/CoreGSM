@@ -7,6 +7,7 @@ import { setGatewayAgent } from './gateway.js';
 import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
 import { parseProxy } from './proxy.js';
+import { syncDiscord } from './sync.js';
 
 const TICK_MS = 10_000;
 const LOGIN_RETRY_MS = 60_000;
@@ -56,7 +57,14 @@ const PERM_LABELS: Record<string, string> = {
 /** Text channels per Discord server. A channel is listed when the bot can see it and write to it;
  *  missing "soft" permissions are reported as warnings instead of hiding the channel. */
 function collectGuilds(c: Client) {
-  const out: { id: string; name: string; hidden: number; channels: { id: string; name: string; pos: number; missing: string[] }[] }[] = [];
+  const out: {
+    id: string;
+    name: string;
+    hidden: number;
+    channels: { id: string; name: string; pos: number; missing: string[] }[];
+    roles: { id: string; name: string; color: number }[];
+    voice: { id: string; name: string }[];
+  }[] = [];
   for (const g of c.guilds.cache.values()) {
     const me = g.members.me;
     const channels: { id: string; name: string; pos: number; missing: string[] }[] = [];
@@ -69,7 +77,19 @@ function collectGuilds(c: Client) {
       channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition, missing });
     }
     channels.sort((x, y) => x.pos - y.pos);
-    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250) });
+    // roles the bot may give: below its own highest role, not @everyone, not owned by an integration
+    const roles = [...g.roles.cache.values()]
+      .filter((r) => r.id !== g.id && !r.managed && r.editable)
+      .sort((x, y) => y.position - x.position)
+      .slice(0, 200)
+      .map((r) => ({ id: r.id, name: r.name, color: r.color }));
+    // voice channels the bot may rename (live counters)
+    const voice = [...g.channels.cache.values()]
+      .filter((ch) => (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) && (!me || ch.permissionsFor(me)?.has(['ViewChannel', 'ManageChannels'])))
+      .sort((x, y) => ('rawPosition' in x && 'rawPosition' in y ? x.rawPosition - y.rawPosition : 0))
+      .slice(0, 200)
+      .map((ch) => ({ id: ch.id, name: ch.name }));
+    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250), roles, voice });
   }
   return out.slice(0, 50);
 }
@@ -81,6 +101,8 @@ async function publishGuilds(): Promise<void> {
     name: g.name,
     hidden: g.hidden,
     channels: g.channels.map(({ id, name, missing }) => ({ id, name, ...(missing.length ? { missing } : {}) })),
+    roles: g.roles,
+    voice: g.voice,
   }));
   const json = JSON.stringify(list);
   // send on change, and every minute so a restarted backend learns the list again
@@ -358,6 +380,7 @@ async function tick(): Promise<void> {
     await updateBindings();
     await processNews();
     await processDeliveries();
+    if (client && state === 'online') await syncDiscord(client, () => stopping);
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {

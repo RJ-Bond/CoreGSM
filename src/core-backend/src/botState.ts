@@ -17,6 +17,10 @@ export interface BotGuild {
   /** text channels the bot can see but not write to */
   hidden?: number;
   channels: { id: string; name: string; missing?: string[] }[];
+  /** roles the bot can give (below its own role, not managed by an integration) */
+  roles?: { id: string; name: string; color: number }[];
+  /** voice channels the bot can rename (live counters) */
+  voice?: { id: string; name: string }[];
 }
 
 // persisted, so a backend restart does not leave the channel picker empty until the bot reports again
@@ -43,8 +47,8 @@ export function channelInfo(channelId: string): { channelName: string | null; gu
   return { channelName: null, guildName: null, guildId: null };
 }
 
-// View Channel + Send Messages + Embed Links + Attach Files
-const BOT_PERMISSIONS = 52224;
+// View Channel + Send Messages + Embed Links + Attach Files + Manage Channels (counters) + Manage Roles (autoroles)
+const BOT_PERMISSIONS = 52224 + 16 + 268435456;
 
 /** The first segment of a bot token is the base64 of the bot user id (= application id). */
 export function clientIdFromToken(token: string | null): string | null {
@@ -65,6 +69,10 @@ export const BOT_COMMANDS = [
   { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
   { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
   { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
+  { name: '/online', description: 'Кто сейчас играет: онлайн всех серверов' },
+  { name: '/status', description: 'Карточка сервера с графиком за сутки. Параметр: server' },
+  { name: '/player', description: 'Карточка игрока: часы, серия дней, где и когда играет. Параметр: nick' },
+  { name: '/top', description: 'Самые активные игроки недели или месяца' },
 ];
 
 export function invitePayload() {

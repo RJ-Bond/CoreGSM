@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2adb42e0cb1e"
+COREGSM_BUILD="9e270dd8f6b7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4143,7 +4143,7 @@ export interface Payload {
   embed: Record<string, unknown>;
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
   const s = alertSettings();
@@ -4421,6 +4421,45 @@ export function staff(req: AuthedRequest, res: Response, next: NextFunction) {
   req.user = u;
   next();
 }
+/**
+ * What a moderator may do. Administrators may do everything; a moderator gets the permissions the administrator
+ * ticked (the default set until then: news and moderation of reviews and screenshots).
+ */
+export const PERMS = ['news', 'moderation', 'servers', 'maintenance', 'journal'] as const;
+export type Perm = (typeof PERMS)[number];
+export const DEFAULT_MOD_PERMS: Perm[] = ['news', 'moderation'];
+
+export function parsePerms(raw: string | null | undefined): Perm[] {
+  if (raw == null) return [...DEFAULT_MOD_PERMS];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? PERMS.filter((p) => v.includes(p)) : [...DEFAULT_MOD_PERMS];
+  } catch {
+    return [...DEFAULT_MOD_PERMS];
+  }
+}
+/** the permissions of an account: all for an administrator, the ticked ones for a moderator, none for a player */
+export function permsOf(u: { id: number; role: Role }): Perm[] {
+  if (u.role === 'admin') return [...PERMS];
+  if (u.role !== 'moderator') return [];
+  return parsePerms((db.prepare('SELECT perms FROM users WHERE id = ?').get(u.id) as { perms: string | null } | undefined)?.perms);
+}
+export const can = (req: Request, p: Perm): boolean => {
+  const u = (req as AuthedRequest).user;
+  return !!u && permsOf(u).includes(p);
+};
+/** administrators, and moderators with the given permission */
+export function allow(p: Perm) {
+  return (req: AuthedRequest, res: Response, next: NextFunction) => {
+    const u = loadUser(req);
+    if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+    req.user = u;
+    if (u.role === 'admin') return next();
+    if (u.role === 'moderator' && permsOf(u).includes(p)) return next();
+    res.status(403).json({ error: u.role === 'moderator' ? 'У вас нет права на это действие: его выдаёт администратор' : 'Это действие доступно администратору и модератору' });
+  };
+}
+
 /** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
 export function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   const u = loadUser(req);
@@ -4620,8 +4659,8 @@ const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
 const MAGIC = Buffer.from('CGSMENC1');
 const HEADER_LEN = 8 + 16 + 12;
 const NAME_RE = /^coregsm-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual)\.tar\.gz(\.enc)?$/;
-const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png|banners|banners\/\d{1,9}\.jpg)$/;
-const DIR_ENTRIES = new Set(['news', 'covers', 'avatars', 'banners']);
+const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png|banners|banners\/\d{1,9}\.jpg|gallery|gallery\/\d{1,9}(@s)?\.jpg)$/;
+const DIR_ENTRIES = new Set(['news', 'covers', 'avatars', 'banners', 'gallery']);
 
 /** user-facing error (message is shown in the panel) */
 export class BackupError extends Error {
@@ -4796,6 +4835,7 @@ export async function buildArchive(dest: string, passphrase: string | null): Pro
       ['covers', /^\d{1,9}(@s)?\.jpg$/],
       ['avatars', /^\d{1,9}\.png$/],
       ['banners', /^\d{1,9}\.jpg$/],
+      ['gallery', /^\d{1,9}(@s)?\.jpg$/],
     ] as const) {
       const src = path.join(DATA_DIR, dir);
       if (!fs.existsSync(src)) continue;
@@ -5277,6 +5317,10 @@ export interface BotGuild {
   /** text channels the bot can see but not write to */
   hidden?: number;
   channels: { id: string; name: string; missing?: string[] }[];
+  /** roles the bot can give (below its own role, not managed by an integration) */
+  roles?: { id: string; name: string; color: number }[];
+  /** voice channels the bot can rename (live counters) */
+  voice?: { id: string; name: string }[];
 }
 
 // persisted, so a backend restart does not leave the channel picker empty until the bot reports again
@@ -5303,8 +5347,8 @@ export function channelInfo(channelId: string): { channelName: string | null; gu
   return { channelName: null, guildName: null, guildId: null };
 }
 
-// View Channel + Send Messages + Embed Links + Attach Files
-const BOT_PERMISSIONS = 52224;
+// View Channel + Send Messages + Embed Links + Attach Files + Manage Channels (counters) + Manage Roles (autoroles)
+const BOT_PERMISSIONS = 52224 + 16 + 268435456;
 
 /** The first segment of a bot token is the base64 of the bot user id (= application id). */
 export function clientIdFromToken(token: string | null): string | null {
@@ -5325,6 +5369,10 @@ export const BOT_COMMANDS = [
   { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
   { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
   { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
+  { name: '/online', description: 'Кто сейчас играет: онлайн всех серверов' },
+  { name: '/status', description: 'Карточка сервера с графиком за сутки. Параметр: server' },
+  { name: '/player', description: 'Карточка игрока: часы, серия дней, где и когда играет. Параметр: nick' },
+  { name: '/top', description: 'Самые активные игроки недели или месяца' },
 ];
 
 export function invitePayload() {
@@ -5812,6 +5860,178 @@ if (INTERNAL_TOKEN.length < 16) {
 export const APP_VERSION = process.env.APP_VERSION ?? '';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/configExport.ts" << '__COREGSM_EOF__'
+/**
+ * The panel's setup as one JSON file, to move it to another panel in a minute (or keep a readable copy).
+ * Unlike a backup it holds no players, history or accounts, and no secrets (bot token, passwords, keys):
+ * servers, Discord status messages, alert and digest settings, appearance, maintenance that repeats,
+ * scheduled restarts, autoroles and counters.
+ *
+ *   GET  /api/config/export             the file
+ *   POST /api/config/import?dry=1       what an import would change, without changing anything
+ *   POST /api/config/import             import: a server with the same game, address and port is updated,
+ *                                       others are added; the settings in the file replace the current ones
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin } from './auth.js';
+import { db, getSetting, setSetting } from './db.js';
+
+export const router = express.Router();
+
+/** settings that travel with the file: never a secret, never a counter or a timestamp of this panel */
+export const PORTABLE_SETTINGS = [
+  'alerts_enabled', 'alerts_channel', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
+  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour',
+  'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
+  'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
+  'poll_concurrency', 'poll_fail_threshold', 'timezone',
+  'public_panel', 'registration_open', 'registration_mode', 'rules_text',
+  'backup_schedule', 'backup_keep',
+  'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from',
+] as const;
+
+interface ServerRow { id: number; name: string; game: string; host: string; port: number; query_port: number | null; display_address: string; country: string }
+
+export function exportConfig() {
+  const servers = db.prepare('SELECT id, name, game, host, port, query_port, display_address, country FROM servers ORDER BY id').all() as ServerRow[];
+  const ref = new Map(servers.map((s, i) => [s.id, i]));
+  const settings: Record<string, string> = {};
+  for (const k of PORTABLE_SETTINGS) {
+    const v = getSetting(k);
+    if (v !== null) settings[k] = v;
+  }
+  const opt = <T,>(sql: string): T[] => {
+    try {
+      return db.prepare(sql).all() as T[];
+    } catch {
+      return [];
+    }
+  };
+  return {
+    app: 'coregsm',
+    format: 1,
+    exportedAt: new Date().toISOString(),
+    servers: servers.map((s) => ({ name: s.name, game: s.game, host: s.host, port: s.port, queryPort: s.query_port, displayAddress: s.display_address, country: s.country })),
+    bindings: opt<{ server_id: number; channel_id: string; interval_sec: number; enabled: number; style: string; extra_ids: string }>('SELECT server_id, channel_id, interval_sec, enabled, style, extra_ids FROM bindings')
+      .filter((b) => ref.has(b.server_id))
+      .map((b) => ({ server: ref.get(b.server_id)!, channelId: b.channel_id, intervalSec: b.interval_sec, enabled: !!b.enabled, style: b.style, extra: (JSON.parse(b.extra_ids || '[]') as number[]).filter((id) => ref.has(id)).map((id) => ref.get(id)!) })),
+    maintenance: opt<{ server_id: number | null; name: string; start_ts: number; end_ts: number; repeat: string }>("SELECT server_id, name, start_ts, end_ts, repeat FROM maintenance_windows WHERE repeat != 'none'")
+      .filter((w) => w.server_id === null || ref.has(w.server_id))
+      .map((w) => ({ server: w.server_id === null ? null : ref.get(w.server_id)!, name: w.name, startTs: w.start_ts, endTs: w.end_ts, repeat: w.repeat })),
+    restarts: opt<{ server_id: number; enabled: number; days: number; at_min: number; duration_min: number; warn_min: number; channel_id: string; command: string; say: string }>('SELECT * FROM restart_plans')
+      .filter((p) => ref.has(p.server_id))
+      .map((p) => ({ server: ref.get(p.server_id)!, enabled: !!p.enabled, days: p.days, atMin: p.at_min, durationMin: p.duration_min, warnMin: p.warn_min, channelId: p.channel_id, command: p.command, say: p.say })),
+    autoroles: opt<{ guild_id: string; role_id: string; kind: string; threshold: number; server_id: number | null }>('SELECT guild_id, role_id, kind, threshold, server_id FROM autoroles')
+      .map((r) => ({ guildId: r.guild_id, roleId: r.role_id, kind: r.kind, threshold: r.threshold, server: r.server_id === null ? null : ref.get(r.server_id) ?? null })),
+    counters: opt<{ channel_id: string; template: string; server_id: number | null }>('SELECT channel_id, template, server_id FROM voice_counters')
+      .map((c) => ({ channelId: c.channel_id, template: c.template, server: c.server_id === null ? null : ref.get(c.server_id) ?? null })),
+    settings,
+  };
+}
+
+const snow = z.string().regex(/^\d{15,25}$/);
+const serverRef = z.number().int().min(0).max(999);
+const fileSchema = z.object({
+  app: z.literal('coregsm'),
+  format: z.literal(1),
+  servers: z.array(z.object({ name: z.string().min(1).max(100), game: z.string().min(1).max(40), host: z.string().min(1).max(253), port: z.number().int().min(1).max(65535), queryPort: z.number().int().min(1).max(65535).nullable().optional(), displayAddress: z.string().max(200).optional(), country: z.string().max(8).optional() })).max(500),
+  bindings: z.array(z.object({ server: serverRef, channelId: snow, intervalSec: z.number().int().min(30).max(3600), enabled: z.boolean(), style: z.enum(['embed', 'card', 'both']), extra: z.array(serverRef).max(9) })).max(500).default([]),
+  maintenance: z.array(z.object({ server: serverRef.nullable(), name: z.string().max(100), startTs: z.number().int(), endTs: z.number().int(), repeat: z.enum(['daily', 'weekly']) })).max(200).default([]),
+  restarts: z.array(z.object({ server: serverRef, enabled: z.boolean(), days: z.number().int().min(0).max(127), atMin: z.number().int().min(0).max(1439), durationMin: z.number().int().min(1).max(240), warnMin: z.number().int().min(0).max(120), channelId: z.string().regex(/^(\d{15,25})?$/), command: z.string().max(200), say: z.string().max(200) })).max(500).default([]),
+  autoroles: z.array(z.object({ guildId: snow, roleId: snow, kind: z.enum(['online', 'week_top', 'hours']), threshold: z.number().int().min(0).max(10000), server: serverRef.nullable() })).max(100).default([]),
+  counters: z.array(z.object({ channelId: snow, template: z.string().min(1).max(100), server: serverRef.nullable() })).max(50).default([]),
+  settings: z.record(z.string().max(5000)).default({}),
+});
+export type ConfigFile = z.infer<typeof fileSchema>;
+
+/** applies (or, with dry, only counts) an import; the answer says what changed */
+export function importConfig(file: ConfigFile, dry: boolean) {
+  const sum = { serversAdded: 0, serversUpdated: 0, bindings: 0, maintenance: 0, restarts: 0, autoroles: 0, counters: 0, settings: 0 };
+  const apply = () => {
+    const ids: number[] = [];
+    const find = db.prepare('SELECT id FROM servers WHERE game = ? AND lower(host) = lower(?) AND port = ?');
+    for (const s of file.servers) {
+      const hit = find.get(s.game, s.host, s.port) as { id: number } | undefined;
+      if (hit) {
+        sum.serversUpdated++;
+        db.prepare('UPDATE servers SET name = ?, query_port = ?, display_address = ?, country = ? WHERE id = ?').run(s.name, s.queryPort ?? null, s.displayAddress ?? '', s.country ?? '', hit.id);
+        ids.push(hit.id);
+      } else {
+        sum.serversAdded++;
+        ids.push(Number(db.prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(s.name, s.game, s.host, s.port, s.queryPort ?? null, s.displayAddress ?? '', s.country ?? '', Date.now()).lastInsertRowid));
+      }
+    }
+    const idOf = (i: number | null) => (i === null ? null : ids[i] ?? undefined);
+    for (const b of file.bindings) {
+      const sid = idOf(b.server);
+      if (!sid) continue;
+      // the same server in the same channel: already there
+      if (db.prepare('SELECT 1 FROM bindings WHERE server_id = ? AND channel_id = ?').get(sid, b.channelId)) continue;
+      sum.bindings++;
+      db.prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, extra_ids) VALUES (?, ?, ?, ?, ?, ?)').run(sid, b.channelId, b.intervalSec, b.enabled ? 1 : 0, b.style, JSON.stringify(b.extra.map((i) => ids[i]).filter(Boolean)));
+    }
+    for (const w of file.maintenance) {
+      const sid = idOf(w.server);
+      if (sid === undefined) continue;
+      if (db.prepare('SELECT 1 FROM maintenance_windows WHERE server_id IS ? AND name = ? AND start_ts = ? AND repeat = ?').get(sid, w.name, w.startTs, w.repeat)) continue;
+      sum.maintenance++;
+      db.prepare('INSERT INTO maintenance_windows (server_id, name, start_ts, end_ts, repeat, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(sid, w.name, w.startTs, w.endTs, w.repeat, 'импорт', Date.now());
+    }
+    for (const p of file.restarts) {
+      const sid = idOf(p.server);
+      if (!sid) continue;
+      sum.restarts++;
+      db.prepare(
+        `INSERT INTO restart_plans (server_id, enabled, days, at_min, duration_min, warn_min, channel_id, command, say) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(server_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, at_min = excluded.at_min, duration_min = excluded.duration_min,
+           warn_min = excluded.warn_min, channel_id = excluded.channel_id, command = excluded.command, say = excluded.say`,
+      ).run(sid, p.enabled ? 1 : 0, p.days, p.atMin, p.durationMin, p.warnMin, p.channelId, p.command, p.say);
+    }
+    for (const r of file.autoroles) {
+      const sid = idOf(r.server);
+      if (sid === undefined) continue;
+      if (db.prepare('SELECT 1 FROM autoroles WHERE guild_id = ? AND role_id = ? AND kind = ? AND server_id IS ?').get(r.guildId, r.roleId, r.kind, sid)) continue;
+      sum.autoroles++;
+      db.prepare('INSERT INTO autoroles (guild_id, role_id, kind, threshold, server_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(r.guildId, r.roleId, r.kind, r.threshold, sid, Date.now());
+    }
+    for (const c of file.counters) {
+      const sid = idOf(c.server);
+      if (sid === undefined) continue;
+      if (db.prepare('SELECT 1 FROM voice_counters WHERE channel_id = ?').get(c.channelId)) continue;
+      sum.counters++;
+      db.prepare('INSERT INTO voice_counters (channel_id, template, server_id, created_at) VALUES (?, ?, ?, ?)').run(c.channelId, c.template, sid, Date.now());
+    }
+    for (const [k, v] of Object.entries(file.settings)) {
+      if (!(PORTABLE_SETTINGS as readonly string[]).includes(k)) continue;
+      if (getSetting(k) === v) continue;
+      sum.settings++;
+      setSetting(k, v);
+    }
+    // a dry run counts inside a transaction that is rolled back
+    if (dry) throw new DryRun();
+  };
+  try {
+    db.transaction(apply)();
+  } catch (e) {
+    if (!(e instanceof DryRun)) throw e;
+  }
+  return sum;
+}
+class DryRun extends Error {}
+
+router.get('/api/config/export', admin, (_req, res) => {
+  const day = new Date().toISOString().slice(0, 10);
+  res.set({ 'Content-Disposition': `attachment; filename="coregsm-config-${day}.json"` }).json(exportConfig());
+});
+
+router.post('/api/config/import', admin, (req, res) => {
+  const b = fileSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Это не файл настроек CoreGSM или он повреждён' });
+  res.json({ dry: req.query.dry === '1', ...importConfig(b.data, req.query.dry === '1') });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/covers.ts" << '__COREGSM_EOF__'
 /**
  * Cover pictures of servers. The uploaded picture is centre-cropped to 16:9 and stored as a 1280x720 JPEG
@@ -5948,6 +6168,7 @@ if (fs.existsSync(pendingDir)) {
         ['covers', /^\d{1,9}(@s)?\.jpg$/],
         ['avatars', /^\d{1,9}\.png$/],
         ['banners', /^\d{1,9}\.jpg$/],
+        ['gallery', /^\d{1,9}(@s)?\.jpg$/],
       ] as const) {
         const src = path.join(pendingDir, dir);
         if (!fs.existsSync(src)) continue;
@@ -7391,6 +7612,7 @@ export const ERRORS = {
   auth_required: 'Требуется вход',
   admin_only: 'Это действие доступно только администратору',
   staff_only: 'Это действие доступно администратору и модератору',
+  perm_missing: 'У вас нет права на это действие: его выдаёт администратор',
   csrf_header_missing: 'Запрос отклонён: не хватает заголовка X-CoreGSM',
   rate_limited: 'Слишком много запросов. Подождите минуту.',
   rate_limited_later: 'Слишком много запросов. Попробуйте позже.',
@@ -7477,6 +7699,12 @@ export const ERRORS = {
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Сервер не найден',
   player_not_found: 'Игрок не найден',
+  counter_exists: 'Этот канал уже стал счётчиком',
+  config_bad_file: 'Это не файл настроек CoreGSM или он повреждён',
+  rcon_password_required: 'Укажите пароль RCON',
+  rcon_not_configured: 'Сначала сохраните порт и пароль RCON',
+  gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',
+  gallery_queue_full: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',
@@ -7601,6 +7829,178 @@ export const errorCodes: RequestHandler = (_req, res, next) => {
   };
   next();
 };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/gallery.ts" << '__COREGSM_EOF__'
+/**
+ * The screenshot gallery: signed-in players upload screenshots from the game, the staff approve them, the best ones
+ * get a star and go to the top of the gallery.
+ *
+ * A picture is re-encoded as JPEG (the original never reaches other people): up to 1920 px wide for viewing and
+ * 640 px for the grid, in <data dir>/gallery/<id>.jpg and <id>@s.jpg. Pictures of the staff are approved at once.
+ *
+ *   GET    /api/gallery                  approved pictures (?serverId, ?featured=1, ?limit)
+ *   GET    /api/gallery/mine             the visitor's own pictures with their state
+ *   POST   /api/gallery                  upload (raw image body; ?serverId, ?caption)
+ *   GET    /api/gallery/queue            waiting and recent pictures (staff)
+ *   PATCH  /api/gallery/:id              approve, reject, star (staff)
+ *   DELETE /api/gallery/:id              delete (the author or the staff)
+ *   GET    /api/gallery/img/:id.jpg      the picture (?s=1 the small one); waiting ones only for the author and staff
+ */
+import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import skia from 'skia-canvas';
+import { z } from 'zod';
+import { allow, auth, type AuthedRequest, can, loadUser, permsOf, rateLimit, viewer } from './auth.js';
+
+const staff = allow('moderation');
+import { db, EFFECTIVE_NAME } from './db.js';
+
+const { Canvas, loadImage } = skia;
+
+export const router = express.Router();
+
+const DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'gallery');
+fs.mkdirSync(DIR, { recursive: true });
+const fileOf = (id: number, small = false) => path.join(DIR, `${Math.trunc(id)}${small ? '@s' : ''}.jpg`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS gallery (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
+  caption TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  featured INTEGER NOT NULL DEFAULT 0,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gallery_status ON gallery(status, created_at);
+`);
+
+/** pictures waiting for the staff, per author */
+export const PENDING_MAX = 5;
+const TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+interface Row { id: number; user_id: number | null; server_id: number | null; caption: string; status: 'pending' | 'approved' | 'rejected'; featured: number; width: number; height: number; created_at: number; author: string | null; server_name: string | null }
+
+const SELECT = `SELECT g.*, u.username AS author, (SELECT ${EFFECTIVE_NAME} FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = g.server_id) AS server_name
+  FROM gallery g LEFT JOIN users u ON u.id = g.user_id`;
+const out = (r: Row) => ({
+  id: r.id,
+  url: `/api/gallery/img/${r.id}.jpg`,
+  thumb: `/api/gallery/img/${r.id}.jpg?s=1`,
+  caption: r.caption,
+  author: r.author,
+  serverId: r.server_id,
+  serverName: r.server_name,
+  status: r.status,
+  featured: !!r.featured,
+  width: r.width,
+  height: r.height,
+  createdAt: r.created_at,
+});
+
+async function encode(img: Awaited<ReturnType<typeof loadImage>>, maxW: number): Promise<{ buf: Buffer; w: number; h: number }> {
+  const k = Math.min(1, maxW / img.width);
+  const w = Math.max(1, Math.round(img.width * k));
+  const h = Math.max(1, Math.round(img.height * k));
+  const canvas = new Canvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  return { buf: await canvas.toBuffer('jpeg', { quality: 0.85 }), w, h };
+}
+
+router.get('/api/gallery', viewer, (req, res) => {
+  const serverId = Number(req.query.serverId) || 0;
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 60));
+  const rows = db
+    .prepare(`${SELECT} WHERE g.status = 'approved' ${serverId ? 'AND g.server_id = ?' : ''} ${req.query.featured === '1' ? 'AND g.featured = 1' : ''} ORDER BY g.featured DESC, g.created_at DESC LIMIT ?`)
+    .all(...(serverId ? [serverId] : []), limit) as Row[];
+  res.json(rows.map(out));
+});
+
+router.get('/api/gallery/mine', auth, (req: AuthedRequest, res) => {
+  res.json((db.prepare(`${SELECT} WHERE g.user_id = ? ORDER BY g.created_at DESC LIMIT 100`).all(req.user!.id) as Row[]).map(out));
+});
+
+router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limit: '8mb' }), async (req: AuthedRequest, res) => {
+  const q = z.object({ serverId: z.coerce.number().int().positive().optional(), caption: z.string().trim().max(140).default('') }).safeParse(req.query);
+  if (!q.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (q.data.serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(q.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
+  const body = req.body as Buffer;
+  if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 8 МБ' });
+  const trusted = can(req, 'moderation');
+  const waiting = (db.prepare("SELECT COUNT(*) AS n FROM gallery WHERE user_id = ? AND status = 'pending'").get(req.user!.id) as { n: number }).n;
+  if (!trusted && waiting >= PENDING_MAX) return res.status(429).json({ error: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.' });
+  let big: { buf: Buffer; w: number; h: number };
+  let small: { buf: Buffer };
+  try {
+    const img = await loadImage(body);
+    if (!img.width || !img.height || img.width > 12000 || img.height > 12000) throw new Error('size');
+    big = await encode(img, 1920);
+    small = await encode(img, 640);
+  } catch {
+    return res.status(400).json({ error: 'Не удалось прочитать картинку: выберите PNG, JPG или WebP' });
+  }
+  const id = Number(
+    db
+      .prepare('INSERT INTO gallery (user_id, server_id, caption, status, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(req.user!.id, q.data.serverId ?? null, q.data.caption, trusted ? 'approved' : 'pending', big.w, big.h, Date.now()).lastInsertRowid,
+  );
+  fs.writeFileSync(fileOf(id), big.buf, { mode: 0o644 });
+  fs.writeFileSync(fileOf(id, true), small.buf, { mode: 0o644 });
+  res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
+});
+
+router.get('/api/gallery/queue', staff, (_req, res) => {
+  const rows = db.prepare(`${SELECT} ORDER BY g.status = 'pending' DESC, g.created_at DESC LIMIT 200`).all() as Row[];
+  res.json(rows.map(out));
+});
+
+router.patch('/api/gallery/:id(\\d+)', staff, (req, res) => {
+  const b = z.object({ status: z.enum(['approved', 'rejected', 'pending']).optional(), featured: z.boolean().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM gallery WHERE id = ?').get(id)) return res.status(404).json({ error: 'Не найдено' });
+  if (b.data.status) db.prepare('UPDATE gallery SET status = ? WHERE id = ?').run(b.data.status, id);
+  // only an approved picture can be starred
+  if (b.data.featured !== undefined) db.prepare("UPDATE gallery SET featured = ? WHERE id = ? AND (status = 'approved' OR ? = 0)").run(b.data.featured ? 1 : 0, id, b.data.featured ? 1 : 0);
+  if (b.data.status && b.data.status !== 'approved') db.prepare('UPDATE gallery SET featured = 0 WHERE id = ?').run(id);
+  res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
+});
+
+router.delete('/api/gallery/:id(\\d+)', auth, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT user_id FROM gallery WHERE id = ?').get(id) as { user_id: number | null } | undefined;
+  if (!row) return res.status(404).json({ error: 'Не найдено' });
+  if (row.user_id !== req.user!.id && !can(req, 'moderation')) return res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
+  db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
+  fs.rmSync(fileOf(id), { force: true });
+  fs.rmSync(fileOf(id, true), { force: true });
+  res.json({ ok: true });
+});
+
+router.get('/api/gallery/img/:file', (req, res) => {
+  const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
+  if (!m) return res.status(404).end();
+  const id = Number(m[1]);
+  const row = db.prepare('SELECT user_id, status FROM gallery WHERE id = ?').get(id) as { user_id: number | null; status: string } | undefined;
+  if (!row) return res.status(404).end();
+  if (row.status !== 'approved') {
+    // a picture not approved yet: only its author and the staff see it
+    const u = loadUser(req);
+    if (!u || (u.id !== row.user_id && !permsOf(u).includes('moderation'))) return res.status(404).end();
+  }
+  const f = fileOf(id, req.query.s === '1');
+  if (!fs.existsSync(f)) return res.status(404).end();
+  res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gameIcons.ts" << '__COREGSM_EOF__'
@@ -7903,7 +8303,6 @@ export function countryLabel(code: string): string {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gsm.ts" << '__COREGSM_EOF__'
-import { GameDig } from 'gamedig';
 import { trackAlerts } from './alerts.js';
 import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
@@ -7913,79 +8312,8 @@ import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
 import { clampConcurrency, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, runPool } from './pollLogic.js';
 
-export interface QueryResult {
-  online: boolean;
-  name: string | null;
-  players: number;
-  maxPlayers: number;
-  map: string | null;
-  version: string | null;
-  ping: number | null;
-  playerNames: string[];
-  error: string | null;
-}
-
-/** Turns GameDig/network errors into a message a person can act on. */
-export function humanizeQueryError(raw: string): string {
-  const m = raw.toLowerCase();
-  if (/invalid game|unknown game|game type/.test(m)) return 'Неизвестный тип игры. Выберите игру из списка или проверьте GameDig ID.';
-  if (/enotfound|eai_again|getaddrinfo/.test(m)) return 'Адрес не найден. Проверьте имя или IP сервера.';
-  if (/econnrefused/.test(m)) return 'Соединение отклонено: порт закрыт или сервер выключен.';
-  if (/ehostunreach|enetunreach|network is unreachable/.test(m)) return 'Нет маршрута до сервера. Проверьте сеть и адрес.';
-  if (/timed out|timeout|failed all|no response|etimedout/.test(m)) {
-    return 'Сервер не ответил. Проверьте адрес и порт, включён ли сервер и разрешён ли query (некоторым играм нужен отдельный query-порт).';
-  }
-  return raw.slice(0, 160);
-}
-
-const clean = (s: unknown): string | null => {
-  if (typeof s !== 'string') return null;
-  // strip Minecraft colour codes and control characters
-  const v = s.replace(/§./g, '').replace(/[\u0000-\u001f]/g, ' ').trim();
-  return v.length ? v.slice(0, 120) : null;
-};
-
-export async function queryServer(s: ServerRow): Promise<QueryResult> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r: any = await GameDig.query({
-      type: s.game,
-      host: s.host,
-      port: s.query_port ?? s.port,
-      maxRetries: 1,
-      socketTimeout: 3000,
-      attemptTimeout: 9000,
-    });
-    const names: string[] = Array.isArray(r.players)
-      ? r.players.map((p: { name?: string }) => clean(p?.name)).filter((n: string | null): n is string => !!n)
-      : [];
-    const count = Number(r.numplayers ?? (Array.isArray(r.players) ? r.players.length : 0)) || 0;
-    const rawVersion = r.version ?? r.raw?.version?.name ?? r.raw?.version ?? null;
-    return {
-      online: true,
-      name: clean(r.name),
-      players: count,
-      maxPlayers: Number(r.maxplayers) || 0,
-      map: clean(r.map),
-      version: clean(typeof rawVersion === 'string' ? rawVersion : null),
-      ping: typeof r.ping === 'number' ? Math.round(r.ping) : null,
-      playerNames: names.slice(0, 200),
-      error: null,
-    };
-  } catch (e) {
-    return {
-      online: false,
-      name: null,
-      players: 0,
-      maxPlayers: 0,
-      map: null,
-      version: null,
-      ping: null,
-      playerNames: [],
-      error: humanizeQueryError(e instanceof Error ? e.message : String(e)),
-    };
-  }
-}
+export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
+import { queryServer, type QueryResult } from './query.js';
 
 const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
@@ -8567,7 +8895,7 @@ __COREGSM_EOF__
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { registerAlerts } from './alerts.js';
-import { admin, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
+import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
@@ -8601,6 +8929,14 @@ import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
 import { router as analyticsRouter } from './routes/analytics.js';
 import { router as communityRouter } from './routes/community.js';
+import { router as discordExtrasRouter } from './routes/discordExtras.js';
+import { router as seasonsRouter } from './seasons.js';
+import { router as reviewsRouter } from './reviews.js';
+import { router as galleryRouter } from './gallery.js';
+import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
+import { router as probesRouter } from './probes.js';
+import { router as configRouter } from './configExport.js';
+import { router as pushRouter } from './push.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -8621,6 +8957,7 @@ app.use('/api', csrfGuard);
 // public player pages: a coarse per-address ceiling on top of the route's own limiter
 app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
+app.use('/api/config/import', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 installAudit(app);
 
@@ -8637,12 +8974,20 @@ app.use(discordLoginRouter);
 app.use(serversRouter);
 app.use(analyticsRouter);
 app.use(communityRouter);
+app.use(discordExtrasRouter);
+app.use(seasonsRouter);
+app.use(reviewsRouter);
+app.use(galleryRouter);
+app.use(restartsRouter);
+app.use(probesRouter);
+app.use(configRouter);
+app.use(pushRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
 registerNews({
   app,
-  staff,
+  staff: allow('news'),
   auth,
   viewer,
   internal,
@@ -8689,10 +9034,10 @@ registerProfile({
 });
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
-registerCovers({ app, admin });
+registerCovers({ app, admin: allow('servers') });
 registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
-registerMaintenance({ app, admin, viewer });
+registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
 registerOverview({ app, viewer });
 
@@ -8715,9 +9060,11 @@ const server = app.listen(PORT, () => {
   startPoller(POLL_MS);
   startBackupTimer();
   startDigestTimer();
+  startRestartTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
+onShutdown('restarts', stopRestartTimer);
 installShutdown(server);
 
 __COREGSM_EOF__
@@ -8740,6 +9087,27 @@ export function localParts(ts: number, tz: string): { dow: number; hour: number;
   const p = Object.fromEntries(f.formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
   const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday);
   return { dow: Math.max(0, dow), hour: Number(p.hour) % 24, day: `${p.year}-${p.month}-${p.day}` };
+}
+
+/** the offset of a time zone from UTC at a moment, in ms (+3 h for Moscow) */
+export function offsetAt(ts: number, tz: string): number {
+  try {
+    const p = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' })
+        .formatToParts(new Date(ts))
+        .map((x) => [x.type, Number(x.value)]),
+    );
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute) - Math.floor(ts / 60_000) * 60_000;
+  } catch {
+    return 0;
+  }
+}
+
+/** the moment of a local time of a day ("YYYY-MM-DD", minutes after midnight) in a time zone */
+export function zonedTime(day: string, minutes: number, tz: string): number {
+  const [y, m, d] = day.split('-').map(Number);
+  const naive = Date.UTC(y, m - 1, d, 0, minutes);
+  return naive - offsetAt(naive - offsetAt(naive, tz), tz);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -9197,6 +9565,12 @@ CREATE TABLE IF NOT EXISTS smart_state (
   last_alert INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (server_id, kind)
 );`),
+  },
+  {
+    version: 8,
+    name: 'users.perms',
+    // what a moderator may do (JSON array of permission names); NULL = the default set
+    up: (db) => addColumn(db, 'users', 'perms', 'TEXT'),
   },
 ];
 
@@ -10505,6 +10879,7 @@ __COREGSM_EOF__
  * Operations for administrators: action log, bulk actions on Discord bindings,
  * system health and diagnostics, database backup and restore.
  */
+import { allow } from './auth.js';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import fs from 'node:fs';
 import tls from 'node:tls';
@@ -10692,7 +11067,7 @@ export function checkCert(force = false): Promise<CertInfo> {
 
 export function registerOps({ app, admin, getBot, guildCount, version, pollMs, publicBase }: Ctx): void {
   // ----- log -----
-  app.get('/api/audit', admin, (req, res) => {
+  app.get('/api/audit', allow('journal'), (req, res) => {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
     res.json(db.prepare('SELECT id, ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT ?').all(limit));
   });
@@ -11045,6 +11420,244 @@ export async function runPool<T>(items: T[], limit: number, worker: (item: T, in
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/probeAgent.ts" << '__COREGSM_EOF__'
+/**
+ * The probe: a small program that runs on another machine (another city, another provider), queries the panel's
+ * game servers from there and reports what it sees. The panel serves it as one file (GET /api/probe/agent.mjs);
+ * it needs Node 18+ and the gamedig package, nothing else.
+ *
+ *   PANEL_URL=https://panel.example PROBE_TOKEN=... node probe.mjs
+ */
+export const GAMEDIG_VERSION = '5';
+
+export const AGENT_SOURCE = `// CoreGSM probe: queries the game servers of the panel from this machine and reports the results.
+// Run: PANEL_URL=https://panel.example PROBE_TOKEN=... node probe.mjs   (needs: npm i gamedig@${GAMEDIG_VERSION})
+import { GameDig } from 'gamedig';
+
+const PANEL = (process.env.PANEL_URL || '').replace(/\\/+$/, '');
+const TOKEN = process.env.PROBE_TOKEN || '';
+const EVERY = Math.max(30, Number(process.env.PROBE_INTERVAL_SEC) || 60) * 1000;
+const VERSION = 'probe-1';
+if (!PANEL || !TOKEN) {
+  console.error('Set PANEL_URL and PROBE_TOKEN');
+  process.exit(1);
+}
+const headers = { 'x-probe-token': TOKEN, 'content-type': 'application/json', 'x-probe-version': VERSION };
+
+async function query(t) {
+  const started = Date.now();
+  try {
+    const r = await GameDig.query({ type: t.game, host: t.host, port: t.queryPort || t.port, maxRetries: 1, socketTimeout: 3000, attemptTimeout: 9000 });
+    const players = Number(r.numplayers ?? (Array.isArray(r.players) ? r.players.length : 0)) || 0;
+    return { serverId: t.id, online: true, ping: typeof r.ping === 'number' ? Math.round(r.ping) : Date.now() - started, players, error: null };
+  } catch (e) {
+    return { serverId: t.id, online: false, ping: null, players: 0, error: String(e && e.message || e).slice(0, 160) };
+  }
+}
+
+async function round() {
+  const res = await fetch(PANEL + '/api/probe/targets', { headers });
+  if (res.status === 401) throw new Error('the panel does not know this token (removed or replaced?)');
+  if (!res.ok) throw new Error('targets: HTTP ' + res.status);
+  const targets = await res.json();
+  const results = [];
+  for (let i = 0; i < targets.length; i += 4) results.push(...(await Promise.all(targets.slice(i, i + 4).map(query))));
+  const sent = await fetch(PANEL + '/api/probe/results', { method: 'POST', headers, body: JSON.stringify(results) });
+  if (!sent.ok) throw new Error('results: HTTP ' + sent.status);
+  console.log(new Date().toISOString(), 'checked', results.length, 'servers,', results.filter((r) => r.online).length, 'online');
+}
+
+for (;;) {
+  try {
+    await round();
+  } catch (e) {
+    console.error(new Date().toISOString(), String(e && e.message || e));
+  }
+  await new Promise((r) => setTimeout(r, EVERY));
+}
+`;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/probes.ts" << '__COREGSM_EOF__'
+/**
+ * Checks from other places: probes (probeAgent.ts) running on other machines query the same game servers and
+ * report here. A server that the panel cannot reach but a probe can is a network problem between them, not a
+ * server that is down; the players see where the server answers from.
+ *
+ *   GET    /api/probes                 the probes with their last report (administrators)
+ *   POST   /api/probes                 add one; the answer holds its token once (administrators)
+ *   POST   /api/probes/:id/token       issue a new token, the old one stops working (administrators)
+ *   DELETE /api/probes/:id             remove (administrators)
+ *   GET    /api/probe/agent.mjs        the probe program
+ *   GET    /api/probe/targets          the servers to check (probe token)
+ *   POST   /api/probe/results          what the probe saw (probe token)
+ *   GET    /api/servers/:id/probes     the view of one server from every probe and from the panel
+ */
+import crypto from 'node:crypto';
+import express from 'express';
+import { z } from 'zod';
+import { admin, viewer } from './auth.js';
+import { db } from './db.js';
+import { AGENT_SOURCE, GAMEDIG_VERSION } from './probeAgent.js';
+import { publicBase } from './site.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS probes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  last_seen INTEGER,
+  last_ip TEXT,
+  version TEXT
+);
+CREATE TABLE IF NOT EXISTS probe_status (
+  probe_id INTEGER NOT NULL REFERENCES probes(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  online INTEGER NOT NULL,
+  ping INTEGER,
+  players INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (probe_id, server_id)
+);
+CREATE TABLE IF NOT EXISTS probe_history (
+  probe_id INTEGER NOT NULL REFERENCES probes(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  online INTEGER NOT NULL,
+  ping INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_probe_hist ON probe_history(server_id, ts);
+`);
+
+/** a report older than this counts as «no data» */
+export const STALE_MS = 5 * 60_000;
+const HISTORY_DAYS = 7;
+
+const hash = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
+const newToken = () => `cgp_${crypto.randomBytes(24).toString('base64url')}`;
+
+interface ProbeRow { id: number; name: string; created_at: number; last_seen: number | null; last_ip: string | null; version: string | null }
+
+function probeFrom(req: express.Request): ProbeRow | null {
+  const t = String(req.headers['x-probe-token'] ?? '');
+  if (t.length < 20 || t.length > 100) return null;
+  return (db.prepare('SELECT id, name, created_at, last_seen, last_ip, version FROM probes WHERE token_hash = ?').get(hash(t)) as ProbeRow | undefined) ?? null;
+}
+
+function commands(token: string) {
+  const base = publicBase() ?? 'https://ваш-адрес-панели';
+  return {
+    docker: `docker run -d --name coregsm-probe --restart unless-stopped -e PANEL_URL=${base} -e PROBE_TOKEN=${token} node:22-alpine sh -c "cd /tmp && npm i --silent gamedig@${GAMEDIG_VERSION} && wget -qO probe.mjs ${base}/api/probe/agent.mjs && node probe.mjs"`,
+    node: `npm i gamedig@${GAMEDIG_VERSION} && curl -fsSLo probe.mjs ${base}/api/probe/agent.mjs && PANEL_URL=${base} PROBE_TOKEN=${token} node probe.mjs`,
+  };
+}
+
+// ---------- administrators ----------
+
+router.get('/api/probes', admin, (_req, res) => {
+  const now = Date.now();
+  const stats = db.prepare('SELECT COUNT(*) AS n, SUM(online) AS up FROM probe_status WHERE probe_id = ? AND updated_at > ?');
+  res.json(
+    (db.prepare('SELECT id, name, created_at, last_seen, last_ip, version FROM probes ORDER BY id').all() as ProbeRow[]).map((p) => {
+      const s = stats.get(p.id, now - STALE_MS) as { n: number; up: number | null };
+      return { id: p.id, name: p.name, createdAt: p.created_at, lastSeen: p.last_seen, ip: p.last_ip, version: p.version, alive: !!p.last_seen && now - p.last_seen < STALE_MS, servers: s.n, online: s.up ?? 0 };
+    }),
+  );
+});
+
+router.post('/api/probes', admin, (req, res) => {
+  const b = z.object({ name: z.string().trim().min(1).max(40) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const token = newToken();
+  const id = Number(db.prepare('INSERT INTO probes (name, token_hash, created_at) VALUES (?, ?, ?)').run(b.data.name, hash(token), Date.now()).lastInsertRowid);
+  res.json({ id, token, commands: commands(token) });
+});
+
+router.post('/api/probes/:id(\\d+)/token', admin, (req, res) => {
+  const token = newToken();
+  const r = db.prepare('UPDATE probes SET token_hash = ? WHERE id = ?').run(hash(token), Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json({ token, commands: commands(token) });
+});
+
+router.delete('/api/probes/:id(\\d+)', admin, (req, res) => {
+  db.prepare('DELETE FROM probes WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// ---------- the probe ----------
+
+router.get('/api/probe/agent.mjs', (_req, res) => {
+  res.set({ 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache' }).send(AGENT_SOURCE);
+});
+
+router.get('/api/probe/targets', (req, res) => {
+  const p = probeFrom(req);
+  if (!p) return res.status(401).json({ error: 'Требуется вход' });
+  const rows = db.prepare('SELECT id, game, host, port, query_port FROM servers ORDER BY id').all() as { id: number; game: string; host: string; port: number; query_port: number | null }[];
+  res.json(rows.map((r) => ({ id: r.id, game: r.game, host: r.host, port: r.port, queryPort: r.query_port })));
+});
+
+router.post('/api/probe/results', (req, res) => {
+  const p = probeFrom(req);
+  if (!p) return res.status(401).json({ error: 'Требуется вход' });
+  const b = z
+    .array(z.object({ serverId: z.number().int().positive(), online: z.boolean(), ping: z.number().int().min(0).max(60_000).nullable(), players: z.number().int().min(0).max(100_000).default(0), error: z.string().max(200).nullable().optional() }))
+    .max(500)
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const now = Date.now();
+  const known = new Set((db.prepare('SELECT id FROM servers').all() as { id: number }[]).map((r) => r.id));
+  db.transaction(() => {
+    for (const r of b.data) {
+      if (!known.has(r.serverId)) continue;
+      db.prepare(
+        `INSERT INTO probe_status (probe_id, server_id, online, ping, players, error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(probe_id, server_id) DO UPDATE SET online = excluded.online, ping = excluded.ping, players = excluded.players, error = excluded.error, updated_at = excluded.updated_at`,
+      ).run(p.id, r.serverId, r.online ? 1 : 0, r.ping, r.players, r.online ? null : r.error ?? null, now);
+      db.prepare('INSERT INTO probe_history (probe_id, server_id, ts, online, ping) VALUES (?, ?, ?, ?, ?)').run(p.id, r.serverId, now, r.online ? 1 : 0, r.ping);
+    }
+    db.prepare('UPDATE probes SET last_seen = ?, last_ip = ?, version = ? WHERE id = ?').run(now, (req.ip ?? '').slice(0, 64), String(req.headers['x-probe-version'] ?? '').slice(0, 20) || null, p.id);
+    db.prepare('DELETE FROM probe_history WHERE ts < ?').run(now - HISTORY_DAYS * 86_400_000);
+  })();
+  res.json({ ok: true });
+});
+
+// ---------- everybody ----------
+
+/** the server seen from the panel and from every probe: up or down now, ping, availability over 24 hours */
+export function probeView(serverId: number, now = Date.now()) {
+  const day = now - 86_400_000;
+  const panel = db.prepare('SELECT online, ping, updated_at FROM status WHERE server_id = ?').get(serverId) as { online: number; ping: number | null; updated_at: number } | undefined;
+  const panelDay = db.prepare('SELECT COUNT(*) AS n, SUM(online) AS up FROM history WHERE server_id = ? AND ts > ?').get(serverId, day) as { n: number; up: number | null };
+  const probes = (db
+    .prepare(
+      `SELECT p.id, p.name, s.online, s.ping, s.updated_at,
+         (SELECT COUNT(*) FROM probe_history h WHERE h.probe_id = p.id AND h.server_id = ? AND h.ts > ?) AS n,
+         (SELECT SUM(online) FROM probe_history h WHERE h.probe_id = p.id AND h.server_id = ? AND h.ts > ?) AS up
+       FROM probes p LEFT JOIN probe_status s ON s.probe_id = p.id AND s.server_id = ? ORDER BY p.id`,
+    )
+    .all(serverId, day, serverId, day, serverId) as { id: number; name: string; online: number | null; ping: number | null; updated_at: number | null; n: number; up: number | null }[]).map((r) => {
+    const fresh = r.updated_at != null && now - r.updated_at < STALE_MS;
+    return { name: r.name, online: fresh ? !!r.online : null, ping: fresh ? r.ping : null, updatedAt: r.updated_at, uptime: r.n ? Math.round(((r.up ?? 0) / r.n) * 1000) / 10 : null };
+  });
+  return {
+    panel: { name: 'Панель', online: panel ? !!panel.online : null, ping: panel?.online ? panel.ping : null, updatedAt: panel?.updated_at ?? null, uptime: panelDay.n ? Math.round(((panelDay.up ?? 0) / panelDay.n) * 1000) / 10 : null },
+    probes,
+  };
+}
+
+router.get('/api/servers/:id(\\d+)/probes', viewer, (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json(probeView(id));
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/profile.ts" << '__COREGSM_EOF__'
 /**
  * Personal profile of the signed-in user: preferences, player profile (game nick, bio), play statistics and
@@ -11343,11 +11956,14 @@ interface Achievement {
   earnedAt: number | null;
 }
 
-export function achievementsOf(userId: number): Achievement[] {
-  const nick = playerOf(userId).gameNick;
-  const now = Date.now();
-  const tz = prefsOf(userId).timezone;
-  const sess = sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000).filter((s) => (s.left_at ?? now) > s.joined_at);
+export type { Achievement };
+
+/**
+ * The achievements earned by playing (hours, streaks, night and morning sessions, servers), from the visits of one
+ * player. Shared by the account's profile and the public card of any nick.
+ */
+export function playAchievements(visits: { server_id: number; joined_at: number; left_at: number | null }[], tz: string, now = Date.now()): Achievement[] {
+  const sess = visits.filter((s) => (s.left_at ?? now) > s.joined_at).sort((x, y) => x.joined_at - y.joined_at);
 
   let totalMs = 0;
   let longestMs = 0;
@@ -11405,16 +12021,7 @@ export function achievementsOf(userId: number): Achievement[] {
     if (run === 7 && at7 === null) at7 = dayEnd.get(k) ?? null;
   }
 
-  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
-  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
-  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
-  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
   const r1 = (n: number) => Math.round(n * 10) / 10;
-
-  const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
-    const earned = progress >= target;
-    return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
-  };
   const domosedEarned = share >= 0.8 && hours >= 10;
 
   return [
@@ -11428,6 +12035,25 @@ export function achievementsOf(userId: number): Achievement[] {
     mk('homebody', 'Домосед', 'Проведите 80% времени на одном сервере (не менее 10 часов всего)', 'heart', domosedEarned ? 100 : Math.min(99, Math.round(share * 100)), 100, domosedEarned ? now : null),
     mk('traveller', 'Путешественник', 'Поиграйте на 3 разных серверах', 'server', perServer.size, 3, perServer.size >= 3 ? now : null),
     mk('marathon', 'Марафонец', 'Одна сессия длиннее 4 часов', 'crown', r1(longestMs / HOUR), 4, marathonAt),
+  ];
+}
+
+export const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
+  const earned = progress >= target;
+  return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
+};
+
+export function achievementsOf(userId: number): Achievement[] {
+  const nick = playerOf(userId).gameNick;
+  const now = Date.now();
+  const tz = prefsOf(userId).timezone;
+  const play = playAchievements(sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000), tz, now);
+  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
+  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
+  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
+  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
+  return [
+    ...play,
     mk('profile-complete', 'Профиль заполнен', 'Аватар, электронная почта и игровой ник', 'calendar', profileParts, 3),
     mk('secured', 'Защищён', 'Пароль, электронная почта и привязанный Discord', 'shield', protectedParts, 3),
   ];
@@ -11941,6 +12567,179 @@ export const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/;
 export const TOKEN_HELP = 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/push.ts" << '__COREGSM_EOF__'
+/**
+ * Notifications on the devices of signed-in players (the panel installed as an app, or the browser tab closed):
+ * the same notices as the in-panel inbox (a full server got a free slot, a server came back or went down).
+ *
+ *   GET    /api/push/key        the panel's public key, for subscribing in the browser
+ *   POST   /api/push/subscribe  remember this device (a signed-in user)
+ *   DELETE /api/push/subscribe  forget this device
+ *   POST   /api/push/test       send a test notification to all of the user's devices
+ */
+import express from 'express';
+import { z } from 'zod';
+import { auth, type AuthedRequest, rateLimit } from './auth.js';
+import { db } from './db.js';
+import { publicBase } from './site.js';
+import { setPushHook } from './subscriptions.js';
+import { sendPush, vapidKeys } from './webpush.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_ok INTEGER,
+  fails INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+`);
+
+/** devices are removed after this many failed sends in a row */
+const MAX_FAILS = 10;
+const subject = () => publicBase() ?? 'mailto:admin@coregsm.local';
+
+export interface PushMessage { title: string; body: string; url?: string; tag?: string }
+
+/** sends to every device of a user; never throws (the poller calls it) */
+export async function pushToUser(userId: number, m: PushMessage): Promise<number> {
+  const subs = db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId) as { id: number; endpoint: string; p256dh: string; auth: string }[];
+  let sent = 0;
+  for (const s of subs) {
+    const r = await sendPush(s, { ...m }, subject());
+    if (r === 'sent') {
+      sent++;
+      db.prepare('UPDATE push_subscriptions SET last_ok = ?, fails = 0 WHERE id = ?').run(Date.now(), s.id);
+    } else if (r === 'gone') {
+      db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(s.id);
+    } else {
+      db.prepare('UPDATE push_subscriptions SET fails = fails + 1 WHERE id = ?').run(s.id);
+      db.prepare('DELETE FROM push_subscriptions WHERE id = ? AND fails >= ?').run(s.id, MAX_FAILS);
+    }
+  }
+  return sent;
+}
+
+/** fire and forget, for code that must not wait */
+export const pushLater = (userId: number, m: PushMessage) => void pushToUser(userId, m).catch(() => undefined);
+setPushHook(pushLater);
+
+router.get('/api/push/key', (_req, res) => res.json({ publicKey: vapidKeys().publicKey }));
+
+const subSchema = z.object({
+  endpoint: z.string().url().max(800).refine((u) => u.startsWith('https://') || u.startsWith('http://127.0.0.1') || u.startsWith('http://localhost')),
+  keys: z.object({ p256dh: z.string().regex(/^[A-Za-z0-9_-]{80,100}$/), auth: z.string().regex(/^[A-Za-z0-9_-]{16,40}$/) }),
+});
+
+router.post('/api/push/subscribe', auth, rateLimit(30), (req: AuthedRequest, res) => {
+  const b = subSchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  db.prepare(
+    `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, fails = 0`,
+  ).run(req.user!.id, b.data.endpoint, b.data.keys.p256dh, b.data.keys.auth, Date.now());
+  res.json({ ok: true, devices: (db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(req.user!.id) as { n: number }).n });
+});
+
+router.delete('/api/push/subscribe', auth, (req: AuthedRequest, res) => {
+  const endpoint = String((req.body as { endpoint?: unknown } | undefined)?.endpoint ?? '');
+  db.prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').run(req.user!.id, endpoint);
+  res.json({ ok: true });
+});
+
+router.post('/api/push/test', auth, rateLimit(10), async (req: AuthedRequest, res) => {
+  const sent = await pushToUser(req.user!.id, { title: 'CoreGSM', body: 'Уведомления работают: сюда придут вести о ваших серверах.', url: '/profile', tag: 'test' });
+  res.json({ sent });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/query.ts" << '__COREGSM_EOF__'
+/** One query of a game server over its game protocol (GameDig). No database: the poller and the probes share it. */
+import { GameDig } from 'gamedig';
+import type { ServerRow } from './db.js';
+
+export interface QueryResult {
+  online: boolean;
+  name: string | null;
+  players: number;
+  maxPlayers: number;
+  map: string | null;
+  version: string | null;
+  ping: number | null;
+  playerNames: string[];
+  error: string | null;
+}
+
+/** Turns GameDig/network errors into a message a person can act on. */
+export function humanizeQueryError(raw: string): string {
+  const m = raw.toLowerCase();
+  if (/invalid game|unknown game|game type/.test(m)) return 'Неизвестный тип игры. Выберите игру из списка или проверьте GameDig ID.';
+  if (/enotfound|eai_again|getaddrinfo/.test(m)) return 'Адрес не найден. Проверьте имя или IP сервера.';
+  if (/econnrefused/.test(m)) return 'Соединение отклонено: порт закрыт или сервер выключен.';
+  if (/ehostunreach|enetunreach|network is unreachable/.test(m)) return 'Нет маршрута до сервера. Проверьте сеть и адрес.';
+  if (/timed out|timeout|failed all|no response|etimedout/.test(m)) {
+    return 'Сервер не ответил. Проверьте адрес и порт, включён ли сервер и разрешён ли query (некоторым играм нужен отдельный query-порт).';
+  }
+  return raw.slice(0, 160);
+}
+
+const clean = (s: unknown): string | null => {
+  if (typeof s !== 'string') return null;
+  // strip Minecraft colour codes and control characters
+  const v = s.replace(/§./g, '').replace(/[\u0000-\u001f]/g, ' ').trim();
+  return v.length ? v.slice(0, 120) : null;
+};
+
+export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 'query_port'> & Partial<ServerRow>): Promise<QueryResult> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r: any = await GameDig.query({
+      type: s.game,
+      host: s.host,
+      port: s.query_port ?? s.port,
+      maxRetries: 1,
+      socketTimeout: 3000,
+      attemptTimeout: 9000,
+    });
+    const names: string[] = Array.isArray(r.players)
+      ? r.players.map((p: { name?: string }) => clean(p?.name)).filter((n: string | null): n is string => !!n)
+      : [];
+    const count = Number(r.numplayers ?? (Array.isArray(r.players) ? r.players.length : 0)) || 0;
+    const rawVersion = r.version ?? r.raw?.version?.name ?? r.raw?.version ?? null;
+    return {
+      online: true,
+      name: clean(r.name),
+      players: count,
+      maxPlayers: Number(r.maxplayers) || 0,
+      map: clean(r.map),
+      version: clean(typeof rawVersion === 'string' ? rawVersion : null),
+      ping: typeof r.ping === 'number' ? Math.round(r.ping) : null,
+      playerNames: names.slice(0, 200),
+      error: null,
+    };
+  } catch (e) {
+    return {
+      online: false,
+      name: null,
+      players: 0,
+      maxPlayers: 0,
+      map: null,
+      version: null,
+      ping: null,
+      playerNames: [],
+      error: humanizeQueryError(e instanceof Error ? e.message : String(e)),
+    };
+  }
+}
+
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/ranks.ts" << '__COREGSM_EOF__'
 /**
  * V Rising rank ladder. Hours of play on servers whose game id is `vrising`.
@@ -11987,13 +12786,504 @@ export function rankById(id: string): VrRank | undefined {
   return VR_RANKS.find((x) => x.id === id);
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/rcon.ts" << '__COREGSM_EOF__'
+/**
+ * A small Source RCON client (the protocol of Minecraft, CS, ARK, V Rising, Palworld, Garry's Mod, Valheim with
+ * a mod and others): sign in with the password, run one command, return its text.
+ *
+ * Packet: int32 size, int32 id, int32 type, body (ASCII/UTF-8) + "\0\0", little endian; size counts everything
+ * after itself. Types: 3 auth, 2 exec (and the auth answer), 0 response value.
+ */
+import net from 'node:net';
+
+const AUTH = 3;
+const EXEC = 2;
+
+export function encodePacket(id: number, type: number, body: string): Buffer {
+  const b = Buffer.from(body, 'utf8');
+  const buf = Buffer.alloc(14 + b.length);
+  buf.writeInt32LE(10 + b.length, 0);
+  buf.writeInt32LE(id, 4);
+  buf.writeInt32LE(type, 8);
+  b.copy(buf, 12);
+  return buf;
+}
+
+/** the complete packets at the start of `buf`, and the bytes left over */
+export function decodePackets(buf: Buffer): { packets: { id: number; type: number; body: string }[]; rest: Buffer } {
+  const packets: { id: number; type: number; body: string }[] = [];
+  let off = 0;
+  while (buf.length - off >= 4) {
+    const size = buf.readInt32LE(off);
+    if (size < 10 || size > 1_000_000) throw new Error('RCON: повреждённый ответ сервера');
+    if (buf.length - off - 4 < size) break;
+    packets.push({ id: buf.readInt32LE(off + 4), type: buf.readInt32LE(off + 8), body: buf.toString('utf8', off + 12, off + 4 + size - 2) });
+    off += 4 + size;
+  }
+  return { packets, rest: buf.subarray(off) };
+}
+
+export class RconError extends Error {}
+
+/**
+ * Runs one command. The answer is everything the server sends back for it until it goes quiet for a moment
+ * (long answers come in several packets).
+ */
+export function rconCommand(host: string, port: number, password: string, command: string, timeoutMs = 6000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = net.createConnection({ host, port });
+    let buf: Buffer = Buffer.alloc(0);
+    let authed = false;
+    let out = '';
+    let quiet: NodeJS.Timeout | undefined;
+    let settled = false;
+    const done = (err: Error | null, text = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(quiet);
+      sock.destroy();
+      if (err) reject(err);
+      else resolve(text);
+    };
+    const timer = setTimeout(() => done(authed ? null : new RconError('RCON: сервер не ответил вовремя'), out.trim()), timeoutMs);
+    sock.setNoDelay(true);
+    sock.on('connect', () => sock.write(encodePacket(1, AUTH, password)));
+    sock.on('error', (e: NodeJS.ErrnoException) =>
+      done(new RconError(e.code === 'ECONNREFUSED' ? 'RCON: порт закрыт (проверьте порт и что RCON включён на сервере)' : `RCON: ${e.message}`)),
+    );
+    sock.on('close', () => done(authed ? null : new RconError('RCON: сервер закрыл соединение'), out.trim()));
+    sock.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      let parsed;
+      try {
+        parsed = decodePackets(buf);
+      } catch (e) {
+        return done(e as Error);
+      }
+      buf = parsed.rest;
+      for (const p of parsed.packets) {
+        if (!authed) {
+          if (p.type !== EXEC) continue; // some servers send an empty response value before the auth answer
+          if (p.id === -1) return done(new RconError('RCON: неверный пароль'));
+          authed = true;
+          sock.write(encodePacket(2, EXEC, command));
+          // a command with no output: finish after a short wait
+          quiet = setTimeout(() => done(null, out.trim()), 1500);
+          continue;
+        }
+        if (p.id !== 2) continue;
+        out += p.body;
+        clearTimeout(quiet);
+        quiet = setTimeout(() => done(null, out.trim()), 300);
+      }
+    });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/restartLogic.ts" << '__COREGSM_EOF__'
+/** When a scheduled restart happens, and the game chat command for its warning (pure, no database). */
+import { localParts, zonedTime } from './localTime.js';
+
+/** the next restart at or after `from` (a week ahead at most), or null when no day is ticked */
+export function nextRun(p: { days: number; at_min: number }, from: number, zone: string): number | null {
+  if (!(p.days & 127)) return null;
+  for (let k = 0; k <= 8; k++) {
+    const parts = localParts(from + k * 86_400_000, zone);
+    if (!(p.days & (1 << parts.dow))) continue;
+    const t = zonedTime(parts.day, p.at_min, zone);
+    if (t >= from) return t;
+  }
+  return null;
+}
+
+/** the game chat command that fits a game best (the admin can change it) */
+export function defaultSay(game: string): string {
+  if (game === 'vrising') return 'announce {text}';
+  if (game === 'ase' || game === 'asa') return 'ServerChat {text}';
+  if (game === 'palworld') return 'Broadcast {text}';
+  return 'say {text}';
+}
+
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/restarts.ts" << '__COREGSM_EOF__'
+/**
+ * Scheduled restarts of a game server.
+ *
+ * The admin picks the days and the time (the panel suggests the quietest hour from the analytics). Before the
+ * restart the panel warns the players: a message in Discord and, when RCON is set up, in the game chat. At the
+ * time it opens a maintenance window (the restart does not count as an outage), sends the restart command over
+ * RCON, if one is set, and reports how it went.
+ *
+ *   GET  /api/servers/:id/restart        the plan, the next run, the suggested hour, the RCON settings (no password)
+ *   PUT  /api/servers/:id/restart        save the plan (permission «Обслуживание»)
+ *   PUT  /api/servers/:id/rcon           RCON port and password (administrators)
+ *   POST /api/servers/:id/rcon/test      run a command now and show the answer (administrators)
+ *   POST /api/servers/:id/restart/now    restart now, without the warning (permission «Обслуживание»)
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin, allow, type AuthedRequest } from './auth.js';
+import { enqueueAlert } from './alerts.js';
+import { db, EFFECTIVE_NAME, getSetting } from './db.js';
+import { defaultSay, nextRun } from './restartLogic.js';
+import { rconCommand } from './rcon.js';
+import { decryptSecret, encryptSecret } from './secrets.js';
+import { analyticsFor } from './routes/analytics.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS restart_plans (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  days INTEGER NOT NULL DEFAULT 127,
+  at_min INTEGER NOT NULL DEFAULT 360,
+  duration_min INTEGER NOT NULL DEFAULT 10,
+  warn_min INTEGER NOT NULL DEFAULT 10,
+  channel_id TEXT NOT NULL DEFAULT '',
+  command TEXT NOT NULL DEFAULT '',
+  say TEXT NOT NULL DEFAULT '',
+  warned_for INTEGER NOT NULL DEFAULT 0,
+  ran_for INTEGER NOT NULL DEFAULT 0,
+  last_result TEXT,
+  last_run_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS server_rcon (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  port INTEGER NOT NULL,
+  password TEXT NOT NULL
+);
+`);
+
+export interface Plan {
+  server_id: number;
+  enabled: number;
+  /** bit 0 = Monday ... bit 6 = Sunday */
+  days: number;
+  at_min: number;
+  duration_min: number;
+  warn_min: number;
+  channel_id: string;
+  command: string;
+  /** the in-game message command, {text} is replaced by the warning */
+  say: string;
+  warned_for: number;
+  ran_for: number;
+  last_result: string | null;
+  last_run_at: number | null;
+}
+
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+const DEFAULT_PLAN = (serverId: number): Plan => ({ server_id: serverId, enabled: 0, days: 127, at_min: 360, duration_min: 10, warn_min: 10, channel_id: '', command: '', say: '', warned_for: 0, ran_for: 0, last_result: null, last_run_at: null });
+const planOf = (serverId: number): Plan => (db.prepare('SELECT * FROM restart_plans WHERE server_id = ?').get(serverId) as Plan | undefined) ?? DEFAULT_PLAN(serverId);
+
+function rconOf(serverId: number): { host: string; port: number; password: string } | null {
+  const r = db.prepare('SELECT s.host, r.port, r.password FROM server_rcon r JOIN servers s ON s.id = r.server_id WHERE r.server_id = ?').get(serverId) as { host: string; port: number; password: string } | undefined;
+  if (!r) return null;
+  try {
+    return { host: r.host, port: r.port, password: decryptSecret(r.password) };
+  } catch {
+    return null;
+  }
+}
+
+const nameOf = (serverId: number) => (db.prepare(`SELECT ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(serverId) as { name: string } | undefined)?.name ?? `#${serverId}`;
+const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+function discord(serverId: number, p: Plan, title: string, description: string, color: number) {
+  enqueueAlert('restart', nameOf(serverId), { content: '', mention: 'none', embed: { title, description, color, timestamp: new Date().toISOString() } }, p.channel_id || undefined);
+}
+
+async function say(serverId: number, p: Plan, text: string): Promise<string | null> {
+  const r = rconOf(serverId);
+  if (!r || !p.say.trim()) return null;
+  try {
+    await rconCommand(r.host, r.port, r.password, p.say.replace('{text}', text));
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+/** the restart itself: a maintenance window, the command, a report */
+async function run(serverId: number, p: Plan, at: number, by = 'расписание'): Promise<string> {
+  const now = Date.now();
+  db.prepare('INSERT INTO maintenance_windows (server_id, name, start_ts, end_ts, repeat, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    serverId,
+    'Плановый перезапуск',
+    Math.min(at, now),
+    Math.max(at, now) + p.duration_min * 60_000,
+    'none',
+    by,
+    now,
+  );
+  let result = p.command.trim() ? 'Команда отправлена' : 'Окно обслуживания открыто (команды перезапуска нет)';
+  const r = rconOf(serverId);
+  if (p.command.trim()) {
+    if (!r) result = 'Не отправлено: RCON не настроен';
+    else {
+      try {
+        const answer = await rconCommand(r.host, r.port, r.password, p.command.trim());
+        result = answer ? `Команда отправлена, сервер ответил: ${answer.slice(0, 200)}` : 'Команда отправлена';
+      } catch (e) {
+        result = `Не отправлено: ${(e as Error).message}`;
+      }
+    }
+  }
+  db.prepare('UPDATE restart_plans SET ran_for = ?, last_result = ?, last_run_at = ? WHERE server_id = ?').run(at, result, now, serverId);
+  discord(serverId, p, '🔄 Плановый перезапуск', `Сервер **${nameOf(serverId)}** перезапускается. Обычно это занимает до ${p.duration_min} мин.`, 0x5865f2);
+  return result;
+}
+
+/** one pass of the timer: warnings that are due, restarts that are due */
+export async function tickRestarts(now = Date.now()): Promise<void> {
+  const zone = tz();
+  for (const p of db.prepare('SELECT * FROM restart_plans WHERE enabled = 1').all() as Plan[]) {
+    // the restart that is due now (a run missed by less than 5 minutes still happens)
+    const due = nextRun(p, now - 5 * 60_000, zone);
+    if (due && due <= now && p.ran_for !== due) {
+      await run(p.server_id, p, due);
+      continue;
+    }
+    const next = nextRun(p, now, zone);
+    if (!next || p.warn_min <= 0) continue;
+    if (next - now <= p.warn_min * 60_000 && p.warned_for !== next) {
+      db.prepare('UPDATE restart_plans SET warned_for = ? WHERE server_id = ?').run(next, p.server_id);
+      const mins = Math.max(1, Math.round((next - now) / 60_000));
+      discord(p.server_id, p, '⏳ Скоро перезапуск', `Сервер **${nameOf(p.server_id)}** перезапустится через ${mins} мин (в ${hhmm(p.at_min)}). Сохраните прогресс.`, 0xf0b232);
+      await say(p.server_id, p, `Перезапуск сервера через ${mins} мин. Сохраните прогресс!`);
+    }
+  }
+}
+
+let timer: NodeJS.Timeout | undefined;
+let busy = false;
+export function startRestartTimer(): void {
+  timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void tickRestarts().catch(() => undefined).finally(() => { busy = false; });
+  }, 30_000);
+  timer.unref();
+}
+export const stopRestartTimer = () => clearInterval(timer);
+
+// ---------- routes ----------
+
+const serverOf = (req: express.Request) => {
+  const id = Number(req.params.id);
+  return Number.isInteger(id) && (db.prepare('SELECT id, game FROM servers WHERE id = ?').get(id) as { id: number; game: string } | undefined);
+};
+
+function view(serverId: number, game: string) {
+  const p = planOf(serverId);
+  const r = db.prepare('SELECT port FROM server_rcon WHERE server_id = ?').get(serverId) as { port: number } | undefined;
+  let suggestedHour: number | null = null;
+  try {
+    suggestedHour = analyticsFor(serverId, 30).heatmap.restartHour ?? null;
+  } catch {
+    suggestedHour = null;
+  }
+  return {
+    enabled: !!p.enabled,
+    days: p.days,
+    atMin: p.at_min,
+    durationMin: p.duration_min,
+    warnMin: p.warn_min,
+    channelId: p.channel_id,
+    command: p.command,
+    say: p.say || defaultSay(game),
+    next: p.enabled ? nextRun(p, Date.now(), tz()) : null,
+    lastResult: p.last_result,
+    lastRunAt: p.last_run_at,
+    suggestedHour,
+    timezone: tz(),
+    rcon: r ? { port: r.port, configured: true } : { port: null, configured: false },
+  };
+}
+
+router.get('/api/servers/:id(\\d+)/restart', allow('maintenance'), (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json(view(s.id, s.game));
+});
+
+router.put('/api/servers/:id(\\d+)/restart', allow('maintenance'), (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z
+    .object({
+      enabled: z.boolean(),
+      days: z.number().int().min(0).max(127),
+      atMin: z.number().int().min(0).max(1439),
+      durationMin: z.number().int().min(1).max(240),
+      warnMin: z.number().int().min(0).max(120),
+      channelId: z.string().regex(/^(\d{15,25})?$/),
+      command: z.string().trim().max(200),
+      say: z.string().trim().max(200),
+    })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const d = b.data;
+  db.prepare(
+    `INSERT INTO restart_plans (server_id, enabled, days, at_min, duration_min, warn_min, channel_id, command, say) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(server_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, at_min = excluded.at_min, duration_min = excluded.duration_min,
+       warn_min = excluded.warn_min, channel_id = excluded.channel_id, command = excluded.command, say = excluded.say`,
+  ).run(s.id, d.enabled ? 1 : 0, d.days, d.atMin, d.durationMin, d.warnMin, d.channelId, d.command, d.say);
+  res.json(view(s.id, s.game));
+});
+
+router.put('/api/servers/:id(\\d+)/rcon', admin, (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ port: z.number().int().min(1).max(65535).nullable(), password: z.string().max(200).optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (b.data.port === null) {
+    db.prepare('DELETE FROM server_rcon WHERE server_id = ?').run(s.id);
+  } else {
+    const old = db.prepare('SELECT password FROM server_rcon WHERE server_id = ?').get(s.id) as { password: string } | undefined;
+    // an empty password field keeps the saved one
+    const pass = b.data.password ? encryptSecret(b.data.password) : old?.password;
+    if (!pass) return res.status(400).json({ error: 'Укажите пароль RCON' });
+    db.prepare('INSERT INTO server_rcon (server_id, port, password) VALUES (?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET port = excluded.port, password = excluded.password').run(s.id, b.data.port, pass);
+  }
+  res.json(view(s.id, s.game));
+});
+
+router.post('/api/servers/:id(\\d+)/rcon/test', admin, async (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ command: z.string().trim().min(1).max(200) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const r = rconOf(s.id);
+  if (!r) return res.status(400).json({ error: 'Сначала сохраните порт и пароль RCON' });
+  try {
+    res.json({ ok: true, answer: await rconCommand(r.host, r.port, r.password, b.data.command) });
+  } catch (e) {
+    res.json({ ok: false, answer: (e as Error).message });
+  }
+});
+
+router.post('/api/servers/:id(\\d+)/restart/now', allow('maintenance'), async (req: AuthedRequest, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const result = await run(s.id, planOf(s.id), Date.now(), req.user?.username ?? 'админка');
+  res.json({ ...view(s.id, s.game), lastResult: result });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/reviews.ts" << '__COREGSM_EOF__'
+/**
+ * Reviews of the servers: a signed-in user gives 1–5 stars and a few words, one review per server (editing replaces
+ * it). A review is shown at once; the staff can hide or delete it.
+ *   GET    /api/servers/:id/reviews        the average, the spread of stars, the shown reviews and the visitor's own
+ *   PUT    /api/servers/:id/reviews        write or edit one's own review
+ *   DELETE /api/servers/:id/reviews/mine   remove one's own review
+ *   GET    /api/reviews                    the latest reviews of all servers, hidden ones included (staff)
+ *   PATCH  /api/reviews/:id                hide or show (staff)
+ *   DELETE /api/reviews/:id                delete (staff)
+ */
+import express from 'express';
+import { z } from 'zod';
+import { allow, auth, type AuthedRequest, rateLimit, viewer } from './auth.js';
+
+const staff = allow('moderation');
+import { db, EFFECTIVE_NAME } from './db.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS server_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  stars INTEGER NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  hidden INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (server_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_server ON server_reviews(server_id, hidden);
+`);
+
+interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; username: string; discord_id: string | null; discord_avatar: string | null }
+
+const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar FROM server_reviews r JOIN users u ON u.id = r.user_id`;
+const avatar = (r: Row) => (r.discord_id && r.discord_avatar ? `https://cdn.discordapp.com/avatars/${r.discord_id}/${r.discord_avatar}.png?size=64` : null);
+const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at });
+
+/** the score of a server: the average of the shown reviews and how many gave each number of stars */
+export function scoreOf(serverId: number): { avg: number | null; count: number; dist: number[] } {
+  const rows = db.prepare('SELECT stars, COUNT(*) AS n FROM server_reviews WHERE server_id = ? AND hidden = 0 GROUP BY stars').all(serverId) as { stars: number; n: number }[];
+  const dist = [0, 0, 0, 0, 0];
+  for (const r of rows) dist[r.stars - 1] = r.n;
+  const count = dist.reduce((a, b) => a + b, 0);
+  const avg = count ? Math.round((dist.reduce((a, n, i) => a + n * (i + 1), 0) / count) * 10) / 10 : null;
+  return { avg, count, dist };
+}
+
+const serverExists = (id: number) => Number.isInteger(id) && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
+
+router.get('/api/servers/:id(\\d+)/reviews', viewer, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const items = (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.hidden = 0 ORDER BY r.updated_at DESC LIMIT 50`).all(id) as Row[]).map(out);
+  const mine = req.user ? (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user.id) as Row | undefined) : undefined;
+  res.json({ ...scoreOf(id), items, mine: mine ? out(mine) : null });
+});
+
+router.put('/api/servers/:id(\\d+)/reviews', auth, rateLimit(20), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ stars: z.number().int().min(1).max(5), text: z.string().trim().max(1000).default('') }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const now = Date.now();
+  // editing keeps a hidden review hidden: the staff decided, not the author
+  db.prepare(
+    `INSERT INTO server_reviews (server_id, user_id, stars, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(server_id, user_id) DO UPDATE SET stars = excluded.stars, text = excluded.text, updated_at = excluded.updated_at`,
+  ).run(id, req.user!.id, b.data.stars, b.data.text, now, now);
+  const mine = db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user!.id) as Row;
+  res.json({ ...scoreOf(id), mine: out(mine) });
+});
+
+router.delete('/api/servers/:id(\\d+)/reviews/mine', auth, (req: AuthedRequest, res) => {
+  db.prepare('DELETE FROM server_reviews WHERE server_id = ? AND user_id = ?').run(Number(req.params.id), req.user!.id);
+  res.json({ ok: true });
+});
+
+router.get('/api/reviews', staff, (_req, res) => {
+  const rows = db
+    .prepare(`SELECT r.*, u.username, u.discord_id, u.discord_avatar, ${EFFECTIVE_NAME} AS server_name FROM server_reviews r JOIN users u ON u.id = r.user_id JOIN servers s ON s.id = r.server_id LEFT JOIN status st ON st.server_id = s.id ORDER BY r.updated_at DESC LIMIT 200`)
+    .all() as (Row & { server_name: string })[];
+  res.json(rows.map((r) => ({ ...out(r), serverName: r.server_name })));
+});
+
+router.patch('/api/reviews/:id(\\d+)', staff, (req, res) => {
+  const b = z.object({ hidden: z.boolean() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const r = db.prepare('UPDATE server_reviews SET hidden = ? WHERE id = ?').run(b.data.hidden ? 1 : 0, Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json({ ok: true });
+});
+
+router.delete('/api/reviews/:id(\\d+)', staff, (req, res) => {
+  db.prepare('DELETE FROM server_reviews WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/account.ts" << '__COREGSM_EOF__'
 /** Sign-in, first-run setup, registration and the signed-in user (profile, password, sessions, favourites). */
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
+import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
 import { db, setSetting } from '../db.js';
@@ -12184,6 +13474,7 @@ router.get('/api/me', auth, (req: AuthedRequest, res) => {
   res.json({
     username: u.username,
     role: u.role,
+    perms: permsOf({ id: u.id, role: u.role }),
     avatarUrl: custom ?? avatarUrl(u),
     avatarSource: custom ? 'custom' : avatarUrl(u) ? 'discord' : null,
     discordName: u.discord_name,
@@ -12574,7 +13865,8 @@ import express from 'express';
 import { viewer } from '../auth.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../localTime.js';
-import { vrRankIdFor } from '../profile.js';
+import { playAchievements, vrRankIdFor } from '../profile.js';
+import { seasonAchievements } from '../seasons.js';
 
 export const router = express.Router();
 
@@ -12584,6 +13876,16 @@ const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
 interface ServerName { id: number; name: string; game: string }
 const serverNames = () =>
   new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
+
+/** the players with the most hours since `since` (any case of a nick counts as one player) */
+export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number }[] {
+  return (db
+    .prepare(
+      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+       FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ? ${serverId ? 'AND server_id = ?' : ''} GROUP BY k ORDER BY h DESC LIMIT ?`,
+    )
+    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+}
 
 function community(now = Date.now()) {
   const names = serverNames();
@@ -12630,13 +13932,7 @@ function community(now = Date.now()) {
       newcomer: (firstSeen.get(r.name) as { t: number }).t === r.joined_at,
     }));
 
-  const topSince = (since: number) =>
-    (db
-      .prepare(
-        `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
-         FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY k ORDER BY h DESC LIMIT 10`,
-      )
-      .all(now, now, since, now, since) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+  const topSince = (since: number) => topPlayers(since, now);
 
   const servers = live
     .filter((s) => names.has(s.id))
@@ -12708,6 +14004,7 @@ export function playerCard(nick: string, now = Date.now()) {
       .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
       .sort((a, b) => b.hours - a.hours),
     recent: visits.slice(-8).reverse().filter((v) => names.has(v.server_id)).map((v) => ({ serverId: v.server_id, serverName: names.get(v.server_id)!.name, from: v.joined_at, to: v.live ? null : v.left_at })),
+    achievements: [...playAchievements(visits.map((v) => ({ server_id: v.server_id, joined_at: v.joined_at, left_at: v.live ? null : v.left_at })), zone, now), ...seasonAchievements(name, now)],
     ...(game ? { rankId: vrRankIdFor(name) } : {}),
   };
 }
@@ -12717,6 +14014,264 @@ router.get('/api/players/:name', viewer, (req, res) => {
   const card = playerCard(nick);
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
   res.json(card);
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/discordExtras.ts" << '__COREGSM_EOF__'
+/**
+ * The bot beyond status messages and news:
+ *   autoroles    Discord roles the bot gives and takes away by themselves: «Сейчас в игре», «Игрок недели»,
+ *                «Ветеран N ч». Only accounts with a linked Discord and a game nick get them.
+ *   counters     voice channels the bot renames into a live counter, «🟢 Онлайн: 42»
+ *   commands     data for /online, /status, /player and /top
+ *
+ * The bot asks GET /internal/discord/sync every tick: for each autorole whom to add and whom to remove (the
+ * difference between who should have it and who got it from the bot), and for each counter the name it should
+ * have. It reports what it applied, so a role given by hand is never taken away.
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin, internal } from '../auth.js';
+import { bot } from '../botState.js';
+import { db, EFFECTIVE_NAME } from '../db.js';
+import { publicBase } from '../site.js';
+import { playerCard, topPlayers } from './community.js';
+
+export const router = express.Router();
+
+const DAY = 86_400_000;
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS autoroles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  threshold INTEGER NOT NULL DEFAULT 0,
+  server_id INTEGER REFERENCES servers(id) ON DELETE CASCADE,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS autorole_members (
+  rule_id INTEGER NOT NULL REFERENCES autoroles(id) ON DELETE CASCADE,
+  discord_id TEXT NOT NULL,
+  PRIMARY KEY (rule_id, discord_id)
+);
+CREATE TABLE IF NOT EXISTS voice_counters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL UNIQUE,
+  template TEXT NOT NULL,
+  server_id INTEGER REFERENCES servers(id) ON DELETE CASCADE,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+);
+`);
+
+export const AUTOROLE_KINDS = ['online', 'week_top', 'hours'] as const;
+type Kind = (typeof AUTOROLE_KINDS)[number];
+
+interface RuleRow { id: number; guild_id: string; role_id: string; kind: Kind; threshold: number; server_id: number | null; last_error: string | null; created_at: number }
+interface CounterRow { id: number; channel_id: string; template: string; server_id: number | null; last_error: string | null; created_at: number }
+
+/** linked accounts: Discord id and game nick (lower case) */
+function linked(): { discordId: string; nick: string }[] {
+  return (db
+    .prepare("SELECT u.discord_id AS d, p.game_nick AS n FROM users u JOIN user_player p ON p.user_id = u.id WHERE u.discord_id IS NOT NULL AND p.game_nick != ''")
+    .all() as { d: string; n: string }[]).map((r) => ({ discordId: r.d, nick: r.n.toLowerCase() }));
+}
+
+/** the Discord ids that should have the role of a rule right now */
+export function wanted(rule: Pick<RuleRow, 'kind' | 'threshold' | 'server_id'>, now = Date.now()): Set<string> {
+  const people = linked();
+  const srv = rule.server_id ? ' AND server_id = ?' : '';
+  const args = rule.server_id ? [rule.server_id] : [];
+  let nicks: Set<string>;
+  if (rule.kind === 'online') {
+    nicks = new Set((db.prepare(`SELECT DISTINCT ulower(name) AS k FROM player_sessions WHERE left_at IS NULL${srv}`).all(...args) as { k: string }[]).map((r) => r.k));
+  } else if (rule.kind === 'week_top') {
+    nicks = new Set(topPlayers(now - 7 * DAY, now, Math.max(1, rule.threshold || 1), rule.server_id ?? undefined).map((p) => p.name.toLowerCase()));
+  } else {
+    const rows = db
+      .prepare(`SELECT ulower(name) AS k, SUM(COALESCE(left_at, ?) - joined_at) / 3600000.0 AS h FROM player_sessions WHERE 1 = 1${srv} GROUP BY k`)
+      .all(now, ...args) as { k: string; h: number }[];
+    nicks = new Set(rows.filter((r) => r.h >= Math.max(1, rule.threshold)).map((r) => r.k));
+  }
+  return new Set(people.filter((p) => nicks.has(p.nick)).map((p) => p.discordId));
+}
+
+/** the name a counter channel should have */
+export function counterName(c: Pick<CounterRow, 'template' | 'server_id'>): string {
+  const rows = db
+    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, st.online, st.players, st.max_players FROM servers s LEFT JOIN status st ON st.server_id = s.id`)
+    .all() as { id: number; name: string; online: number | null; players: number | null; max_players: number | null }[];
+  const list = c.server_id ? rows.filter((r) => r.id === c.server_id) : rows;
+  const up = list.filter((r) => r.online);
+  const vars: Record<string, string> = {
+    players: String(up.reduce((n, r) => n + (r.players ?? 0), 0)),
+    max: String(up.reduce((n, r) => n + (r.max_players ?? 0), 0)),
+    online: String(up.length),
+    servers: String(list.length),
+    status: list.length && up.length === list.length ? '🟢' : up.length ? '🟡' : '🔴',
+    name: c.server_id ? list[0]?.name ?? '' : '',
+  };
+  // Discord: channel names are 1..100 characters
+  return c.template.replace(/\{(\w+)\}/g, (m, k: string) => vars[k] ?? m).slice(0, 100).trim() || '—';
+}
+
+// ---------- the bot ----------
+
+router.get('/internal/discord/sync', internal, (_req, res) => {
+  const rules = db.prepare('SELECT * FROM autoroles').all() as RuleRow[];
+  const held = db.prepare('SELECT discord_id FROM autorole_members WHERE rule_id = ?');
+  const autoroles = rules.map((r) => {
+    const want = wanted(r);
+    const have = new Set((held.all(r.id) as { discord_id: string }[]).map((x) => x.discord_id));
+    return {
+      ruleId: r.id,
+      guildId: r.guild_id,
+      roleId: r.role_id,
+      // a few at a time: Discord limits role changes, the rest goes on the next ticks
+      add: [...want].filter((id) => !have.has(id)).slice(0, 10),
+      remove: [...have].filter((id) => !want.has(id)).slice(0, 10),
+    };
+  });
+  const counters = (db.prepare('SELECT * FROM voice_counters').all() as CounterRow[]).map((c) => ({ id: c.id, channelId: c.channel_id, name: counterName(c) }));
+  res.json({ autoroles, counters });
+});
+
+router.post('/internal/discord/autoroles/:id(\\d+)', internal, (req, res) => {
+  const b = z
+    .object({ added: z.array(z.string().max(30)).max(50), removed: z.array(z.string().max(30)).max(50), error: z.string().max(300).nullable().optional() })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM autoroles WHERE id = ?').get(id)) return res.status(404).json({ error: 'Не найдено' });
+  db.transaction(() => {
+    for (const d of b.data.added) db.prepare('INSERT OR IGNORE INTO autorole_members (rule_id, discord_id) VALUES (?, ?)').run(id, d);
+    for (const d of b.data.removed) db.prepare('DELETE FROM autorole_members WHERE rule_id = ? AND discord_id = ?').run(id, d);
+    db.prepare('UPDATE autoroles SET last_error = ? WHERE id = ?').run(b.data.error ?? null, id);
+  })();
+  res.json({ ok: true });
+});
+
+router.post('/internal/discord/counters/:id(\\d+)', internal, (req, res) => {
+  const b = z.object({ error: z.string().max(300).nullable() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  db.prepare('UPDATE voice_counters SET last_error = ? WHERE id = ?').run(b.data.error, Number(req.params.id));
+  res.json({ ok: true });
+});
+
+/** /online: every server, online first */
+router.get('/internal/discord/online', internal, (_req, res) => {
+  const rows = db
+    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game, st.online, st.players, st.max_players, st.map FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`)
+    .all() as { id: number; name: string; game: string; online: number | null; players: number | null; max_players: number | null; map: string | null }[];
+  const servers = rows
+    .map((r) => ({ id: r.id, name: r.name, game: r.game, online: !!r.online, players: r.online ? r.players ?? 0 : 0, maxPlayers: r.max_players ?? 0, map: r.online ? r.map : null }))
+    .sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players);
+  res.json({ players: servers.reduce((n, s) => n + s.players, 0), servers, url: publicBase() });
+});
+
+/** /status and /player autocomplete: servers or nicks matching what was typed */
+router.get('/internal/discord/suggest', internal, (req, res) => {
+  const what = String(req.query.what ?? '');
+  const q = String(req.query.q ?? '').slice(0, 60).toLowerCase();
+  if (what === 'server') {
+    const rows = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string }[];
+    return res.json({ items: rows.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 25).map((r) => ({ name: r.name.slice(0, 100), value: String(r.id) })) });
+  }
+  const rows = db
+    .prepare('SELECT MIN(name) AS name, MAX(joined_at) AS t FROM player_sessions WHERE ulower(name) LIKE ? GROUP BY ulower(name) ORDER BY t DESC LIMIT 25')
+    .all(`%${q.replace(/[%_]/g, '')}%`) as { name: string }[];
+  res.json({ items: rows.map((r) => ({ name: r.name.slice(0, 100), value: r.name.slice(0, 100) })) });
+});
+
+router.get('/internal/discord/player', internal, (req, res) => {
+  const card = playerCard(String(req.query.nick ?? '').slice(0, 64));
+  if (!card) return res.status(404).json({ error: 'Игрок не найден' });
+  const base = publicBase();
+  res.json({ ...card, url: base ? `${base}/player/${encodeURIComponent(card.name)}` : null });
+});
+
+router.get('/internal/discord/top', internal, (req, res) => {
+  const month = req.query.period === 'month';
+  const base = publicBase();
+  res.json({ period: month ? 'month' : 'week', top: topPlayers(Date.now() - (month ? 30 : 7) * DAY, Date.now(), 10), url: base ? `${base}/community` : null });
+});
+
+// ---------- the panel ----------
+
+const roleOf = (guildId: string, roleId: string) => bot.guilds.find((g) => g.id === guildId)?.roles?.find((r) => r.id === roleId) ?? null;
+const voiceOf = (channelId: string) => {
+  for (const g of bot.guilds) {
+    const v = g.voice?.find((c) => c.id === channelId);
+    if (v) return { guildName: g.name, name: v.name };
+  }
+  return null;
+};
+
+router.get('/api/discord/extras', admin, (_req, res) => {
+  const count = db.prepare('SELECT COUNT(*) AS n FROM autorole_members WHERE rule_id = ?');
+  const autoroles = (db.prepare('SELECT * FROM autoroles ORDER BY id').all() as RuleRow[]).map((r) => ({
+    id: r.id,
+    guildId: r.guild_id,
+    roleId: r.role_id,
+    roleName: roleOf(r.guild_id, r.role_id)?.name ?? null,
+    roleColor: roleOf(r.guild_id, r.role_id)?.color ?? 0,
+    kind: r.kind,
+    threshold: r.threshold,
+    serverId: r.server_id,
+    members: (count.get(r.id) as { n: number }).n,
+    error: r.last_error,
+  }));
+  const counters = (db.prepare('SELECT * FROM voice_counters ORDER BY id').all() as CounterRow[]).map((c) => ({
+    id: c.id,
+    channelId: c.channel_id,
+    channelName: voiceOf(c.channel_id)?.name ?? null,
+    guildName: voiceOf(c.channel_id)?.guildName ?? null,
+    template: c.template,
+    serverId: c.server_id,
+    preview: counterName(c),
+    error: c.last_error,
+  }));
+  const guilds = bot.guilds.map((g) => ({ id: g.id, name: g.name, roles: g.roles ?? [], voice: g.voice ?? [] }));
+  res.json({ autoroles, counters, guilds });
+});
+
+const serverIdOk = (id: number | null | undefined) => id == null || !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
+const snowflake = z.string().regex(/^\d{15,25}$/);
+
+router.post('/api/discord/autoroles', admin, (req, res) => {
+  const b = z
+    .object({ guildId: snowflake, roleId: snowflake, kind: z.enum(AUTOROLE_KINDS), threshold: z.number().int().min(0).max(10_000).default(0), serverId: z.number().int().positive().nullable().optional() })
+    .safeParse(req.body);
+  if (!b.success || !serverIdOk(b.data.serverId)) return res.status(400).json({ error: 'Неверные данные' });
+  const { guildId, roleId, kind, threshold, serverId } = b.data;
+  const t = kind === 'hours' ? Math.max(1, threshold) : kind === 'week_top' ? Math.min(25, Math.max(1, threshold || 1)) : 0;
+  const r = db.prepare('INSERT INTO autoroles (guild_id, role_id, kind, threshold, server_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(guildId, roleId, kind, t, serverId ?? null, Date.now());
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+
+/** removing a rule forgets its holders; the roles already given stay (the admin removes them in Discord if needed) */
+router.delete('/api/discord/autoroles/:id(\\d+)', admin, (req, res) => {
+  db.prepare('DELETE FROM autoroles WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+router.post('/api/discord/counters', admin, (req, res) => {
+  const b = z.object({ channelId: snowflake, template: z.string().trim().min(1).max(100), serverId: z.number().int().positive().nullable().optional() }).safeParse(req.body);
+  if (!b.success || !serverIdOk(b.data.serverId)) return res.status(400).json({ error: 'Неверные данные' });
+  try {
+    const r = db.prepare('INSERT INTO voice_counters (channel_id, template, server_id, created_at) VALUES (?, ?, ?, ?)').run(b.data.channelId, b.data.template, b.data.serverId ?? null, Date.now());
+    res.json({ id: Number(r.lastInsertRowid) });
+  } catch {
+    res.status(409).json({ error: 'Этот канал уже стал счётчиком' });
+  }
+});
+
+router.delete('/api/discord/counters/:id(\\d+)', admin, (req, res) => {
+  db.prepare('DELETE FROM voice_counters WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
@@ -12887,6 +14442,8 @@ router.post('/internal/bot-guilds', internal, (req, res) => {
         name: z.string().max(120),
         hidden: z.number().int().min(0).optional(),
         channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
+        roles: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), color: z.number().int().min(0).max(0xffffff) })).max(250).optional(),
+        voice: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(250).optional(),
       }),
     )
     .max(60)
@@ -12959,7 +14516,7 @@ __COREGSM_EOF__
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
 import express from 'express';
 import { z } from 'zod';
-import { admin, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
+import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
 import { channelInfo } from '../botState.js';
 import { isKnownGame, renderCard, renderGameIcon } from '../card.js';
 import { removeCover } from '../covers.js';
@@ -13029,7 +14586,7 @@ router.get('/api/servers/sparks', viewer, (req, res) => {
 
 router.post(
   '/api/servers',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
@@ -13044,7 +14601,7 @@ router.post(
 
 router.put(
   '/api/servers/:id',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     const b = serverSchema.safeParse(req.body);
@@ -13068,7 +14625,7 @@ router.delete('/api/servers/:id', admin, (req, res) => {
 // try a server without saving it: used by the "Проверить" button in the add/edit form
 router.post(
   '/api/servers/test',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
@@ -13181,7 +14738,7 @@ function usualWeek(serverId: number, before: number): (number | null)[] {
 
 router.post(
   '/api/servers/:id/refresh',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
     if (!row) return res.status(404).json({ error: 'Сервер не найден' });
@@ -13494,12 +15051,22 @@ router.get('/api/manifest.json', (_req, res) => {
   const b = brand();
   const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
   res.type('application/manifest+json').json({
+    id: '/',
     name: b.name,
     short_name: b.name.slice(0, 12),
-    start_url: '/',
+    description: 'Мониторинг игровых серверов: кто играет, доступность, новости',
+    start_url: '/servers',
+    scope: '/',
     display: 'standalone',
-    background_color: '#f4f5f7',
+    // the default theme is dark: the splash screen matches it
+    background_color: '#09090e',
     theme_color: b.color,
+    categories: ['games', 'utilities'],
+    shortcuts: [
+      { name: 'Серверы', url: '/servers' },
+      { name: 'Сообщество', url: '/community' },
+      { name: 'Статус', url: '/status' },
+    ],
     icons: [
       { src: icon, sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: b.hasLogo ? icon : '/logo-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
@@ -13691,7 +15258,7 @@ __COREGSM_EOF__
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { admin, type AuthedRequest, type Role } from '../auth.js';
+import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../auth.js';
 import { removeAvatar } from '../avatars.js';
 import { db } from '../db.js';
 import { wrap } from '../http.js';
@@ -13703,15 +15270,16 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
     id: number;
     username: string;
     role: Role;
+    perms: string | null;
     created_at: number | null;
     status: string;
     discord_name: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {
@@ -13721,13 +15289,15 @@ router.post('/api/users/:id/approve', admin, (req, res) => {
 });
 
 router.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
-  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']) }).safeParse(req.body);
+  const b = z.object({ role: z.enum(['admin', 'moderator', 'player']), perms: z.array(z.enum(PERMS)).max(PERMS.length).optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверная роль' });
   const id = Number(req.params.id);
   const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
   if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
   db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
+  // the permissions matter for a moderator only; not sent: the ones already set stay
+  if (b.data.perms) db.prepare('UPDATE users SET perms = ? WHERE id = ?').run(JSON.stringify([...new Set(b.data.perms)]), id);
   res.json({ ok: true });
 });
 
@@ -13756,6 +15326,133 @@ router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   removeAvatar(id);
   removeBanner(id);
   res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/seasons.ts" << '__COREGSM_EOF__'
+/**
+ * Seasons (usually one per wipe): the admin starts a new season, the previous one ends at that moment.
+ *   GET    /api/seasons          the current season with its leaderboard, the finished ones with their podium
+ *                               (the «Зал славы»)
+ *   POST   /api/seasons          start a new season (admin)
+ *   PUT    /api/seasons/:id      rename (admin)
+ *   DELETE /api/seasons/:id      remove (admin); the season before it stays as it was
+ *
+ * seasonAchievements(nick) adds the season badges to a player's card: the first visitor of a new season, a place
+ * on the podium of a finished season and its champion.
+ */
+import express from 'express';
+import { z } from 'zod';
+import { admin, viewer } from './auth.js';
+import { db } from './db.js';
+import { mk, type Achievement } from './profile.js';
+import { topPlayers } from './routes/community.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS seasons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  starts_at INTEGER NOT NULL,
+  ends_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_seasons_start ON seasons(starts_at);
+`);
+
+interface SeasonRow { id: number; name: string; starts_at: number; ends_at: number | null }
+
+const all = () => db.prepare('SELECT * FROM seasons ORDER BY starts_at').all() as SeasonRow[];
+
+/** the end of a season: its own end, else the start of the next one, else now (the current season) */
+function endOf(s: SeasonRow, list: SeasonRow[], now: number): number {
+  if (s.ends_at) return s.ends_at;
+  const next = list.find((x) => x.starts_at > s.starts_at);
+  return next ? next.starts_at : now;
+}
+
+/** the first visitor after the start of a season (null when nobody came) */
+function firstOf(s: SeasonRow, end: number): { name: string; at: number } | null {
+  const r = db.prepare('SELECT name, joined_at FROM player_sessions WHERE joined_at >= ? AND joined_at < ? ORDER BY joined_at LIMIT 1').get(s.starts_at, end) as { name: string; joined_at: number } | undefined;
+  return r ? { name: r.name, at: r.joined_at } : null;
+}
+
+export function seasonsView(now = Date.now()) {
+  const list = all();
+  const current = [...list].reverse().find((s) => !s.ends_at && s.starts_at <= now) ?? null;
+  const finished = list.filter((s) => s !== current && s.starts_at <= now).reverse();
+  return {
+    current: current
+      ? { id: current.id, name: current.name, startsAt: current.starts_at, top: topPlayers(current.starts_at, now, 10), first: firstOf(current, now) }
+      : null,
+    past: finished.map((s) => {
+      const end = endOf(s, list, now);
+      return { id: s.id, name: s.name, startsAt: s.starts_at, endsAt: end, podium: topPlayers(s.starts_at, end, 3), first: firstOf(s, end) };
+    }),
+  };
+}
+
+/** the season badges of a nick */
+export function seasonAchievements(nick: string, now = Date.now()): Achievement[] {
+  const key = nick.toLowerCase();
+  const list = all().filter((s) => s.starts_at <= now);
+  let firstAt: number | null = null;
+  let podiumAt: number | null = null;
+  let champAt: number | null = null;
+  let podiums = 0;
+  let titles = 0;
+  for (const s of list) {
+    const end = endOf(s, list, now);
+    const first = firstOf(s, end);
+    if (first && first.name.toLowerCase() === key) firstAt ??= first.at;
+    // a podium counts only when the season is over
+    if (end >= now) continue;
+    const podium = topPlayers(s.starts_at, end, 3).map((p) => p.name.toLowerCase());
+    const place = podium.indexOf(key);
+    if (place >= 0) { podiums++; podiumAt ??= end; }
+    if (place === 0) { titles++; champAt ??= end; }
+  }
+  return [
+    mk('season-first', 'Первопроходец', 'Зайдите первым после старта нового сезона', 'star', firstAt ? 1 : 0, 1, firstAt),
+    mk('season-podium', 'Призёр сезона', 'Войдите в тройку самых активных игроков сезона', 'crown', Math.min(podiums, 1), 1, podiumAt),
+    mk('season-champion', 'Чемпион сезона', 'Наиграйте больше всех часов за сезон', 'crown', Math.min(titles, 1), 1, champAt),
+  ];
+}
+
+router.get('/api/seasons', viewer, (_req, res) => res.json(seasonsView()));
+
+const nameSchema = z.string().trim().min(1).max(60);
+
+router.post('/api/seasons', admin, (req, res) => {
+  const b = z.object({ name: nameSchema, startsAt: z.number().int().positive().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const at = Math.min(b.data.startsAt ?? Date.now(), Date.now() + 365 * 86_400_000);
+  const id = db.transaction(() => {
+    // the open season ends where the new one starts
+    db.prepare('UPDATE seasons SET ends_at = ? WHERE ends_at IS NULL AND starts_at < ?').run(at, at);
+    return Number(db.prepare('INSERT INTO seasons (name, starts_at) VALUES (?, ?)').run(b.data.name, at).lastInsertRowid);
+  })();
+  res.json({ id, ...seasonsView() });
+});
+
+router.put('/api/seasons/:id(\\d+)', admin, (req, res) => {
+  const b = z.object({ name: nameSchema }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const r = db.prepare('UPDATE seasons SET name = ? WHERE id = ?').run(b.data.name, Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json(seasonsView());
+});
+
+router.delete('/api/seasons/:id(\\d+)', admin, (req, res) => {
+  const id = Number(req.params.id);
+  const s = db.prepare('SELECT * FROM seasons WHERE id = ?').get(id) as SeasonRow | undefined;
+  if (!s) return res.status(404).json({ error: 'Не найдено' });
+  db.transaction(() => {
+    db.prepare('DELETE FROM seasons WHERE id = ?').run(id);
+    // removing the current season reopens the one before it
+    if (!s.ends_at) db.prepare('UPDATE seasons SET ends_at = NULL WHERE id = (SELECT id FROM seasons WHERE starts_at < ? ORDER BY starts_at DESC LIMIT 1) AND ends_at = ?').run(s.starts_at, s.starts_at);
+  })();
+  res.json(seasonsView());
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -14667,6 +16364,11 @@ import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from './db.js';
 import { enqueueDelivery } from './deliveries.js';
 
+/** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
+type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
+let pushLater: PushHook = () => undefined;
+export const setPushHook = (fn: PushHook) => { pushLater = fn; };
+
 export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
 export type SubKind = (typeof SUB_KINDS)[number];
 
@@ -14772,6 +16474,8 @@ export function notifySubscribers(serverId: number, kind: SubKind, obs: Observat
     insert.run(s.user_id, now, kind, serverId, text);
     touch.run(now, s.user_id, serverId, kind);
     if (s.discord_id && canDm()) enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+    // and on the devices where the player turned notifications on
+    pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}` });
     n++;
   }
   if (n) db.prepare('DELETE FROM user_notifications WHERE ts < ?').run(now - 60 * 86400_000);
@@ -14850,6 +16554,96 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     }
     res.json({ ok: true, unread: unreadNotifications(uid) });
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/webpush.ts" << '__COREGSM_EOF__'
+/**
+ * Web Push without a library: the panel's VAPID keys (RFC 8292), the encryption of a message for one browser
+ * (RFC 8291, aes128gcm of RFC 8188) and the request to the browser's push service.
+ *
+ * The keys are made once and kept in the settings (the private one encrypted, like every *_secret).
+ */
+import crypto from 'node:crypto';
+import { getSetting, setSetting } from './db.js';
+
+const b64u = (b: Buffer) => b.toString('base64url');
+
+/** the panel's VAPID key pair: the public key as browsers want it (65 bytes, base64url) and the private one as PEM */
+export function vapidKeys(): { publicKey: string; privatePem: string } {
+  const pub = getSetting('push_vapid_public');
+  const priv = getSetting('push_vapid_secret');
+  if (pub && priv) return { publicKey: pub, privatePem: priv };
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const jwk = publicKey.export({ format: 'jwk' });
+  const raw = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x!, 'base64url'), Buffer.from(jwk.y!, 'base64url')]);
+  const keys = { publicKey: b64u(raw), privatePem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString() };
+  setSetting('push_vapid_public', keys.publicKey);
+  setSetting('push_vapid_secret', keys.privatePem);
+  return keys;
+}
+
+/** the VAPID header for one push service: a short ES256 token for its origin */
+export function vapidAuth(endpoint: string, keys: { publicKey: string; privatePem: string }, subject: string, now = Date.now()): string {
+  const aud = new URL(endpoint).origin;
+  const head = b64u(Buffer.from(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const body = b64u(Buffer.from(JSON.stringify({ aud, exp: Math.floor(now / 1000) + 12 * 3600, sub: subject })));
+  const sig = crypto.sign('sha256', Buffer.from(`${head}.${body}`), { key: keys.privatePem, dsaEncoding: 'ieee-p1363' });
+  return `vapid t=${head}.${body}.${b64u(sig)}, k=${keys.publicKey}`;
+}
+
+const hkdf = (salt: Buffer, ikm: Buffer, info: Buffer, len: number) => Buffer.from(crypto.hkdfSync('sha256', ikm, salt, info, len));
+
+/**
+ * Encrypts a message for one subscription (aes128gcm): the body is
+ * salt(16) | record size(4) | key id length(1) | the server's one-time public key(65) | ciphertext + tag.
+ */
+export function encryptPayload(plain: Buffer, p256dh: string, authSecret: string, opts: { salt?: Buffer; ecdh?: crypto.ECDH } = {}): Buffer {
+  const uaPublic = Buffer.from(p256dh, 'base64url');
+  const auth = Buffer.from(authSecret, 'base64url');
+  if (uaPublic.length !== 65 || auth.length < 16) throw new Error('bad subscription keys');
+  const ecdh = opts.ecdh ?? crypto.createECDH('prime256v1');
+  if (!opts.ecdh) ecdh.generateKeys();
+  const asPublic = ecdh.getPublicKey();
+  const shared = ecdh.computeSecret(uaPublic);
+  const ikm = hkdf(auth, shared, Buffer.concat([Buffer.from('WebPush: info\0'), uaPublic, asPublic]), 32);
+  const salt = opts.salt ?? crypto.randomBytes(16);
+  const cek = hkdf(salt, ikm, Buffer.from('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = hkdf(salt, ikm, Buffer.from('Content-Encoding: nonce\0'), 12);
+  const cipher = crypto.createCipheriv('aes-128-gcm', cek, nonce);
+  // one record: the message and the delimiter 0x02 (last record), no padding
+  const body = Buffer.concat([cipher.update(Buffer.concat([plain, Buffer.from([2])])), cipher.final(), cipher.getAuthTag()]);
+  const header = Buffer.alloc(21);
+  salt.copy(header, 0);
+  header.writeUInt32BE(4096, 16);
+  header.writeUInt8(asPublic.length, 20);
+  return Buffer.concat([header, asPublic, body]);
+}
+
+export interface PushTarget { endpoint: string; p256dh: string; auth: string }
+export type PushOutcome = 'sent' | 'gone' | 'failed';
+
+/** sends one message; 'gone' means the browser dropped the subscription (404/410) and it should be forgotten */
+export async function sendPush(t: PushTarget, message: Record<string, unknown>, subject: string): Promise<PushOutcome> {
+  try {
+    const keys = vapidKeys();
+    const res = await fetch(t.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: vapidAuth(t.endpoint, keys, subject),
+        'Content-Encoding': 'aes128gcm',
+        'Content-Type': 'application/octet-stream',
+        TTL: '86400',
+        Urgency: 'high',
+      },
+      body: new Uint8Array(encryptPayload(Buffer.from(JSON.stringify(message)), t.p256dh, t.auth)),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 404 || res.status === 410) return 'gone';
+    return res.ok ? 'sent' : 'failed';
+  } catch {
+    return 'failed';
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend"
@@ -15929,6 +17723,7 @@ import { setGatewayAgent } from './gateway.js';
 import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
 import { parseProxy } from './proxy.js';
+import { syncDiscord } from './sync.js';
 
 const TICK_MS = 10_000;
 const LOGIN_RETRY_MS = 60_000;
@@ -15978,7 +17773,14 @@ const PERM_LABELS: Record<string, string> = {
 /** Text channels per Discord server. A channel is listed when the bot can see it and write to it;
  *  missing "soft" permissions are reported as warnings instead of hiding the channel. */
 function collectGuilds(c: Client) {
-  const out: { id: string; name: string; hidden: number; channels: { id: string; name: string; pos: number; missing: string[] }[] }[] = [];
+  const out: {
+    id: string;
+    name: string;
+    hidden: number;
+    channels: { id: string; name: string; pos: number; missing: string[] }[];
+    roles: { id: string; name: string; color: number }[];
+    voice: { id: string; name: string }[];
+  }[] = [];
   for (const g of c.guilds.cache.values()) {
     const me = g.members.me;
     const channels: { id: string; name: string; pos: number; missing: string[] }[] = [];
@@ -15991,7 +17793,19 @@ function collectGuilds(c: Client) {
       channels.push({ id: ch.id, name: ch.name, pos: ch.rawPosition, missing });
     }
     channels.sort((x, y) => x.pos - y.pos);
-    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250) });
+    // roles the bot may give: below its own highest role, not @everyone, not owned by an integration
+    const roles = [...g.roles.cache.values()]
+      .filter((r) => r.id !== g.id && !r.managed && r.editable)
+      .sort((x, y) => y.position - x.position)
+      .slice(0, 200)
+      .map((r) => ({ id: r.id, name: r.name, color: r.color }));
+    // voice channels the bot may rename (live counters)
+    const voice = [...g.channels.cache.values()]
+      .filter((ch) => (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) && (!me || ch.permissionsFor(me)?.has(['ViewChannel', 'ManageChannels'])))
+      .sort((x, y) => ('rawPosition' in x && 'rawPosition' in y ? x.rawPosition - y.rawPosition : 0))
+      .slice(0, 200)
+      .map((ch) => ({ id: ch.id, name: ch.name }));
+    out.push({ id: g.id, name: g.name, hidden, channels: channels.slice(0, 250), roles, voice });
   }
   return out.slice(0, 50);
 }
@@ -16003,6 +17817,8 @@ async function publishGuilds(): Promise<void> {
     name: g.name,
     hidden: g.hidden,
     channels: g.channels.map(({ id, name, missing }) => ({ id, name, ...(missing.length ? { missing } : {}) })),
+    roles: g.roles,
+    voice: g.voice,
   }));
   const json = JSON.stringify(list);
   // send on change, and every minute so a restarted backend learns the list again
@@ -16280,6 +18096,7 @@ async function tick(): Promise<void> {
     await updateBindings();
     await processNews();
     await processDeliveries();
+    if (client && state === 'online') await syncDiscord(client, () => stopping);
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {
@@ -16317,6 +18134,7 @@ import type { AutocompleteInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 
 export const COMMANDS = [
@@ -16334,6 +18152,7 @@ export const COMMANDS = [
     options: [{ type: 3, name: 'nick', description: 'Новый ник В ИГРЕ (V Rising), точно как в игре', required: true, min_length: 2, max_length: 40, autocomplete: true }],
   },
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
+  ...INFO_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -16380,8 +18199,9 @@ async function handleAutocomplete(i: AutocompleteInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isAutocomplete()) return handleAutocomplete(i);
+  if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
+  if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
   // Discord wants an answer within 3 seconds: acknowledge first, do the work after, and log how long it took
@@ -16578,6 +18398,174 @@ for (const sig of ['SIGTERM', 'SIGINT'] as const) {
   });
 }
 bot.start();
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/info.ts" << '__COREGSM_EOF__'
+/** Public slash commands: /online, /status, /player and /top. The answers are seen by everybody in the channel. */
+import { AttachmentBuilder, EmbedBuilder, type AutocompleteInteraction, type ChatInputCommandInteraction } from 'discord.js';
+import { backend, backendJson } from './backend.js';
+import { log } from './log.js';
+import { COLORS, hoursText, replyEmbed } from './replies.js';
+
+export const INFO_COMMANDS = [
+  { name: 'online', description: 'Кто сейчас играет: онлайн всех серверов' },
+  {
+    name: 'status',
+    description: 'Карточка сервера с графиком за сутки',
+    options: [{ type: 3, name: 'server', description: 'Сервер', required: true, autocomplete: true }],
+  },
+  {
+    name: 'player',
+    description: 'Карточка игрока: часы, серия дней, где и когда играет',
+    options: [{ type: 3, name: 'nick', description: 'Ник в игре', required: true, min_length: 1, max_length: 64, autocomplete: true }],
+  },
+  {
+    name: 'top',
+    description: 'Самые активные игроки',
+    options: [{ type: 3, name: 'period', description: 'За какой срок', required: false, choices: [{ name: 'неделя', value: 'week' }, { name: 'месяц', value: 'month' }] }],
+  },
+];
+export const INFO_NAMES = new Set(INFO_COMMANDS.map((c) => c.name));
+
+export interface OnlineData {
+  players: number;
+  servers: { id: number; name: string; game: string; online: boolean; players: number; maxPlayers: number; map: string | null }[];
+  url: string | null;
+}
+export interface PlayerData {
+  name: string;
+  online: boolean;
+  lastSeen: number | null;
+  hours: number;
+  visits: number;
+  days: number;
+  streak: number;
+  usualHour: number | null;
+  servers: { name: string; hours: number }[];
+  url: string | null;
+}
+export interface TopData { period: 'week' | 'month'; top: { name: string; hours: number; servers: number }[]; url: string | null }
+
+const plural = (n: number, f: [string, string, string]) => {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  return a > 10 && a < 20 ? f[2] : b > 1 && b < 5 ? f[1] : b === 1 ? f[0] : f[2];
+};
+const bar = (p: number) => {
+  const n = Math.max(0, Math.min(8, Math.round(p * 8)));
+  return '█'.repeat(n) + '░'.repeat(8 - n);
+};
+
+export function onlineEmbed(d: OnlineData): EmbedBuilder {
+  const up = d.servers.filter((s) => s.online);
+  const lines = d.servers.slice(0, 20).map((s) =>
+    s.online
+      ? `🟢 **${s.name}** — ${s.players}${s.maxPlayers ? `/${s.maxPlayers}` : ''} ${s.maxPlayers ? bar(s.players / s.maxPlayers) : ''}${s.map ? ` · ${s.map}` : ''}`
+      : `🔴 **${s.name}** — не в сети`,
+  );
+  const e = new EmbedBuilder()
+    .setTitle(`🎮 Сейчас играют: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}`)
+    .setDescription((lines.join('\n') || 'Серверов пока нет.').slice(0, 3900))
+    .setColor(up.length ? COLORS.ok : COLORS.bad)
+    .setFooter({ text: `Серверов в сети: ${up.length} из ${d.servers.length} · CoreGSM` });
+  if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
+  return e;
+}
+
+const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
+
+export function playerEmbed(p: PlayerData): EmbedBuilder {
+  const status = p.online ? '🟢 Сейчас в игре' : p.lastSeen ? `Был в игре <t:${Math.floor(p.lastSeen / 1000)}:R>` : '';
+  const e = new EmbedBuilder()
+    .setTitle(`👤 ${p.name}`.slice(0, 250))
+    .setDescription([status, p.usualHour != null ? `Обычно играет ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : ''].filter(Boolean).join('\n') || ' ')
+    .setColor(p.online ? COLORS.ok : COLORS.info)
+    .addFields(
+      { name: 'Часов', value: hoursText(p.hours), inline: true },
+      { name: 'Визитов', value: String(p.visits), inline: true },
+      { name: 'Подряд', value: `${p.streak >= 3 ? '🔥 ' : ''}${p.streak} ${plural(p.streak, ['день', 'дня', 'дней'])}`, inline: true },
+    )
+    .setFooter({ text: 'За последние 90 дней · CoreGSM' });
+  if (p.servers.length) e.addFields({ name: 'Где играет', value: p.servers.slice(0, 5).map((s) => `${s.name} — ${hoursText(s.hours)} ч`).join('\n').slice(0, 1000) });
+  if (p.url && /^https?:\/\//.test(p.url)) e.setURL(p.url);
+  return e;
+}
+
+export function topEmbed(d: TopData): EmbedBuilder {
+  const medals = ['🥇', '🥈', '🥉'];
+  const lines = d.top.map((p, i) => `${medals[i] ?? `\`${String(i + 1).padStart(2, ' ')}\``} **${p.name}** — ${hoursText(p.hours)} ч`);
+  const e = new EmbedBuilder()
+    .setTitle(d.period === 'month' ? '🏆 Самые активные за месяц' : '🏆 Самые активные за неделю')
+    .setDescription((lines.join('\n') || 'Пока никто не играл.').slice(0, 3900))
+    .setColor(COLORS.warn)
+    .setFooter({ text: 'CoreGSM' });
+  if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
+  return e;
+}
+
+/** autocomplete of /status server and /player nick; answers within 3 s and never throws */
+export async function infoAutocomplete(i: AutocompleteInteraction): Promise<void> {
+  let items: { name: string; value: string }[] = [];
+  try {
+    const what = i.commandName === 'status' ? 'server' : 'nick';
+    const q = new URLSearchParams({ what, q: String(i.options.getFocused()).slice(0, 60) });
+    const r = await backend(`/internal/discord/suggest?${q.toString()}`, { signal: AbortSignal.timeout(2000) });
+    const d = (await r.json()) as { items?: { name: string; value: string }[] };
+    if (Array.isArray(d.items)) items = d.items.filter((x) => typeof x?.name === 'string' && typeof x?.value === 'string' && x.name.length > 0).slice(0, 25);
+  } catch {
+    items = [];
+  }
+  try {
+    await i.respond(items);
+  } catch (e) {
+    log('autocomplete failed:', (e as Error).message);
+  }
+}
+
+export async function handleInfo(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply();
+  } catch (e) {
+    log(`/${i.commandName}: could not acknowledge:`, (e as Error).message);
+    return;
+  }
+  const reply = async (p: Parameters<typeof i.editReply>[0]) => {
+    try {
+      await i.editReply(p);
+    } catch (e) {
+      log('reply failed:', (e as Error).message);
+    }
+  };
+  const down = () => reply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad));
+  try {
+    if (i.commandName === 'online') {
+      const { data } = await backendJson<OnlineData>('/internal/discord/online');
+      return void (await (data ? reply({ embeds: [onlineEmbed(data)] }) : down()));
+    }
+    if (i.commandName === 'top') {
+      const period = i.options.getString('period') === 'month' ? 'month' : 'week';
+      const { data } = await backendJson<TopData>(`/internal/discord/top?period=${period}`);
+      return void (await (data ? reply({ embeds: [topEmbed(data)] }) : down()));
+    }
+    if (i.commandName === 'player') {
+      const nick = i.options.getString('nick', true);
+      const { status, data } = await backendJson<PlayerData>(`/internal/discord/player?nick=${encodeURIComponent(nick)}`);
+      if (status === 404) return void (await reply(replyEmbed('Игрок не найден', `Ник «${nick.slice(0, 64)}» не появлялся на серверах за последние 90 дней.`, COLORS.warn)));
+      return void (await (data ? reply({ embeds: [playerEmbed(data)] }) : down()));
+    }
+    // /status: the same picture card as in the status messages
+    const id = Number(i.options.getString('server', true));
+    if (!Number.isInteger(id) || id <= 0) return void (await reply(replyEmbed('Выберите сервер', 'Начните вводить название и выберите сервер из списка.', COLORS.warn)));
+    const r = await backend(`/internal/card/${id}.png`);
+    if (r.status === 404) return void (await reply(replyEmbed('Сервер не найден', 'Выберите сервер из списка подсказок.', COLORS.warn)));
+    if (!r.ok) return void (await down());
+    const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
+    await reply({ files: [file] });
+  } catch (e) {
+    log(`/${i.commandName} failed:`, (e as Error).message);
+    await down();
+  }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/log.ts" << '__COREGSM_EOF__'
@@ -16951,6 +18939,95 @@ export function cardReply(
     );
   }
   return { embeds: [e], components };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/sync.ts" << '__COREGSM_EOF__'
+/**
+ * Autoroles and voice counters: the panel says whom to give a role and whom to take it from, and what name each
+ * counter channel should have; the bot applies it and reports back.
+ *
+ * Discord allows renaming a channel only twice per 10 minutes, so a counter is renamed at most every 5 minutes
+ * and only when its name actually changed.
+ */
+import type { Client } from 'discord.js';
+import { backend, backendJson } from './backend.js';
+import { humanDiscordError } from './errors.js';
+import { log } from './log.js';
+
+interface SyncData {
+  autoroles: { ruleId: number; guildId: string; roleId: string; add: string[]; remove: string[] }[];
+  counters: { id: number; channelId: string; name: string }[];
+}
+
+export const RENAME_GAP_MS = 5 * 60_000;
+const lastRename = new Map<string, number>();
+
+/** true when a counter should be renamed now */
+export function renameDue(current: string, wanted: string, last: number | undefined, now = Date.now()): boolean {
+  return current !== wanted && (last === undefined || now - last >= RENAME_GAP_MS);
+}
+
+/** Discord «Unknown Member»: the person left the server, nothing to give or take */
+const gone = (e: unknown) => (e as { code?: number }).code === 10007;
+
+async function post(path: string, body: unknown) {
+  try {
+    await backend(path, { method: 'POST', body: JSON.stringify(body) });
+  } catch (e) {
+    log('sync report failed', (e as Error).message);
+  }
+}
+
+export async function syncDiscord(c: Client, stopping: () => boolean): Promise<void> {
+  const { ok, data } = await backendJson<SyncData>('/internal/discord/sync');
+  if (!ok || !data) return;
+
+  for (const r of data.autoroles) {
+    if (stopping()) return;
+    if (!r.add.length && !r.remove.length) continue;
+    const added: string[] = [];
+    const removed: string[] = [];
+    let error: string | null = null;
+    const guild = c.guilds.cache.get(r.guildId);
+    if (!guild) {
+      error = 'Бот не состоит в этом Discord-сервере';
+    } else {
+      for (const [ids, give] of [[r.add, true], [r.remove, false]] as const) {
+        for (const id of ids) {
+          try {
+            const member = await guild.members.fetch(id);
+            if (give) await member.roles.add(r.roleId, 'CoreGSM: автороль');
+            else await member.roles.remove(r.roleId, 'CoreGSM: автороль');
+            (give ? added : removed).push(id);
+          } catch (e) {
+            // a person who left: count as done, so the panel does not try every tick
+            if (gone(e)) (give ? added : removed).push(id);
+            else error = humanDiscordError(e);
+          }
+        }
+      }
+    }
+    if (added.length || removed.length) log(`autorole ${r.ruleId}: +${added.length} −${removed.length}`);
+    await post(`/internal/discord/autoroles/${r.ruleId}`, { added, removed, error });
+  }
+
+  for (const k of data.counters) {
+    if (stopping()) return;
+    try {
+      const ch = await c.channels.fetch(k.channelId);
+      if (!ch || !('setName' in ch) || !('name' in ch)) throw Object.assign(new Error('Канал не найден'), { code: 10003 });
+      if (!renameDue(String(ch.name), k.name, lastRename.get(k.channelId))) continue;
+      await ch.setName(k.name, 'CoreGSM: счётчик онлайна');
+      lastRename.set(k.channelId, Date.now());
+      log(`counter ${k.id}: «${k.name}»`);
+      await post(`/internal/discord/counters/${k.id}`, { error: null });
+    } catch (e) {
+      // wait the full gap before the next attempt, so a missing permission does not hammer Discord
+      lastRename.set(k.channelId, Date.now());
+      await post(`/internal/discord/counters/${k.id}`, { error: humanDiscordError(e) });
+    }
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot"
@@ -29533,9 +31610,41 @@ EP4BeQojTBa++28AAAAASUVORK5CYII=
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
   cat > "$APP_DIR/core-frontend/public/sw.js" << '__COREGSM_EOF__'
-// Minimal service worker: lets the browser offer "install app". Nothing is cached and requests are not intercepted: the panel is always live.
+// Service worker: lets the browser offer "install app" and shows push notifications. Nothing is cached and
+// requests are not intercepted: the panel is always live.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+
+// a notification from the panel: { title, body, url, tag }
+self.addEventListener('push', (e) => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(m.title || 'CoreGSM', {
+    body: m.body || '',
+    icon: '/logo-192.png',
+    badge: '/logo-128.png',
+    tag: m.tag || undefined,
+    renotify: !!m.tag,
+    data: { url: m.url || '/' },
+  }));
+});
+
+// a click opens the page of the notification: an open tab of the panel is reused
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin).href;
+  e.waitUntil((async () => {
+    const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of tabs) {
+      if (new URL(c.url).origin === self.location.origin && 'focus' in c) {
+        await c.focus();
+        if ('navigate' in c) await c.navigate(url).catch(() => undefined);
+        return;
+      }
+    }
+    await self.clients.openWindow(url);
+  })());
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public/vrising/achievements"
   base64 -d > "$APP_DIR/core-frontend/public/vrising/achievements/vr-blood-bond-locked.png" << '__COREGSM_EOF__'
@@ -38854,6 +40963,7 @@ IwAAAABJRU5ErkJggg==
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
+import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
 import { AuthContext } from './auth';
@@ -38877,6 +40987,7 @@ const StatusPage = lazyPage(() => import('./pages/Status'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
 const CommunityPage = lazyPage(() => import('./pages/Community'));
 const PlayerPage = lazyPage(() => import('./pages/Player'));
+const GalleryPage = lazyPage(() => import('./pages/Gallery'));
 // rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
 const Setup = lazyPage(() => import('./pages/Setup'));
 const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
@@ -38915,6 +41026,7 @@ const ADMIN_TITLES: Record<string, string> = {
   news: 'Новости',
   alerts: 'Оповещения',
   cards: 'Карточки',
+  community: 'Сообщество',
   users: 'Пользователи',
   journal: 'Журнал',
   system: 'Система',
@@ -38931,6 +41043,8 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
 function useBrand(b: Access['brand']) {
   // the community's default theme, for visitors who have not picked one
   useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
+  // a game theme also tints the page glow and lays the game's picture across the top
+  useEffect(() => { paintGameTheme(b.preset); }, [b.preset]);
   useEffect(() => {
     const root = document.documentElement;
     // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
@@ -39063,7 +41177,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'gallery' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -39129,8 +41243,8 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player', 'gallery'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'gallery' ? 'gallery' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
   if (page === 'u' || page === 'player') {
@@ -39146,6 +41260,8 @@ export default function App() {
         ? t('title.notfound')
         : page === 'u' || page === 'player'
         ? publicName
+        : page === 'gallery'
+        ? 'Галерея'
         : page === 'profile'
         ? t('hdr.profile')
         : page === 'admin'
@@ -39320,6 +41436,7 @@ export default function App() {
             {page === 'status' && <StatusPage />}
             {page === 'community' && <CommunityPage />}
             {page === 'player' && <PlayerPage name={publicName} />}
+            {page === 'gallery' && <GalleryPage />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}
             {page === 'u' && <PublicProfilePage username={publicName} />}
@@ -39987,6 +42104,8 @@ export interface NewsSettings {
 export interface Me {
   username: string;
   role: 'admin' | 'moderator' | 'player';
+  /** what this account may do in the admin area (all for an administrator) */
+  perms?: Perm[];
   /** Discord CDN url */
   avatarUrl: string | null;
   /** where the picture comes from: an uploaded file wins over Discord */
@@ -40154,10 +42273,20 @@ export interface Access {
   discordLogin: boolean;
 }
 
+export type Perm = 'news' | 'moderation' | 'servers' | 'maintenance' | 'journal';
+export const PERM_LABELS: { id: Perm; label: string; hint: string }[] = [
+  { id: 'news', label: 'Новости', hint: 'писать, планировать и публиковать' },
+  { id: 'moderation', label: 'Модерация', hint: 'отзывы и галерея скриншотов' },
+  { id: 'servers', label: 'Серверы', hint: 'добавлять и изменять (удаляет только администратор)' },
+  { id: 'maintenance', label: 'Обслуживание', hint: 'окна технических работ' },
+  { id: 'journal', label: 'Журнал', hint: 'кто и что менял в панели' },
+];
+
 export interface UserRow {
   id: number;
   username: string;
   role: 'admin' | 'moderator' | 'player';
+  perms?: Perm[];
   createdAt: number | null;
   status: 'active' | 'pending';
   discordName: string | null;
@@ -40835,8 +42964,9 @@ import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
-import { ADMIN_LINKS, ADMIN_SECTIONS } from '../pages/adminNav';
-import { GameAvatar, IconNews, IconServers, toast, useDensity, navigate } from '../ui';
+import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
+import { confirmDialog } from '../confirm';
+import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, currentTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -40885,7 +43015,8 @@ const sectionItem = (key: string, label: string, hint: string, href: string, ico
  * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
  */
 export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
-  const { me } = useAuth();
+  const { me, logout } = useAuth();
+  const perms = me?.perms ?? (isAdmin ? ['news', 'moderation', 'servers', 'maintenance', 'journal'] : []);
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -40923,17 +43054,51 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-servers', 'Серверы', 'Список серверов', '/servers', <IconServers />),
       sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
+      sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
+      sectionItem('p-gallery', 'Галерея', 'Скриншоты игроков', '/gallery', <IconCards />, 'скриншоты картинки фото загрузить', true),
     );
     if (isStaff) {
-      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => x.id === 'news');
+      const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => SECTION_PERM[x.id] && perms.includes(SECTION_PERM[x.id]!));
       for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
       if (isAdmin) {
         ADMIN_LINKS.forEach((l, i) => out.push(sectionItem(`l-${i}`, l.label, `Админка · ${l.hint}`, l.href, l.icon(), `${l.keywords} админка`, true)));
-      } else {
+      } else if (perms.includes('news')) {
         out.push(sectionItem('l-news-new', 'Написать новость', 'Админка · Новости', '/admin/news/new', <IconNews />, 'новость объявление', true));
       }
     }
     if (me) out.push(sectionItem('p-profile', 'Профиль', me.username, '/profile', <IconUser />));
+    // actions on a server, found by typing its name: copy the address, poll it now, restart it
+    const act = (key: string, label: string, hint: string, words: string, icon: ReactNode, run: () => void) =>
+      out.push({ key, group: 'Действия', label, hint, href: '', run, icon, hay: norm(`${label} ${hint} ${words}`), searchOnly: true });
+    for (const s of servers ?? []) {
+      act(`copy-${s.id}`, `Скопировать адрес: ${s.name}`, s.address, 'адрес ip подключиться копировать', <IconCopy />, () => {
+        void navigator.clipboard?.writeText(s.address).then(() => toast('Адрес скопирован'));
+      });
+      if (perms.includes('servers')) {
+        act(`poll-${s.id}`, `Опросить сейчас: ${s.name}`, 'Свежие онлайн, карта и пинг', 'обновить опросить проверить', <IconRefresh />, () => {
+          void api(`/servers/${s.id}/refresh`, 'POST').then(() => toast(`«${s.name}» опрошен`)).catch((e: Error) => toast(e.message, 'err'));
+        });
+      }
+      if (perms.includes('maintenance')) {
+        act(`restart-${s.id}`, `Перезапустить: ${s.name}`, 'Окно обслуживания и команда по RCON', 'перезапуск рестарт restart', <IconWrench />, () => {
+          void confirmDialog({ title: `Перезапустить «${s.name}» сейчас?`, text: 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.', confirmLabel: 'Перезапустить', danger: true }).then((ok) => {
+            if (ok) void api<{ lastResult: string | null }>(`/servers/${s.id}/restart/now`, 'POST').then((r) => toast(r.lastResult ?? 'Готово')).catch((e: Error) => toast(e.message, 'err'));
+          });
+        });
+      }
+    }
+    if (isAdmin) {
+      act('act-digest', 'Отправить итоги недели сейчас', 'Картинка с итогами в канал Discord', 'дайджест итоги неделя отчёт', <IconNews />, () => {
+        void api('/digest/send', 'POST').then(() => toast('Итоги недели поставлены в очередь')).catch((e: Error) => toast(e.message, 'err'));
+      });
+      act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
+    }
+    const theme = currentTheme();
+    for (const [t, label, icon] of [['dark', 'Тёмная тема', <IconMoon key="m" />], ['light', 'Светлая тема', <IconSun key="s" />], ['auto', 'Тема как в системе', <IconSun key="a" />]] as const) {
+      if (t === theme) continue;
+      out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
+    }
+    if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
     const compact = density === 'compact';
     out.push({
       key: 'act-density',
@@ -40946,7 +43111,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
-  }, [servers, isStaff, isAdmin, me, density]);
+  }, [servers, isStaff, isAdmin, me, density, perms, logout]);
 
   const results = useMemo(() => {
     const words = norm(q).split(/\s+/).filter(Boolean);
@@ -41078,6 +43243,81 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         <p className="sr-only" role="status">{results.length ? `Найдено: ${results.length}` : 'Ничего не найдено'}</p>
       </div>
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ConfigTransfer.tsx" << '__COREGSM_EOF__'
+/**
+ * Settings → Обновления и копии: the panel's setup as a JSON file (servers, Discord messages, alerts, appearance,
+ * maintenance, restarts, roles and counters, without secrets) and its import into this or another panel.
+ */
+import { useRef, useState } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { downloadFile } from '../pages/Backups';
+import { Button, ErrorLine, Section, toast } from '../ui';
+
+interface Summary { dry: boolean; serversAdded: number; serversUpdated: number; bindings: number; maintenance: number; restarts: number; autoroles: number; counters: number; settings: number }
+
+export function summaryText(s: Summary): string {
+  const parts = [
+    s.serversAdded && `новых серверов: ${s.serversAdded}`,
+    s.serversUpdated && `обновится серверов: ${s.serversUpdated}`,
+    s.bindings && `сообщений Discord: ${s.bindings}`,
+    s.maintenance && `окон обслуживания: ${s.maintenance}`,
+    s.restarts && `расписаний перезапуска: ${s.restarts}`,
+    s.autoroles && `авторолей: ${s.autoroles}`,
+    s.counters && `счётчиков: ${s.counters}`,
+    s.settings && `настроек: ${s.settings}`,
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'ничего не изменится: всё уже так';
+}
+
+export default function ConfigTransfer() {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const file = useRef<HTMLInputElement>(null);
+
+  const exportNow = async () => {
+    setBusy('export');
+    await downloadFile('/config/export', 'coregsm-config.json').catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
+  };
+  const importFile = async (f: File) => {
+    setError('');
+    let data: unknown;
+    try {
+      data = JSON.parse(await f.text());
+    } catch {
+      return setError('Это не файл настроек CoreGSM или он повреждён');
+    }
+    setBusy('import');
+    try {
+      const preview = await api<Summary>('/config/import?dry=1', 'POST', data);
+      const ok = await confirmDialog({ title: 'Импортировать настройки?', text: `Из файла «${f.name}»: ${summaryText(preview)}. Серверы с той же игрой, адресом и портом обновятся, остальные добавятся.`, confirmLabel: 'Импортировать' });
+      if (!ok) return;
+      const done = await api<Summary>('/config/import', 'POST', data);
+      toast(`Импортировано: ${summaryText(done)}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy('');
+      if (file.current) file.current.value = '';
+    }
+  };
+
+  return (
+    <Section
+      title="Перенос настроек"
+      description="Файл с настройкой панели: серверы, сообщения в Discord, оповещения и итоги недели, оформление, повторяющиеся окна обслуживания, перезапуски, автороли и счётчики. Без игроков, истории и секретов (токен бота и пароли вводятся заново). Удобно, чтобы поднять вторую панель или перенести её на другой сервер."
+    >
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" className="btn-soft" loading={busy === 'export'} onClick={() => void exportNow()}>Скачать файл настроек</Button>
+        <Button type="button" className="btn-soft" loading={busy === 'import'} onClick={() => file.current?.click()}>Импортировать из файла…</Button>
+        <input ref={file} type="file" accept="application/json,.json" className="sr-only" aria-hidden tabIndex={-1} onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); }} />
+      </div>
+      <ErrorLine text={error} />
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -41323,6 +43563,180 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
         <img key={imgKey} src={`/api/digest/preview.png?k=${imgKey}`} alt={`Итоги недели: ${t.players} ${plural(t.players, ['игрок', 'игрока', 'игроков'])}, пик ${t.peak}, ${t.hours} часов в игре`} className="w-full rounded-ui-lg" loading="lazy" />
       </div>
     </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DiscordExtras.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Discord: roles the bot gives by itself (autoroles) and voice channels it renames into a live counter.
+ */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Server } from '../api';
+import { confirmDialog } from '../confirm';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast } from '../ui';
+
+interface Extras {
+  autoroles: { id: number; guildId: string; roleId: string; roleName: string | null; roleColor: number; kind: Kind; threshold: number; serverId: number | null; members: number; error: string | null }[];
+  counters: { id: number; channelId: string; channelName: string | null; guildName: string | null; template: string; serverId: number | null; preview: string; error: string | null }[];
+  guilds: { id: string; name: string; roles: { id: string; name: string; color: number }[]; voice: { id: string; name: string }[] }[];
+}
+type Kind = 'online' | 'week_top' | 'hours';
+
+const KIND_TEXT: Record<Kind, (t: number) => string> = {
+  online: () => 'Сейчас в игре',
+  week_top: (t) => (t > 1 ? `Топ-${t} недели по часам` : 'Игрок недели (больше всех часов за 7 дней)'),
+  hours: (t) => `Наиграл ${t} ч и больше`,
+};
+const TEMPLATES = ['🟢 Онлайн: {players}', '{status} Онлайн: {players}/{max}', '🎮 Игроков: {players} · серверов {online}/{servers}'];
+
+const roleDot = (color: number) => (color ? `#${color.toString(16).padStart(6, '0')}` : 'rgb(var(--mute))');
+
+export default function DiscordExtras({ servers }: { servers: Server[] }) {
+  const [x, setX] = useState<Extras | null>(null);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState<'role' | 'counter' | null>(null);
+  const load = () => api<Extras>('/discord/extras').then(setX).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+
+  const serverName = (id: number | null) => (id ? servers.find((s) => s.id === id)?.name ?? `#${id}` : 'все серверы');
+  const del = async (what: 'autoroles' | 'counters', id: number, text: string) => {
+    if (!(await confirmDialog({ title: 'Удалить?', text, confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/discord/${what}/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+
+  const noRoles = !!x && x.guilds.every((g) => g.roles.length === 0);
+  const noVoice = !!x && x.guilds.every((g) => g.voice.length === 0);
+  return (
+    <>
+      <Section
+        title="Автороли"
+        description="Бот сам выдаёт и снимает роли в Discord: «Сейчас в игре», «Игрок недели», «Ветеран 100 ч». Роли получают только игроки, которые связали Discord с игровым ником (команда /register)."
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('role')} disabled={!x || noRoles}>Добавить роль</button>}
+      >
+        <ErrorLine text={error} />
+        {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.</p>}
+        {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">Пока нет ни одной автороли.</p>}
+        <ul className="grid gap-2">
+          {x?.autoroles.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: roleDot(r.roleColor) }} aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block font-extrabold">@{r.roleName ?? r.roleId}</span>
+                <span className="block text-sm font-semibold text-mute">{KIND_TEXT[r.kind](r.threshold)} · {serverName(r.serverId)} · сейчас у {r.members} {plural(r.members, ['игрока', 'игроков', 'игроков'])}</span>
+                {r.error && <span className="mt-1 block text-sm font-bold text-bad">{r.error}</span>}
+              </span>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить автороль" title="Удалить" onClick={() => void del('autoroles', r.id, 'Бот перестанет выдавать эту роль. Уже выданные роли останутся у игроков.')}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <Section
+        title="Счётчик онлайна в голосовом канале"
+        description="Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут."
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>Добавить счётчик</button>}
+      >
+        {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.</p>}
+        <ul className="grid gap-2">
+          {x?.counters.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block font-extrabold">🔊 {c.preview}</span>
+                <span className="block text-sm font-semibold text-mute">Канал «{c.channelName ?? c.channelId}»{c.guildName ? ` на «${c.guildName}»` : ''} · {serverName(c.serverId)} · шаблон <code>{c.template}</code></span>
+                {c.error && <span className="mt-1 block text-sm font-bold text-bad">{c.error}</span>}
+              </span>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить счётчик" title="Удалить" onClick={() => void del('counters', c.id, 'Бот перестанет обновлять название этого канала.')}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      {form && x && <ExtraForm kind={form} extras={x} servers={servers} onClose={() => setForm(null)} onSaved={() => { setForm(null); void load(); toast(form === 'role' ? 'Автороль добавлена: бот начнёт выдавать её в течение минуты' : 'Счётчик добавлен: бот переименует канал в течение минуты'); }} />}
+    </>
+  );
+}
+
+function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' | 'counter'; extras: Extras; servers: Server[]; onClose: () => void; onSaved: () => void }) {
+  const guilds = extras.guilds.filter((g) => (kind === 'role' ? g.roles.length : g.voice.length) > 0);
+  const [guildId, setGuildId] = useState(guilds[0]?.id ?? '');
+  const g = guilds.find((x) => x.id === guildId);
+  const [target, setTarget] = useState('');
+  const [rule, setRule] = useState<Kind>('online');
+  const [threshold, setThreshold] = useState(100);
+  const [template, setTemplate] = useState(TEMPLATES[0]);
+  const [serverId, setServerId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      if (kind === 'role') await api('/discord/autoroles', 'POST', { guildId, roleId: target, kind: rule, threshold: rule === 'hours' ? threshold : rule === 'week_top' ? Math.max(1, Math.min(25, threshold)) : 0, serverId });
+      else await api('/discord/counters', 'POST', { channelId: target, template, serverId });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={kind === 'role' ? 'Новая автороль' : 'Новый счётчик'} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3.5">
+        {guilds.length > 1 && (
+          <Field label="Сервер Discord">
+            <select className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); setTarget(''); }}>
+              {guilds.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </Field>
+        )}
+        <Field label={kind === 'role' ? 'Роль' : 'Голосовой канал'}>
+          <select className="input" value={target} onChange={(e) => setTarget(e.target.value)} required>
+            <option value="" disabled>Выберите…</option>
+            {kind === 'role' ? g?.roles.map((r) => <option key={r.id} value={r.id}>@{r.name}</option>) : g?.voice.map((v) => <option key={v.id} value={v.id}>🔊 {v.name}</option>)}
+          </select>
+        </Field>
+        {kind === 'role' ? (
+          <>
+            <Field label="Кому выдавать">
+              <select className="input" value={rule} onChange={(e) => { const k = e.target.value as Kind; setRule(k); setThreshold(k === 'hours' ? 100 : 1); }}>
+                <option value="online">Тем, кто сейчас в игре (снимается при выходе)</option>
+                <option value="week_top">Самым активным за 7 дней</option>
+                <option value="hours">Наигравшим N часов (за последние 90 дней)</option>
+              </select>
+            </Field>
+            {rule !== 'online' && (
+              <Field label={rule === 'hours' ? 'Сколько часов' : 'Сколько игроков из топа'}>
+                <input className="input" type="number" min={1} max={rule === 'hours' ? 10000 : 25} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} required />
+              </Field>
+            )}
+          </>
+        ) : (
+          <>
+            <Field label="Название канала">
+              <input className="input" value={template} onChange={(e) => setTemplate(e.target.value)} maxLength={100} required list="counter-templates" />
+            </Field>
+            <datalist id="counter-templates">{TEMPLATES.map((t) => <option key={t} value={t} />)}</datalist>
+            <p className="-mt-2 text-sm font-semibold text-mute">{'{players}'} игроков, {'{max}'} мест, {'{online}'} серверов в сети, {'{servers}'} всего, {'{status}'} 🟢/🟡/🔴, {'{name}'} название сервера</p>
+          </>
+        )}
+        <Field label="Считать по серверу">
+          <select className="input" value={serverId ?? ''} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : null)}>
+            <option value="">Все серверы</option>
+            {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </Field>
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <Button loading={busy}>Добавить</Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 __COREGSM_EOF__
@@ -42444,6 +44858,311 @@ export default function PollSettingsCard() {
         )}
       </div>
     </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ProbesSection.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Система: probes, small programs on other machines that check the game servers from there. A server the
+ * panel cannot reach but a probe can has a network problem between them, not an outage.
+ */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast } from '../ui';
+
+interface Probe { id: number; name: string; createdAt: number; lastSeen: number | null; ip: string | null; version: string | null; alive: boolean; servers: number; online: number }
+interface Issued { token: string; commands: { docker: string; node: string } }
+
+function Copyable({ label, text }: { label: string; text: string }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="label !mb-0">{label}</span>
+        <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast('Скопировано'))}><IconCopy size={14} /> Копировать</button>
+      </div>
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-soft px-3 py-2 font-mono text-[12.5px] font-semibold">{text}</pre>
+    </div>
+  );
+}
+
+export default function ProbesSection() {
+  const [list, setList] = useState<Probe[] | null>(null);
+  const [error, setError] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [issued, setIssued] = useState<(Issued & { name: string }) | null>(null);
+  const load = () => api<Probe[]>('/probes').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+
+  const rotate = async (p: Probe) => {
+    if (!(await confirmDialog({ title: `Новый ключ для «${p.name}»?`, text: 'Старый ключ перестанет работать: точку нужно будет перезапустить с новым.', confirmLabel: 'Выдать новый' }))) return;
+    await api<Issued>(`/probes/${p.id}/token`, 'POST').then((r) => setIssued({ ...r, name: p.name })).catch((e: Error) => setError(e.message));
+  };
+  const remove = async (p: Probe) => {
+    if (!(await confirmDialog({ title: `Удалить «${p.name}»?`, text: 'Её проверки пропадут со страниц серверов.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/probes/${p.id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+
+  return (
+    <Section
+      title="Точки проверки"
+      description="Небольшая программа на другом компьютере или VPS (в другом городе, у другого провайдера) проверяет игровые серверы оттуда. Если панель сервер не видит, а точки видят, — дело в сети между ними, а не в сервере. Игроки увидят на странице сервера, откуда он доступен."
+      actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>Добавить точку</button>}
+    >
+      <ErrorLine text={error} />
+      {list && list.length === 0 && <p className="text-sm font-semibold text-mute">Точек пока нет: серверы проверяет только сама панель.</p>}
+      <ul className="grid gap-2">
+        {list?.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? 'на связи' : 'не на связи'} role="img" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-extrabold">📍 {p.name}</span>
+              <span className="block text-sm font-semibold text-mute">
+                {p.lastSeen ? `на связи ${ago(p.lastSeen)}${p.alive ? ` · видит ${p.online} из ${p.servers}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : 'ещё ни разу не выходила на связь'}
+              </span>
+            </span>
+            <button type="button" className="row-act" aria-label="Новый ключ" title="Новый ключ" onClick={() => void rotate(p)}><IconRefresh /></button>
+            <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void remove(p)}><IconTrash /></button>
+          </li>
+        ))}
+      </ul>
+      {adding && <AddProbe onClose={() => setAdding(false)} onDone={(r) => { setAdding(false); setIssued(r); void load(); }} />}
+      {issued && (
+        <Modal title={`Точка «${issued.name}»`} onClose={() => { setIssued(null); void load(); }}>
+          <div className="space-y-3.5">
+            <p className="font-semibold">Запустите на нужной машине одну из команд. Ключ показывается только сейчас: сохраните команду, если понадобится повторить.</p>
+            <Copyable label="Docker (проще всего)" text={issued.commands.docker} />
+            <Copyable label="Или Node.js 18+" text={issued.commands.node} />
+            <p className="text-sm font-semibold text-mute">Точка появится «на связи» через минуту после запуска.</p>
+            <div className="flex justify-end"><button type="button" className="btn" onClick={() => { setIssued(null); void load(); }}>Готово</button></div>
+          </div>
+        </Modal>
+      )}
+    </Section>
+  );
+}
+
+function AddProbe({ onClose, onDone }: { onClose: () => void; onDone: (r: Issued & { name: string }) => void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    await api<Issued>('/probes', 'POST', { name: name.trim() })
+      .then((r) => onDone({ ...r, name: name.trim() }))
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Modal title="Новая точка проверки" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3.5">
+        <Field label="Название (его увидят игроки)"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Например: Франкфурт" required autoFocus /></Field>
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <Button loading={busy}>Создать</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/RestartPlans.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Обслуживание: scheduled restarts per server (days and time, the warning in Discord and in the game chat,
+ * the restart command over RCON) and the RCON connection itself.
+ */
+import { useEffect, useState } from 'react';
+import { api, type Server } from '../api';
+import { useAuth } from '../auth';
+import { confirmDialog } from '../confirm';
+import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast } from '../ui';
+import { ChannelPicker } from './ChannelPicker';
+import '../styles/admin.css';
+
+interface Plan {
+  enabled: boolean;
+  days: number;
+  atMin: number;
+  durationMin: number;
+  warnMin: number;
+  channelId: string;
+  command: string;
+  say: string;
+  next: number | null;
+  lastResult: string | null;
+  lastRunAt: number | null;
+  suggestedHour: number | null;
+  timezone: string;
+  rcon: { port: number | null; configured: boolean };
+}
+
+const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+const daysText = (d: number) => (d === 127 ? 'каждый день' : d === 0 ? 'дни не выбраны' : DAYS.filter((_, i) => d & (1 << i)).join(', '));
+
+export default function RestartPlans({ servers }: { servers: Server[] }) {
+  const [plans, setPlans] = useState<Record<number, Plan>>({});
+  const [open, setOpen] = useState<Server | null>(null);
+  useEffect(() => {
+    for (const s of servers) api<Plan>(`/servers/${s.id}/restart`).then((p) => setPlans((x) => ({ ...x, [s.id]: p }))).catch(() => undefined);
+  }, [servers]);
+  if (!servers.length) return null;
+  return (
+    <Section
+      title="Плановые перезапуски"
+      description="Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска."
+    >
+      <ul className="grid gap-2">
+        {servers.map((s) => {
+          const p = plans[s.id];
+          return (
+            <li key={s.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <GameAvatar game={s.game} size={32} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-extrabold">{s.name}</span>
+                <span className="block text-sm font-semibold text-mute">
+                  {!p ? '…' : p.enabled ? `${daysText(p.days)} в ${hhmm(p.atMin)}${p.next ? ` · следующий ${fmtDateTime(p.next)}` : ''}` : 'выключено'}
+                  {p?.rcon.configured ? ' · RCON подключён' : ''}
+                </span>
+                {p?.lastResult && <span className="block text-xs font-bold text-mute">Последний раз {p.lastRunAt ? fmtDateTime(p.lastRunAt) : ''}: {p.lastResult}</span>}
+              </span>
+              {p?.enabled && <span className="pill pill-ok">включено</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)} disabled={!p}>Настроить</button>
+            </li>
+          );
+        })}
+      </ul>
+      {open && plans[open.id] && (
+        <PlanModal server={open} plan={plans[open.id]} onClose={() => setOpen(null)} onSaved={(p) => { setPlans((x) => ({ ...x, [open.id]: p })); }} />
+      )}
+    </Section>
+  );
+}
+
+function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: Plan; onClose: () => void; onSaved: (p: Plan) => void }) {
+  const { isAdmin } = useAuth();
+  const [f, setF] = useState(plan);
+  const [time, setTime] = useState(hhmm(plan.atMin));
+  const [port, setPort] = useState(plan.rcon.port ? String(plan.rcon.port) : '');
+  const [password, setPassword] = useState('');
+  const [testCmd, setTestCmd] = useState('status');
+  const [answer, setAnswer] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  const minutes = () => {
+    const [h, m] = time.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+  const save = async () => {
+    setBusy('save');
+    setError('');
+    try {
+      let p = await api<Plan>(`/servers/${server.id}/restart`, 'PUT', { enabled: f.enabled, days: f.days, atMin: minutes(), durationMin: f.durationMin, warnMin: f.warnMin, channelId: f.channelId, command: f.command, say: f.say });
+      if (isAdmin && (port !== (plan.rcon.port ? String(plan.rcon.port) : '') || password)) {
+        p = await api<Plan>(`/servers/${server.id}/rcon`, 'PUT', { port: port ? Number(port) : null, ...(password ? { password } : {}) });
+      }
+      onSaved(p);
+      toast('Перезапуски сохранены');
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy('');
+    }
+  };
+  const test = async () => {
+    setBusy('test');
+    setAnswer(null);
+    try {
+      if (port && (password || port !== String(plan.rcon.port ?? ''))) {
+        const p = await api<Plan>(`/servers/${server.id}/rcon`, 'PUT', { port: Number(port), ...(password ? { password } : {}) });
+        onSaved(p);
+        setPassword('');
+      }
+      const r = await api<{ ok: boolean; answer: string }>(`/servers/${server.id}/rcon/test`, 'POST', { command: testCmd });
+      setAnswer({ ok: r.ok, text: r.answer || 'Сервер выполнил команду и ничего не ответил' });
+    } catch (e) {
+      setAnswer({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy('');
+    }
+  };
+  const now = async () => {
+    if (!(await confirmDialog({ title: `Перезапустить «${server.name}» сейчас?`, text: 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.', confirmLabel: 'Перезапустить', danger: true }))) return;
+    setBusy('now');
+    await api<Plan>(`/servers/${server.id}/restart/now`, 'POST').then((p) => { onSaved(p); toast(p.lastResult ?? 'Готово'); }).catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
+  };
+
+  return (
+    <Modal title={`Перезапуски: ${server.name}`} onClose={onClose}>
+      <div className="space-y-4">
+        <label className="flex cursor-pointer items-center gap-3 font-extrabold">
+          <Switch checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> Перезапускать по расписанию
+        </label>
+        <fieldset>
+          <legend className="label">Дни</legend>
+          <div className="flex flex-wrap gap-1.5">
+            {DAYS.map((d, i) => {
+              const on = !!(f.days & (1 << i));
+              return <button key={d} type="button" className={`rp-day ${on ? 'is-on' : ''}`} aria-pressed={on} onClick={() => setF({ ...f, days: f.days ^ (1 << i) })}>{d}</button>;
+            })}
+          </div>
+        </fieldset>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Время"><input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required /></Field>
+          <Field label="Предупредить, мин"><input className="input" type="number" min={0} max={120} value={f.warnMin} onChange={(e) => setF({ ...f, warnMin: Number(e.target.value) })} /></Field>
+          <Field label="Длится, мин"><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
+        </div>
+        {plan.suggestedHour != null && (
+          <p className="-mt-2 text-sm font-semibold text-mute">
+            Время панели: {plan.timezone}. Меньше всего игроков обычно в {String(plan.suggestedHour).padStart(2, '0')}:00.{' '}
+            <button type="button" className="btn-link btn-xs" onClick={() => setTime(`${String(plan.suggestedHour).padStart(2, '0')}:00`)}>Поставить это время</button>
+          </p>
+        )}
+        <div>
+          <span className="label">Канал Discord для предупреждений</span>
+          <ChannelPicker id="restart-channel" value={f.channelId} onChange={(v) => setF({ ...f, channelId: v })} />
+          <p className="mt-1 text-sm font-semibold text-mute">Не выбран: сообщения уйдут в канал оповещений.</p>
+        </div>
+
+        <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
+          <legend className="px-1 font-extrabold">RCON (необязательно)</legend>
+          <p className="text-sm font-semibold text-mute">Для Minecraft, CS, ARK, V Rising, Palworld и других игр с Source RCON. Rust (WebRCON) пока не поддерживается.</p>
+          {isAdmin ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Порт RCON"><input className="input" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} placeholder="например 25575" /></Field>
+              <Field label={plan.rcon.configured ? 'Пароль (пусто: оставить прежний)' : 'Пароль'}><input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+            </div>
+          ) : (
+            <p className="text-sm font-bold">{plan.rcon.configured ? `Подключён, порт ${plan.rcon.port}` : 'Не подключён: порт и пароль задаёт администратор'}</p>
+          )}
+          <Field label="Команда перезапуска"><input className="input font-mono" value={f.command} onChange={(e) => setF({ ...f, command: e.target.value })} placeholder="например stop, quit или shutdown" maxLength={200} /></Field>
+          <Field label="Сообщение в игровой чат ({text} — текст предупреждения)"><input className="input font-mono" value={f.say} onChange={(e) => setF({ ...f, say: e.target.value })} maxLength={200} /></Field>
+          <p className="text-sm font-semibold text-mute">Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.</p>
+          {isAdmin && (
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="min-w-[10rem] flex-1"><Field label="Проверить команду"><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
+              <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>Выполнить</Button>
+            </div>
+          )}
+          {answer && <pre className={`whitespace-pre-wrap rounded-xl px-3 py-2 text-sm font-semibold ${answer.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`}>{answer.text}</pre>}
+        </fieldset>
+
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-between gap-2">
+          <Button type="button" className="btn-ghost text-bad" loading={busy === 'now'} onClick={() => void now()}>Перезапустить сейчас</Button>
+          <div className="flex gap-2">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+            <Button type="button" loading={busy === 'save'} onClick={() => void save()}>Сохранить</Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 __COREGSM_EOF__
@@ -45884,7 +48603,7 @@ export function useAchievements() {
 
 const pct = (a: Achievement) => (a.target > 0 ? Math.max(0, Math.min(100, (a.progress / a.target) * 100)) : a.earned ? 100 : 0);
 
-function Card({ a }: { a: Achievement }) {
+export function AchievementCard({ a }: { a: Achievement }) {
   return (
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
       <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /></span>
@@ -45918,7 +48637,7 @@ export function AchievementsGrid() {
     <Section title={t('pf.ach.title')} description={data ? t('pf.ach.count', { done, total: list.length }) : undefined}>
       {data === undefined && <div className="skeleton h-32 rounded-2xl bg-soft" />}
       {data && list.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.none')}</p>}
-      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <Card key={a.id} a={a} />)}</ul>}
+      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <AchievementCard key={a.id} a={a} />)}</ul>}
     </Section>
   );
 }
@@ -46676,6 +49395,110 @@ export function PlayerCard() {
         )}
       </Section>
     </form>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/PushCard.tsx" << '__COREGSM_EOF__'
+/** Profile → Безопасность: notifications on this device (Web Push), the same as the inbox in the header. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { Button, ErrorLine, Section, Switch, toast } from '../../ui';
+
+type State = 'unsupported' | 'denied' | 'off' | 'on' | 'loading';
+
+const b64ToBytes = (s: string) => {
+  const raw = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+};
+const supported = () => typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+interface InstallPrompt extends Event { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
+const installPrompt = () => (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt;
+
+export function PushCard() {
+  const [state, setState] = useState<State>('loading');
+  const [installable, setInstallable] = useState(() => !!installPrompt());
+  useEffect(() => {
+    const on = () => setInstallable(true);
+    window.addEventListener('coregsm:installable', on);
+    return () => window.removeEventListener('coregsm:installable', on);
+  }, []);
+  const install = async () => {
+    const p = installPrompt();
+    if (!p) return;
+    await p.prompt();
+    const { outcome } = await p.userChoice;
+    if (outcome === 'accepted') {
+      (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt = undefined;
+      setInstallable(false);
+    }
+  };
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!supported()) return setState('unsupported');
+    if (Notification.permission === 'denied') return setState('denied');
+    navigator.serviceWorker.ready.then((r) => r.pushManager.getSubscription()).then((s) => setState(s ? 'on' : 'off')).catch(() => setState('off'));
+  }, []);
+
+  const turnOn = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      if ((await Notification.requestPermission()) !== 'granted') return setState('denied');
+      const { publicKey } = await api<{ publicKey: string }>('/push/key');
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) }));
+      await api('/push/subscribe', 'POST', sub.toJSON());
+      setState('on');
+      toast('Уведомления на этом устройстве включены');
+    } catch (e) {
+      setError((e as Error).message || 'Браузер не разрешил уведомления');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const turnOff = async () => {
+    setBusy(true);
+    try {
+      const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (sub) {
+        await api('/push/subscribe', 'DELETE', { endpoint: sub.endpoint }).catch(() => undefined);
+        await sub.unsubscribe();
+      }
+      setState('off');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const test = async () => {
+    setBusy(true);
+    await api<{ sent: number }>('/push/test', 'POST').then((r) => toast(r.sent ? 'Тестовое уведомление отправлено' : 'Не получилось доставить: включите уведомления заново')).catch((e: Error) => setError(e.message)).finally(() => setBusy(false));
+  };
+
+  return (
+    <Section title="Уведомления на этом устройстве" description="Сервер упал или вернулся, на заполненном сервере освободилось место: придёт уведомление, даже если панель закрыта. Какие серверы — выбирается кнопкой «Подписаться» на странице сервера.">
+      {state === 'unsupported' && <p className="text-sm font-semibold text-mute">Этот браузер не умеет получать уведомления от сайтов. На iPhone сначала добавьте панель на экран «Домой».</p>}
+      {state === 'denied' && <p className="text-sm font-semibold text-warn">Уведомления запрещены в настройках браузера для этого сайта. Разрешите их там и обновите страницу.</p>}
+      {(state === 'on' || state === 'off') && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="flex cursor-pointer items-center gap-3 font-extrabold">
+            <Switch checked={state === 'on'} disabled={busy} onChange={(v) => void (v ? turnOn() : turnOff())} />
+            {state === 'on' ? 'Включены' : 'Выключены'}
+          </label>
+          {state === 'on' && <Button type="button" className="btn-soft btn-sm" loading={busy} onClick={() => void test()}>Проверить</Button>}
+        </div>
+      )}
+      {installable && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-soft px-3 py-2.5">
+          <span className="text-sm font-semibold">Установите панель как приложение: своя иконка, отдельное окно и уведомления как у приложений.</span>
+          <button type="button" className="btn btn-sm" onClick={() => void install()}>Установить</button>
+        </div>
+      )}
+      <ErrorLine text={error} />
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -48855,6 +51678,61 @@ export default function PlayersList({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/ProbesView.tsx" << '__COREGSM_EOF__'
+/** «Доступность из разных мест»: the server seen from the panel and from every probe, with a short verdict. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { ago } from '../../ui';
+
+interface Point { name: string; online: boolean | null; ping: number | null; updatedAt: number | null; uptime: number | null }
+export interface ProbeView { panel: Point; probes: Point[] }
+
+/** what the views together say */
+export function verdict(v: ProbeView): { tone: 'ok' | 'warn' | 'bad' | 'mute'; text: string } {
+  const known = [v.panel, ...v.probes].filter((p) => p.online !== null);
+  if (!known.length) return { tone: 'mute', text: 'Пока нет свежих проверок' };
+  const up = known.filter((p) => p.online);
+  if (up.length === known.length) return { tone: 'ok', text: 'Сервер доступен отовсюду' };
+  if (!up.length) return { tone: 'bad', text: 'Сервер не отвечает ни из одной точки' };
+  return { tone: 'warn', text: `Доступен не отовсюду: не отвечает из ${known.filter((p) => !p.online).map((p) => `«${p.name}»`).join(', ')}. Похоже на проблему сети, а не сервера.` };
+}
+
+export function useProbes(serverId: number): ProbeView | null {
+  const [v, setV] = useState<ProbeView | null>(null);
+  useEffect(() => {
+    let on = true;
+    const load = () => api<ProbeView>(`/servers/${serverId}/probes`).then((x) => on && setV(x)).catch(() => undefined);
+    void load();
+    const t = window.setInterval(load, 60_000);
+    return () => { on = false; window.clearInterval(t); };
+  }, [serverId]);
+  return v;
+}
+
+export default function ProbesView({ v }: { v: ProbeView }) {
+  const vd = verdict(v);
+  return (
+    <div className="space-y-3">
+      <p className={`rounded-xl px-3 py-2 text-sm font-bold ${vd.tone === 'ok' ? 'bg-okbg text-ok' : vd.tone === 'warn' ? 'bg-warnbg text-warn' : vd.tone === 'bad' ? 'bg-badbg text-bad' : 'bg-soft text-mute'}`}>{vd.text}</p>
+      <ul className="pr-points">
+        {[v.panel, ...v.probes].map((p, i) => (
+          <li key={`${i}-${p.name}`} className="pr-point">
+            <span className={`pr-dot ${p.online === null ? 'is-unknown' : p.online ? 'is-up' : 'is-down'}`} aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-extrabold">{i === 0 ? '🖥 Панель' : `📍 ${p.name}`}</span>
+              <span className="block text-xs font-bold text-mute">
+                {p.online === null ? (p.updatedAt ? `нет данных с ${ago(p.updatedAt)}` : 'нет данных') : p.online ? (p.ping != null ? `${p.ping} мс` : 'отвечает') : 'не отвечает'}
+                {p.uptime != null ? ` · ${String(p.uptime).replace('.', ',')}% за сутки` : ''}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/QrCode.tsx" << '__COREGSM_EOF__'
 import { useMemo } from 'react';
 import qrcode from 'qrcode-generator';
@@ -48888,6 +51766,144 @@ export default function QrCode({ text, label }: { text: string; label: string })
       <svg viewBox={`0 0 ${svg.n} ${svg.n}`} role="img" aria-label={label} shapeRendering="crispEdges">
         <path d={svg.d} fill="#111" />
       </svg>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Reviews.tsx" << '__COREGSM_EOF__'
+/** Reviews of a server: the average with the spread of stars, the reviews, and the visitor's own one to write or edit. */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { Button, ErrorLine, UserAvatar, ago, plural, toast } from '../../ui';
+
+export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number }
+interface Reviews { avg: number | null; count: number; dist: number[]; items: Review[]; mine: Review | null }
+
+export function Stars({ value, size = 16 }: { value: number; size?: number }) {
+  return (
+    <span className="rv-stars" role="img" aria-label={`${value} из 5`} style={{ fontSize: size }}>
+      {[1, 2, 3, 4, 5].map((n) => <span key={n} className={n <= Math.round(value) ? 'on' : ''} aria-hidden>★</span>)}
+    </span>
+  );
+}
+
+function StarPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [hover, setHover] = useState(0);
+  const shown = hover || value;
+  return (
+    <span className="rv-pick" role="radiogroup" aria-label="Оценка" onMouseLeave={() => setHover(0)}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          role="radio"
+          aria-checked={value === n}
+          aria-label={`${n} из 5`}
+          className={n <= shown ? 'on' : ''}
+          onMouseEnter={() => setHover(n)}
+          onClick={() => onChange(n)}
+        >★</button>
+      ))}
+    </span>
+  );
+}
+
+export default function ServerReviews({ serverId }: { serverId: number }) {
+  const { me } = useAuth();
+  const [r, setR] = useState<Reviews | null>(null);
+  const [stars, setStars] = useState(0);
+  const [text, setText] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = () => api<Reviews>(`/servers/${serverId}/reviews`).then((v) => { setR(v); setStars(v.mine?.stars ?? 0); setText(v.mine?.text ?? ''); }).catch(() => undefined);
+  useEffect(() => { void load(); }, [serverId]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!stars) return setError('Поставьте оценку: от 1 до 5 звёзд');
+    setBusy(true);
+    setError('');
+    await api(`/servers/${serverId}/reviews`, 'PUT', { stars, text })
+      .then(() => { toast(r?.mine ? 'Отзыв обновлён' : 'Спасибо за отзыв!'); setEditing(false); void load(); })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+  const remove = async () => {
+    await api(`/servers/${serverId}/reviews/mine`, 'DELETE').then(() => { toast('Отзыв удалён'); setEditing(false); void load(); }).catch((err: Error) => setError(err.message));
+  };
+
+  if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
+  const formOpen = !!me && (editing || !r.mine);
+  const others = r.items.filter((x) => x.id !== r.mine?.id);
+  return (
+    <div className="rv">
+      <div className="rv-score">
+        <div className="text-center">
+          <div className="rv-avg">{r.avg != null ? r.avg.toFixed(1).replace('.', ',') : '—'}</div>
+          <Stars value={r.avg ?? 0} size={18} />
+          <div className="mt-1 text-sm font-bold text-mute">{r.count} {plural(r.count, ['отзыв', 'отзыва', 'отзывов'])}</div>
+        </div>
+        <ul className="rv-dist" aria-label="Оценки">
+          {[5, 4, 3, 2, 1].map((n) => (
+            <li key={n}>
+              <span className="w-3 text-right">{n}</span>
+              <span className="rv-dist-bar"><span style={{ width: `${r.count ? (r.dist[n - 1] / r.count) * 100 : 0}%` }} /></span>
+              <span className="w-6 text-right tabular-nums">{r.dist[n - 1]}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {r.mine && !editing && (
+        <div className="rv-item is-mine">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-extrabold">Ваш отзыв</span>
+            <Stars value={r.mine.stars} />
+            {r.mine.hidden && <span className="pill pill-mute">скрыт модератором</span>}
+            <span className="ml-auto flex gap-3">
+              <button type="button" className="btn-link btn-xs" onClick={() => setEditing(true)}>Изменить</button>
+              <button type="button" className="btn-link btn-link-danger btn-xs" onClick={() => void remove()}>Удалить</button>
+            </span>
+          </div>
+          {r.mine.text && <p className="mt-1 whitespace-pre-line font-semibold">{r.mine.text}</p>}
+        </div>
+      )}
+
+      {formOpen && (
+        <form onSubmit={submit} className="rv-form">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-extrabold">{r.mine ? 'Изменить отзыв' : 'Как вам сервер?'}</span>
+            <StarPicker value={stars} onChange={setStars} />
+          </div>
+          <textarea className="input min-h-[5rem]" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
+          <ErrorLine text={error} />
+          <div className="flex justify-end gap-2">
+            {editing && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>}
+            <Button loading={busy} className="btn-sm">{r.mine ? 'Сохранить' : 'Оставить отзыв'}</Button>
+          </div>
+        </form>
+      )}
+      {!me && <p className="text-sm font-semibold text-mute"><a href="/login" className="font-extrabold text-link hover:underline">Войдите</a>, чтобы оставить отзыв.</p>}
+
+      {others.length > 0 && (
+        <ul className="grid gap-2.5">
+          {others.map((x) => (
+            <li key={x.id} className="rv-item">
+              <div className="flex flex-wrap items-center gap-2">
+                <UserAvatar name={x.author} url={x.avatarUrl} size={28} />
+                <span className="font-extrabold">{x.author}</span>
+                <Stars value={x.stars} />
+                <span className="ml-auto text-xs font-bold text-mute">{ago(x.updatedAt)}</span>
+              </div>
+              {x.text && <p className="mt-1.5 whitespace-pre-line font-semibold">{x.text}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -49580,6 +52596,28 @@ export function useStickyTop(): number {
   }, []);
   return top;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/probes.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { verdict, type ProbeView } from './ProbesView';
+
+const pt = (name: string, online: boolean | null) => ({ name, online, ping: online ? 40 : null, updatedAt: 1, uptime: null });
+const view = (panel: boolean | null, ...probes: (boolean | null)[]): ProbeView => ({ panel: pt('Панель', panel), probes: probes.map((o, i) => pt(`P${i + 1}`, o)) });
+
+describe('availability verdict', () => {
+  it('everyone sees it: ok; nobody: bad; nothing fresh: mute', () => {
+    expect(verdict(view(true, true, true)).tone).toBe('ok');
+    expect(verdict(view(false, false)).tone).toBe('bad');
+    expect(verdict(view(null, null)).tone).toBe('mute');
+  });
+  it('some see it: a network problem, the silent points named; stale points are left out', () => {
+    const v = verdict(view(false, true, null));
+    expect(v.tone).toBe('warn');
+    expect(v.text).toContain('«Панель»');
+    expect(v.text).not.toContain('P2');
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/serverLogic.ts" << '__COREGSM_EOF__'
@@ -51844,6 +54882,49 @@ export function shownFields(fields: GameProfile['fields']): ('map' | 'mode' | 'v
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/gameThemes.ts" << '__COREGSM_EOF__'
+/**
+ * Ready-made themes: the brand colour and the end of its gradient, and for the game themes also the glow along the
+ * page and, for games that ship a cover, a faint picture across the top of every page.
+ */
+export interface ThemePreset { id: string; name: string; c1: string; c2: string; game?: string; glow?: string; art?: string }
+
+export const THEME_PRESETS: ThemePreset[] = [
+  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
+  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
+  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
+  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
+  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
+  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
+];
+
+export const GAME_PRESETS: ThemePreset[] = [
+  { id: 'g-vrising', name: 'V Rising: кровавая луна', game: 'vrising', c1: '#c0262d', c2: '#5b0a1f', glow: 'rgb(220 38 38 / 0.28)', art: '/games/covers/vrising.jpg' },
+  { id: 'g-icarus', name: 'Icarus: рассвет', game: 'icarus', c1: '#d97706', c2: '#7c2d12', glow: 'rgb(245 158 11 / 0.26)', art: '/games/covers/icarus.jpg' },
+  { id: 'g-rust', name: 'Rust: ржавчина', game: 'rust', c1: '#cd4a1f', c2: '#4a1608', glow: 'rgb(234 88 12 / 0.24)' },
+  { id: 'g-minecraft', name: 'Minecraft: трава', game: 'minecraft', c1: '#3f9b2f', c2: '#1d4d18', glow: 'rgb(74 222 128 / 0.2)' },
+  { id: 'g-cs2', name: 'CS2: тактика', game: 'counterstrike2', c1: '#d69e14', c2: '#253246', glow: 'rgb(234 179 8 / 0.2)' },
+  { id: 'g-palworld', name: 'Palworld: лагуна', game: 'palworld', c1: '#0e9fb8', c2: '#0b4f66', glow: 'rgb(34 211 238 / 0.22)' },
+];
+
+export const presetById = (id: string | undefined | null) => [...THEME_PRESETS, ...GAME_PRESETS].find((p) => p.id === id) ?? null;
+
+/** the extras of a game theme on the page: the glow colour and the picture; other themes take them away */
+export function paintGameTheme(id: string | undefined | null): void {
+  const root = document.documentElement;
+  const p = presetById(id);
+  if (p?.glow) root.style.setProperty('--horizon-b', p.glow);
+  else root.style.removeProperty('--horizon-b');
+  if (p?.art) {
+    root.style.setProperty('--game-art', `url("${p.art}")`);
+    root.dataset.gameArt = '1';
+  } else {
+    root.style.removeProperty('--game-art');
+    delete root.dataset.gameArt;
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
 import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
@@ -52129,6 +55210,7 @@ export const IconTrend = make(<path d="M3 17l6-6 4 4 8-8M15 7h6v6" />);
 export const IconBars = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
 export const IconBolt = make(<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />);
 export const IconPlug = make(<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v5" />);
+export const IconTrophy = make(<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/index.css" << '__COREGSM_EOF__'
@@ -52278,6 +55360,17 @@ __COREGSM_EOF__
     background-size: 100% 130vh;
     background-repeat: no-repeat;
     background-position: top;
+  }
+  /* a game theme: the game's picture across the top of the page, dimmed into the page colour */
+  html[data-game-art] body {
+    background-image:
+      linear-gradient(180deg, rgb(var(--page) / .78) 0, rgb(var(--page) / .93) 34vh, rgb(var(--page)) 62vh),
+      var(--game-art),
+      radial-gradient(90% 30% at 50% 77%, var(--horizon-b), transparent 72%),
+      linear-gradient(180deg, transparent 32%, var(--horizon-a) 77%, transparent 100%);
+    background-size: 100% 100vh, 100% auto, 100% 130vh, 100% 130vh;
+    background-repeat: no-repeat;
+    background-position: top, top center, top, top;
   }
 
   ::selection { @apply bg-brand/30; }
@@ -53888,6 +56981,7 @@ const errorsEn: Record<string, string> = {
   auth_required: 'Sign-in required',
   admin_only: 'Only an administrator can do this',
   staff_only: 'Only an administrator or a moderator can do this',
+  perm_missing: 'You do not have this permission: an administrator grants it',
   csrf_header_missing: 'Request rejected: the X-CoreGSM header is missing',
   rate_limited: 'Too many requests. Wait a minute.',
   rate_limited_later: 'Too many requests. Try again later.',
@@ -53974,6 +57068,12 @@ const errorsEn: Record<string, string> = {
   // ---- servers, Discord bindings, alerts, deliveries ----
   server_not_found: 'Server not found',
   player_not_found: 'Player not found',
+  counter_exists: 'This channel is already a counter',
+  config_bad_file: 'This is not a CoreGSM settings file, or it is damaged',
+  rcon_password_required: 'Enter the RCON password',
+  rcon_not_configured: 'Save the RCON port and password first',
+  gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
+  gallery_queue_full: 'You already have 5 screenshots waiting for review. Wait until they are checked.',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
@@ -54767,6 +57867,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 );
 
 // installable as an app (home screen on phones, window on desktop)
+// the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  (window as unknown as { __installPrompt?: Event }).__installPrompt = e;
+  window.dispatchEvent(new Event('coregsm:installable'));
+});
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
 }
@@ -54972,9 +58078,10 @@ import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
 import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll, navigate } from '../ui';
-import { ADMIN_GROUPS, ADMIN_SECTIONS, START_SECTION, type AdminSection } from './adminNav';
+import { ADMIN_GROUPS, ADMIN_SECTIONS, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
+import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
 import CardsPage from './Cards';
 import DiscordPage from './Discord';
@@ -54989,10 +58096,10 @@ import SystemPage from './System';
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
-  const { isAdmin } = useAuth();
+  const { isAdmin, me } = useAuth();
   const [section, ...rest] = sub.split('/');
-  // a moderator sees only the news section; everything else is for administrators
-  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => s.id === 'news');
+  // a moderator sees the sections of the permissions the administrator gave; everything else is for administrators
+  const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => SECTION_PERM[s.id] && (me?.perms ?? []).includes(SECTION_PERM[s.id]!));
   const known = sections.some((s) => s.id === section);
   // bare /admin (or an unknown section): administrators land on «Начало работы» or «Серверы», see AdminHome
   const home = isAdmin && !known;
@@ -55106,6 +58213,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'alerts' && <AlertsPage />}
         {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}
+        {!home && current === 'community' && <AdminCommunity sub={tail} />}
         {!home && current === 'users' && <UsersTab />}
         {!home && current === 'journal' && <JournalPage />}
         {!home && current === 'system' && <SystemPage />}
@@ -55210,6 +58318,7 @@ function CertWarning() {
 
 /** Add, edit, delete and re-query servers. */
 function ServersManage({ sub }: { sub: string }) {
+  const { isAdmin } = useAuth();
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
@@ -55299,7 +58408,7 @@ function ServersManage({ sub }: { sub: string }) {
               <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
                 <IconEdit />
               </button>
-              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)}>
+              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)} hidden={!isAdmin}>
                 <IconTrash />
               </button>
             </div>
@@ -55318,6 +58427,188 @@ function ServersManage({ sub }: { sub: string }) {
         />
       )}
     </PageStack>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/AdminCommunity.tsx" << '__COREGSM_EOF__'
+/** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers, the screenshot gallery. */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog, promptDialog } from '../confirm';
+import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, plural, toast } from '../ui';
+import type { Seasons } from './Community';
+import { useAuth } from '../auth';
+import { Stars, type Review } from '../components/server/Reviews';
+import { Lightbox, type Shot } from './Gallery';
+import '../styles/gallery.css';
+
+export const COMMUNITY_TABS = [
+  { id: 'seasons', label: 'Сезоны', admin: true },
+  { id: 'reviews', label: 'Отзывы', admin: false },
+  { id: 'gallery', label: 'Галерея', admin: false },
+] as const;
+
+export default function AdminCommunity({ sub = '' }: { sub?: string }) {
+  const { me } = useAuth();
+  const tabs = COMMUNITY_TABS.filter((t) => !t.admin || me?.role === 'admin');
+  const tab = tabs.find((t) => t.id === sub.split('/')[0])?.id ?? tabs[0].id;
+  return (
+    <AdminPage head={<PageHead icon={<IconTrophy />} title="Сообщество" subtitle="Сезоны и зал славы, отзывы о серверах, галерея скриншотов" />}>
+      {tabs.length > 1 && (
+        <nav className="seg" aria-label="Разделы сообщества">
+          {tabs.map((t) => <a key={t.id} href={`/admin/community/${t.id}`} className="seg-item" aria-current={tab === t.id ? 'page' : undefined}>{t.label}</a>)}
+        </nav>
+      )}
+      {tab === 'seasons' && <SeasonsAdmin />}
+      {tab === 'reviews' && <ReviewsAdmin />}
+      {tab === 'gallery' && <GalleryAdmin />}
+    </AdminPage>
+  );
+}
+
+const toLocalInput = (ts: number) => {
+  const d = new Date(ts - new Date().getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+};
+
+function SeasonsAdmin() {
+  const [s, setS] = useState<Seasons | null>(null);
+  const [error, setError] = useState('');
+  const [name, setName] = useState('');
+  const [start, setStart] = useState(() => toLocalInput(Date.now()));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<Seasons>('/seasons').then(setS).catch((e: Error) => setError(e.message)); }, []);
+
+  const count = (s?.past.length ?? 0) + (s?.current ? 1 : 0);
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    const at = new Date(start).getTime();
+    if (s?.current && !(await confirmDialog({ title: `Завершить «${s.current.name}»?`, text: 'Текущий сезон закончится, его тройка лучших попадёт в зал славы, а таблица нового сезона начнётся с нуля.', confirmLabel: 'Начать новый сезон' }))) return;
+    setBusy(true);
+    await api<Seasons>('/seasons', 'POST', { name: name.trim() || `Сезон ${count + 1}`, startsAt: Number.isFinite(at) ? at : undefined })
+      .then((v) => { setS(v); setName(''); setError(''); toast('Новый сезон начался'); })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+  const rename = async (id: number, old: string) => {
+    const v = await promptDialog({ title: 'Название сезона', label: 'Название', value: old, confirmLabel: 'Сохранить' });
+    if (!v || v.trim() === old) return;
+    await api<Seasons>(`/seasons/${id}`, 'PUT', { name: v.trim() }).then(setS).catch((err: Error) => setError(err.message));
+  };
+  const remove = async (id: number, n: string, current: boolean) => {
+    if (!(await confirmDialog({ title: `Удалить «${n}»?`, text: current ? 'Предыдущий сезон снова станет текущим.' : 'Сезон пропадёт из зала славы. Игровая статистика не удаляется.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api<Seasons>(`/seasons/${id}`, 'DELETE').then(setS).catch((err: Error) => setError(err.message));
+  };
+
+  const rows = s ? [...(s.current ? [{ ...s.current, endsAt: null as number | null, podium: s.current.top.slice(0, 3), isCurrent: true }] : []), ...s.past.map((p) => ({ ...p, isCurrent: false }))] : [];
+  return (
+    <>
+      <Section title="Новый сезон" description="Начните сезон, например, в день вайпа. Таблица сезона на странице «Сообщество» считает часы с его начала, а когда начнётся следующий, тройка лучших попадёт в зал славы и получит достижения.">
+        <form onSubmit={create} className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[12rem] flex-1"><Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={`Сезон ${count + 1}`} /></Field></div>
+          <div className="min-w-[12rem]"><Field label="Начало"><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
+          <Button loading={busy}>Начать сезон</Button>
+        </form>
+        <ErrorLine text={error} />
+      </Section>
+
+      <Section title="Сезоны" description={rows.length ? `${rows.length} ${plural(rows.length, ['сезон', 'сезона', 'сезонов'])}` : 'Сезонов пока нет'}>
+        <ul className="grid gap-2">
+          {rows.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2 font-extrabold">{r.name}{r.isCurrent && <span className="pill pill-ok">идёт</span>}</span>
+                <span className="block text-sm font-semibold text-mute">
+                  {fmtDate(r.startsAt)}{r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}
+                  {r.podium.length > 0 && ` · ${r.isCurrent ? 'лидирует' : 'чемпион'} ${r.podium[0].name} (${r.podium[0].hours} ч)`}
+                </span>
+              </span>
+              <button type="button" className="row-act" aria-label="Переименовать" title="Переименовать" onClick={() => void rename(r.id, r.name)}><IconEdit /></button>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void remove(r.id, r.name, r.isCurrent)}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      </Section>
+    </>
+  );
+}
+
+function ReviewsAdmin() {
+  const [list, setList] = useState<(Review & { serverId: number; serverName: string })[] | null>(null);
+  const [error, setError] = useState('');
+  const load = () => api<(Review & { serverId: number; serverName: string })[]>('/reviews').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+  const hide = (id: number, hidden: boolean) => api(`/reviews/${id}`, 'PATCH', { hidden }).then(() => { toast(hidden ? 'Отзыв скрыт' : 'Отзыв снова виден'); void load(); }).catch((e: Error) => setError(e.message));
+  const del = async (id: number) => {
+    if (!(await confirmDialog({ title: 'Удалить отзыв?', text: 'Автор сможет написать новый.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/reviews/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+  return (
+    <Section title="Отзывы о серверах" description="Отзывы видны сразу. Скрытый отзыв не учитывается в оценке сервера, автор видит пометку «скрыт модератором».">
+      <ErrorLine text={error} />
+      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">Отзывов пока нет.</p> : (
+        <ul className="grid gap-2">
+          {list.map((r) => (
+            <li key={r.id} className={`flex flex-wrap items-start gap-3 rounded-2xl bg-soft px-3 py-2.5 ${r.hidden ? 'opacity-60' : ''}`}>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="font-extrabold">{r.author}</span>
+                  <Stars value={r.stars} />
+                  <a href={`/servers/${r.serverId}`} className="text-sm font-bold text-link hover:underline">{r.serverName}</a>
+                  <span className="text-xs font-bold text-mute">{ago(r.updatedAt)}</span>
+                  {r.hidden && <span className="pill pill-mute">скрыт</span>}
+                </span>
+                {r.text && <span className="mt-1 block whitespace-pre-line text-sm font-semibold">{r.text}</span>}
+              </span>
+              <button type="button" className="row-act" aria-label={r.hidden ? 'Показать' : 'Скрыть'} title={r.hidden ? 'Показать' : 'Скрыть'} onClick={() => void hide(r.id, !r.hidden)}>{r.hidden ? <IconEye /> : <IconEyeOff />}</button>
+              <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void del(r.id)}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function GalleryAdmin() {
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState<number | null>(null);
+  const load = () => api<Shot[]>('/gallery/queue').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+  const patch = (id: number, body: { status?: Shot['status']; featured?: boolean }, done: string) =>
+    api(`/gallery/${id}`, 'PATCH', body).then(() => { toast(done); void load(); }).catch((e: Error) => setError(e.message));
+  const del = async (id: number) => {
+    if (!(await confirmDialog({ title: 'Удалить скриншот?', text: 'Картинка будет удалена насовсем.', confirmLabel: 'Удалить', danger: true }))) return;
+    await api(`/gallery/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
+  };
+  const waiting = list?.filter((s) => s.status === 'pending').length ?? 0;
+  return (
+    <Section title="Галерея" description={waiting ? `Ждут проверки: ${waiting}` : 'Новых скриншотов на проверке нет.'}>
+      <ErrorLine text={error} />
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title="Скриншотов пока нет" text="Игроки загружают их на странице «Галерея»." /> : (
+        <ul className="ga-grid">
+          {list.map((s, i) => (
+            <li key={s.id} className={`ga-card is-${s.status}`}>
+              <button type="button" className="ga-img" onClick={() => setOpen(i)} aria-label="Открыть"><img src={s.thumb} alt="" loading="lazy" /></button>
+              <div className="ga-meta">
+                <span className="block truncate font-extrabold">{s.caption || 'Без подписи'}</span>
+                <span className="block truncate text-xs font-bold text-mute">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
+              </div>
+              <div className="ga-acts">
+                {s.status !== 'approved' && <button type="button" className="btn btn-success btn-xs" onClick={() => void patch(s.id, { status: 'approved' }, 'Скриншот опубликован')}>Одобрить</button>}
+                {s.status === 'pending' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, 'Скриншот отклонён')}>Отклонить</button>}
+                {s.status === 'approved' && <button type="button" className={`btn btn-xs ${s.featured ? 'btn-warn' : 'btn-soft'}`} onClick={() => void patch(s.id, { featured: !s.featured }, s.featured ? 'Звезда снята' : 'Скриншот в лучших')}>{s.featured ? '★ В лучших' : '☆ В лучшие'}</button>}
+                {s.status === 'approved' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, 'Скриншот снят с публикации')}>Снять</button>}
+                <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void del(s.id)}><IconTrash /></button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -55670,6 +58961,7 @@ const KIND = {
   ping: { label: 'Вырос пинг', cls: 'pill-warn' },
   full: { label: 'Почти заполнен', cls: 'pill-mute' },
   digest: { label: 'Итоги недели', cls: 'pill-ok' },
+  restart: { label: 'Перезапуск', cls: 'pill-mute' },
 } as const;
 
 const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
@@ -56236,17 +59528,106 @@ __COREGSM_EOF__
  * «Сообщество»: the public showcase. Players online now and the record, how many people play, when the community
  * plays, the live feed of arrivals, the most active players of the week and the month, and the servers by players.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../api';
 import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
-import { AnimatedNumber, GameAvatar, PageHead, fmtDateTime, plural } from '../ui';
+import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
+import '../styles/gallery.css';
+import { Lightbox, ShotGrid, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
   </svg>
 );
+
+interface Top { name: string; hours: number; servers: number }
+export interface Seasons {
+  current: { id: number; name: string; startsAt: number; top: Top[]; first: { name: string; at: number } | null } | null;
+  past: { id: number; name: string; startsAt: number; endsAt: number; podium: Top[]; first: { name: string; at: number } | null }[];
+}
+
+const MEDALS = ['🥇', '🥈', '🥉'];
+const playerHref = (n: string) => `/player/${encodeURIComponent(n)}`;
+
+/** the current season's leaderboard and the hall of fame of the finished ones */
+function SeasonBlocks() {
+  const [s, setS] = useState<Seasons | null>(null);
+  useEffect(() => { api<Seasons>('/seasons').then(setS).catch(() => undefined); }, []);
+  if (!s || (!s.current && s.past.length === 0)) return null;
+  const cur = s.current;
+  const days = cur ? Math.max(1, Math.ceil((Date.now() - cur.startsAt) / 86_400_000)) : 0;
+  const maxH = Math.max(1, ...(cur?.top ?? []).map((p) => p.hours));
+  return (
+    <>
+      {cur && (
+        <section className="tile cm-season fade-in p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-extrabold">🏁 {cur.name}</h2>
+            <span className="text-sm font-bold text-mute">идёт {days} {plural(days, ['день', 'дня', 'дней'])}, с {fmtDate(cur.startsAt)}</span>
+          </div>
+          {cur.top.length === 0 ? <p className="cm-sub">В этом сезоне ещё никто не играл: станьте первым.</p> : (
+            <ol className="an-top">
+              {cur.top.map((p, i) => (
+                <li key={p.name}>
+                  <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <a href={playerHref(p.name)} className="block truncate font-extrabold hover:text-link">{p.name}</a>
+                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn))' }} /></span>
+                  </span>
+                  <span className="shrink-0 font-extrabold tabular-nums">{p.hours} ч</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          {cur.first && <p className="cm-sub">Первым в сезоне зашёл <a href={playerHref(cur.first.name)} className="text-ink hover:text-link">{cur.first.name}</a>, {fmtDateTime(cur.first.at)}</p>}
+        </section>
+      )}
+      {s.past.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">🏆 Зал славы</h2>
+          <ul className="cm-fame">
+            {s.past.map((x) => (
+              <li key={x.id} className="cm-fame-i">
+                <div className="font-extrabold">{x.name}</div>
+                <div className="text-xs font-bold text-mute">{fmtDate(x.startsAt)} – {fmtDate(x.endsAt)}</div>
+                <ol className="mt-2 grid gap-1">
+                  {x.podium.map((p, i) => (
+                    <li key={p.name} className="flex items-center gap-2">
+                      <span aria-label={`${i + 1} место`}>{MEDALS[i]}</span>
+                      <a href={playerHref(p.name)} className="min-w-0 flex-1 truncate font-bold hover:text-link">{p.name}</a>
+                      <span className="text-sm font-extrabold tabular-nums text-mute">{p.hours} ч</span>
+                    </li>
+                  ))}
+                  {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">Никто не играл</li>}
+                </ol>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
+  );
+}
+
+/** the latest screenshots, the starred ones first */
+function GalleryStrip() {
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => { api<Shot[]>('/gallery?limit=6').then(setList).catch(() => setList([])); }, []);
+  return (
+    <section className="tile p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-extrabold">📸 Галерея</h2>
+        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
+      </div>
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <p className="cm-sub">Скриншотов пока нет: поделитесь первым.</p> : <ShotGrid list={list} onOpen={setOpen} />}
+      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
+    </section>
+  );
+}
 
 export default function CommunityPage() {
   const c = useCommunity();
@@ -56283,6 +59664,8 @@ export default function CommunityPage() {
           <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
         </dl>
       </section>
+
+      <SeasonBlocks />
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
@@ -56324,6 +59707,8 @@ export default function CommunityPage() {
         </section>
       </div>
 
+      <GalleryStrip />
+
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Где играют сейчас</h2>
         <ul className="grid gap-2.5">
@@ -56351,6 +59736,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
+import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
@@ -56638,6 +60024,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       </div>
 
       <PlayersShownCard />
+      {loaded && <DiscordExtras servers={servers} />}
       <DeliveryList />
 
       {draft && (
@@ -57100,6 +60487,212 @@ export default function ForgotPassword() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Gallery.tsx" << '__COREGSM_EOF__'
+/**
+ * The screenshot gallery (/gallery): pictures from the players, the starred ones first. A click opens the picture
+ * full size (arrows and Esc work). Signed-in players upload their own; until the staff approve a picture only its
+ * author sees it, under «Мои скриншоты».
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api, getToken, type Server } from '../api';
+import { errorText } from '../apiErrors';
+import { useAuth } from '../auth';
+import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast } from '../ui';
+import '../styles/gallery.css';
+
+export interface Shot {
+  id: number;
+  url: string;
+  thumb: string;
+  caption: string;
+  author: string | null;
+  serverId: number | null;
+  serverName: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  featured: boolean;
+  width: number;
+  height: number;
+  createdAt: number;
+}
+
+const IconImage = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.6" /><path d="M21 16l-5-5-8 8" />
+  </svg>
+);
+
+/** the full-size viewer over the page */
+export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; index: number; onClose: () => void; onIndex: (i: number) => void }) {
+  const s = list[index];
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') onIndex((index + 1) % list.length);
+      else if (e.key === 'ArrowLeft') onIndex((index - 1 + list.length) % list.length);
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [index, list.length, onClose, onIndex]);
+  if (!s) return null;
+  return (
+    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || 'Скриншот'} onClick={onClose}>
+      <figure className="gl-box-fig" onClick={(e) => e.stopPropagation()}>
+        <img src={s.url} alt={s.caption || 'Скриншот'} width={s.width} height={s.height} />
+        <figcaption>
+          <span className="min-w-0 flex-1">
+            {s.caption && <span className="block font-extrabold">{s.caption}</span>}
+            <span className="block text-sm font-semibold opacity-75">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
+          </span>
+          <span className="text-sm font-bold opacity-75">{index + 1} / {list.length}</span>
+        </figcaption>
+      </figure>
+      {list.length > 1 && (
+        <>
+          <button type="button" className="gl-box-nav is-prev" aria-label="Предыдущий" onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
+          <button type="button" className="gl-box-nav is-next" aria-label="Следующий" onClick={(e) => { e.stopPropagation(); onIndex((index + 1) % list.length); }}>›</button>
+        </>
+      )}
+      <button type="button" className="gl-box-close" aria-label="Закрыть" onClick={onClose}>✕</button>
+    </div>
+  );
+}
+
+export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: number) => void; badge?: (s: Shot) => string | null }) {
+  return (
+    <ul className="gl-grid">
+      {list.map((s, i) => (
+        <li key={s.id} className="gl-cell">
+          <button type="button" className="gl-shot" onClick={() => onOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
+            <img src={s.thumb} alt="" loading="lazy" width={640} height={Math.round((640 * s.height) / s.width)} />
+            {s.featured && <span className="gl-star" title="Лучшее">★</span>}
+            {badge?.(s) && <span className="gl-badge">{badge(s)}</span>}
+            {(s.caption || s.author) && (
+              <span className="gl-cap">
+                {s.caption && <span className="block truncate font-extrabold">{s.caption}</span>}
+                <span className="block truncate text-xs font-bold opacity-80">{[s.author, s.serverName].filter(Boolean).join(' · ')}</span>
+              </span>
+            )}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function UploadForm({ servers, onClose, onDone }: { servers: Server[]; onClose: () => void; onDone: (s: Shot) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState('');
+  const [caption, setCaption] = useState('');
+  const [serverId, setServerId] = useState<number | ''>('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!file) return;
+    const u = URL.createObjectURL(file);
+    setPreview(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  const send = async () => {
+    if (!file) return;
+    setBusy(true);
+    setError('');
+    try {
+      const q = new URLSearchParams({ caption: caption.trim() });
+      if (serverId) q.set('serverId', String(serverId));
+      const r = await fetch(`/api/gallery?${q.toString()}`, { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
+      const j = (await r.json().catch(() => null)) as (Shot & { error?: string }) | null;
+      if (!r.ok || !j) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)'));
+      onDone(j);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Новый скриншот" onClose={onClose}>
+      <div className="space-y-3.5">
+        <label className={`gl-drop ${preview ? 'has-file' : ''}`}>
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {preview ? <img src={preview} alt="" /> : <span className="font-extrabold text-mute">Выберите картинку: PNG, JPG или WebP до 8 МБ</span>}
+        </label>
+        <Field label="Подпись (необязательно)"><input className="input" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} placeholder="Например: закат над замком" /></Field>
+        <Field label="Сервер">
+          <select className="input" value={serverId} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : '')}>
+            <option value="">Не указывать</option>
+            {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </Field>
+        <p className="text-sm font-semibold text-mute">Скриншот появится в галерее после проверки модератором.</p>
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+          <Button loading={busy} disabled={!file} onClick={() => void send()} type="button">Отправить</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+const STATUS: Record<Shot['status'], string | null> = { pending: 'на проверке', rejected: 'отклонён', approved: null };
+
+export default function GalleryPage() {
+  const { me } = useAuth();
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [mine, setMine] = useState<Shot[]>([]);
+  const [servers, setServers] = useState<Server[]>([]);
+  const [open, setOpen] = useState<{ list: Shot[]; i: number } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const topRef = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(() => {
+    api<Shot[]>('/gallery?limit=200').then(setList).catch((e: Error) => setError(e.message));
+    if (me) api<Shot[]>('/gallery/mine').then((m) => setMine(m.filter((s) => s.status !== 'approved'))).catch(() => undefined);
+  }, [me]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (me) api<Server[]>('/servers').then(setServers).catch(() => undefined); }, [me]);
+
+  return (
+    <div className="space-y-5" ref={topRef}>
+      <PageHead
+        icon={<IconImage />}
+        title="Галерея"
+        subtitle="Скриншоты игроков с наших серверов"
+      >
+        {me ? <button type="button" className="btn" onClick={() => setUploading(true)}>Загрузить скриншот</button> : <a href="/login" className="btn btn-soft">Войдите, чтобы загрузить</a>}
+      </PageHead>
+      <ErrorLine text={error} />
+      {mine.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">Мои скриншоты на проверке</h2>
+          <ShotGrid list={mine} onOpen={(i) => setOpen({ list: mine, i })} badge={(s) => STATUS[s.status]} />
+        </section>
+      )}
+      {list === null ? (
+        <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
+      ) : list.length === 0 ? (
+        <Empty title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки." />
+      ) : (
+        <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
+      )}
+      {open && <Lightbox list={open.list} index={open.i} onClose={() => setOpen(null)} onIndex={(i) => setOpen({ ...open, i })} />}
+      {uploading && (
+        <UploadForm
+          servers={servers}
+          onClose={() => setUploading(false)}
+          onDone={(s) => {
+            setUploading(false);
+            toast(s.status === 'approved' ? 'Скриншот опубликован' : 'Скриншот отправлен на проверку');
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
@@ -57319,6 +60912,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Maintenance.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
+import RestartPlans from '../components/RestartPlans';
 import { StateView } from '../components/StateView';
 import {
   REPEAT_LABEL, fromLocalInput, presetNow, presetTonight, rangeLabel, toLocalInput, untilLabel, validateWindow, windowState,
@@ -57440,6 +61034,8 @@ export default function MaintenancePage() {
           ))}
         </ul>
       )}
+
+      <RestartPlans servers={servers} />
 
       {draft && <WindowModal draft={draft} servers={servers} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); void load(); }} />}
     </AdminPage>
@@ -58464,10 +62060,12 @@ __COREGSM_EOF__
  * time of day, the streak of days in a row and the latest visits. Works without signing in on a public panel.
  */
 import { useEffect, useState } from 'react';
-import { api, ApiError } from '../api';
+import { api, ApiError, type Achievement } from '../api';
+import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural } from '../ui';
 import '../styles/community.css';
+import '../styles/profile.css';
 
 interface PlayerCard {
   name: string;
@@ -58483,6 +62081,7 @@ interface PlayerCard {
   servers: { id: number; name: string; game: string; hours: number; visits: number; last: number }[];
   recent: { serverId: number; serverName: string; from: number; to: number | null }[];
   rankId?: string;
+  achievements?: Achievement[];
 }
 
 const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
@@ -58563,6 +62162,18 @@ export default function PlayerPage({ name }: { name: string }) {
         </section>
       </div>
 
+      {p.achievements && p.achievements.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-extrabold">Достижения</h2>
+            <span className="text-sm font-bold text-mute">{p.achievements.filter((a) => a.earned).length} из {p.achievements.length}</span>
+          </div>
+          <ul className="pf-ach-grid">
+            {[...p.achievements].sort((x, y) => Number(y.earned) - Number(x.earned) || (y.earnedAt ?? 0) - (x.earnedAt ?? 0)).map((a) => <AchievementCard key={a.id} a={a} />)}
+          </ul>
+        </section>
+      )}
+
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Последние визиты</h2>
         <ul className="divide-y divide-line">
@@ -58598,6 +62209,7 @@ import { AchievementsGrid, AchievementsPreview } from '../components/profile/Ach
 import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
+import { PushCard } from '../components/profile/PushCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
@@ -58743,6 +62355,7 @@ function SecurityTab() {
         <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
         <DiscordCard onChanged={reload} />
+        <PushCard />
         <SessionsCard key={rev} />
       </div>
       <JournalCard onRevoked={() => setRev((x) => x + 1)} />
@@ -59391,6 +63004,8 @@ export default function ResetPassword({ token }: { token: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
+import ServerReviews from '../components/server/Reviews';
+import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
@@ -59441,6 +63056,8 @@ const OVERVIEW_SECTIONS: SectionDef[] = [
   { id: 'ov-chart', label: 'График' },
   { id: 'ov-events', label: 'События', secondary: true },
   { id: 'ov-players', label: 'Игроки' },
+  { id: 'ov-probes', label: 'Доступность', secondary: true },
+  { id: 'ov-reviews', label: 'Отзывы', secondary: true },
 ];
 const HISTORY_SECTIONS: SectionDef[] = [
   { id: 'hi-chart', label: 'График' },
@@ -59502,6 +63119,9 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const { me, isAdmin } = useAuth();
+  // editing a server: administrators and moderators given «Серверы»
+  const canEdit = isAdmin || !!me?.perms?.includes('servers');
+  const probes = useProbes(id);
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -59756,6 +63376,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
+        {probes && probes.probes.length > 0 && (
+          <SectionCard id="ov-probes" state={sections} style={stagger(4)} title="Доступность из разных мест">
+            <ProbesView v={probes} />
+          </SectionCard>
+        )}
+        <SectionCard id="ov-reviews" state={sections} style={stagger(4)} title="Отзывы игроков">
+          <ServerReviews serverId={id} />
+        </SectionCard>
       </div>
     );
   }
@@ -59774,11 +63402,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   const moreItems: MoreItem[] = [
     { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
-    ...(isAdmin ? [
+    ...(canEdit ? [
       { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
       { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
-      { key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true },
     ] : []),
+    ...(isAdmin ? [{ key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true }] : []),
   ];
 
   return (
@@ -60578,6 +64206,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import BackupsCard from './Backups';
+import ConfigTransfer from '../components/ConfigTransfer';
 import SmtpCard from '../components/SmtpCard';
 import PollSettingsCard from '../components/PollSettingsCard';
 import type { ReactNode } from 'react';
@@ -60665,6 +64294,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         <>
           <UpdateCard />
           <BackupsCard />
+          <ConfigTransfer />
         </>
       )}
     </AdminPage>
@@ -61041,6 +64671,7 @@ import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
+import ProbesSection from '../components/ProbesSection';
 import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 
 interface Health {
@@ -61209,6 +64840,8 @@ export default function SystemPage() {
           </>
         )}
       </Section>
+
+      <ProbesSection />
 
       <Strip>
         <div className="min-w-0">
@@ -61719,7 +65352,8 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
-import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconUsers } from '../ui';
+import type { Perm } from '../api';
+import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -61747,18 +65381,22 @@ const S = {
   alerts: { id: 'alerts', label: 'Оповещения', icon: IconBell, desc: 'Сообщение в Discord, если игровой сервер упал или вернулся.', keywords: 'упал недоступен уведомление падение упоминание here everyone' },
   maintenance: { id: 'maintenance', label: 'Обслуживание', icon: IconWrench, desc: 'Окна технических работ: во время них падение сервера не считается сбоем.', keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
   cards: { id: 'cards', label: 'Карточки', icon: IconCards, desc: 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.', keywords: 'картинка баннер ссылка png' },
+  community: { id: 'community', label: 'Сообщество', icon: IconTrophy, desc: 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов игроков.', keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
   users: { id: 'users', label: 'Пользователи', icon: IconUsers, desc: 'Аккаунты, роли, регистрация и правила сообщества.', keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
   journal: { id: 'journal', label: 'Журнал', icon: IconJournal, desc: 'Кто и что менял в панели, с датой и временем.', keywords: 'аудит история действия изменения кто менял лог' },
   system: { id: 'system', label: 'Система', icon: IconSystem, desc: 'Здоровье панели: версия, диск, бот, сертификат, диагностика.', keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
   settings: { id: 'settings', label: 'Настройки', icon: IconSettings, desc: 'Токен бота, оформление, пароль, обновления и резервные копии.', keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
 } satisfies Record<string, AdminSection>;
 
+/** the permission that opens a section to a moderator (sections not listed are for administrators only) */
+export const SECTION_PERM: Partial<Record<string, Perm>> = { news: 'news', community: 'moderation', servers: 'servers', maintenance: 'maintenance', journal: 'journal' };
+
 export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
   { title: 'Основное', sections: [S.servers, S.discord, S.news] },
   { title: 'Мониторинг', sections: [S.alerts, S.maintenance, S.cards] },
-  { title: 'Люди', sections: [S.users, S.journal] },
+  { title: 'Люди', sections: [S.community, S.users, S.journal] },
   { title: 'Система', sections: [S.system, S.settings] },
 ];
 
@@ -62025,24 +65663,18 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/BrandCard.tsx" << '__COREGSM_EOF__'
 /** Settings → Branding: community name, accent colours, theme presets and logo. */
+import { GAME_PRESETS, THEME_PRESETS, type ThemePreset } from '../../gameThemes';
+import '../../styles/admin.css';
 import { useEffect, useRef, useState } from 'react';
 import { onAccentChange, paintBrand } from '../../accent';
 import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
-import { ErrorLine, FieldError, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
 import { errorText } from '../../apiErrors';
 
-/** готовые темы: основной цвет и конец градиента */
-const THEME_PRESETS = [
-  { id: 'indigo', name: 'Индиго', c1: '#4f46e5', c2: '#3730a3' },
-  { id: 'emerald', name: 'Изумруд', c1: '#059669', c2: '#047857' },
-  { id: 'sunset', name: 'Закат', c1: '#ea580c', c2: '#be185d' },
-  { id: 'ocean', name: 'Океан', c1: '#0284c7', c2: '#1d4ed8' },
-  { id: 'fuchsia', name: 'Фуксия', c1: '#c026d3', c2: '#7e22ce' },
-  { id: 'graphite', name: 'Графит', c1: '#475569', c2: '#0f172a' },
-] as const;
+
 
 /** название, цвет и логотип сообщества: изменения сохраняются сами */
 export function BrandCard() {
@@ -62059,7 +65691,7 @@ export function BrandCard() {
   savedRef.current = b;
 
   const pickColor = (c: string) => { setColor(c); setColor2(''); setPreset(''); };
-  const pickPreset = (p: (typeof THEME_PRESETS)[number]) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
+  const pickPreset = (p: ThemePreset) => { setColor(p.c1); setColor2(p.c2); setPreset(p.id); };
 
   // live preview of the chosen colours across the whole panel (a game accent chosen in «Внешний вид» still wins, see accent.ts)
   useEffect(() => {
@@ -62155,6 +65787,23 @@ export function BrandCard() {
             );
           })}
         </div>
+      </div>
+      <div>
+        <span className="label">Темы игр</span>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {GAME_PRESETS.map((p) => {
+            const on = preset === p.id;
+            return (
+              <button type="button" key={p.id} onClick={() => pickPreset(p)} aria-pressed={on} className={`gt-card ${on ? 'is-on' : ''}`}>
+                <span className="gt-art" style={{ backgroundImage: `${p.art ? `linear-gradient(135deg, ${p.c1}cc, ${p.c2}ee), url("${p.art.replace('.jpg', '@s.jpg')}")` : `linear-gradient(135deg, ${p.c1}, ${p.c2})`}` }}>
+                  <GameAvatar game={p.game!} size={30} glass />
+                </span>
+                <span className="mt-1.5 block px-0.5 text-sm font-extrabold">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-1.5 text-sm font-semibold text-mute">Цвет, свечение страницы и, для V Rising и Icarus, приглушённая картинка игры в шапке каждой страницы.</p>
       </div>
       <div>
         <span className="label">Свой цвет</span>
@@ -62531,7 +66180,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/settings/UsersTab.tsx" << '__COREGSM_EOF__'
 /** Users: registration and access settings, pending requests, roles and passwords. */
 import { useEffect, useRef, useState } from 'react';
-import { type Access, api, type UserRow } from '../../api';
+import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../api';
+import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { confirmDialog, promptDialog } from '../../confirm';
@@ -62595,6 +66245,9 @@ export function UsersTab() {
       void reload();
     },
   });
+  const setPerms = async (u: UserRow, perms: Perm[]) => {
+    await api(`/users/${u.id}`, 'PUT', { role: u.role, perms }).then(() => { toast('Права модератора сохранены'); void load(); }).catch((e) => setError(e.message));
+  };
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
     load();
@@ -62707,6 +66360,20 @@ export function UsersTab() {
               </select>
               <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
               <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
+              {u.role === 'moderator' && (
+                <fieldset className="us-perms basis-full">
+                  <legend className="sr-only">Права модератора {u.username}</legend>
+                  {PERM_LABELS.map((p) => {
+                    const on = (u.perms ?? []).includes(p.id);
+                    return (
+                      <label key={p.id} className={`us-perm ${on ? 'is-on' : ''}`} title={p.hint}>
+                        <input type="checkbox" checked={on} onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
+                        <span><b>{p.label}</b> <span className="text-mute">· {p.hint}</span></span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              )}
             </li>
           ))}
         </ul>
@@ -62857,6 +66524,26 @@ export function downsample(values: (number | null)[], max: number): (number | nu
   }
   return out;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/admin.css" << '__COREGSM_EOF__'
+
+/* users: the permissions of a moderator, as toggle chips */
+.us-perms { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.us-perm { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; border-radius: 9999px; padding: 4px 12px 4px 8px; font-size: 13px; font-weight: 700; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, box-shadow .15s ease; }
+.us-perm.is-on { background: rgb(var(--brand) / .12); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .45); }
+.us-perm input { width: 15px; height: 15px; }
+
+/* restart plans: the days of the week */
+.rp-day { min-width: 2.75rem; border-radius: 9999px; padding: 6px 12px; font-size: 14px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, color .15s ease; }
+.rp-day:hover { color: rgb(var(--ink)); }
+.rp-day.is-on { color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: 0 4px 12px -6px rgb(var(--brand) / .8); }
+
+/* branding: the game theme cards */
+.gt-card { border-radius: var(--r-lg, 20px); border: 1px solid rgb(var(--line)); background: rgb(var(--card)); padding: 8px; text-align: left; transition: box-shadow .15s ease; }
+.gt-card:hover { box-shadow: var(--shadow-1); }
+.gt-card.is-on { border-color: transparent; box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 4px rgb(var(--ink)); }
+.gt-art { display: flex; align-items: flex-end; height: 64px; padding: 8px; border-radius: 14px; background-size: cover; background-position: center; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -63363,6 +67050,11 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .pl-hour { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
 .pl-hour i { display: block; width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, rgb(var(--link)), rgb(var(--brand))); }
 .pl-hour b { height: 14px; font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* seasons */
+.cm-season { background: radial-gradient(120% 140% at 100% 0%, rgb(var(--warn) / .12), transparent 55%), rgb(var(--card)); }
+.cm-fame { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+.cm-fame-i { border-radius: 18px; background: rgb(var(--soft)); padding: 12px 14px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
@@ -63608,6 +67300,75 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .hc-over { margin-top: 8px; border-radius: 12px; overflow: hidden; background: rgb(var(--soft)); }
 .hc-over-dim { fill: rgb(var(--card)); fill-opacity: .55; }
 .hc-over-win { fill: none; stroke: var(--srv-accent, rgb(var(--brand))); stroke-width: 2; rx: 6; }
+
+/* ---------- reviews ---------- */
+.rv { display: grid; gap: 14px; }
+.rv-score { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: center; border-radius: 18px; background: rgb(var(--soft)); padding: 14px 18px; }
+.rv-avg { font-size: 44px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
+.rv-stars { display: inline-flex; gap: 1px; color: rgb(var(--line)); line-height: 1; }
+.rv-stars .on { color: #f6b73c; }
+.rv-dist { display: grid; gap: 4px; font-size: 12.5px; font-weight: 800; color: rgb(var(--mute)); }
+.rv-dist li { display: flex; align-items: center; gap: 8px; }
+.rv-dist-bar { flex: 1; height: 8px; border-radius: 9999px; background: rgb(var(--card)); overflow: hidden; }
+.rv-dist-bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #f6b73c, #ff9a3c); }
+.rv-pick { display: inline-flex; gap: 2px; }
+.rv-pick button { font-size: 26px; line-height: 1; color: rgb(var(--line)); transition: transform .15s cubic-bezier(.34, 1.56, .64, 1), color .1s ease; }
+.rv-pick button.on { color: #f6b73c; }
+.rv-pick button:hover { transform: scale(1.18); }
+.rv-form { display: grid; gap: 10px; border-radius: 18px; padding: 14px; box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.rv-item { border-radius: 16px; background: rgb(var(--soft)); padding: 10px 14px; }
+.rv-item.is-mine { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .4); }
+@media (prefers-reduced-motion: reduce) { .rv-pick button { transition: none; } }
+
+/* ---------- availability from several places ---------- */
+.pr-points { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); }
+.pr-point { display: flex; align-items: center; gap: 10px; border-radius: 16px; background: rgb(var(--soft)); padding: 10px 12px; }
+.pr-dot { width: 10px; height: 10px; flex: none; border-radius: 9999px; background: rgb(var(--mute)); }
+.pr-dot.is-up { background: rgb(var(--ok)); box-shadow: 0 0 0 4px rgb(var(--ok) / .18); }
+.pr-dot.is-down { background: rgb(var(--bad)); box-shadow: 0 0 0 4px rgb(var(--bad) / .18); }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
+/* the screenshot gallery: a masonry of thumbnails and the full-size viewer */
+.gl-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); align-items: start; }
+.gl-cell { min-width: 0; }
+.gl-shot { position: relative; display: block; width: 100%; overflow: hidden; border-radius: 18px; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); cursor: zoom-in; }
+.gl-shot img { display: block; width: 100%; height: auto; transition: transform .5s cubic-bezier(.2, .8, .2, 1); }
+.gl-shot:hover img { transform: scale(1.04); }
+.gl-cap { position: absolute; inset: auto 0 0 0; padding: 26px 12px 10px; text-align: left; color: #fff; background: linear-gradient(180deg, transparent, rgba(8, 10, 20, .8)); opacity: 0; transform: translateY(6px); transition: opacity .2s ease, transform .2s ease; }
+.gl-shot:hover .gl-cap, .gl-shot:focus-visible .gl-cap { opacity: 1; transform: none; }
+@media (hover: none) { .gl-cap { opacity: 1; transform: none; } }
+.gl-star { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9999px; color: #f6b73c; background: rgba(8, 10, 20, .55); font-size: 15px; }
+.gl-badge { position: absolute; top: 8px; right: 8px; border-radius: 9999px; padding: 2px 9px; font-size: 12px; font-weight: 800; color: #fff; background: rgba(8, 10, 20, .65); }
+
+.gl-box { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px 64px; background: rgba(6, 6, 14, .92); animation: gl-in .2s ease both; }
+@keyframes gl-in { from { opacity: 0; } }
+.gl-box-fig { max-width: min(1400px, 100%); display: grid; gap: 10px; color: #fff; }
+.gl-box-fig img { max-width: 100%; max-height: calc(100dvh - 140px); width: auto; height: auto; margin: 0 auto; border-radius: 14px; box-shadow: 0 30px 80px -20px #000; }
+.gl-box-fig figcaption { display: flex; gap: 12px; align-items: flex-end; }
+.gl-box-nav, .gl-box-close { position: absolute; display: grid; place-items: center; border-radius: 9999px; color: #fff; background: rgba(255, 255, 255, .1); transition: background .15s ease; }
+.gl-box-nav:hover, .gl-box-close:hover { background: rgba(255, 255, 255, .22); }
+.gl-box-nav { top: 50%; width: 46px; height: 46px; margin-top: -23px; font-size: 30px; line-height: 1; }
+.gl-box-nav.is-prev { left: 12px; } .gl-box-nav.is-next { right: 12px; }
+.gl-box-close { top: 14px; right: 14px; width: 40px; height: 40px; font-size: 18px; }
+@media (max-width: 639px) { .gl-box { padding: 56px 8px 16px; } .gl-box-nav { top: auto; bottom: 14px; } }
+
+.gl-drop { display: grid; place-items: center; min-height: 10rem; border-radius: 18px; border: 2px dashed rgb(var(--line)); cursor: pointer; overflow: hidden; text-align: center; padding: 12px; transition: border-color .15s ease; }
+.gl-drop:hover { border-color: rgb(var(--brand)); }
+.gl-drop.has-file { padding: 0; border-style: solid; }
+.gl-drop img { display: block; width: 100%; max-height: 18rem; object-fit: contain; background: #000; }
+@media (prefers-reduced-motion: reduce) { .gl-shot img, .gl-cap, .gl-box { transition: none; animation: none; } }
+
+/* admin: the moderation queue */
+.ga-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+.ga-card { display: grid; border-radius: 18px; overflow: hidden; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); }
+.ga-card.is-pending { box-shadow: 0 0 0 2px rgb(var(--warn) / .7); }
+.ga-card.is-rejected { opacity: .55; }
+.ga-img { display: block; aspect-ratio: 16 / 9; background: #000; cursor: zoom-in; }
+.ga-img img { width: 100%; height: 100%; object-fit: cover; }
+.ga-meta { padding: 8px 12px 0; min-width: 0; }
+.ga-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px 12px; }
+.ga-acts .row-act { margin-left: auto; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
@@ -64385,7 +68146,7 @@ export { useTween, AnimatedNumber, Burst } from './ui/motion';
 export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
 export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
-export { ThemeToggle, applyDefaultTheme } from './ui/theme';
+export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
 export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
@@ -65664,6 +69425,13 @@ export function applyDefaultTheme(def: Theme) {
   paint(def);
   subs.forEach((f) => f(def));
 }
+
+/** pick a theme from elsewhere (the Ctrl+K palette): the same as the header button, which follows */
+export function setThemeChoice(t: Theme) {
+  applyTheme(t);
+  subs.forEach((f) => f(t));
+}
+export const currentTheme = (): Theme => readTheme();
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(readTheme);

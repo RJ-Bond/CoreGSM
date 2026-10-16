@@ -54,8 +54,9 @@ describe('smart alerts', () => {
   before(() => {
     id = addServer('Smart');
     const now = Date.now();
-    // four weeks of history at this hour of the week: about 20 players
-    for (let w = 1; w <= 4; w++) for (let k = 0; k < 15; k++) hist.run(id, now - w * 7 * DAY + k * MIN, 1, 20, 40, 0, 0);
+    // four weeks of history around this hour of the week (an hour before to three after, so the checks below
+    // never step into an hour without history, whatever the clock): about 20 players
+    for (let w = 1; w <= 4; w++) for (let k = -90; k < 180; k += 2) hist.run(id, now - w * 7 * DAY + k * MIN, 1, 20, 40, 0, 0);
     setSetting('alerts_enabled', '1');
     setSetting('alerts_channel', '123456789012345678');
     setSetting('alerts_smart_low', '1');

@@ -2,17 +2,106 @@
  * «Сообщество»: the public showcase. Players online now and the record, how many people play, when the community
  * plays, the live feed of arrivals, the most active players of the week and the month, and the servers by players.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../api';
 import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
-import { AnimatedNumber, GameAvatar, PageHead, fmtDateTime, plural } from '../ui';
+import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
+import '../styles/gallery.css';
+import { Lightbox, ShotGrid, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
   </svg>
 );
+
+interface Top { name: string; hours: number; servers: number }
+export interface Seasons {
+  current: { id: number; name: string; startsAt: number; top: Top[]; first: { name: string; at: number } | null } | null;
+  past: { id: number; name: string; startsAt: number; endsAt: number; podium: Top[]; first: { name: string; at: number } | null }[];
+}
+
+const MEDALS = ['🥇', '🥈', '🥉'];
+const playerHref = (n: string) => `/player/${encodeURIComponent(n)}`;
+
+/** the current season's leaderboard and the hall of fame of the finished ones */
+function SeasonBlocks() {
+  const [s, setS] = useState<Seasons | null>(null);
+  useEffect(() => { api<Seasons>('/seasons').then(setS).catch(() => undefined); }, []);
+  if (!s || (!s.current && s.past.length === 0)) return null;
+  const cur = s.current;
+  const days = cur ? Math.max(1, Math.ceil((Date.now() - cur.startsAt) / 86_400_000)) : 0;
+  const maxH = Math.max(1, ...(cur?.top ?? []).map((p) => p.hours));
+  return (
+    <>
+      {cur && (
+        <section className="tile cm-season fade-in p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-extrabold">🏁 {cur.name}</h2>
+            <span className="text-sm font-bold text-mute">идёт {days} {plural(days, ['день', 'дня', 'дней'])}, с {fmtDate(cur.startsAt)}</span>
+          </div>
+          {cur.top.length === 0 ? <p className="cm-sub">В этом сезоне ещё никто не играл: станьте первым.</p> : (
+            <ol className="an-top">
+              {cur.top.map((p, i) => (
+                <li key={p.name}>
+                  <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <a href={playerHref(p.name)} className="block truncate font-extrabold hover:text-link">{p.name}</a>
+                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn))' }} /></span>
+                  </span>
+                  <span className="shrink-0 font-extrabold tabular-nums">{p.hours} ч</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          {cur.first && <p className="cm-sub">Первым в сезоне зашёл <a href={playerHref(cur.first.name)} className="text-ink hover:text-link">{cur.first.name}</a>, {fmtDateTime(cur.first.at)}</p>}
+        </section>
+      )}
+      {s.past.length > 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="mb-3 text-lg font-extrabold">🏆 Зал славы</h2>
+          <ul className="cm-fame">
+            {s.past.map((x) => (
+              <li key={x.id} className="cm-fame-i">
+                <div className="font-extrabold">{x.name}</div>
+                <div className="text-xs font-bold text-mute">{fmtDate(x.startsAt)} – {fmtDate(x.endsAt)}</div>
+                <ol className="mt-2 grid gap-1">
+                  {x.podium.map((p, i) => (
+                    <li key={p.name} className="flex items-center gap-2">
+                      <span aria-label={`${i + 1} место`}>{MEDALS[i]}</span>
+                      <a href={playerHref(p.name)} className="min-w-0 flex-1 truncate font-bold hover:text-link">{p.name}</a>
+                      <span className="text-sm font-extrabold tabular-nums text-mute">{p.hours} ч</span>
+                    </li>
+                  ))}
+                  {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">Никто не играл</li>}
+                </ol>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
+  );
+}
+
+/** the latest screenshots, the starred ones first */
+function GalleryStrip() {
+  const [list, setList] = useState<Shot[] | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => { api<Shot[]>('/gallery?limit=6').then(setList).catch(() => setList([])); }, []);
+  return (
+    <section className="tile p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-extrabold">📸 Галерея</h2>
+        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
+      </div>
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <p className="cm-sub">Скриншотов пока нет: поделитесь первым.</p> : <ShotGrid list={list} onOpen={setOpen} />}
+      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
+    </section>
+  );
+}
 
 export default function CommunityPage() {
   const c = useCommunity();
@@ -49,6 +138,8 @@ export default function CommunityPage() {
           <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
         </dl>
       </section>
+
+      <SeasonBlocks />
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
@@ -89,6 +180,8 @@ export default function CommunityPage() {
           {c.feed.length ? <ul className="cm-feed-list">{c.feed.map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
         </section>
       </div>
+
+      <GalleryStrip />
 
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Где играют сейчас</h2>
