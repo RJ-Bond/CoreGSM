@@ -76,3 +76,13 @@ export function plural(n: number, forms: [string, string, string]): string {
   if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return forms[1];
   return forms[2];
 }
+
+const numFmt = new Map<string, Intl.NumberFormat>();
+/** a number in the panel's language: «99,8» in Russian, «99.8» in English; up to `digits` decimals */
+export const num = (n: number | null | undefined, digits = 1): string => {
+  if (n == null || !Number.isFinite(n)) return '–';
+  const loc = `${getPrefs().lang === 'en' ? 'en-US' : 'ru-RU'}|${digits}`;
+  let f = numFmt.get(loc);
+  if (!f) numFmt.set(loc, (f = new Intl.NumberFormat(loc.split('|')[0], { maximumFractionDigits: digits })));
+  return f.format(n);
+};

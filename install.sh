@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="63dd2a3fcacf"
+COREGSM_BUILD="175e0cfb6080"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -43576,7 +43576,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast } from '../ui';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast, SkeletonRows } from '../ui';
 
 interface Extras {
   autoroles: { id: number; guildId: string; roleId: string; roleName: string | null; roleColor: number; kind: Kind; threshold: number; serverId: number | null; members: number; error: string | null }[];
@@ -43618,6 +43618,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
       >
         <ErrorLine text={error} />
         {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.</p>}
+        {!x && !error && <SkeletonRows n={2} />}
         {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">Пока нет ни одной автороли.</p>}
         <ul className="grid gap-2">
           {x?.autoroles.map((r) => (
@@ -43639,6 +43640,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
         description="Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут."
         actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>Добавить счётчик</button>}
       >
+        {!x && !error && <SkeletonRows n={1} />}
         {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.</p>}
         <ul className="grid gap-2">
           {x?.counters.map((c) => (
@@ -44872,7 +44874,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast } from '../ui';
+import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast, SkeletonRows } from '../ui';
 
 interface Probe { id: number; name: string; createdAt: number; lastSeen: number | null; ip: string | null; version: string | null; alive: boolean; servers: number; online: number }
 interface Issued { token: string; commands: { docker: string; node: string } }
@@ -44913,6 +44915,7 @@ export default function ProbesSection() {
       actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>Добавить точку</button>}
     >
       <ErrorLine text={error} />
+      {!list && !error && <SkeletonRows n={2} />}
       {list && list.length === 0 && <p className="text-sm font-semibold text-mute">Точек пока нет: серверы проверяет только сама панель.</p>}
       <ul className="grid gap-2">
         {list?.map((p) => (
@@ -45027,7 +45030,7 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-extrabold">{s.name}</span>
                 <span className="block text-sm font-semibold text-mute">
-                  {!p ? '…' : p.enabled ? `${daysText(p.days)} в ${hhmm(p.atMin)}${p.next ? ` · следующий ${fmtDateTime(p.next)}` : ''}` : 'выключено'}
+                  {!p ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : p.enabled ? `${daysText(p.days)} в ${hhmm(p.atMin)}${p.next ? ` · следующий ${fmtDateTime(p.next)}` : ''}` : 'выключено'}
                   {p?.rcon.configured ? ' · RCON подключён' : ''}
                 </span>
                 {p?.lastResult && <span className="block text-xs font-bold text-mute">Последний раз {p.lastRunAt ? fmtDateTime(p.lastRunAt) : ''}: {p.lastResult}</span>}
@@ -47428,6 +47431,8 @@ function FeedSkeleton() {
 
 /** /news: rubrics, pinned first, month groups, the side panel */
 export function NewsListPage() {
+  const { me } = useAuth();
+  const canWrite = me?.role === 'admin' || !!me?.perms?.includes('news');
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -47478,7 +47483,15 @@ export function NewsListPage() {
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
           {!loaded && <FeedSkeleton />}
-          {loaded && !error && ordered.length === 0 && <StateView kind="empty" art={<NewsArt />} title={t('nw.empty.title')} text={t('nw.empty.text')} />}
+          {loaded && !error && ordered.length === 0 && (
+            <StateView
+              kind="empty"
+              art={<NewsArt />}
+              title={t('nw.empty.title')}
+              text={t('nw.empty.text')}
+              action={canWrite ? <a href="/admin/news/new" className="btn">{t('nw.empty.write')}</a> : <a href="/servers" className="btn btn-soft">{t('nw.empty.servers')}</a>}
+            />
+          )}
           {loaded && ordered.length > 0 && shown.length === 0 && (
             <StateView
               kind="empty"
@@ -50005,7 +50018,7 @@ import { useEffect, useMemo, useState } from 'react';
 import '../../styles/analytics.css';
 import { api } from '../../api';
 import { rankById } from '../../vrisingRanks';
-import { ago, ErrorLine, fmtDate, plural } from '../../ui';
+import { ago, ErrorLine, fmtDate, plural, num } from '../../ui';
 
 interface Analytics {
   days: number;
@@ -50087,11 +50100,11 @@ function Heatmap({ h }: { h: Analytics['heatmap'] }) {
           меньше <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> больше
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {hover && cur ? (cur.avg == null ? `${DOW[hover.dow]} ${hh(hover.hour)}: нет данных` : `${DOW[hover.dow]} ${hh(hover.hour)}: в среднем ${cur.avg}, максимум ${cur.peak}`) : `средние за ${h.days} ${plural(h.days, ['день', 'дня', 'дней'])}`}
+          {hover && cur ? (cur.avg == null ? `${DOW[hover.dow]} ${hh(hover.hour)}: нет данных` : `${DOW[hover.dow]} ${hh(hover.hour)}: в среднем ${num(cur.avg)}, максимум ${cur.peak}`) : `средние за ${h.days} ${plural(h.days, ['день', 'дня', 'дней'])}`}
         </span>
       </div>
       <div className="an-facts">
-        {h.busiest && <p><b>Пик</b> {DOW_LONG[h.busiest.dow]} в {hh(h.busiest.hour)}: в среднем {h.busiest.avg} {plural(Math.round(h.busiest.avg), ['игрок', 'игрока', 'игроков'])}</p>}
+        {h.busiest && <p><b>Пик</b> {DOW_LONG[h.busiest.dow]} в {hh(h.busiest.hour)}: в среднем {num(h.busiest.avg)} {plural(Math.round(h.busiest.avg), ['игрок', 'игрока', 'игроков'])}</p>}
         {h.quietest && <p><b>Тише всего</b> {DOW_LONG[h.quietest.dow]} в {hh(h.quietest.hour)}</p>}
         {h.restartHour != null && <p><b>Рестарт</b> лучше всего в {hh(h.restartHour)}: в это время меньше всего игроков в любой день</p>}
       </div>
@@ -50125,7 +50138,7 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
           <span className="an-legend"><i className="an-bar-new" />новые</span>
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {d ? `${dayLabel(d.day)}: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}, новых ${d.newPlayers}, ${d.hours} ч в игре, пик ${d.peak}` : 'наведите на столбец'}
+          {d ? `${dayLabel(d.day)}: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}, новых ${d.newPlayers}, ${num(d.hours)} ч в игре, пик ${d.peak}` : 'наведите на столбец'}
         </span>
       </div>
     </div>
@@ -50199,7 +50212,7 @@ function TopPlayers({ top }: { top: Analytics['top'] }) {
               <span className="an-top-bar"><span style={{ width: `${(p.hours / max) * 100}%` }} /></span>
             </span>
             <span className="shrink-0 text-right">
-              <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+              <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
               <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
             </span>
           </li>
@@ -51197,7 +51210,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Metrics.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, fmtDateTime } from '../../ui';
+import { AnimatedNumber, fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
 import { metricFill } from './serverLogic';
 
@@ -51247,13 +51260,13 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
       />
       <Cell
         k="Аптайм"
-        v={d.uptimePct == null ? '–' : `${d.uptimePct}%`}
+        v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
         hint={d.windowLabel}
         fill={d.uptimePct ?? 0}
       />
       <Cell
         k="В среднем"
-        v={d.avg == null ? '–' : String(d.avg)}
+        v={d.avg == null ? '–' : num(d.avg)}
         hint="пока онлайн"
         fill={metricFill(d.avg, d.maxPlayers)}
       />
@@ -51778,7 +51791,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
-import { Button, ErrorLine, UserAvatar, ago, plural, toast } from '../../ui';
+import { Button, ErrorLine, UserAvatar, ago, plural, toast, num } from '../../ui';
 
 export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number }
 interface Reviews { avg: number | null; count: number; dist: number[]; items: Review[]; mine: Review | null }
@@ -51845,7 +51858,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
     <div className="rv">
       <div className="rv-score">
         <div className="text-center">
-          <div className="rv-avg">{r.avg != null ? r.avg.toFixed(1).replace('.', ',') : '—'}</div>
+          <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
           <Stars value={r.avg ?? 0} size={18} />
           <div className="mt-1 text-sm font-bold text-mute">{r.count} {plural(r.count, ['отзыв', 'отзыва', 'отзывов'])}</div>
         </div>
@@ -52863,7 +52876,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
-import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll } from '../../ui';
+import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll, num } from '../../ui';
 import '../../styles/community.css';
 
 export interface Community {
@@ -52895,7 +52908,7 @@ export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; b
         <div key={d} className="contents">
           <span className="cm-heat-d">{DOW_SHORT[d]}</span>
           {row.map((v, h) => (
-            <span key={h} className="cm-heat-c" style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${v}`} />
+            <span key={h} className="cm-heat-c" style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${num(v)}`} />
           ))}
         </div>
       ))}
@@ -52966,6 +52979,7 @@ export default function CommunityBento() {
         <p className="cm-sub">
           {isRecord ? '🎉 Это рекорд за 30 дней!' : rec ? `Рекорд за 30 дней: ${rec.players} (${fmtDateTime(rec.at)})` : 'Рекорд появится, когда накопится история'}
         </p>
+        <a href="/community" className="cm-more">Сообщество: кто и когда играет →</a>
         <dl className="cm-mini">
           <div><dt>Серверов в сети</dt><dd>{c.now.online} из {c.now.servers}</dd></div>
           <div><dt>Игроков за неделю</dt><dd>{c.players.week}</dd></div>
@@ -53214,7 +53228,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/servers/PulseStrip.tsx" << '__COREGSM_EOF__'
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
 import { useId } from 'react';
-import { AnimatedNumber, fmtTime, LAG_PING } from '../../ui';
+import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
 import type { Server } from '../../api';
@@ -53321,7 +53335,7 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
         </div>
         <div>
           <dt>{t('srv.pulse.uptime')}</dt>
-          <dd>{uptime == null ? '–' : <>{(Math.round(uptime * 10) / 10).toLocaleString(undefined, { maximumFractionDigits: 1 })}<small>%</small></>}</dd>
+          <dd>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
         </div>
       </dl>
       <PlayersChart data={overview} now={now} />
@@ -53336,7 +53350,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
-import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../../ui';
+import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
@@ -53359,7 +53373,7 @@ export function saveView(v: ServersView) {
   }
 }
 
-const fmtUp = (v: number) => `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`;
+const fmtUp = (v: number) => `${num(v)}%`;
 
 /** copies the address; the button shows a check mark for a moment */
 function CopyAddress({ text, className = '' }: { text: string; className?: string }) {
@@ -54661,6 +54675,14 @@ export function coverBackground(
   const [a, b] = opts.strong ? [0.3, 0.62] : [0.22, 0.5];
   return `linear-gradient(180deg, rgba(8,10,20,${a}) 0%, rgba(8,10,20,${b}) 100%), url("${url}") center / cover no-repeat, ${gradient}`;
 }
+
+/**
+ * The background of a game without a picture: a deep, dark base tinted by the game colour with a soft glow in the
+ * corner, instead of a flat saturated slab (white text stays readable, the page stays calm).
+ */
+export function gameBackdrop(color: string, angle = 140): string {
+  return `radial-gradient(120% 130% at 100% 0%, ${color}b3 0%, ${color}33 45%, transparent 70%), linear-gradient(${angle}deg, color-mix(in srgb, ${color} 34%, #0d0f1a), #0b0c16)`;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/deliveries.ts" << '__COREGSM_EOF__'
@@ -55248,6 +55270,10 @@ __COREGSM_EOF__
   --badbg: 254 226 226;
   --badsolid: 185 40 40;
   --oksolid: 21 128 61;
+  /* fills (bars, dots, meters): bright in both themes; the text colours above stay dark in the light theme for contrast */
+  --ok-fill: 34 197 94;
+  --warn-fill: 245 158 11;
+  --bad-fill: 239 68 68;
   --seg-on: 255 255 255;
   --tile-border: rgb(231 233 240);
   --glass: rgb(255 255 255 / 0.74);
@@ -55279,7 +55305,7 @@ __COREGSM_EOF__
     --card: 18 20 27;
     --raised: 27 30 40;
     --ink: 226 228 236;
-    --mute: 148 154 170;
+    --mute: 160 166 182;
     --line: 38 41 53;
     --field: 112 118 136;
     --soft: 30 33 44;
@@ -55294,6 +55320,9 @@ __COREGSM_EOF__
     --bad: 248 113 113;
     --badbg: 58 25 30;
     --badsolid: 214 48 48;
+    --ok-fill: 74 222 128;
+    --warn-fill: 251 191 36;
+    --bad-fill: 248 113 113;
     --seg-on: 44 48 64;
     --tile-border: rgb(255 255 255 / 0.07);
     --glass: rgb(20 22 30 / 0.72);
@@ -55314,7 +55343,7 @@ __COREGSM_EOF__
   --card: 18 20 27;
   --raised: 27 30 40;
   --ink: 226 228 236;
-  --mute: 148 154 170;
+  --mute: 160 166 182;
   --line: 38 41 53;
   --field: 112 118 136;
   --soft: 30 33 44;
@@ -55329,6 +55358,9 @@ __COREGSM_EOF__
   --bad: 248 113 113;
   --badbg: 58 25 30;
   --badsolid: 214 48 48;
+    --ok-fill: 74 222 128;
+    --warn-fill: 251 191 36;
+    --bad-fill: 248 113 113;
   --seg-on: 44 48 64;
   --tile-border: rgb(255 255 255 / 0.07);
   --glass: rgb(20 22 30 / 0.72);
@@ -55563,8 +55595,8 @@ main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #000
 .meter > i { display: block; height: 100%; border-radius: 9999px; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--brand-2, var(--brand)))); transition: width 1.1s cubic-bezier(.2, .8, .2, 1); animation: meter-in 1.1s cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes meter-in { from { width: 0; } }
 
-.live-dot { position: relative; width: 8px; height: 8px; border-radius: 9999px; background: rgb(var(--ok)); }
-.live-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: rgb(var(--ok)); animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+.live-dot { position: relative; width: 8px; height: 8px; border-radius: 9999px; background: rgb(var(--ok-fill)); }
+.live-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: rgb(var(--ok-fill)); animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 @keyframes live-ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
 
 .offline-cover { opacity: .78; }
@@ -55788,6 +55820,10 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 
 /* ---------- skeletons: same shapes as the content; content fades in when it arrives ---------- */
 .fade-in { animation: fade-in .4s ease-out both; }
+.view-swap { animation: view-swap .32s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes view-swap { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .view-swap { animation: none; } }
+html[data-motion='reduce'] .view-swap { animation: none; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .skel-line { height: 12px; border-radius: 9999px; }
 
@@ -55910,9 +55946,9 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .tab-count { margin-left: 6px; border-radius: 9999px; padding: 0 6px; font-size: 12px; font-weight: 800; background: rgb(var(--ink) / 0.08); font-variant-numeric: tabular-nums; }
 
-.meter.m-ok > i { background: rgb(var(--ok)); }
-.meter.m-warn > i { background: rgb(var(--warn)); }
-.meter.m-bad > i { background: rgb(var(--bad)); }
+.meter.m-ok > i { background: rgb(var(--ok-fill)); }
+.meter.m-warn > i { background: rgb(var(--warn-fill)); }
+.meter.m-bad > i { background: rgb(var(--bad-fill)); }
 
 .avatar-hue { background: hsl(var(--h) 72% 88%); color: hsl(var(--h) 62% 24%); }
 :root[data-theme='dark'] .avatar-hue { background: hsl(var(--h) 42% 26%); color: hsl(var(--h) 90% 86%); }
@@ -56221,6 +56257,11 @@ html[data-contrast='high'] .seg { box-shadow: inset 0 0 0 1px rgb(var(--field));
 html[data-contrast='high'] .seg-item[aria-pressed='true'], html[data-contrast='high'] .seg-item[aria-current='page'], html[data-contrast='high'] .seg-item.on { box-shadow: inset 0 0 0 2px rgb(var(--ink)); }
 html[data-contrast='high'] .hint-strip { box-shadow: inset 0 0 0 1px rgb(var(--field)); }
 html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline; text-underline-offset: 3px; }
+
+/* status colours as fills (dots, legend squares, strength bars) use the bright fill tokens */
+.bg-ok { background-color: rgb(var(--ok-fill)); }
+.bg-warn { background-color: rgb(var(--warn-fill)); }
+.bg-bad { background-color: rgb(var(--bad-fill)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/lazyPage.tsx" << '__COREGSM_EOF__'
@@ -56956,6 +56997,8 @@ const en: Record<keyof typeof ru, string> = {
   'nw.react.error': 'Could not save the reaction',
   'nw.empty.title': 'No news yet',
   'nw.empty.text': 'Once an administrator publishes something, it will show up here.',
+  'nw.empty.write': 'Write the first news',
+  'nw.empty.servers': 'Go to servers',
   'nw.emptyRubric.title': 'Nothing in this category',
   'nw.emptyRubric.text': 'Try another category or show all news.',
   'nw.showAll': 'Show all',
@@ -57825,6 +57868,8 @@ const ru = {
   'nw.react.error': 'Не удалось сохранить реакцию',
   'nw.empty.title': 'Новостей пока нет',
   'nw.empty.text': 'Когда администратор что-нибудь опубликует, это появится здесь.',
+  'nw.empty.write': 'Написать первую новость',
+  'nw.empty.servers': 'К серверам',
   'nw.emptyRubric.title': 'В этой рубрике ничего нет',
   'nw.emptyRubric.text': 'Попробуйте другую рубрику или покажите все новости.',
   'nw.showAll': 'Показать все',
@@ -58438,7 +58483,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, plural, toast } from '../ui';
+import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, plural, toast, num, SkeletonRows } from '../ui';
 import type { Seasons } from './Community';
 import { useAuth } from '../auth';
 import { Stars, type Review } from '../components/server/Reviews';
@@ -58515,7 +58560,8 @@ function SeasonsAdmin() {
         <ErrorLine text={error} />
       </Section>
 
-      <Section title="Сезоны" description={rows.length ? `${rows.length} ${plural(rows.length, ['сезон', 'сезона', 'сезонов'])}` : 'Сезонов пока нет'}>
+      <Section title="Сезоны" description={!s ? undefined : rows.length ? `${rows.length} ${plural(rows.length, ['сезон', 'сезона', 'сезонов'])}` : 'Сезонов пока нет'}>
+        {!s && !error && <SkeletonRows n={2} />}
         <ul className="grid gap-2">
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
@@ -58523,7 +58569,7 @@ function SeasonsAdmin() {
                 <span className="flex flex-wrap items-center gap-2 font-extrabold">{r.name}{r.isCurrent && <span className="pill pill-ok">идёт</span>}</span>
                 <span className="block text-sm font-semibold text-mute">
                   {fmtDate(r.startsAt)}{r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}
-                  {r.podium.length > 0 && ` · ${r.isCurrent ? 'лидирует' : 'чемпион'} ${r.podium[0].name} (${r.podium[0].hours} ч)`}
+                  {r.podium.length > 0 && ` · ${r.isCurrent ? 'лидирует' : 'чемпион'} ${r.podium[0].name} (${num(r.podium[0].hours)} ч)`}
                 </span>
               </span>
               <button type="button" className="row-act" aria-label="Переименовать" title="Переименовать" onClick={() => void rename(r.id, r.name)}><IconEdit /></button>
@@ -58589,7 +58635,7 @@ function GalleryAdmin() {
   return (
     <Section title="Галерея" description={waiting ? `Ждут проверки: ${waiting}` : 'Новых скриншотов на проверке нет.'}>
       <ErrorLine text={error} />
-      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title="Скриншотов пока нет" text="Игроки загружают их на странице «Галерея»." /> : (
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title="Скриншотов пока нет" text="Игроки загружают их на странице «Галерея»."><a href="/gallery" className="btn btn-soft mt-2">Открыть галерею</a></Empty> : (
         <ul className="ga-grid">
           {list.map((s, i) => (
             <li key={s.id} className={`ga-card is-${s.status}`}>
@@ -59533,7 +59579,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
-import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural } from '../ui';
+import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
@@ -59577,9 +59623,9 @@ function SeasonBlocks() {
                   <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
                   <span className="min-w-0 flex-1">
                     <a href={playerHref(p.name)} className="block truncate font-extrabold hover:text-link">{p.name}</a>
-                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn))' }} /></span>
+                    <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn-fill))' }} /></span>
                   </span>
-                  <span className="shrink-0 font-extrabold tabular-nums">{p.hours} ч</span>
+                  <span className="shrink-0 font-extrabold tabular-nums">{num(p.hours)} ч</span>
                 </li>
               ))}
             </ol>
@@ -59600,7 +59646,7 @@ function SeasonBlocks() {
                     <li key={p.name} className="flex items-center gap-2">
                       <span aria-label={`${i + 1} место`}>{MEDALS[i]}</span>
                       <a href={playerHref(p.name)} className="min-w-0 flex-1 truncate font-bold hover:text-link">{p.name}</a>
-                      <span className="text-sm font-extrabold tabular-nums text-mute">{p.hours} ч</span>
+                      <span className="text-sm font-extrabold tabular-nums text-mute">{num(p.hours)} ч</span>
                     </li>
                   ))}
                   {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">Никто не играл</li>}
@@ -59694,7 +59740,7 @@ export default function CommunityPage() {
                     <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
                   </span>
                   <span className="shrink-0 text-right">
-                    <span className="block font-extrabold tabular-nums">{p.hours} ч</span>
+                    <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
                     <span className="block text-xs font-bold text-mute">{p.servers} {plural(p.servers, ['сервер', 'сервера', 'серверов'])}</span>
                   </span>
                 </li>
@@ -60674,7 +60720,7 @@ export default function GalleryPage() {
       {list === null ? (
         <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
       ) : list.length === 0 ? (
-        <Empty title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки." />
+        <Empty title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки.">{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>Загрузить первый скриншот</button> : <a href="/login" className="btn btn-soft mt-2">Войти и загрузить</a>}</Empty>
       ) : (
         <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
       )}
@@ -60698,7 +60744,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
-import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, usePoll } from '../ui';
+import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, usePoll, SkeletonRows } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -60727,6 +60773,7 @@ export default function JournalPage() {
     >
       {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
+      {!rows && !error && <SkeletonRows n={6} h="h-12" />}
       {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
       {shown.length > 0 && (
         <ul className="panel divide-y divide-line overflow-hidden">
@@ -62065,7 +62112,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
-import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural } from '../ui';
+import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
 import '../styles/community.css';
 import '../styles/profile.css';
 
@@ -62121,7 +62168,7 @@ export default function PlayerPage({ name }: { name: string }) {
           </p>
         </div>
         <dl className="pl-stats">
-          <div><dt>Часов</dt><dd>{p.hours}</dd></div>
+          <div><dt>Часов</dt><dd>{num(p.hours)}</dd></div>
           <div><dt>Визитов</dt><dd>{p.visits}</dd></div>
           <div><dt>Дней в игре</dt><dd>{p.days}</dd></div>
           <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>Подряд</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{p.streak} {plural(p.streak, ['день', 'дня', 'дней'])}</dd></div>
@@ -62134,7 +62181,7 @@ export default function PlayerPage({ name }: { name: string }) {
           <p className="mb-3 text-sm font-semibold text-mute">{p.usualHour != null ? `Чаще всего ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : 'Пока мало данных'}</p>
           <div className="pl-hours" role="img" aria-label="Часы в игре по времени суток">
             {p.byHour.map((v, h) => (
-              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${v} ч`}>
+              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${num(v)} ч`}>
                 <i style={{ height: `${(v / maxH) * 100}%` }} />
                 <b>{h % 3 === 0 ? h : ''}</b>
               </span>
@@ -62154,7 +62201,7 @@ export default function PlayerPage({ name }: { name: string }) {
                     <span className="cm-srv-bar"><span style={{ width: `${(s.hours / maxS) * 100}%` }} /></span>
                   </span>
                   <span className="shrink-0 text-right">
-                    <span className="block font-extrabold tabular-nums">{s.hours} ч</span>
+                    <span className="block font-extrabold tabular-nums">{num(s.hours)} ч</span>
                     <span className="block text-xs font-bold text-mute">{s.visits} {plural(s.visits, ['визит', 'визита', 'визитов'])}</span>
                   </span>
                 </a>
@@ -63014,7 +63061,7 @@ import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameGradient, gameLabel } from '../games';
-import { coverBackground } from '../cover';
+import { coverBackground, coverUrlOf, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
 import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
@@ -63032,7 +63079,6 @@ import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { useCoverAccent } from '../components/server/coverAccent';
-import { coverUrlOf } from '../cover';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
@@ -63124,6 +63170,16 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   // editing a server: administrators and moderators given «Серверы»
   const canEdit = isAdmin || !!me?.perms?.includes('servers');
   const probes = useProbes(id);
+  // the phone bar shows once the banner's buttons are scrolled out of sight
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const [barOn, setBarOn] = useState(false);
+  useEffect(() => {
+    const el = actionsRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(([e]) => setBarOn(!e.isIntersecting && e.boundingClientRect.top < 0), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  });
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -63417,7 +63473,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <article
         className={`srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
-        style={{ background: coverBackground(s.coverUrl, `linear-gradient(120deg, ${c1}, ${c2})`, { strong: true, game: s.game }) }}
+        style={{ background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
         {...depth}
       >
         {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
@@ -63474,9 +63530,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         )}
 
         {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
-            On phones «Подключиться» and «Подписаться» are in the bottom bar. */}
-        <div className="relative mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-          <a className="btn-cta max-sm:hidden" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+            On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
+            (and «Подписаться») floats above the bottom navigation. */}
+        <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
+          <a className="btn-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>{connectLabel}</a>
           <CopyButton text={s.address} label={t('srv.act.copyAddr')} tone="glass" />
           {canSub && (
             <button type="button" className="btn-glass max-sm:hidden" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
@@ -63504,10 +63561,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <SubscribeMenu serverId={id} serverName={s.name} subs={subs} open={subOpen} onOpenChange={setSubOpen} preselect={subPre} hideButton />
       )}
 
-      <div className="srv-mbar" role="region" aria-label={t('srv.bar.label')}>
-        <a className="btn" href={connectHref} onClick={onConnect}>{connectLabel}</a>
+      <div className={`srv-mbar ${barOn ? 'is-on' : ''}`} role="region" aria-label={t('srv.bar.label')} aria-hidden={!barOn}>
+        <a className="btn" href={connectHref} onClick={onConnect} tabIndex={barOn ? undefined : -1}>{connectLabel}</a>
         {canSub && (
-          <button type="button" className="btn btn-soft" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+          <button type="button" className="btn btn-soft" tabIndex={barOn ? undefined : -1} onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
             <IconBell size={18} />
             {subLabel}
           </button>
@@ -63747,7 +63804,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } fro
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
-import { coverBackground } from '../cover';
+import { coverBackground, gameBackdrop } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
@@ -63994,7 +64051,9 @@ function ServerList() {
 
       {servers.length > 0 && (
         <div className="srv-split" data-open={wnOpen}>
-          <div className="min-w-0 space-y-5">
+          {/* keyed by the filter and the view: switching them plays a short entrance (tiles come in one after another)
+              instead of a jump; the periodic refresh keeps the key, so nothing flickers */}
+          <div key={`${effFilter}|${effView}`} className="view-swap min-w-0 space-y-5">
             {visible.length === 0 && (
               effFilter === 'fav' && favCount === 0
                 ? <NoFavsState onReset={resetFilter} />
@@ -64082,8 +64141,8 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
-        background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
-        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? '0 0 0 3px rgb(var(--bad) / .85), ' : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
+        background: coverBackground(s.coverUrl, gameBackdrop(c1), { strong: true, game: s.game }),
+        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
       }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
       {...depth}
@@ -64104,7 +64163,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
             <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
           </div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
-          {reason && <span className={`hero-reason ${reason === 'attention' ? 'attn' : ''}`}>{t(`srv.hero.${reason}` as const)}</span>}
+          {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -64160,7 +64219,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
+      <div className={`flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -64429,9 +64488,11 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Status.tsx" << '__COREGSM_EOF__'
+import { useAuth } from '../auth';
+import { Icon } from '../icons';
 import { useMemo, useState } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 import '../styles/status.css';
 
 const fmtDay = (day: string) => {
@@ -64621,7 +64682,10 @@ const LEGEND: [string, string][] = [
 ];
 
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
+const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
+
 export default function StatusPage() {
+  const { isAdmin } = useAuth();
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
 
@@ -64633,7 +64697,7 @@ export default function StatusPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов и история сбоев за 30 дней" />
+      <PageHead icon={<IconPulse />} title="Статус" subtitle="Доступность серверов и история сбоев за 30 дней" />
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
@@ -64645,7 +64709,7 @@ export default function StatusPage() {
       )}
 
       {data && data.servers.length === 0 && (
-        <Empty title="Серверов пока нет" text="Когда серверы будут добавлены, здесь появится их доступность." />
+        <Empty title="Серверов пока нет" text="Когда серверы будут добавлены, здесь появится их доступность.">{isAdmin && <a href="/admin/servers/new" className="btn mt-2">Добавить сервер</a>}</Empty>
       )}
 
       {data && data.servers.length > 0 && (
@@ -66985,6 +67049,7 @@ __COREGSM_EOF__
 @media (max-width: 699px) { .cm-bento { grid-template-columns: minmax(0, 1fr); } }
 .cm-bento > .tile { padding: 16px 18px; min-width: 0; }
 .cm-k { font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); margin-bottom: 8px; }
+.cm-more { display: none; }
 .cm-sub { margin-top: 8px; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
 
 .cm-now { position: relative; overflow: hidden; }
@@ -67005,7 +67070,7 @@ __COREGSM_EOF__
 .cm-heat { display: grid; grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
 .cm-heat.is-big { gap: 3px; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); }
 .cm-heat-d { font-size: 11px; font-weight: 800; color: rgb(var(--mute)); }
-.cm-heat-h { font-size: 10.5px; font-weight: 700; color: rgb(var(--mute)); }
+.cm-heat-h { font-size: 11px; font-weight: 700; color: rgb(var(--mute)); }
 .cm-heat-c { height: 15px; border-radius: 3px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
 .cm-heat.is-big .cm-heat-c { height: clamp(14px, 2.4vw, 26px); border-radius: 5px; }
 
@@ -67057,6 +67122,16 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-season { background: radial-gradient(120% 140% at 100% 0%, rgb(var(--warn) / .12), transparent 55%), rgb(var(--card)); }
 .cm-fame { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
 .cm-fame-i { border-radius: 18px; background: rgb(var(--soft)); padding: 12px 14px; }
+
+/* phones: only «Сейчас играют», compact; when and who arrived are one tap away on «Сообщество» */
+@media (max-width: 699px) {
+  .cm-bento { grid-template-columns: minmax(0, 1fr); }
+  .cm-bento .cm-when, .cm-bento .cm-feed { display: none; }
+  .cm-bento > .tile { padding: 12px 14px; }
+  .cm-big { font-size: 44px; }
+  .cm-mini dd { font-size: 15px; }
+  .cm-more { display: block; margin-top: 8px; font-size: 13px; font-weight: 800; color: rgb(var(--link)); }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
@@ -67086,9 +67161,12 @@ __COREGSM_EOF__
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
 .pp-v a { text-decoration: underline; text-underline-offset: 3px; }
-.pp-tone-ok { color: #86efac; }
-.pp-tone-warn { color: #fde68a; }
-.pp-tone-bad { color: #fecaca; }
+/* the ping's quality: white text (readable on any cover) and a coloured light in front of it */
+.pp-v > :is(.pp-tone-ok, .pp-tone-warn, .pp-tone-bad) { display: inline-flex; align-items: center; gap: 7px; color: #fff; white-space: normal; overflow: visible; }
+:is(.pp-tone-ok, .pp-tone-warn, .pp-tone-bad)::before { content: ''; flex: none; width: 9px; height: 9px; border-radius: 9999px; background: var(--tone); box-shadow: 0 0 0 3px rgb(0 0 0 / .25), 0 0 10px var(--tone); }
+.pp-tone-ok { --tone: #4ade80; }
+.pp-tone-warn { --tone: #facc15; }
+.pp-tone-bad { --tone: #f87171; }
 @media (min-width: 640px) { .pp { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pp-i.wide { grid-column: span 2; } }
 @media (min-width: 1024px) { .pp { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
@@ -67202,7 +67280,7 @@ __COREGSM_EOF__
 .srv-metric-of { font-size: 14px; font-weight: 800; color: rgb(var(--mute)); }
 .srv-metric-bar { height: 4px; margin: 7px 0 5px; border-radius: 9999px; background: rgb(var(--line)); overflow: hidden; }
 .srv-metric-bar > i { display: block; height: 100%; border-radius: 9999px; background: var(--srv-acc); }
-.srv-metric-bar > i.is-warm { background: rgb(var(--warn)); }
+.srv-metric-bar > i.is-warm { background: rgb(var(--warn-fill)); }
 .srv-metric-bar > i.is-hot { background: rgb(var(--bad)); }
 .srv-metric-h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
 
@@ -67266,13 +67344,20 @@ __COREGSM_EOF__
 /* ---------- phone action bar (solid, no blur; sits above the bottom navigation of the app) ---------- */
 .srv-mbar { display: none; }
 @media (max-width: 639px) {
+  /* a floating bar above the bottom navigation, only while the banner's own buttons are out of sight */
   .srv-mbar {
-    display: flex; gap: 8px; position: fixed; left: 0; right: 0; z-index: 30; padding: 10px 12px;
-    bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
-    background: rgb(var(--card)); border-top: 1px solid rgb(var(--line));
+    display: flex; gap: 8px; position: fixed; left: 12px; right: 12px; z-index: 30; padding: 8px;
+    bottom: calc(5.75rem + env(safe-area-inset-bottom, 0px));
+    border-radius: 22px; background: rgb(var(--card) / .92); box-shadow: 0 0 0 1px rgb(var(--line)), 0 14px 34px -14px rgb(0 0 0 / .55);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    opacity: 0; transform: translateY(12px); pointer-events: none; transition: opacity .2s ease, transform .25s cubic-bezier(.2, .8, .2, 1);
   }
-  .srv-mbar > * { flex: 1 1 0; min-width: 0; min-height: 48px; }
+  .srv-mbar.is-on { opacity: 1; transform: none; pointer-events: auto; }
+  .srv-mbar > * { flex: 1 1 0; min-width: 0; min-height: 44px; }
+  /* the banner's buttons on a phone: one line each, the main one across the whole row */
+  .srv-banner :is(.btn-cta, .btn-glass) { white-space: nowrap; }
 }
+@media (max-width: 639px) and (prefers-reduced-motion: reduce) { .srv-mbar { transition: none; } }
 
 @media (prefers-reduced-motion: reduce) {
   .srv-more-pop { animation: none !important; }
@@ -67374,16 +67459,16 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
-/* news page (public): rubrics, two columns, cover, article. Colours / shadows / opacity only; no transforms, no infinite animation */
-.nw-page { position: relative; min-height: calc(100dvh - 7rem); padding: .25rem 0 3rem; border-radius: 2rem;
-  background: linear-gradient(180deg, color-mix(in srgb, rgb(var(--brand)) 8%, transparent) 0, color-mix(in srgb, rgb(var(--brand)) 4%, transparent) 45%, transparent 100%); }
-.nw-grid { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.5rem; }
+/* news page (public): rubrics, two columns, cover, article. Colours / shadows / opacity only; no transforms, no infinite animation.
+   The page sits on the same grid as every other page: the title on the left edge, no panel of its own behind it. */
+.nw-page { position: relative; padding: 0 0 3rem; }
+.nw-grid { display: grid; gap: 1.5rem; }
 .nw-main { display: grid; gap: 1.25rem; min-width: 0; align-content: start; }
 .nw-feed { max-width: none; margin: 0; }
 .nw-group { display: grid; gap: .75rem; }
 .nw-article-wrap { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.25rem; }
 @media (min-width: 1100px) {
-  .nw-grid.has-side { max-width: 76rem; grid-template-columns: minmax(0, 1fr) 19rem; align-items: start; }
+  .nw-grid.has-side { grid-template-columns: minmax(0, 1fr) 19rem; align-items: start; }
   .nw-aside { position: sticky; top: 1rem; }
 }
 
@@ -67525,7 +67610,6 @@ __COREGSM_EOF__
 .nw-edit-row { display: grid; gap: .5rem; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto; align-items: center; }
 
 @media (max-width: 560px) {
-  .nw-page { border-radius: 1.25rem; }
   .nw-hero, .nw-article { border-radius: 1.25rem; }
   .nw-cover { min-height: 13rem; }
   .nw-cover.is-tall { min-height: 15rem; }
@@ -67886,10 +67970,18 @@ __COREGSM_EOF__
   .pulse { grid-template-columns: minmax(0, 1fr) minmax(200px, 1fr); }
   .pulse-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; }
 }
+/* phones: the state in one row and the four numbers in one compact line; the day's curve is left out (the servers
+   below are what a visitor came for) */
 @media (max-width: 560px) {
-  .pulse { grid-template-columns: minmax(0, 1fr); padding: 14px; }
-  .pulse-nums { grid-row: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-  .pulse-nums dd { font-size: 20px; }
+  .pulse { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 12px 14px; }
+  .pulse-icon { width: 34px; height: 34px; border-radius: 12px; }
+  .pulse-icon svg { width: 18px; height: 18px; }
+  .pulse-title { font-size: 15px; }
+  .pulse-sub { font-size: 12px; }
+  .pulse-nums { grid-row: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .pulse-nums dt { font-size: 9.5px; letter-spacing: .02em; white-space: normal; line-height: 1.15; }
+  .pulse-nums dd { font-size: 17px; }
+  .pulse-chart { display: none; }
 }
 
 /* ---------- hero: why this server ---------- */
@@ -68147,9 +68239,9 @@ export { usePoll, LAG_PING, isLag } from './ui/poll';
 export { useTween, AnimatedNumber, Burst } from './ui/motion';
 export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
 export type { Route } from './ui/route';
-export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, plural } from './ui/format';
+export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/format';
 export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
-export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, Wordmark } from './ui/blocks';
+export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
 export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
@@ -68855,6 +68947,15 @@ export function Wordmark({ className = '' }: { className?: string }) {
     </span>
   );
 }
+
+/** a few grey rows while a list loads: the page keeps its shape instead of jumping when the data comes */
+export function SkeletonRows({ n = 3, h = 'h-14' }: { n?: number; h?: string }) {
+  return (
+    <div className="grid gap-2" aria-busy="true" role="status" aria-label="Загрузка">
+      {Array.from({ length: n }, (_, i) => <div key={i} className={`skeleton ${h} rounded-2xl`} style={{ opacity: 1 - i * 0.18 }} />)}
+    </div>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/charts.tsx" << '__COREGSM_EOF__'
@@ -69114,6 +69215,16 @@ export function plural(n: number, forms: [string, string, string]): string {
   if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return forms[1];
   return forms[2];
 }
+
+const numFmt = new Map<string, Intl.NumberFormat>();
+/** a number in the panel's language: «99,8» in Russian, «99.8» in English; up to `digits` decimals */
+export const num = (n: number | null | undefined, digits = 1): string => {
+  if (n == null || !Number.isFinite(n)) return '–';
+  const loc = `${getPrefs().lang === 'en' ? 'en-US' : 'ru-RU'}|${digits}`;
+  let f = numFmt.get(loc);
+  if (!f) numFmt.set(loc, (f = new Intl.NumberFormat(loc.split('|')[0], { maximumFractionDigits: digits })));
+  return f.format(n);
+};
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/motion.tsx" << '__COREGSM_EOF__'

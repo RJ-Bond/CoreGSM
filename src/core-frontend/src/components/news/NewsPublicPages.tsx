@@ -84,6 +84,8 @@ function FeedSkeleton() {
 
 /** /news: rubrics, pinned first, month groups, the side panel */
 export function NewsListPage() {
+  const { me } = useAuth();
+  const canWrite = me?.role === 'admin' || !!me?.perms?.includes('news');
   const [items, setItems] = useState<PublicNews[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -134,7 +136,15 @@ export function NewsListPage() {
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
           {!loaded && <FeedSkeleton />}
-          {loaded && !error && ordered.length === 0 && <StateView kind="empty" art={<NewsArt />} title={t('nw.empty.title')} text={t('nw.empty.text')} />}
+          {loaded && !error && ordered.length === 0 && (
+            <StateView
+              kind="empty"
+              art={<NewsArt />}
+              title={t('nw.empty.title')}
+              text={t('nw.empty.text')}
+              action={canWrite ? <a href="/admin/news/new" className="btn">{t('nw.empty.write')}</a> : <a href="/servers" className="btn btn-soft">{t('nw.empty.servers')}</a>}
+            />
+          )}
           {loaded && ordered.length > 0 && shown.length === 0 && (
             <StateView
               kind="empty"

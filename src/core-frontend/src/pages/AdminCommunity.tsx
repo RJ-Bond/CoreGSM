@@ -2,7 +2,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, plural, toast } from '../ui';
+import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, plural, toast, num, SkeletonRows } from '../ui';
 import type { Seasons } from './Community';
 import { useAuth } from '../auth';
 import { Stars, type Review } from '../components/server/Reviews';
@@ -79,7 +79,8 @@ function SeasonsAdmin() {
         <ErrorLine text={error} />
       </Section>
 
-      <Section title="Сезоны" description={rows.length ? `${rows.length} ${plural(rows.length, ['сезон', 'сезона', 'сезонов'])}` : 'Сезонов пока нет'}>
+      <Section title="Сезоны" description={!s ? undefined : rows.length ? `${rows.length} ${plural(rows.length, ['сезон', 'сезона', 'сезонов'])}` : 'Сезонов пока нет'}>
+        {!s && !error && <SkeletonRows n={2} />}
         <ul className="grid gap-2">
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
@@ -87,7 +88,7 @@ function SeasonsAdmin() {
                 <span className="flex flex-wrap items-center gap-2 font-extrabold">{r.name}{r.isCurrent && <span className="pill pill-ok">идёт</span>}</span>
                 <span className="block text-sm font-semibold text-mute">
                   {fmtDate(r.startsAt)}{r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}
-                  {r.podium.length > 0 && ` · ${r.isCurrent ? 'лидирует' : 'чемпион'} ${r.podium[0].name} (${r.podium[0].hours} ч)`}
+                  {r.podium.length > 0 && ` · ${r.isCurrent ? 'лидирует' : 'чемпион'} ${r.podium[0].name} (${num(r.podium[0].hours)} ч)`}
                 </span>
               </span>
               <button type="button" className="row-act" aria-label="Переименовать" title="Переименовать" onClick={() => void rename(r.id, r.name)}><IconEdit /></button>
@@ -153,7 +154,7 @@ function GalleryAdmin() {
   return (
     <Section title="Галерея" description={waiting ? `Ждут проверки: ${waiting}` : 'Новых скриншотов на проверке нет.'}>
       <ErrorLine text={error} />
-      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title="Скриншотов пока нет" text="Игроки загружают их на странице «Галерея»." /> : (
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title="Скриншотов пока нет" text="Игроки загружают их на странице «Галерея»."><a href="/gallery" className="btn btn-soft mt-2">Открыть галерею</a></Empty> : (
         <ul className="ga-grid">
           {list.map((s, i) => (
             <li key={s.id} className={`ga-card is-${s.status}`}>

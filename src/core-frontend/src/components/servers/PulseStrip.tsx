@@ -1,6 +1,6 @@
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
 import { useId } from 'react';
-import { AnimatedNumber, fmtTime, LAG_PING } from '../../ui';
+import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
 import type { Server } from '../../api';
@@ -107,7 +107,7 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
         </div>
         <div>
           <dt>{t('srv.pulse.uptime')}</dt>
-          <dd>{uptime == null ? '–' : <>{(Math.round(uptime * 10) / 10).toLocaleString(undefined, { maximumFractionDigits: 1 })}<small>%</small></>}</dd>
+          <dd>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
         </div>
       </dl>
       <PlayersChart data={overview} now={now} />
