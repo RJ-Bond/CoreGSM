@@ -142,9 +142,10 @@
 .srv-metric-v { margin-top: 2px; font-size: 22px; font-weight: 900; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .srv-metric-of { font-size: 14px; font-weight: 800; color: rgb(var(--mute)); }
 .srv-metric-bar { height: 4px; margin: 7px 0 5px; border-radius: 9999px; background: rgb(var(--line)); overflow: hidden; }
-.srv-metric-bar > i { display: block; height: 100%; border-radius: 9999px; background: var(--srv-acc); }
+.srv-metric-bar > i { display: block; height: 100%; border-radius: 9999px; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); }
+.srv-metric-bar > i.is-good { background: rgb(var(--ok-fill)); }
 .srv-metric-bar > i.is-warm { background: rgb(var(--warn-fill)); }
-.srv-metric-bar > i.is-hot { background: rgb(var(--bad)); }
+.srv-metric-bar > i.is-hot { background: rgb(var(--bad-fill)); }
 .srv-metric-h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
 
 /* ---------- chart header ---------- */
