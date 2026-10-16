@@ -52,7 +52,7 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-extrabold">{s.name}</span>
                 <span className="block text-sm font-semibold text-mute">
-                  {!p ? '…' : p.enabled ? `${daysText(p.days)} в ${hhmm(p.atMin)}${p.next ? ` · следующий ${fmtDateTime(p.next)}` : ''}` : 'выключено'}
+                  {!p ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : p.enabled ? `${daysText(p.days)} в ${hhmm(p.atMin)}${p.next ? ` · следующий ${fmtDateTime(p.next)}` : ''}` : 'выключено'}
                   {p?.rcon.configured ? ' · RCON подключён' : ''}
                 </span>
                 {p?.lastResult && <span className="block text-xs font-bold text-mute">Последний раз {p.lastRunAt ? fmtDateTime(p.lastRunAt) : ''}: {p.lastResult}</span>}

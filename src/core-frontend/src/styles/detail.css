@@ -24,9 +24,12 @@
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
 .pp-v a { text-decoration: underline; text-underline-offset: 3px; }
-.pp-tone-ok { color: #86efac; }
-.pp-tone-warn { color: #fde68a; }
-.pp-tone-bad { color: #fecaca; }
+/* the ping's quality: white text (readable on any cover) and a coloured light in front of it */
+.pp-v > :is(.pp-tone-ok, .pp-tone-warn, .pp-tone-bad) { display: inline-flex; align-items: center; gap: 7px; color: #fff; white-space: normal; overflow: visible; }
+:is(.pp-tone-ok, .pp-tone-warn, .pp-tone-bad)::before { content: ''; flex: none; width: 9px; height: 9px; border-radius: 9999px; background: var(--tone); box-shadow: 0 0 0 3px rgb(0 0 0 / .25), 0 0 10px var(--tone); }
+.pp-tone-ok { --tone: #4ade80; }
+.pp-tone-warn { --tone: #facc15; }
+.pp-tone-bad { --tone: #f87171; }
 @media (min-width: 640px) { .pp { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pp-i.wide { grid-column: span 2; } }
 @media (min-width: 1024px) { .pp { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
@@ -140,7 +143,7 @@
 .srv-metric-of { font-size: 14px; font-weight: 800; color: rgb(var(--mute)); }
 .srv-metric-bar { height: 4px; margin: 7px 0 5px; border-radius: 9999px; background: rgb(var(--line)); overflow: hidden; }
 .srv-metric-bar > i { display: block; height: 100%; border-radius: 9999px; background: var(--srv-acc); }
-.srv-metric-bar > i.is-warm { background: rgb(var(--warn)); }
+.srv-metric-bar > i.is-warm { background: rgb(var(--warn-fill)); }
 .srv-metric-bar > i.is-hot { background: rgb(var(--bad)); }
 .srv-metric-h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
 
@@ -204,13 +207,20 @@
 /* ---------- phone action bar (solid, no blur; sits above the bottom navigation of the app) ---------- */
 .srv-mbar { display: none; }
 @media (max-width: 639px) {
+  /* a floating bar above the bottom navigation, only while the banner's own buttons are out of sight */
   .srv-mbar {
-    display: flex; gap: 8px; position: fixed; left: 0; right: 0; z-index: 30; padding: 10px 12px;
-    bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
-    background: rgb(var(--card)); border-top: 1px solid rgb(var(--line));
+    display: flex; gap: 8px; position: fixed; left: 12px; right: 12px; z-index: 30; padding: 8px;
+    bottom: calc(5.75rem + env(safe-area-inset-bottom, 0px));
+    border-radius: 22px; background: rgb(var(--card) / .92); box-shadow: 0 0 0 1px rgb(var(--line)), 0 14px 34px -14px rgb(0 0 0 / .55);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    opacity: 0; transform: translateY(12px); pointer-events: none; transition: opacity .2s ease, transform .25s cubic-bezier(.2, .8, .2, 1);
   }
-  .srv-mbar > * { flex: 1 1 0; min-width: 0; min-height: 48px; }
+  .srv-mbar.is-on { opacity: 1; transform: none; pointer-events: auto; }
+  .srv-mbar > * { flex: 1 1 0; min-width: 0; min-height: 44px; }
+  /* the banner's buttons on a phone: one line each, the main one across the whole row */
+  .srv-banner :is(.btn-cta, .btn-glass) { white-space: nowrap; }
 }
+@media (max-width: 639px) and (prefers-reduced-motion: reduce) { .srv-mbar { transition: none; } }
 
 @media (prefers-reduced-motion: reduce) {
   .srv-more-pop { animation: none !important; }

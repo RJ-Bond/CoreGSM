@@ -4,7 +4,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast } from '../ui';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast, SkeletonRows } from '../ui';
 
 interface Extras {
   autoroles: { id: number; guildId: string; roleId: string; roleName: string | null; roleColor: number; kind: Kind; threshold: number; serverId: number | null; members: number; error: string | null }[];
@@ -46,6 +46,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
       >
         <ErrorLine text={error} />
         {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.</p>}
+        {!x && !error && <SkeletonRows n={2} />}
         {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">Пока нет ни одной автороли.</p>}
         <ul className="grid gap-2">
           {x?.autoroles.map((r) => (
@@ -67,6 +68,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
         description="Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут."
         actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>Добавить счётчик</button>}
       >
+        {!x && !error && <SkeletonRows n={1} />}
         {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.</p>}
         <ul className="grid gap-2">
           {x?.counters.map((c) => (

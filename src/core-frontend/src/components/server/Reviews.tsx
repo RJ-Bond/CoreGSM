@@ -2,7 +2,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
-import { Button, ErrorLine, UserAvatar, ago, plural, toast } from '../../ui';
+import { Button, ErrorLine, UserAvatar, ago, plural, toast, num } from '../../ui';
 
 export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number }
 interface Reviews { avg: number | null; count: number; dist: number[]; items: Review[]; mine: Review | null }
@@ -69,7 +69,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
     <div className="rv">
       <div className="rv-score">
         <div className="text-center">
-          <div className="rv-avg">{r.avg != null ? r.avg.toFixed(1).replace('.', ',') : '—'}</div>
+          <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
           <Stars value={r.avg ?? 0} size={18} />
           <div className="mt-1 text-sm font-bold text-mute">{r.count} {plural(r.count, ['отзыв', 'отзыва', 'отзывов'])}</div>
         </div>

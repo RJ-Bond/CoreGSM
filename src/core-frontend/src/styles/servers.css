@@ -181,10 +181,18 @@
   .pulse { grid-template-columns: minmax(0, 1fr) minmax(200px, 1fr); }
   .pulse-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; }
 }
+/* phones: the state in one row and the four numbers in one compact line; the day's curve is left out (the servers
+   below are what a visitor came for) */
 @media (max-width: 560px) {
-  .pulse { grid-template-columns: minmax(0, 1fr); padding: 14px; }
-  .pulse-nums { grid-row: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-  .pulse-nums dd { font-size: 20px; }
+  .pulse { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 12px 14px; }
+  .pulse-icon { width: 34px; height: 34px; border-radius: 12px; }
+  .pulse-icon svg { width: 18px; height: 18px; }
+  .pulse-title { font-size: 15px; }
+  .pulse-sub { font-size: 12px; }
+  .pulse-nums { grid-row: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .pulse-nums dt { font-size: 9.5px; letter-spacing: .02em; white-space: normal; line-height: 1.15; }
+  .pulse-nums dd { font-size: 17px; }
+  .pulse-chart { display: none; }
 }
 
 /* ---------- hero: why this server ---------- */
