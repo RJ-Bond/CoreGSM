@@ -15,6 +15,11 @@ import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from './db.js';
 import { enqueueDelivery } from './deliveries.js';
 
+/** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
+type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
+let pushLater: PushHook = () => undefined;
+export const setPushHook = (fn: PushHook) => { pushLater = fn; };
+
 export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
 export type SubKind = (typeof SUB_KINDS)[number];
 
@@ -120,6 +125,8 @@ export function notifySubscribers(serverId: number, kind: SubKind, obs: Observat
     insert.run(s.user_id, now, kind, serverId, text);
     touch.run(now, s.user_id, serverId, kind);
     if (s.discord_id && canDm()) enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+    // and on the devices where the player turned notifications on
+    pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}` });
     n++;
   }
   if (n) db.prepare('DELETE FROM user_notifications WHERE ts < ?').run(now - 60 * 86400_000);

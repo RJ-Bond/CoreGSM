@@ -1,0 +1,17 @@
+
+/* users: the permissions of a moderator, as toggle chips */
+.us-perms { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.us-perm { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; border-radius: 9999px; padding: 4px 12px 4px 8px; font-size: 13px; font-weight: 700; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, box-shadow .15s ease; }
+.us-perm.is-on { background: rgb(var(--brand) / .12); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .45); }
+.us-perm input { width: 15px; height: 15px; }
+
+/* restart plans: the days of the week */
+.rp-day { min-width: 2.75rem; border-radius: 9999px; padding: 6px 12px; font-size: 14px; font-weight: 800; color: rgb(var(--mute)); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, color .15s ease; }
+.rp-day:hover { color: rgb(var(--ink)); }
+.rp-day.is-on { color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: 0 4px 12px -6px rgb(var(--brand) / .8); }
+
+/* branding: the game theme cards */
+.gt-card { border-radius: var(--r-lg, 20px); border: 1px solid rgb(var(--line)); background: rgb(var(--card)); padding: 8px; text-align: left; transition: box-shadow .15s ease; }
+.gt-card:hover { box-shadow: var(--shadow-1); }
+.gt-card.is-on { border-color: transparent; box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 4px rgb(var(--ink)); }
+.gt-art { display: flex; align-items: flex-end; height: 64px; padding: 8px; border-radius: 14px; background-size: cover; background-position: center; }

@@ -16,7 +16,8 @@ import express from 'express';
 import { viewer } from '../auth.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../localTime.js';
-import { vrRankIdFor } from '../profile.js';
+import { playAchievements, vrRankIdFor } from '../profile.js';
+import { seasonAchievements } from '../seasons.js';
 
 export const router = express.Router();
 
@@ -26,6 +27,16 @@ const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
 interface ServerName { id: number; name: string; game: string }
 const serverNames = () =>
   new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
+
+/** the players with the most hours since `since` (any case of a nick counts as one player) */
+export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number }[] {
+  return (db
+    .prepare(
+      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+       FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ? ${serverId ? 'AND server_id = ?' : ''} GROUP BY k ORDER BY h DESC LIMIT ?`,
+    )
+    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+}
 
 function community(now = Date.now()) {
   const names = serverNames();
@@ -72,13 +83,7 @@ function community(now = Date.now()) {
       newcomer: (firstSeen.get(r.name) as { t: number }).t === r.joined_at,
     }));
 
-  const topSince = (since: number) =>
-    (db
-      .prepare(
-        `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
-         FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY k ORDER BY h DESC LIMIT 10`,
-      )
-      .all(now, now, since, now, since) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+  const topSince = (since: number) => topPlayers(since, now);
 
   const servers = live
     .filter((s) => names.has(s.id))
@@ -150,6 +155,7 @@ export function playerCard(nick: string, now = Date.now()) {
       .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
       .sort((a, b) => b.hours - a.hours),
     recent: visits.slice(-8).reverse().filter((v) => names.has(v.server_id)).map((v) => ({ serverId: v.server_id, serverName: names.get(v.server_id)!.name, from: v.joined_at, to: v.live ? null : v.left_at })),
+    achievements: [...playAchievements(visits.map((v) => ({ server_id: v.server_id, joined_at: v.joined_at, left_at: v.live ? null : v.left_at })), zone, now), ...seasonAchievements(name, now)],
     ...(game ? { rankId: vrRankIdFor(name) } : {}),
   };
 }

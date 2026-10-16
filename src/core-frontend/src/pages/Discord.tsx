@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
+import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
@@ -289,6 +290,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       </div>
 
       <PlayersShownCard />
+      {loaded && <DiscordExtras servers={servers} />}
       <DeliveryList />
 
       {draft && (

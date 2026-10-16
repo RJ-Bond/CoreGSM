@@ -92,6 +92,45 @@ export function staff(req: AuthedRequest, res: Response, next: NextFunction) {
   req.user = u;
   next();
 }
+/**
+ * What a moderator may do. Administrators may do everything; a moderator gets the permissions the administrator
+ * ticked (the default set until then: news and moderation of reviews and screenshots).
+ */
+export const PERMS = ['news', 'moderation', 'servers', 'maintenance', 'journal'] as const;
+export type Perm = (typeof PERMS)[number];
+export const DEFAULT_MOD_PERMS: Perm[] = ['news', 'moderation'];
+
+export function parsePerms(raw: string | null | undefined): Perm[] {
+  if (raw == null) return [...DEFAULT_MOD_PERMS];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? PERMS.filter((p) => v.includes(p)) : [...DEFAULT_MOD_PERMS];
+  } catch {
+    return [...DEFAULT_MOD_PERMS];
+  }
+}
+/** the permissions of an account: all for an administrator, the ticked ones for a moderator, none for a player */
+export function permsOf(u: { id: number; role: Role }): Perm[] {
+  if (u.role === 'admin') return [...PERMS];
+  if (u.role !== 'moderator') return [];
+  return parsePerms((db.prepare('SELECT perms FROM users WHERE id = ?').get(u.id) as { perms: string | null } | undefined)?.perms);
+}
+export const can = (req: Request, p: Perm): boolean => {
+  const u = (req as AuthedRequest).user;
+  return !!u && permsOf(u).includes(p);
+};
+/** administrators, and moderators with the given permission */
+export function allow(p: Perm) {
+  return (req: AuthedRequest, res: Response, next: NextFunction) => {
+    const u = loadUser(req);
+    if (!u) return void res.status(401).json({ error: 'Требуется вход' });
+    req.user = u;
+    if (u.role === 'admin') return next();
+    if (u.role === 'moderator' && permsOf(u).includes(p)) return next();
+    res.status(403).json({ error: u.role === 'moderator' ? 'У вас нет права на это действие: его выдаёт администратор' : 'Это действие доступно администратору и модератору' });
+  };
+}
+
 /** viewing: open to everyone while the panel is public, otherwise requires a sign-in */
 export function viewer(req: AuthedRequest, res: Response, next: NextFunction) {
   const u = loadUser(req);

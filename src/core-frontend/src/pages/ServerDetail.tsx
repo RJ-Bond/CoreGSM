@@ -1,3 +1,5 @@
+import ServerReviews from '../components/server/Reviews';
+import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
@@ -48,6 +50,8 @@ const OVERVIEW_SECTIONS: SectionDef[] = [
   { id: 'ov-chart', label: 'График' },
   { id: 'ov-events', label: 'События', secondary: true },
   { id: 'ov-players', label: 'Игроки' },
+  { id: 'ov-probes', label: 'Доступность', secondary: true },
+  { id: 'ov-reviews', label: 'Отзывы', secondary: true },
 ];
 const HISTORY_SECTIONS: SectionDef[] = [
   { id: 'hi-chart', label: 'График' },
@@ -109,6 +113,9 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const { me, isAdmin } = useAuth();
+  // editing a server: administrators and moderators given «Серверы»
+  const canEdit = isAdmin || !!me?.perms?.includes('servers');
+  const probes = useProbes(id);
   const [hours, setHours] = useState(24);
   const [series, setSeries] = useState<Series>('players');
   const [data, setData] = useState<ServerDetails | null>(null);
@@ -363,6 +370,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
+        {probes && probes.probes.length > 0 && (
+          <SectionCard id="ov-probes" state={sections} style={stagger(4)} title="Доступность из разных мест">
+            <ProbesView v={probes} />
+          </SectionCard>
+        )}
+        <SectionCard id="ov-reviews" state={sections} style={stagger(4)} title="Отзывы игроков">
+          <ServerReviews serverId={id} />
+        </SectionCard>
       </div>
     );
   }
@@ -381,11 +396,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   const moreItems: MoreItem[] = [
     { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
-    ...(isAdmin ? [
+    ...(canEdit ? [
       { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
       { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
-      { key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true },
     ] : []),
+    ...(isAdmin ? [{ key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true }] : []),
   ];
 
   return (

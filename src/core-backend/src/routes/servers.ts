@@ -1,7 +1,7 @@
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
 import express from 'express';
 import { z } from 'zod';
-import { admin, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
+import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
 import { channelInfo } from '../botState.js';
 import { isKnownGame, renderCard, renderGameIcon } from '../card.js';
 import { removeCover } from '../covers.js';
@@ -71,7 +71,7 @@ router.get('/api/servers/sparks', viewer, (req, res) => {
 
 router.post(
   '/api/servers',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
@@ -86,7 +86,7 @@ router.post(
 
 router.put(
   '/api/servers/:id',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     const b = serverSchema.safeParse(req.body);
@@ -110,7 +110,7 @@ router.delete('/api/servers/:id', admin, (req, res) => {
 // try a server without saving it: used by the "Проверить" button in the add/edit form
 router.post(
   '/api/servers/test',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const b = serverSchema.pick({ game: true, host: true, port: true, queryPort: true }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Укажите игру, адрес и порт' });
@@ -223,7 +223,7 @@ function usualWeek(serverId: number, before: number): (number | null)[] {
 
 router.post(
   '/api/servers/:id/refresh',
-  admin,
+  allow('servers'),
   wrap(async (req, res) => {
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(Number(req.params.id)) as ServerRow | undefined;
     if (!row) return res.status(404).json({ error: 'Сервер не найден' });

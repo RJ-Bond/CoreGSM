@@ -1,7 +1,7 @@
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { registerAlerts } from './alerts.js';
-import { admin, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
+import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
@@ -35,6 +35,14 @@ import { router as discordLoginRouter } from './routes/discordLogin.js';
 import { router as serversRouter } from './routes/servers.js';
 import { router as analyticsRouter } from './routes/analytics.js';
 import { router as communityRouter } from './routes/community.js';
+import { router as discordExtrasRouter } from './routes/discordExtras.js';
+import { router as seasonsRouter } from './seasons.js';
+import { router as reviewsRouter } from './reviews.js';
+import { router as galleryRouter } from './gallery.js';
+import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
+import { router as probesRouter } from './probes.js';
+import { router as configRouter } from './configExport.js';
+import { router as pushRouter } from './push.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
 
@@ -55,6 +63,7 @@ app.use('/api', csrfGuard);
 // public player pages: a coarse per-address ceiling on top of the route's own limiter
 app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
+app.use('/api/config/import', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
 installAudit(app);
 
@@ -71,12 +80,20 @@ app.use(discordLoginRouter);
 app.use(serversRouter);
 app.use(analyticsRouter);
 app.use(communityRouter);
+app.use(discordExtrasRouter);
+app.use(seasonsRouter);
+app.use(reviewsRouter);
+app.use(galleryRouter);
+app.use(restartsRouter);
+app.use(probesRouter);
+app.use(configRouter);
+app.use(pushRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
 
 registerNews({
   app,
-  staff,
+  staff: allow('news'),
   auth,
   viewer,
   internal,
@@ -123,10 +140,10 @@ registerProfile({
 });
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
-registerCovers({ app, admin });
+registerCovers({ app, admin: allow('servers') });
 registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
-registerMaintenance({ app, admin, viewer });
+registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
 registerOverview({ app, viewer });
 
@@ -149,8 +166,10 @@ const server = app.listen(PORT, () => {
   startPoller(POLL_MS);
   startBackupTimer();
   startDigestTimer();
+  startRestartTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
+onShutdown('restarts', stopRestartTimer);
 installShutdown(server);
 
