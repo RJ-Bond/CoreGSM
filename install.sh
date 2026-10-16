@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="175e0cfb6080"
+COREGSM_BUILD="df325bdb1083"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -51228,7 +51228,7 @@ export interface MetricsData {
   windowLabel: string;
 }
 
-function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'warm' | 'hot' }) {
+function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot' }) {
   return (
     <div className="srv-metric">
       <div className="stat-k">{k}</div>
@@ -51239,7 +51239,12 @@ function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: Rea
   );
 }
 
-/** one compact row: Сейчас · Пик · Аптайм · В среднем (small value, a hint and a static mini bar) */
+/** uptime has its own scale: from 99 % it is good, 95–99 % is worth a look, below 95 % is bad */
+export const uptimeLevel = (pct: number | null): 'good' | 'warm' | 'hot' | undefined => (pct == null ? undefined : pct >= 99 ? 'good' : pct >= 95 ? 'warm' : 'hot');
+
+/** one compact row: Сейчас · Пик · Аптайм · В среднем (small value, a hint and a static mini bar).
+ *  The bars speak in status colours (brand, then amber and red as a server fills up; green for good uptime),
+ *  never in the cover's colour: a red cover must not make a healthy server look broken. */
 export default function Metrics({ d, withSamples = false }: { d: MetricsData; withSamples?: boolean }) {
   useI18n();
   const nowPct = metricFill(d.players, d.maxPlayers);
@@ -51257,12 +51262,14 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
         v={d.peak == null ? '–' : String(d.peak)}
         hint={d.peakAt ? fmtDateTime(d.peakAt) : undefined}
         fill={metricFill(d.peak, d.maxPlayers)}
+        level={d.peak == null ? undefined : capLevel(metricFill(d.peak, d.maxPlayers))}
       />
       <Cell
         k="Аптайм"
         v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
         hint={d.windowLabel}
         fill={d.uptimePct ?? 0}
+        level={uptimeLevel(d.uptimePct)}
       />
       <Cell
         k="В среднем"
@@ -52611,6 +52618,22 @@ export function useStickyTop(): number {
   }, []);
   return top;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/metrics.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { uptimeLevel } from './Metrics';
+
+describe('uptime colour', () => {
+  it('green from 99 %, amber from 95 %, red below, nothing without data', () => {
+    expect(uptimeLevel(100)).toBe('good');
+    expect(uptimeLevel(99)).toBe('good');
+    expect(uptimeLevel(97.9)).toBe('warm');
+    expect(uptimeLevel(95)).toBe('warm');
+    expect(uptimeLevel(94.9)).toBe('hot');
+    expect(uptimeLevel(null)).toBeUndefined();
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/probes.test.ts" << '__COREGSM_EOF__'
@@ -67279,9 +67302,10 @@ __COREGSM_EOF__
 .srv-metric-v { margin-top: 2px; font-size: 22px; font-weight: 900; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .srv-metric-of { font-size: 14px; font-weight: 800; color: rgb(var(--mute)); }
 .srv-metric-bar { height: 4px; margin: 7px 0 5px; border-radius: 9999px; background: rgb(var(--line)); overflow: hidden; }
-.srv-metric-bar > i { display: block; height: 100%; border-radius: 9999px; background: var(--srv-acc); }
+.srv-metric-bar > i { display: block; height: 100%; border-radius: 9999px; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); }
+.srv-metric-bar > i.is-good { background: rgb(var(--ok-fill)); }
 .srv-metric-bar > i.is-warm { background: rgb(var(--warn-fill)); }
-.srv-metric-bar > i.is-hot { background: rgb(var(--bad)); }
+.srv-metric-bar > i.is-hot { background: rgb(var(--bad-fill)); }
 .srv-metric-h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: rgb(var(--mute)); }
 
 /* ---------- chart header ---------- */
