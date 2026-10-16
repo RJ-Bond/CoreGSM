@@ -1,13 +1,13 @@
-/* news page (public): rubrics, two columns, cover, article. Colours / shadows / opacity only; no transforms, no infinite animation */
-.nw-page { position: relative; min-height: calc(100dvh - 7rem); padding: .25rem 0 3rem; border-radius: 2rem;
-  background: linear-gradient(180deg, color-mix(in srgb, rgb(var(--brand)) 8%, transparent) 0, color-mix(in srgb, rgb(var(--brand)) 4%, transparent) 45%, transparent 100%); }
-.nw-grid { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.5rem; }
+/* news page (public): rubrics, two columns, cover, article. Colours / shadows / opacity only; no transforms, no infinite animation.
+   The page sits on the same grid as every other page: the title on the left edge, no panel of its own behind it. */
+.nw-page { position: relative; padding: 0 0 3rem; }
+.nw-grid { display: grid; gap: 1.5rem; }
 .nw-main { display: grid; gap: 1.25rem; min-width: 0; align-content: start; }
 .nw-feed { max-width: none; margin: 0; }
 .nw-group { display: grid; gap: .75rem; }
 .nw-article-wrap { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.25rem; }
 @media (min-width: 1100px) {
-  .nw-grid.has-side { max-width: 76rem; grid-template-columns: minmax(0, 1fr) 19rem; align-items: start; }
+  .nw-grid.has-side { grid-template-columns: minmax(0, 1fr) 19rem; align-items: start; }
   .nw-aside { position: sticky; top: 1rem; }
 }
 
@@ -149,7 +149,6 @@
 .nw-edit-row { display: grid; gap: .5rem; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto; align-items: center; }
 
 @media (max-width: 560px) {
-  .nw-page { border-radius: 1.25rem; }
   .nw-hero, .nw-article { border-radius: 1.25rem; }
   .nw-cover { min-height: 13rem; }
   .nw-cover.is-tall { min-height: 15rem; }

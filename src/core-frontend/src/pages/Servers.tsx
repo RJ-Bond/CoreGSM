@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } fro
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
-import { coverBackground } from '../cover';
+import { coverBackground, gameBackdrop } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
@@ -249,7 +249,9 @@ function ServerList() {
 
       {servers.length > 0 && (
         <div className="srv-split" data-open={wnOpen}>
-          <div className="min-w-0 space-y-5">
+          {/* keyed by the filter and the view: switching them plays a short entrance (tiles come in one after another)
+              instead of a jump; the periodic refresh keeps the key, so nothing flickers */}
+          <div key={`${effFilter}|${effView}`} className="view-swap min-w-0 space-y-5">
             {visible.length === 0 && (
               effFilter === 'fav' && favCount === 0
                 ? <NoFavsState onReset={resetFilter} />
@@ -337,8 +339,8 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
-        background: coverBackground(s.coverUrl, `linear-gradient(140deg, ${c1}, ${c2})`, { strong: true, game: s.game }),
-        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? '0 0 0 3px rgb(var(--bad) / .85), ' : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
+        background: coverBackground(s.coverUrl, gameBackdrop(c1), { strong: true, game: s.game }),
+        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
       }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
       {...depth}
@@ -359,7 +361,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
             <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
           </div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
-          {reason && <span className={`hero-reason ${reason === 'attention' ? 'attn' : ''}`}>{t(`srv.hero.${reason}` as const)}</span>}
+          {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -415,7 +417,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, `linear-gradient(135deg, ${c1}, ${c2})`, { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
+      <div className={`flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>

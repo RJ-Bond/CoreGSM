@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
-import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural } from '../ui';
+import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
 import '../styles/community.css';
 import '../styles/profile.css';
 
@@ -62,7 +62,7 @@ export default function PlayerPage({ name }: { name: string }) {
           </p>
         </div>
         <dl className="pl-stats">
-          <div><dt>Часов</dt><dd>{p.hours}</dd></div>
+          <div><dt>Часов</dt><dd>{num(p.hours)}</dd></div>
           <div><dt>Визитов</dt><dd>{p.visits}</dd></div>
           <div><dt>Дней в игре</dt><dd>{p.days}</dd></div>
           <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>Подряд</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{p.streak} {plural(p.streak, ['день', 'дня', 'дней'])}</dd></div>
@@ -75,7 +75,7 @@ export default function PlayerPage({ name }: { name: string }) {
           <p className="mb-3 text-sm font-semibold text-mute">{p.usualHour != null ? `Чаще всего ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : 'Пока мало данных'}</p>
           <div className="pl-hours" role="img" aria-label="Часы в игре по времени суток">
             {p.byHour.map((v, h) => (
-              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${v} ч`}>
+              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${num(v)} ч`}>
                 <i style={{ height: `${(v / maxH) * 100}%` }} />
                 <b>{h % 3 === 0 ? h : ''}</b>
               </span>
@@ -95,7 +95,7 @@ export default function PlayerPage({ name }: { name: string }) {
                     <span className="cm-srv-bar"><span style={{ width: `${(s.hours / maxS) * 100}%` }} /></span>
                   </span>
                   <span className="shrink-0 text-right">
-                    <span className="block font-extrabold tabular-nums">{s.hours} ч</span>
+                    <span className="block font-extrabold tabular-nums">{num(s.hours)} ч</span>
                     <span className="block text-xs font-bold text-mute">{s.visits} {plural(s.visits, ['визит', 'визита', 'визитов'])}</span>
                   </span>
                 </a>

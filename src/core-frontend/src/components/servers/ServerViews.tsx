@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
-import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural } from '../../ui';
+import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
@@ -26,7 +26,7 @@ export function saveView(v: ServersView) {
   }
 }
 
-const fmtUp = (v: number) => `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`;
+const fmtUp = (v: number) => `${num(v)}%`;
 
 /** copies the address; the button shows a check mark for a moment */
 function CopyAddress({ text, className = '' }: { text: string; className?: string }) {

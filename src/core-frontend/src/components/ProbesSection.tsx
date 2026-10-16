@@ -5,7 +5,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast } from '../ui';
+import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast, SkeletonRows } from '../ui';
 
 interface Probe { id: number; name: string; createdAt: number; lastSeen: number | null; ip: string | null; version: string | null; alive: boolean; servers: number; online: number }
 interface Issued { token: string; commands: { docker: string; node: string } }
@@ -46,6 +46,7 @@ export default function ProbesSection() {
       actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>Добавить точку</button>}
     >
       <ErrorLine text={error} />
+      {!list && !error && <SkeletonRows n={2} />}
       {list && list.length === 0 && <p className="text-sm font-semibold text-mute">Точек пока нет: серверы проверяет только сама панель.</p>}
       <ul className="grid gap-2">
         {list?.map((p) => (

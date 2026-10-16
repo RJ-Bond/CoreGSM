@@ -24,3 +24,11 @@ export function coverBackground(
   const [a, b] = opts.strong ? [0.3, 0.62] : [0.22, 0.5];
   return `linear-gradient(180deg, rgba(8,10,20,${a}) 0%, rgba(8,10,20,${b}) 100%), url("${url}") center / cover no-repeat, ${gradient}`;
 }
+
+/**
+ * The background of a game without a picture: a deep, dark base tinted by the game colour with a soft glow in the
+ * corner, instead of a flat saturated slab (white text stays readable, the page stays calm).
+ */
+export function gameBackdrop(color: string, angle = 140): string {
+  return `radial-gradient(120% 130% at 100% 0%, ${color}b3 0%, ${color}33 45%, transparent 70%), linear-gradient(${angle}deg, color-mix(in srgb, ${color} 34%, #0d0f1a), #0b0c16)`;
+}

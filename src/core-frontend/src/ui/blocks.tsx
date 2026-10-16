@@ -300,3 +300,12 @@ export function Wordmark({ className = '' }: { className?: string }) {
     </span>
   );
 }
+
+/** a few grey rows while a list loads: the page keeps its shape instead of jumping when the data comes */
+export function SkeletonRows({ n = 3, h = 'h-14' }: { n?: number; h?: string }) {
+  return (
+    <div className="grid gap-2" aria-busy="true" role="status" aria-label="Загрузка">
+      {Array.from({ length: n }, (_, i) => <div key={i} className={`skeleton ${h} rounded-2xl`} style={{ opacity: 1 - i * 0.18 }} />)}
+    </div>
+  );
+}

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, fmtDateTime } from '../../ui';
+import { AnimatedNumber, fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
 import { metricFill } from './serverLogic';
 
@@ -50,13 +50,13 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
       />
       <Cell
         k="Аптайм"
-        v={d.uptimePct == null ? '–' : `${d.uptimePct}%`}
+        v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
         hint={d.windowLabel}
         fill={d.uptimePct ?? 0}
       />
       <Cell
         k="В среднем"
-        v={d.avg == null ? '–' : String(d.avg)}
+        v={d.avg == null ? '–' : num(d.avg)}
         hint="пока онлайн"
         fill={metricFill(d.avg, d.maxPlayers)}
       />

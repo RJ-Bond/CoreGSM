@@ -1,6 +1,8 @@
+import { useAuth } from '../auth';
+import { Icon } from '../icons';
 import { useMemo, useState } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 import '../styles/status.css';
 
 const fmtDay = (day: string) => {
@@ -190,7 +192,10 @@ const LEGEND: [string, string][] = [
 ];
 
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
+const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
+
 export default function StatusPage() {
+  const { isAdmin } = useAuth();
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
 
@@ -202,7 +207,7 @@ export default function StatusPage() {
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconServers />} title="Статус" subtitle="Доступность серверов и история сбоев за 30 дней" />
+      <PageHead icon={<IconPulse />} title="Статус" subtitle="Доступность серверов и история сбоев за 30 дней" />
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
@@ -214,7 +219,7 @@ export default function StatusPage() {
       )}
 
       {data && data.servers.length === 0 && (
-        <Empty title="Серверов пока нет" text="Когда серверы будут добавлены, здесь появится их доступность." />
+        <Empty title="Серверов пока нет" text="Когда серверы будут добавлены, здесь появится их доступность.">{isAdmin && <a href="/admin/servers/new" className="btn mt-2">Добавить сервер</a>}</Empty>
       )}
 
       {data && data.servers.length > 0 && (
