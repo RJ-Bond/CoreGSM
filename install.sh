@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9e270dd8f6b7"
+COREGSM_BUILD="63dd2a3fcacf"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18757,8 +18757,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-bot/src/proxy.ts" << '__COREGSM_EOF__'
 import { createRequire } from 'node:module';
 import type { Agent } from 'node:http';
-import { ProxyAgent, type Dispatcher } from 'undici';
-import { socksDispatcher } from 'fetch-socks';
+import { Agent as UndiciAgent, ProxyAgent, type Dispatcher } from 'undici';
+import { socksConnector } from 'fetch-socks';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
@@ -18798,14 +18798,16 @@ export function parseProxy(raw: string): ProxySetup | null {
       const port = Number(u.port) || 1080;
       const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
       return {
-        rest: socksDispatcher(
-          {
+        // our own undici (the one discord.js calls) with the SOCKS connector of fetch-socks: fetch-socks' ready-made
+        // dispatcher comes from its own, newer undici, which refuses the `dispatcher` option discord.js passes along
+        rest: new UndiciAgent({
+          connect: socksConnector({
             type: 5,
             host: u.hostname,
             port,
             ...(user ? { userId: user, password: pass } : {}),
-          },
-        ) as unknown as Dispatcher,
+          }) as unknown as UndiciAgent.Options['connect'],
+        }),
         ws: new SocksProxyAgent(`socks5h://${auth}${u.hostname}:${port}`) as unknown as Agent,
         label,
       };
