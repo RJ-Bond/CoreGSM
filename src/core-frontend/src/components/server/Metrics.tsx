@@ -18,7 +18,7 @@ export interface MetricsData {
   windowLabel: string;
 }
 
-function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'warm' | 'hot' }) {
+function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot' }) {
   return (
     <div className="srv-metric">
       <div className="stat-k">{k}</div>
@@ -29,7 +29,12 @@ function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: Rea
   );
 }
 
-/** one compact row: Сейчас · Пик · Аптайм · В среднем (small value, a hint and a static mini bar) */
+/** uptime has its own scale: from 99 % it is good, 95–99 % is worth a look, below 95 % is bad */
+export const uptimeLevel = (pct: number | null): 'good' | 'warm' | 'hot' | undefined => (pct == null ? undefined : pct >= 99 ? 'good' : pct >= 95 ? 'warm' : 'hot');
+
+/** one compact row: Сейчас · Пик · Аптайм · В среднем (small value, a hint and a static mini bar).
+ *  The bars speak in status colours (brand, then amber and red as a server fills up; green for good uptime),
+ *  never in the cover's colour: a red cover must not make a healthy server look broken. */
 export default function Metrics({ d, withSamples = false }: { d: MetricsData; withSamples?: boolean }) {
   useI18n();
   const nowPct = metricFill(d.players, d.maxPlayers);
@@ -47,12 +52,14 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
         v={d.peak == null ? '–' : String(d.peak)}
         hint={d.peakAt ? fmtDateTime(d.peakAt) : undefined}
         fill={metricFill(d.peak, d.maxPlayers)}
+        level={d.peak == null ? undefined : capLevel(metricFill(d.peak, d.maxPlayers))}
       />
       <Cell
         k="Аптайм"
         v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
         hint={d.windowLabel}
         fill={d.uptimePct ?? 0}
+        level={uptimeLevel(d.uptimePct)}
       />
       <Cell
         k="В среднем"
