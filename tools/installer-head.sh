@@ -443,7 +443,8 @@ preseed_grub() {
   local src disk=""
   src="$(findmnt -no SOURCE / 2>/dev/null || true)"
   if [ -b "$src" ]; then
-    disk="$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1)"
+    # walk up from the root device (partition, LVM, crypt...) to the physical disk, never a partition
+    disk="$(lsblk -nds -o NAME,TYPE "$src" 2>/dev/null | awk '$2 == "disk" {print $1; exit}')"
     [ -n "$disk" ] && disk="/dev/$disk"
   fi
   if [ -n "$disk" ] && [ -b "$disk" ]; then
