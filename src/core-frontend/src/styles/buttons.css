@@ -46,7 +46,7 @@
   --b-hl: inset 0 1px 0 0 transparent; --b-ring: inset 0 0 0 1px transparent;
   --b-ovl: inset 0 0 0 999px transparent; --b-drop: 0 0 0 0 transparent;
   padding: .3rem var(--b-px);
-  font-size: var(--b-fs); font-weight: 800; line-height: 1.2;
+  font-size: var(--b-fs); font-weight: 650; line-height: 1.2;
   color: var(--b-fg); background-color: var(--b-bg); background-image: var(--b-img);
   box-shadow: var(--b-hl), var(--b-ring), var(--b-ovl), var(--b-drop);
   /* colours and shadows only: no border/outline colour, no transform */
@@ -89,18 +89,18 @@
 .btn-spin { width: 1rem; height: 1rem; flex-shrink: 0; }
 
 /* ---------- primary ---------- */
+/* flat: one brand fill, a hairline top light and a small neutral shadow (no gradient, no coloured glow) */
 .btn {
   --b-fg: #fff;
-  --b-bg: rgb(var(--brand));
-  /* brand -> brand-2: custom accent colours flow through both variables; the game accent changes --brand */
-  --b-img: linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
-  --b-hl: inset 0 1px 0 0 rgb(255 255 255 / .22);
-  --b-drop: 0 1px 2px rgb(var(--brand) / .25), 0 8px 18px -8px rgb(var(--brand) / .5);
-  --b-ovl-h: inset 0 0 0 999px rgb(255 255 255 / .06);
-  --b-drop-h: 0 1px 2px rgb(var(--brand) / .3), 0 10px 22px -8px rgb(var(--brand) / .65);
-  --b-hl-a: inset 0 2px 8px 0 rgb(0 0 0 / .26);
-  --b-ovl-a: inset 0 0 0 999px rgb(0 0 0 / .06);
-  --b-drop-a: 0 1px 1px rgb(var(--brand) / .2), 0 2px 6px -3px rgb(var(--brand) / .4);
+  --b-bg: rgb(var(--brand)); --b-bg-h: rgb(var(--brand-hover));
+  --b-img: none;
+  --b-hl: inset 0 1px 0 0 rgb(255 255 255 / .12);
+  --b-drop: 0 1px 2px rgb(0 0 0 / .28);
+  --b-ovl-h: inset 0 0 0 999px transparent;
+  --b-drop-h: 0 1px 3px rgb(0 0 0 / .34);
+  --b-hl-a: inset 0 2px 6px 0 rgb(0 0 0 / .26);
+  --b-ovl-a: inset 0 0 0 999px rgb(0 0 0 / .08);
+  --b-drop-a: 0 1px 1px rgb(0 0 0 / .2);
 }
 
 /* ---------- soft (secondary): brand-tinted surface ---------- */
@@ -251,7 +251,7 @@
 .split-menu[data-up='false'] { top: calc(100% + 6px); }
 .split-item {
   display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
-  border-radius: var(--r-md); padding: .55rem .8rem; font-weight: 800; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
+  border-radius: var(--r-md); padding: .55rem .8rem; font-weight: 650; color: rgb(var(--ink)); min-height: 44px; justify-content: center;
   transition: background-color .15s ease;
 }
 .split-item small { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
@@ -281,7 +281,7 @@
   --b-h: 3rem; --b-px: 1.5rem; --b-fs: 1rem; --b-gap: .5rem;
   --b-fg: #12141a; --b-bg: #fff; --b-bg-h: rgb(255 255 255 / .92); --b-bg-a: rgb(255 255 255 / .84);
   --b-drop: 0 6px 18px -6px rgb(0 0 0 / .5); --b-drop-h: 0 10px 22px -6px rgb(0 0 0 / .55); --b-drop-a: 0 2px 6px -2px rgb(0 0 0 / .4);
-  font-weight: 900;
+  font-weight: 800;
 }
 
 /* ---------- on a cover: translucent white / dark glass (no backdrop-filter, see the black-square notes) ---------- */
