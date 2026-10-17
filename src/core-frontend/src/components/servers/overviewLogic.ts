@@ -10,9 +10,14 @@ export const needsAttention = (s: Server): boolean => !s.maintenance && s.hasSta
 export function pickHero(servers: Server[], favs: number[]): { server: Server; reason: HeroReason } | null {
   if (servers.length === 0) return null;
   const withReason = (server: Server, reason: HeroReason) => ({ server, reason: server.maintenance && reason !== 'attention' ? ('maintenance' as const) : reason });
-  // offline first, then laggy ones
-  const bad = servers.filter(needsAttention).sort((a, b) => Number(a.online) - Number(b.online) || b.players - a.players || a.id - b.id);
-  if (bad[0]) return { server: bad[0], reason: 'attention' };
+  // Servers that need a look are not the hero: they get a compact strip (AttentionStrip) so that the working ones keep
+  // the first screen. Only when every server has a problem is the worst one the hero (a card with the details).
+  const calm = servers.filter((s) => !needsAttention(s));
+  if (calm.length === 0) {
+    const bad = [...servers].sort((a, b) => Number(a.online) - Number(b.online) || b.players - a.players || a.id - b.id);
+    return { server: bad[0], reason: 'attention' };
+  }
+  servers = calm;
   const fav = servers.filter((s) => favs.includes(s.id)).sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players || a.id - b.id);
   if (fav[0]) return withReason(fav[0], 'fav');
   const busiest = servers.filter((s) => s.online).sort((a, b) => b.players - a.players || a.id - b.id);

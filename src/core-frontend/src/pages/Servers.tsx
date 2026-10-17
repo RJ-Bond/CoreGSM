@@ -9,11 +9,11 @@ import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
-import CommunityBento from '../components/servers/CommunityBento';
+import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
-import { pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
+import { needsAttention, pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
@@ -153,7 +153,10 @@ function ServerList() {
   const picked = useMemo(() => pickHero(sorted, me ? favs : []), [sorted, favs, me]);
   const hero = picked?.server ?? null;
   const heroReason: HeroReason = picked?.reason ?? null;
-  const rest = sorted.filter((s) => s.id !== hero?.id);
+  // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
+  const attention = heroReason === 'attention' ? [] : sorted.filter(needsAttention);
+  const attentionIds = new Set(attention.map((s) => s.id));
+  const rest = sorted.filter((s) => s.id !== hero?.id && !attentionIds.has(s.id));
   const offlineCount = servers.filter((s) => !s.online).length;
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
   // a filter other than "all" turns the bento into a plain grid of the matching servers
@@ -211,7 +214,8 @@ function ServerList() {
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
       )}
 
-      {loaded && servers.length > 0 && !selOn && <CommunityBento />}
+
+      {effView === 'tiles' && effFilter === 'all' && attention.length > 0 && !selOn && <AttentionStrip servers={attention} onOpen={open} />}
 
       {servers.length > 0 && (
         <div className="srv-bar">
