@@ -405,8 +405,56 @@ system_update() {
     return 0
   fi
   run "Обновление списка пакетов" apt-get "${APT_OPTS[@]}" update -y
-  run "Установка обновлений системы (несколько минут)" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
-  ok "Система обновлена"
+  # a half-configured package from an earlier failed run would break every later apt call
+  apt_repair
+  preseed_grub
+  if run_soft "Установка обновлений системы (несколько минут)" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef; then
+    ok "Система обновлена"
+    return 0
+  fi
+  warn "Обновление системы завершилось с ошибкой, пробую починить dpkg и повторить"
+  if apt_repair && run_soft "Повторная установка обновлений" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef; then
+    ok "Система обновлена"
+    return 0
+  fi
+  # The panel does not need the system upgrade (usually a kernel or bootloader package that cannot be configured
+  # inside a hosting VM). Keep the broken packages out of the way and carry on with the installation.
+  apt_repair || true
+  if dpkg --audit 2>/dev/null | grep -q .; then
+    # still half-configured: hold those packages so the next apt-get install does not trip over them
+    local bad; bad="$(dpkg --audit 2>/dev/null | awk '/^ / && NF {print $1}' | sort -u)"
+    [ -z "$bad" ] || apt-mark hold $bad >> "$LOGFILE" 2>&1 || true
+    dpkg --configure -a --force-confold >> "$LOGFILE" 2>&1 || true
+  fi
+  warn "Обновление системы пропущено из-за ошибки (см. $LOGFILE). Установка панели продолжается; обновите систему позже вручную: apt-get -f install && apt-get upgrade"
+}
+
+# Finishes interrupted package configuration and fixes broken dependencies. Returns 0 when apt is healthy again.
+apt_repair() {
+  run_soft "Починка незавершённой настройки пакетов" dpkg --configure -a --force-confold --force-confdef || true
+  run_soft "Починка зависимостей" apt-get "${APT_OPTS[@]}" -f install -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
+}
+
+# grub-pc asks "where to install GRUB" through debconf. Without a terminal there is no answer, its postinst fails
+# and dpkg stops the whole upgrade (typical on VPS images). Answer in advance: the disk holding /, else "none".
+preseed_grub() {
+  dpkg -s grub-pc >/dev/null 2>&1 || return 0
+  command -v debconf-set-selections >/dev/null 2>&1 || return 0
+  local src disk=""
+  src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+  if [ -b "$src" ]; then
+    disk="$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1)"
+    [ -n "$disk" ] && disk="/dev/$disk"
+  fi
+  if [ -n "$disk" ] && [ -b "$disk" ]; then
+    echo "grub-pc grub-pc/install_devices multiselect $disk" | debconf-set-selections
+    echo "grub-pc grub-pc/install_devices_empty boolean false" | debconf-set-selections
+    info "GRUB: загрузчик обновляется на $disk"
+  else
+    echo "grub-pc grub-pc/install_devices_empty boolean true" | debconf-set-selections
+    echo "grub-pc grub-pc/install_devices multiselect" | debconf-set-selections
+    info "GRUB: диск не определён, установка загрузчика пропущена (на VPS загрузчик обычно ведёт хостер)"
+  fi
 }
 
 # ---------- 3. packages ----------
