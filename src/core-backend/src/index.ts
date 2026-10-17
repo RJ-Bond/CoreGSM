@@ -93,6 +93,7 @@ app.use(internalRouter);
 
 registerNews({
   app,
+  publicBase,
   staff: allow('news'),
   auth,
   viewer,
