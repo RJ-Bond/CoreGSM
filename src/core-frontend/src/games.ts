@@ -39,7 +39,7 @@ export const gameColor = (id: string) => findGame(id)?.color ?? FALLBACK;
 export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toUpperCase();
 
 /** artwork used instead of the line pictogram (files in public/games) */
-export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png', icarus: '/games/icarus.png' };
+export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png', icarus: '/games/icarus.png', m2o: '/games/m2o.png' };
 
 /** [deep, light] gradient colours of a game (tile covers, banners) */
 export const gameGradient = (id: string): [string, string] => gradientFor(gameColor(id));
