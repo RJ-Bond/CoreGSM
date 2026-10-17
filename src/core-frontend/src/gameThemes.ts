@@ -16,6 +16,8 @@ export const THEME_PRESETS: ThemePreset[] = [
 export const GAME_PRESETS: ThemePreset[] = [
   { id: 'g-vrising', name: 'V Rising: кровавая луна', game: 'vrising', c1: '#c0262d', c2: '#5b0a1f', glow: 'rgb(220 38 38 / 0.28)', art: '/games/covers/vrising.jpg' },
   { id: 'g-icarus', name: 'Icarus: рассвет', game: 'icarus', c1: '#d97706', c2: '#7c2d12', glow: 'rgb(245 158 11 / 0.26)', art: '/games/covers/icarus.jpg' },
+  // white text on the brand colour must stay >= 4.5:1, so the gold is the dark one
+  { id: 'g-m2o', name: 'Mafia II: ночной порт', game: 'm2o', c1: '#8a6420', c2: '#4a3410', glow: 'rgb(201 162 74 / 0.26)', art: '/games/covers/m2o.jpg' },
   { id: 'g-rust', name: 'Rust: ржавчина', game: 'rust', c1: '#cd4a1f', c2: '#4a1608', glow: 'rgb(234 88 12 / 0.24)' },
   { id: 'g-minecraft', name: 'Minecraft: трава', game: 'minecraft', c1: '#3f9b2f', c2: '#1d4d18', glow: 'rgb(74 222 128 / 0.2)' },
   { id: 'g-cs2', name: 'CS2: тактика', game: 'counterstrike2', c1: '#d69e14', c2: '#253246', glow: 'rgb(234 179 8 / 0.2)' },

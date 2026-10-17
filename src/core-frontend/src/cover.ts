@@ -1,5 +1,5 @@
 /** Games that ship a default cover (files in public/games/covers: <game>.jpg 1280x720 and <game>@s.jpg 640x360). */
-const DEFAULT_COVERS = new Set(['vrising', 'icarus']);
+const DEFAULT_COVERS = new Set(['vrising', 'icarus', 'm2o']);
 
 /** the picture of a server: its uploaded cover, else the default cover of its game, else null (small = the 640px one) */
 export function coverUrlOf(coverUrl: string | null | undefined, game: string, small = true): string | null {
