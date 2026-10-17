@@ -457,6 +457,7 @@ const ru = {
   'srv.pulse.noChart': 'График появится, когда накопится история',
   'srv.pulse.chart': 'Игроков на всех серверах за сутки',
   'srv.pulse.hours': 'За {n} ч',
+  'srv.pulse.minutes': 'За {n} мин',
   'srv.pulse.peak': 'Пик {n} в {time}',
   'srv.pulse.noPeak': 'Пика пока нет',
   'srv.hero.attention': 'Нужно внимание',

@@ -456,6 +456,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pulse.noChart': 'The chart appears once history is collected',
   'srv.pulse.chart': 'Total players on all servers over the last day',
   'srv.pulse.hours': 'Last {n} h',
+  'srv.pulse.minutes': 'Last {n} min',
   'srv.pulse.peak': 'Peak {n} at {time}',
   'srv.pulse.noPeak': 'No peak yet',
   'srv.hero.attention': 'Needs attention',
