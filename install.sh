@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a30f76fb852c"
+COREGSM_BUILD="632f20e5fe4a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -64358,7 +64358,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, gameBackdrop } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, useDepth, usePoll, navigate, routeQuery } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useDepth, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
@@ -64687,6 +64687,7 @@ const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElemen
 };
 
 function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
+  const sparkSpan = useSparkSpanMin(s.id);
   useI18n();
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
@@ -64755,7 +64756,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       )}
 
       <div className="relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
-        <span>за 24 часа</span>
+        <span>{spanCaption(sparkSpan)}</span>
         {uptime != null && <span>аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
         <span className="truncate">{s.online && s.map ? `карта ${s.map}` : `обновлено ${ago(s.updatedAt)}`}</span>
       </div>
@@ -68921,7 +68922,7 @@ export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/fo
 export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
-export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
+export { Spark, smoothPath, SmoothArea, FleetBar, useSparkSpanMin, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
@@ -69710,6 +69711,20 @@ function useSparkSet(): SparkSet | null {
   return sparkSet;
 }
 
+/** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
+export function useSparkSpanMin(serverId: number): number | null {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  if (!set || !raw) return null;
+  const first = raw.players.findIndex((v) => v != null);
+  if (first < 0) return null;
+  return Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
+}
+
+/** «за 24 часа» / «за 3 ч» / «за 40 мин» for a span in minutes (null = the whole day while nothing is known) */
+export const spanCaption = (min: number | null): string =>
+  min == null || min >= 24 * 60 - 1 ? 'за 24 часа' : min >= 180 ? `за ${Math.round(min / 60)} ч` : `за ${Math.max(1, min)} мин`;
+
 /** empty buckets (no poll yet, or the panel was off) take the value before them */
 const filled = (vals: (number | null)[]): number[] => {
   let prev = vals.find((v) => v != null) ?? 0;
@@ -69743,6 +69758,19 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   return hero
     ? <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
     : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+}
+
+/**
+ * The red «server was down» band of sample `i` of `n` in a chart `w` wide with `pad` on both sides: the part of the
+ * x axis that sample stands for, never outside the chart (with few samples one band is wide, and the first and last
+ * ones used to stick out of the chart).
+ */
+export function downBand(i: number, n: number, w: number, pad = 3): { x: number; width: number } {
+  const step = (w - pad * 2) / Math.max(1, n - 1);
+  const cx = pad + (n <= 1 ? 0 : (i / (n - 1)) * (w - pad * 2));
+  const x0 = Math.max(0, cx - step / 2);
+  const x1 = Math.min(w, cx + step / 2);
+  return { x: x0, width: Math.max(0, x1 - x0) };
 }
 
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
@@ -69790,8 +69818,8 @@ export function SmoothArea({
         ))}
         {down?.map((d, i) => {
           if (!d || !pts[i]) return null;
-          const half = (w - pad * 2) / Math.max(1, values.length - 1) / 2;
-          return <rect key={i} x={pts[i][0] - half} y={0} width={half * 2} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
+          const b = downBand(i, values.length, w, pad);
+          return <rect key={i} x={b.x} y={0} width={b.width} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
         })}
         <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
