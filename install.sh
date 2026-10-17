@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="df325bdb1083"
+COREGSM_BUILD="50a1a91d8d14"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -405,8 +405,57 @@ system_update() {
     return 0
   fi
   run "Обновление списка пакетов" apt-get "${APT_OPTS[@]}" update -y
-  run "Установка обновлений системы (несколько минут)" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
-  ok "Система обновлена"
+  # a half-configured package from an earlier failed run would break every later apt call
+  apt_repair
+  preseed_grub
+  if run_soft "Установка обновлений системы (несколько минут)" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef; then
+    ok "Система обновлена"
+    return 0
+  fi
+  warn "Обновление системы завершилось с ошибкой, пробую починить dpkg и повторить"
+  if apt_repair && run_soft "Повторная установка обновлений" apt-get "${APT_OPTS[@]}" upgrade -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef; then
+    ok "Система обновлена"
+    return 0
+  fi
+  # The panel does not need the system upgrade (usually a kernel or bootloader package that cannot be configured
+  # inside a hosting VM). Keep the broken packages out of the way and carry on with the installation.
+  apt_repair || true
+  if dpkg --audit 2>/dev/null | grep -q .; then
+    # still half-configured: hold those packages so the next apt-get install does not trip over them
+    local bad; bad="$(dpkg --audit 2>/dev/null | awk '/^ / && NF {print $1}' | sort -u)"
+    [ -z "$bad" ] || apt-mark hold $bad >> "$LOGFILE" 2>&1 || true
+    dpkg --configure -a --force-confold >> "$LOGFILE" 2>&1 || true
+  fi
+  warn "Обновление системы пропущено из-за ошибки (см. $LOGFILE). Установка панели продолжается; обновите систему позже вручную: apt-get -f install && apt-get upgrade"
+}
+
+# Finishes interrupted package configuration and fixes broken dependencies. Returns 0 when apt is healthy again.
+apt_repair() {
+  run_soft "Починка незавершённой настройки пакетов" dpkg --configure -a --force-confold --force-confdef || true
+  run_soft "Починка зависимостей" apt-get "${APT_OPTS[@]}" -f install -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef
+}
+
+# grub-pc asks "where to install GRUB" through debconf. Without a terminal there is no answer, its postinst fails
+# and dpkg stops the whole upgrade (typical on VPS images). Answer in advance: the disk holding /, else "none".
+preseed_grub() {
+  dpkg -s grub-pc >/dev/null 2>&1 || return 0
+  command -v debconf-set-selections >/dev/null 2>&1 || return 0
+  local src disk=""
+  src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+  if [ -b "$src" ]; then
+    # walk up from the root device (partition, LVM, crypt...) to the physical disk, never a partition
+    disk="$(lsblk -nds -o NAME,TYPE "$src" 2>/dev/null | awk '$2 == "disk" {print $1; exit}')"
+    [ -n "$disk" ] && disk="/dev/$disk"
+  fi
+  if [ -n "$disk" ] && [ -b "$disk" ]; then
+    echo "grub-pc grub-pc/install_devices multiselect $disk" | debconf-set-selections
+    echo "grub-pc grub-pc/install_devices_empty boolean false" | debconf-set-selections
+    info "GRUB: загрузчик обновляется на $disk"
+  else
+    echo "grub-pc grub-pc/install_devices_empty boolean true" | debconf-set-selections
+    echo "grub-pc grub-pc/install_devices multiselect" | debconf-set-selections
+    info "GRUB: диск не определён, установка загрузчика пропущена (на VPS загрузчик обычно ведёт хостер)"
+  fi
 }
 
 # ---------- 3. packages ----------
@@ -8987,6 +9036,7 @@ app.use(internalRouter);
 
 registerNews({
   app,
+  publicBase,
   staff: allow('news'),
   auth,
   viewer,
@@ -9975,6 +10025,8 @@ export function registerNews(deps: {
   servers: () => NewsServerInfo[];
   /** the status card of a server (the one the bot posts), or null */
   statusEmbed: (serverId: number) => StatusEmbed | null;
+  /** public https address of the panel (for the «read in full» link), or null when unknown */
+  publicBase: () => string | null;
 }) {
   const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
   const authed = deps.auth ?? staff;
@@ -10066,7 +10118,7 @@ export function registerNews(deps: {
   }
 
   /** the payload as it goes to Discord: variables substituted, status cards appended */
-  function resolvePayload(p: NewsPayload, test: boolean) {
+  function resolvePayload(p: NewsPayload, test: boolean, newsId?: number) {
     const r = makeResolver();
     const embed = (e: EmbedIn): EmbedIn => ({
       ...e,
@@ -10090,8 +10142,14 @@ export function registerNews(deps: {
     }
     const out: NewsPayload = { content, mention, ...(p.embed ? { embed: embed(p.embed) } : {}) };
     if (p.extraEmbeds?.length) out.extraEmbeds = p.extraEmbeds.map(embed);
-    // link buttons under the message
-    if (p.actions?.length) out.actions = p.actions;
+    // link buttons under the message; the first one always opens the full version in the panel (a short /go/ link)
+    const base = deps.publicBase();
+    const full = base && newsId && !test ? `${base}/go/news/${newsId}` : null;
+    if (full) {
+      // the title becomes a link too, unless the author set their own
+      if (out.embed?.title && !out.embed.url) out.embed.url = full;
+      out.actions = [{ label: 'Читать полностью', url: full }, ...(p.actions ?? []).slice(0, 2)];
+    } else if (p.actions?.length) out.actions = p.actions;
     // status cards: they never push the message over 10 embeds or 6000 characters
     const statusEmbeds: StatusEmbed[] = [];
     const used = allEmbeds(out);
@@ -10564,7 +10622,7 @@ export function registerNews(deps: {
       const stored = JSON.parse(r.payload) as NewsPayload;
       if (action === 'delete') return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: stored, statusEmbeds: [], test: false };
       // variables are substituted and status cards built right now, at send time
-      const { payload, statusEmbeds } = resolvePayload(stored, !!r.test);
+      const { payload, statusEmbeds } = resolvePayload(stored, !!r.test, r.id);
       return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test };
     });
     res.json(out);
@@ -15552,6 +15610,7 @@ import { z } from 'zod';
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { db, setSetting } from './db.js';
 import { guardGet, guardSet } from './loginGuard.js';
+import { enqueueDelivery } from './deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
 
@@ -15777,7 +15836,7 @@ export interface SecurityDeps {
   brandName: () => string;
 }
 
-const FORGOT_TEXT = 'Если для этого аккаунта указана подтверждённая почта, мы отправили на неё письмо со ссылкой для сброса пароля.';
+const FORGOT_TEXT = 'Если у аккаунта есть подтверждённая почта или привязанный Discord, мы отправили ссылку для сброса пароля: письмом на почту и личным сообщением от бота в Discord.';
 
 export function registerSecurity(d: SecurityDeps): void {
   const { app } = d;
@@ -15904,9 +15963,13 @@ export function registerSecurity(d: SecurityDeps): void {
       void (async () => {
         try {
           const u = db
-            .prepare("SELECT id, username, email, email_verified FROM users WHERE status = 'active' AND (ulower(username) = ? OR (email IS NOT NULL AND lower(email) = ?))")
-            .get(login, login) as { id: number; username: string; email: string | null; email_verified: number } | undefined;
-          if (!u || !u.email || !u.email_verified || !mailReady()) return;
+            .prepare("SELECT id, username, email, email_verified, discord_id FROM users WHERE status = 'active' AND (ulower(username) = ? OR (email IS NOT NULL AND lower(email) = ?))")
+            .get(login, login) as { id: number; username: string; email: string | null; email_verified: number; discord_id: string | null } | undefined;
+          if (!u) return;
+          // the link goes to every channel the account has: a verified e-mail and/or the linked Discord (a private message from the bot)
+          const viaMail = !!u.email && !!u.email_verified && mailReady();
+          const viaDiscord = !!u.discord_id;
+          if (!viaMail && !viaDiscord) return;
           const base = d.publicBase();
           if (!base) {
             console.error('password reset letter not sent: the public address of the panel is unknown (set PUBLIC_URL or DOMAIN)');
@@ -15921,14 +15984,23 @@ export function registerSecurity(d: SecurityDeps): void {
           db.prepare('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(now, u.id);
           db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(hashToken(token), u.id, now + 30 * 60_000);
           const en = prefsOf(u.id).lang === 'en';
-          const body = layout(
-            d.brandName(),
-            en
-              ? [`A password reset was requested for the account "${u.username}".`, 'The link works for 30 minutes and only once. If this was not you, just ignore this letter.']
-              : [`Запрошен сброс пароля для аккаунта «${u.username}».`, 'Ссылка действует 30 минут и только один раз. Если это были не вы, просто проигнорируйте письмо.'],
-            { label: en ? 'Set a new password' : 'Задать новый пароль', url: `${base}/#/reset/${token}` },
-          );
-          await sendMail({ to: u.email, subject: en ? 'Password reset' : 'Сброс пароля', ...body });
+          const resetUrl = `${base}/#/reset/${token}`;
+          if (viaDiscord) {
+            const text = en
+              ? `🔐 A password reset was requested for the account "${u.username}".\nSet a new password (the link works for 30 minutes and only once):\n${resetUrl}\n\nIf this was not you, ignore this message: the password stays as it is.`
+              : `🔐 Запрошен сброс пароля для аккаунта «${u.username}».\nЗадайте новый пароль (ссылка действует 30 минут и только один раз):\n${resetUrl}\n\nЕсли это были не вы, просто проигнорируйте сообщение: пароль останется прежним.`;
+            enqueueDelivery({ kind: 'dm', refId: null, target: u.discord_id!, payload: { content: text, summary: en ? 'Password reset' : 'Сброс пароля' } });
+          }
+          if (viaMail) {
+            const body = layout(
+              d.brandName(),
+              en
+                ? [`A password reset was requested for the account "${u.username}".`, 'The link works for 30 minutes and only once. If this was not you, just ignore this letter.']
+                : [`Запрошен сброс пароля для аккаунта «${u.username}».`, 'Ссылка действует 30 минут и только один раз. Если это были не вы, просто проигнорируйте письмо.'],
+              { label: en ? 'Set a new password' : 'Задать новый пароль', url: resetUrl },
+            );
+            await sendMail({ to: u.email!, subject: en ? 'Password reset' : 'Сброс пароля', ...body });
+          }
         } catch (e) {
           console.error('password reset letter failed:', (e as Error).message);
         }
@@ -15954,6 +16026,15 @@ export function registerSecurity(d: SecurityDeps): void {
       db.prepare('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(Date.now(), row.user_id);
     })();
     logAccount(req, row.user_id, 'password_changed', 'сброс по ссылке из письма');
+    // a confirmation in Discord too: if it was not the owner, they see it at once
+    const dm = db.prepare('SELECT username, discord_id FROM users WHERE id = ?').get(row.user_id) as { username: string; discord_id: string | null } | undefined;
+    if (dm?.discord_id) {
+      const enDm = prefsOf(row.user_id).lang === 'en';
+      const text = enDm
+        ? `✅ The password of the account "${dm.username}" was changed. All sessions were ended. If this was not you, contact an administrator.`
+        : `✅ Пароль аккаунта «${dm.username}» изменён, все сеансы завершены. Если это были не вы, срочно сообщите администратору.`;
+      enqueueDelivery({ kind: 'dm', refId: null, target: dm.discord_id, payload: { content: text, summary: enDm ? 'Password changed' : 'Пароль изменён' } });
+    }
     const u = emailOf(row.user_id);
     if (u?.email && u.email_verified && mailReady()) {
       const en = prefsOf(row.user_id).lang === 'en';
@@ -53255,7 +53336,7 @@ import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
 import type { Server } from '../../api';
-import { chartPoints, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
+import { chartPoints, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
 
 const ICON: Record<PulseState, JSX.Element> = {
   ok: <IconOk size={24} />,
@@ -53268,7 +53349,7 @@ const ICON: Record<PulseState, JSX.Element> = {
 function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
   const gid = useId().replace(/:/g, '');
   const { t: tr } = useI18n();
-  if (!data || data.points.length < 2) {
+  if (!data || !hasEnoughHistory(data.points, data.hours)) {
     return <div className="pulse-chart pulse-chart-empty">{tr('srv.pulse.noChart')}</div>;
   }
   const end = Math.max(now, data.points[data.points.length - 1].ts + data.bucketMs);
@@ -53881,6 +53962,16 @@ export interface RecentEvent {
   type: 'up' | 'down' | 'peak' | 'maintenance';
   players?: number;
   name?: string;
+}
+
+/**
+ * Enough history to draw a curve: at least 3 points that cover a tenth of the window. A handful of polls bunched at the
+ * right edge would otherwise be drawn as a vertical stroke with the peak dot hanging in the corner.
+ */
+export function hasEnoughHistory(points: { ts: number }[], hours: number): boolean {
+  if (points.length < 3) return false;
+  const span = points[points.length - 1].ts - points[0].ts;
+  return span >= hours * 3_600_000 * 0.1;
 }
 
 /** x/y positions (0..1, y up = more players) of the chart points for a window ending at `end` */
@@ -56719,9 +56810,9 @@ const en: Record<keyof typeof ru, string> = {
   'forgot.enter': 'Enter a username or e-mail',
   'forgot.submit': 'Send link',
   'forgot.sending': 'Sending…',
-  'forgot.sentTitle': 'Check your mail',
-  'forgot.sentText': 'If the account has a confirmed e-mail, we have sent a letter with a password reset link. The link works for 30 minutes.',
-  'forgot.noMail': 'No letter? The address may not be confirmed in the profile: then only an administrator can reset the password.',
+  'forgot.sentTitle': 'Check your mail and Discord',
+  'forgot.sentText': 'If the account has a confirmed e-mail or a linked Discord, we have sent a password reset link: a letter and a private message from the bot. The link works for 30 minutes.',
+  'forgot.noMail': 'Nothing arrived? The e-mail is not confirmed, Discord is not linked, or Discord blocks private messages from server members: then only an administrator can reset the password.',
   'forgot.back': 'Back to sign in',
   'reset.title': 'New password',
   'reset.sub': 'Choose a new password to sign in',
@@ -57590,9 +57681,9 @@ const ru = {
   'forgot.enter': 'Введите логин или почту',
   'forgot.submit': 'Отправить ссылку',
   'forgot.sending': 'Отправляю…',
-  'forgot.sentTitle': 'Проверьте почту',
-  'forgot.sentText': 'Если для этого аккаунта указана подтверждённая почта, мы отправили на неё письмо со ссылкой для сброса пароля. Ссылка действует 30 минут.',
-  'forgot.noMail': 'Письма нет? Почта могла не быть подтверждена в профиле: тогда сбросить пароль может только администратор.',
+  'forgot.sentTitle': 'Проверьте почту и Discord',
+  'forgot.sentText': 'Если у аккаунта есть подтверждённая почта или привязанный Discord, мы отправили ссылку для сброса пароля: письмом и личным сообщением от бота. Ссылка действует 30 минут.',
+  'forgot.noMail': 'Ничего не пришло? Почта не подтверждена, Discord не привязан или в Discord закрыты личные сообщения от участников сервера: тогда сбросить пароль может только администратор.',
   'forgot.back': 'Вернуться ко входу',
   'reset.title': 'Новый пароль',
   'reset.sub': 'Придумайте новый пароль для входа',
@@ -66274,7 +66365,7 @@ import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { confirmDialog, promptDialog } from '../../confirm';
-import { AdminPage, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
   return (
@@ -66422,7 +66513,10 @@ export function UsersTab() {
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-                <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.discordName ? ` · Discord: ${u.discordName}` : ''}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
+                  <span className="truncate">{u.username}</span>
+                  {u.discordName && <DiscordBadge name={u.discordName} />}
+                </span>
                 <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
               </li>
@@ -66438,7 +66532,7 @@ export function UsersTab() {
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
               <span className="min-w-0 flex-1 truncate font-bold">
                 {u.username}{u.username === me?.username ? ' (вы)' : ''}
-                {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
+                {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
@@ -68270,7 +68364,7 @@ export type { ProxyType } from './ui/blocks';
 export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
-export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, OrDivider } from './ui/authParts';
+export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
 export { AdminPage, Section, Strip, SaveBadge, TextField } from './ui/admin';
 export { noAutofill } from './ui/noAutofill';
 __COREGSM_EOF__
@@ -68638,11 +68732,24 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   );
 }
 
-const IconDiscordLogo = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+export const IconDiscordLogo = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
     <path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 2.9c-.2.4-.5.9-.6 1.3a18.3 18.3 0 0 0-5.5 0c-.2-.4-.4-.9-.6-1.3A19.7 19.7 0 0 0 3.8 4.4C.5 9 -.3 13.600.1 18.100a19.900 19.900 0 0 0 6 3c.5-.6.9-1.300 1.200-2-.7-.2-1.300-.5-1.900-.9l.4-.3a14.200 14.200 0 0 0 12.100 0l.4.3c-.6.4-1.200.7-1.900.9.4.7.8 1.400 1.200 2a19.900 19.900 0 0 0 6-3c.5-5.200-.8-9.700-3.500-13.700zM8 15.300c-1.200 0-2.200-1.100-2.200-2.400S6.800 10.500 8 10.500s2.200 1.100 2.200 2.400-1 2.400-2.200 2.400zm8 0c-1.200 0-2.200-1.100-2.200-2.400s1-2.400 2.200-2.400 2.200 1.100 2.200 2.400-1 2.400-2.200 2.400z" />
   </svg>
 );
+
+/** «linked Discord account» badge: the logo and the Discord name in the brand colour, so it reads without a label */
+export function DiscordBadge({ name }: { name: string }) {
+  return (
+    <span
+      className="inline-flex max-w-[11rem] items-center gap-1.5 rounded-full bg-[#5865f2]/15 py-0.5 pl-1.5 pr-2.5 text-xs font-bold text-[#7983f5]"
+      title={`Привязан аккаунт Discord: ${name}`}
+    >
+      <IconDiscordLogo size={14} />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
 
 /** full-page redirect to Discord; the backend returns to the panel afterwards */
 export function DiscordButton({ label, href, className = '' }: { label: string; href: string; className?: string }) {
