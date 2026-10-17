@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none"><defs><linearGradient id="m" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ed9a85"/><stop offset="1" stop-color="#e0502d"/></linearGradient></defs><path d="M53.61 27.88 L59.84 29.01 L59.84 34.99 L53.61 36.12 L51.91 41.37 L56.28 45.95 L52.77 50.78 L47.06 48.04 L42.6 51.28 L43.44 57.56 L37.76 59.4 L34.76 53.83 L29.24 53.83 L26.24 59.4 L20.56 57.56 L21.4 51.28 L16.94 48.04 L11.23 50.78 L7.72 45.95 L12.09 41.37 L10.39 36.12 L4.16 34.99 L4.16 29.01 L10.39 27.88 L12.09 22.63 L7.72 18.05 L11.23 13.22 L16.94 15.96 L21.4 12.72 L20.56 6.44 L26.24 4.6 L29.24 10.17 L34.76 10.17 L37.76 4.6 L43.44 6.44 L42.6 12.72 L47.06 15.96 L52.77 13.22 L56.28 18.05 L51.91 22.63 Z M41 32 a9 9 0 1 0 -18 0 a9 9 0 1 0 18 0Z" fill="#98361f" fill-opacity=".62" fill-rule="evenodd"/>
+<g transform="rotate(32 32 32)">
+  <path d="M29.4 14 H34.6 V57 Q34.6 60 32 60 Q29.4 60 29.4 57Z" fill="#f1b0a1"/>
+  <path d="M34.6 12 C46 9 55 14 57 25 C55 34 46 38 34.6 35Z" fill="url(#m)"/>
+  <path d="M38 17 C45 15.5 50 18 52 23" stroke="#fff" stroke-opacity=".6" stroke-width="2" stroke-linecap="round"/>
+</g></svg>

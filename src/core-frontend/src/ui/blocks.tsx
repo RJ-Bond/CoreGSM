@@ -84,7 +84,12 @@ export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: str
         width: size,
         height: size,
         borderRadius: Math.round(size * 0.3),
-        background: glass ? 'rgba(255,255,255,0.24)' : `linear-gradient(135deg, ${c1}, ${c2})`,
+        // artwork sits on a deep tile of the game colour (as on the PNG card), a line pictogram on the colour itself
+        background: glass
+          ? 'rgba(255,255,255,0.24)'
+          : GAME_IMAGE[game]
+            ? `linear-gradient(135deg, color-mix(in srgb, ${c1} 55%, #000), color-mix(in srgb, ${c2} 25%, #000))`
+            : `linear-gradient(135deg, ${c1}, ${c2})`,
         fontSize: size * 0.34,
         boxShadow: glass ? 'inset 0 0 0 1px rgba(255,255,255,0.25)' : `0 4px 12px -4px ${c1}99`,
       }}

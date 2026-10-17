@@ -39,7 +39,17 @@ export const gameColor = (id: string) => findGame(id)?.color ?? FALLBACK;
 export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toUpperCase();
 
 /** artwork used instead of the line pictogram (files in public/games) */
-export const GAME_IMAGE: Record<string, string> = { vrising: '/games/vrising.png', icarus: '/games/icarus.png', m2o: '/games/m2o.png' };
+/** games with their own artwork: PNG logos, and the emblems drawn by tools/gen-game-emblems.cjs (public/games/<id>.svg) */
+export const EMBLEM_GAMES = [
+  'minecraft', 'mbe', 'counterstrike2', 'csgo', 'counterstrike16', 'css', 'rust', 'valheim', 'garrysmod', 'teamfortress2', 'l4d2', 'terraria',
+  'sdtd', 'dayz', 'ase', 'asa', 'conanexiles', 'palworld', 'factorio', 'unturned', 'projectzomboid', 'gta5f', 'gtasam', 'teamspeak3',
+] as const;
+export const GAME_IMAGE: Record<string, string> = {
+  vrising: '/games/vrising.png',
+  icarus: '/games/icarus.png',
+  m2o: '/games/m2o.png',
+  ...Object.fromEntries(EMBLEM_GAMES.map((id) => [id, `/games/${id}.svg`])),
+};
 
 /** [deep, light] gradient colours of a game (tile covers, banners) */
 export const gameGradient = (id: string): [string, string] => gradientFor(gameColor(id));
