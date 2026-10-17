@@ -324,6 +324,8 @@ export function registerNews(deps: {
   servers: () => NewsServerInfo[];
   /** the status card of a server (the one the bot posts), or null */
   statusEmbed: (serverId: number) => StatusEmbed | null;
+  /** public https address of the panel (for the «read in full» link), or null when unknown */
+  publicBase: () => string | null;
 }) {
   const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
   const authed = deps.auth ?? staff;
@@ -415,7 +417,7 @@ export function registerNews(deps: {
   }
 
   /** the payload as it goes to Discord: variables substituted, status cards appended */
-  function resolvePayload(p: NewsPayload, test: boolean) {
+  function resolvePayload(p: NewsPayload, test: boolean, newsId?: number) {
     const r = makeResolver();
     const embed = (e: EmbedIn): EmbedIn => ({
       ...e,
@@ -439,8 +441,14 @@ export function registerNews(deps: {
     }
     const out: NewsPayload = { content, mention, ...(p.embed ? { embed: embed(p.embed) } : {}) };
     if (p.extraEmbeds?.length) out.extraEmbeds = p.extraEmbeds.map(embed);
-    // link buttons under the message
-    if (p.actions?.length) out.actions = p.actions;
+    // link buttons under the message; the first one always opens the full version in the panel (a short /go/ link)
+    const base = deps.publicBase();
+    const full = base && newsId && !test ? `${base}/go/news/${newsId}` : null;
+    if (full) {
+      // the title becomes a link too, unless the author set their own
+      if (out.embed?.title && !out.embed.url) out.embed.url = full;
+      out.actions = [{ label: 'Читать полностью', url: full }, ...(p.actions ?? []).slice(0, 2)];
+    } else if (p.actions?.length) out.actions = p.actions;
     // status cards: they never push the message over 10 embeds or 6000 characters
     const statusEmbeds: StatusEmbed[] = [];
     const used = allEmbeds(out);
@@ -913,7 +921,7 @@ export function registerNews(deps: {
       const stored = JSON.parse(r.payload) as NewsPayload;
       if (action === 'delete') return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: stored, statusEmbeds: [], test: false };
       // variables are substituted and status cards built right now, at send time
-      const { payload, statusEmbeds } = resolvePayload(stored, !!r.test);
+      const { payload, statusEmbeds } = resolvePayload(stored, !!r.test, r.id);
       return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test };
     });
     res.json(out);

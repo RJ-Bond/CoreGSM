@@ -13,6 +13,7 @@ import { z } from 'zod';
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { db, setSetting } from './db.js';
 import { guardGet, guardSet } from './loginGuard.js';
+import { enqueueDelivery } from './deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
 
@@ -238,7 +239,7 @@ export interface SecurityDeps {
   brandName: () => string;
 }
 
-const FORGOT_TEXT = 'Если для этого аккаунта указана подтверждённая почта, мы отправили на неё письмо со ссылкой для сброса пароля.';
+const FORGOT_TEXT = 'Если у аккаунта есть подтверждённая почта или привязанный Discord, мы отправили ссылку для сброса пароля: письмом на почту и личным сообщением от бота в Discord.';
 
 export function registerSecurity(d: SecurityDeps): void {
   const { app } = d;
@@ -365,9 +366,13 @@ export function registerSecurity(d: SecurityDeps): void {
       void (async () => {
         try {
           const u = db
-            .prepare("SELECT id, username, email, email_verified FROM users WHERE status = 'active' AND (ulower(username) = ? OR (email IS NOT NULL AND lower(email) = ?))")
-            .get(login, login) as { id: number; username: string; email: string | null; email_verified: number } | undefined;
-          if (!u || !u.email || !u.email_verified || !mailReady()) return;
+            .prepare("SELECT id, username, email, email_verified, discord_id FROM users WHERE status = 'active' AND (ulower(username) = ? OR (email IS NOT NULL AND lower(email) = ?))")
+            .get(login, login) as { id: number; username: string; email: string | null; email_verified: number; discord_id: string | null } | undefined;
+          if (!u) return;
+          // the link goes to every channel the account has: a verified e-mail and/or the linked Discord (a private message from the bot)
+          const viaMail = !!u.email && !!u.email_verified && mailReady();
+          const viaDiscord = !!u.discord_id;
+          if (!viaMail && !viaDiscord) return;
           const base = d.publicBase();
           if (!base) {
             console.error('password reset letter not sent: the public address of the panel is unknown (set PUBLIC_URL or DOMAIN)');
@@ -382,14 +387,23 @@ export function registerSecurity(d: SecurityDeps): void {
           db.prepare('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(now, u.id);
           db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(hashToken(token), u.id, now + 30 * 60_000);
           const en = prefsOf(u.id).lang === 'en';
-          const body = layout(
-            d.brandName(),
-            en
-              ? [`A password reset was requested for the account "${u.username}".`, 'The link works for 30 minutes and only once. If this was not you, just ignore this letter.']
-              : [`Запрошен сброс пароля для аккаунта «${u.username}».`, 'Ссылка действует 30 минут и только один раз. Если это были не вы, просто проигнорируйте письмо.'],
-            { label: en ? 'Set a new password' : 'Задать новый пароль', url: `${base}/#/reset/${token}` },
-          );
-          await sendMail({ to: u.email, subject: en ? 'Password reset' : 'Сброс пароля', ...body });
+          const resetUrl = `${base}/#/reset/${token}`;
+          if (viaDiscord) {
+            const text = en
+              ? `🔐 A password reset was requested for the account "${u.username}".\nSet a new password (the link works for 30 minutes and only once):\n${resetUrl}\n\nIf this was not you, ignore this message: the password stays as it is.`
+              : `🔐 Запрошен сброс пароля для аккаунта «${u.username}».\nЗадайте новый пароль (ссылка действует 30 минут и только один раз):\n${resetUrl}\n\nЕсли это были не вы, просто проигнорируйте сообщение: пароль останется прежним.`;
+            enqueueDelivery({ kind: 'dm', refId: null, target: u.discord_id!, payload: { content: text, summary: en ? 'Password reset' : 'Сброс пароля' } });
+          }
+          if (viaMail) {
+            const body = layout(
+              d.brandName(),
+              en
+                ? [`A password reset was requested for the account "${u.username}".`, 'The link works for 30 minutes and only once. If this was not you, just ignore this letter.']
+                : [`Запрошен сброс пароля для аккаунта «${u.username}».`, 'Ссылка действует 30 минут и только один раз. Если это были не вы, просто проигнорируйте письмо.'],
+              { label: en ? 'Set a new password' : 'Задать новый пароль', url: resetUrl },
+            );
+            await sendMail({ to: u.email!, subject: en ? 'Password reset' : 'Сброс пароля', ...body });
+          }
         } catch (e) {
           console.error('password reset letter failed:', (e as Error).message);
         }
@@ -415,6 +429,15 @@ export function registerSecurity(d: SecurityDeps): void {
       db.prepare('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(Date.now(), row.user_id);
     })();
     logAccount(req, row.user_id, 'password_changed', 'сброс по ссылке из письма');
+    // a confirmation in Discord too: if it was not the owner, they see it at once
+    const dm = db.prepare('SELECT username, discord_id FROM users WHERE id = ?').get(row.user_id) as { username: string; discord_id: string | null } | undefined;
+    if (dm?.discord_id) {
+      const enDm = prefsOf(row.user_id).lang === 'en';
+      const text = enDm
+        ? `✅ The password of the account "${dm.username}" was changed. All sessions were ended. If this was not you, contact an administrator.`
+        : `✅ Пароль аккаунта «${dm.username}» изменён, все сеансы завершены. Если это были не вы, срочно сообщите администратору.`;
+      enqueueDelivery({ kind: 'dm', refId: null, target: dm.discord_id, payload: { content: text, summary: enDm ? 'Password changed' : 'Пароль изменён' } });
+    }
     const u = emailOf(row.user_id);
     if (u?.email && u.email_verified && mailReady()) {
       const en = prefsOf(row.user_id).lang === 'en';
