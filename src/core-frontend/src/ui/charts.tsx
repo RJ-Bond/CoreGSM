@@ -58,6 +58,20 @@ function useSparkSet(): SparkSet | null {
   return sparkSet;
 }
 
+/** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
+export function useSparkSpanMin(serverId: number): number | null {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  if (!set || !raw) return null;
+  const first = raw.players.findIndex((v) => v != null);
+  if (first < 0) return null;
+  return Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
+}
+
+/** «за 24 часа» / «за 3 ч» / «за 40 мин» for a span in minutes (null = the whole day while nothing is known) */
+export const spanCaption = (min: number | null): string =>
+  min == null || min >= 24 * 60 - 1 ? 'за 24 часа' : min >= 180 ? `за ${Math.round(min / 60)} ч` : `за ${Math.max(1, min)} мин`;
+
 /** empty buckets (no poll yet, or the panel was off) take the value before them */
 const filled = (vals: (number | null)[]): number[] => {
   let prev = vals.find((v) => v != null) ?? 0;
@@ -91,6 +105,19 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   return hero
     ? <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
     : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+}
+
+/**
+ * The red «server was down» band of sample `i` of `n` in a chart `w` wide with `pad` on both sides: the part of the
+ * x axis that sample stands for, never outside the chart (with few samples one band is wide, and the first and last
+ * ones used to stick out of the chart).
+ */
+export function downBand(i: number, n: number, w: number, pad = 3): { x: number; width: number } {
+  const step = (w - pad * 2) / Math.max(1, n - 1);
+  const cx = pad + (n <= 1 ? 0 : (i / (n - 1)) * (w - pad * 2));
+  const x0 = Math.max(0, cx - step / 2);
+  const x1 = Math.min(w, cx + step / 2);
+  return { x: x0, width: Math.max(0, x1 - x0) };
 }
 
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
@@ -138,8 +165,8 @@ export function SmoothArea({
         ))}
         {down?.map((d, i) => {
           if (!d || !pts[i]) return null;
-          const half = (w - pad * 2) / Math.max(1, values.length - 1) / 2;
-          return <rect key={i} x={pts[i][0] - half} y={0} width={half * 2} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
+          const b = downBand(i, values.length, w, pad);
+          return <rect key={i} x={b.x} y={0} width={b.width} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
         })}
         <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />

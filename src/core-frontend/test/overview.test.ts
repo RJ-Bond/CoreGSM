@@ -4,6 +4,7 @@ import { capLevel, capacityPct, slotsInfo } from '../src/components/servers/capa
 import { chartPoints, chartStart, hasEnoughHistory, needsAttention, pickHero, pulseOf } from '../src/components/servers/overviewLogic';
 import { excerptOf } from '../src/components/servers/WhatsNew';
 import { t } from '../src/i18n';
+import { downBand, spanCaption } from '../src/ui/charts';
 
 const srv = (id: number, o: Partial<Server> = {}): Server => ({
   id, name: `S${id}`, customName: '', nameAuto: false, game: 'minecraft', host: '', port: 0, queryPort: null, displayAddress: '', country: '', coverUrl: null,
@@ -69,6 +70,38 @@ describe('hero pick', () => {
   it('says maintenance when the picked server is in a window', () => {
     const list = [srv(1, { players: 4, maintenance: { name: 'x', until: null } })];
     expect(pickHero(list, [])?.reason).toBe('maintenance');
+  });
+});
+
+describe('down bands on the sparkline', () => {
+  it('stay inside the chart and cover the share of the axis of their sample', () => {
+    const w = 240;
+    // many samples: narrow
+    const b = downBand(10, 48, w);
+    expect(b.width).toBeCloseTo((w - 6) / 47, 5);
+    // the first and the last sample are cut at the edges instead of sticking out
+    const first = downBand(0, 4, w);
+    expect(first.x).toBe(0);
+    expect(first.width).toBeCloseTo((w - 6) / 3 / 2 + 3, 5);
+    const last = downBand(3, 4, w);
+    expect(last.x + last.width).toBe(w);
+    // a single sample
+    expect(downBand(0, 1, w).x).toBeGreaterThanOrEqual(0);
+    for (const n of [1, 2, 3, 5, 48]) for (let i = 0; i < n; i++) {
+      const d = downBand(i, n, w);
+      expect(d.x).toBeGreaterThanOrEqual(0);
+      expect(d.x + d.width).toBeLessThanOrEqual(w + 1e-9);
+    }
+  });
+});
+
+describe('sparkline caption', () => {
+  it('says how much the curve really covers', () => {
+    expect(spanCaption(null)).toBe('за 24 часа');
+    expect(spanCaption(24 * 60)).toBe('за 24 часа');
+    expect(spanCaption(600)).toBe('за 10 ч');
+    expect(spanCaption(120)).toBe('за 120 мин');
+    expect(spanCaption(0)).toBe('за 1 мин');
   });
 });
 
