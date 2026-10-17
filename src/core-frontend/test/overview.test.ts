@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Server } from '../src/api';
 import { capLevel, capacityPct, slotsInfo } from '../src/components/servers/capacity';
-import { chartPoints, needsAttention, pickHero, pulseOf } from '../src/components/servers/overviewLogic';
+import { chartPoints, hasEnoughHistory, needsAttention, pickHero, pulseOf } from '../src/components/servers/overviewLogic';
 import { excerptOf } from '../src/components/servers/WhatsNew';
 import { t } from '../src/i18n';
 
@@ -84,6 +84,13 @@ describe('chart and excerpt', () => {
   it('scales the points into the window', () => {
     const pts = chartPoints([{ ts: 0, players: 5 }, { ts: 50, players: 10 }], 0, 100);
     expect(pts).toEqual([{ x: 0, y: 0.5 }, { x: 0.5, y: 1 }]);
+  });
+  it('draws the curve only when the history covers enough of the window', () => {
+    const H = 3_600_000;
+    // a few polls bunched at the right edge: no chart (it would be a vertical stroke)
+    expect(hasEnoughHistory([{ ts: 23 * H }, { ts: 23 * H + 60_000 }, { ts: 23 * H + 120_000 }], 24)).toBe(false);
+    expect(hasEnoughHistory([{ ts: 0 }, { ts: 5 * H }], 24)).toBe(false);
+    expect(hasEnoughHistory([{ ts: 0 }, { ts: 3 * H }, { ts: 6 * H }], 24)).toBe(true);
   });
   it('cuts markdown out of the news teaser', () => {
     expect(excerptOf({ payload: { content: '', mention: 'none', embed: { description: '**Bold** [link](http://x) text' } } })).toBe('Bold link text');
