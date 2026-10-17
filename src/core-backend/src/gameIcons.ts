@@ -25,7 +25,7 @@ export const GAME_ICON: Record<string, keyof typeof ICON_PATHS> = {
   rust: 'axe', valheim: 'shield', garrysmod: 'wrench', l4d2: 'warning', dayz: 'warning',
   terraria: 'sword', conanexiles: 'sword', sdtd: 'calendar', ase: 'leaf', asa: 'leaf',
   palworld: 'paw', factorio: 'gear', vrising: 'drop', projectzomboid: 'skull',
-  gta5f: 'car', gtasam: 'car', teamspeak3: 'headset', icarus: 'planet',
+  gta5f: 'car', gtasam: 'car', m2o: 'car', teamspeak3: 'headset', icarus: 'planet',
 };
 
 export const gameIconPath = (game: string): string | null => {

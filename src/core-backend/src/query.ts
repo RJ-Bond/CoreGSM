@@ -1,6 +1,7 @@
 /** One query of a game server over its game protocol (GameDig). No database: the poller and the probes share it. */
 import { GameDig } from 'gamedig';
 import type { ServerRow } from './db.js';
+import { fetchM2oInfo } from './m2oInfo.js';
 
 export interface QueryResult {
   online: boolean;
@@ -35,6 +36,15 @@ const clean = (s: unknown): string | null => {
 };
 
 export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 'query_port'> & Partial<ServerRow>): Promise<QueryResult> {
+  // Mafia II: Online: the current server answers over HTTP (TCP, game port + 1); the old UDP query below is the fallback
+  if (s.game === 'm2o') {
+    try {
+      const { info, ping } = await fetchM2oInfo(s.host, s.query_port ?? s.port + 1);
+      return { online: true, name: info.name, players: info.players, maxPlayers: info.maxPlayers, map: info.map, version: info.version, ping, playerNames: info.playerNames, error: null };
+    } catch {
+      /* not the HTTP kind of server: try the GameDig protocol */
+    }
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const r: any = await GameDig.query({

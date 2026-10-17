@@ -25,6 +25,7 @@ export const GAMES: Game[] = [
   { id: 'unturned', label: 'Unturned', port: 27015, abbr: 'UT', color: '#4aa86a' },
   { id: 'vrising', label: 'V Rising', port: 27015, abbr: 'VR', color: '#7c3aed' },
   { id: 'icarus', label: 'Icarus', port: 27015, abbr: 'IC', color: '#f5b01e' },
+  { id: 'm2o', label: 'Mafia II: Online', port: 27015, abbr: 'M2', color: '#c9a24a' },
   { id: 'projectzomboid', label: 'Project Zomboid', port: 16261, abbr: 'PZ', color: '#7a8a4a' },
   { id: 'gta5f', label: 'FiveM (GTA V)', port: 30120, abbr: '5M', color: '#f26a3d' },
   { id: 'gtasam', label: 'SA-MP', port: 7777, abbr: 'SA', color: '#8a6ad9' },
