@@ -4,9 +4,12 @@
  * The current server (MafiaHub framework, https://docs.mafia2online.com/guides/basics/server-setup/) listens on
  *   port      UDP   game traffic (27015 by default)
  *   port + 1  TCP   a small HTTP endpoint with the server metadata as JSON (used by the server browser and masterlist)
- * The documentation names `max_players` and the `mod` config but gives neither the path nor the other keys, so the
- * answer is read tolerantly: the usual spellings of every value are accepted and a missing value is simply left out.
+ * Its JSON (MafiaHub Framework, integrations/server/instance.cpp, route "/") is: mod_name, mod_slug, mod_version,
+ * framework_version, host, port, password_required, max_players, mod_config. There is NO server name and NO number
+ * of players in it (those are in the masterlist, see m2oMasterlist.ts). Other usual spellings are accepted too and a
+ * missing value is simply left out.
  * An answer of any JSON object already proves that the server is up, which is what monitoring needs most.
+ * The version shown is the mod version (`mod_version`).
  * The old UDP query (GameDig `m2o`, header «M2Online») stays as the fallback in query.ts.
  */
 
@@ -48,7 +51,7 @@ export function parseM2oInfo(raw: unknown): M2oInfo | null {
     players,
     maxPlayers: first(num(o.max_players), num(o.maxplayers), num(o.maxPlayers), num(o.slots)) ?? 0,
     map: first(str(o.map), str(mod.map)),
-    version: first(str(o.version), str(mod.version), str(o.mod_version)),
+    version: first(str(o.mod_version), str(o.version), str(mod.version)),
     playerNames: playerNames.slice(0, 200),
   };
 }

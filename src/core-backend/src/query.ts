@@ -2,6 +2,7 @@
 import { GameDig } from 'gamedig';
 import type { ServerRow } from './db.js';
 import { fetchM2oInfo } from './m2oInfo.js';
+import { FRESH_MS, findInMasterlist } from './m2oMasterlist.js';
 
 export interface QueryResult {
   online: boolean;
@@ -36,13 +37,30 @@ const clean = (s: unknown): string | null => {
 };
 
 export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 'query_port'> & Partial<ServerRow>): Promise<QueryResult> {
-  // Mafia II: Online: the current server answers over HTTP (TCP, game port + 1); the old UDP query below is the fallback
+  // Mafia II: Online. The server answers over HTTP (TCP, game port + 1) with its version and slots; its name and the
+  // number of players are only in the public masterlist (when it is announced there). The old UDP query is the fallback.
   if (s.game === 'm2o') {
+    const listed = await findInMasterlist(s.host, s.port).catch(() => null);
+    const fresh = listed && listed.lastPing > 0 && Date.now() - listed.lastPing < FRESH_MS ? listed : null;
     try {
       const { info, ping } = await fetchM2oInfo(s.host, s.query_port ?? s.port + 1);
-      return { online: true, name: info.name, players: info.players, maxPlayers: info.maxPlayers, map: info.map, version: info.version, ping, playerNames: info.playerNames, error: null };
+      return {
+        online: true,
+        name: listed?.name ?? info.name,
+        players: fresh ? fresh.players : info.players,
+        maxPlayers: info.maxPlayers || listed?.maxPlayers || 0,
+        map: info.map,
+        version: info.version ?? listed?.version ?? null,
+        ping,
+        playerNames: info.playerNames,
+        error: null,
+      };
     } catch {
-      /* not the HTTP kind of server: try the GameDig protocol */
+      // the HTTP port is closed but the server keeps announcing itself: it is up, and the list knows the rest
+      if (fresh) {
+        return { online: true, name: fresh.name, players: fresh.players, maxPlayers: fresh.maxPlayers, map: null, version: fresh.version, ping: null, playerNames: [], error: null };
+      }
+      /* not announced and no HTTP: try the GameDig protocol */
     }
   }
   try {

@@ -134,7 +134,7 @@ export const GAME_PROFILES: GameProfile[] = [
     id: 'm2o',
     label: 'Mafia II: Online',
     defaultPort: 27015,
-    queryPortHint: 'Mafia II: Online: игра идёт по UDP на порту 27015, а панель спрашивает сервер по TCP на порту игры + 1 (по умолчанию 27016). Откройте оба.',
+    queryPortHint: 'Mafia II: Online: игра идёт по UDP на порту 27015, а панель спрашивает версию и слоты по TCP на порту игры + 1 (27016). Имя сервера и число игроков панель берёт из публичного мастер-листа, если сервер в нём есть (задан server-token).',
     fields: F(true, false, true),
     connect: { note: 'В клиенте Mafia II: Online выберите сервер в списке или подключитесь напрямую: {address}.' },
     accent: 0xc9a24a,
