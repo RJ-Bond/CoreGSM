@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   categoryOf, countByCategory, countdownText, coverGame, coverGradient, filterByCategory, galleryUrls, groupByMonth, groupChanges,
-  normCategory, orderFeed, toggleReaction, validActions,
+  extractHeadings, isGeneratedCover, normCategory, orderFeed, relatedNews, toggleReaction, validActions, visibleRubrics,
 } from '../src/components/news/newsLogic';
 import { blank, fromPayload, toPayload } from '../src/components/news/model';
 import type { PublicNews } from '../src/api';
@@ -111,5 +111,36 @@ describe('editor model', () => {
     expect(back.category).toBe('wipe');
     expect(back.countdownAt).toBe('2030-01-01T10:00');
     expect(back.actions[0]).toMatchObject({ label: 'Go' });
+  });
+});
+
+describe('news page helpers', () => {
+  it('hides empty rubrics, and the whole row when there is nothing to filter', () => {
+    const counts = (o: Partial<Record<string, number>>) => ({ all: 0, announcement: 0, wipe: 0, update: 0, event: 0, maintenance: 0, other: 0, ...o }) as ReturnType<typeof countByCategory>;
+    expect(visibleRubrics(counts({ all: 2, announcement: 2 }), 'all')).toEqual([]);
+    expect(visibleRubrics(counts({ all: 3, announcement: 2, wipe: 1 }), 'all')).toEqual(['announcement', 'wipe']);
+    // the selected rubric stays, even when it became empty, so it can be switched off
+    expect(visibleRubrics(counts({ all: 2, announcement: 2 }), 'event')).toEqual(['announcement', 'event']);
+  });
+  it('a cover is drawn by the panel only without a picture and a game', () => {
+    expect(isGeneratedCover({ image: null })).toBe(true);
+    expect(isGeneratedCover({ image: '/a.png' })).toBe(false);
+    expect(isGeneratedCover({ image: null, game: 'vrising' })).toBe(false);
+    expect(isGeneratedCover({ image: null, statusServerIds: [1], servers: [{ id: 1, game: 'icarus' }] })).toBe(false);
+    expect(isGeneratedCover({ image: null, statusServerIds: [1], servers: [] })).toBe(true);
+  });
+  it('lists the headings outside code blocks with their line ids', () => {
+    const text = ['intro', '# One', 'text', '```', '# not a heading', '```', '## Two **bold**', '### Three', '#nospace', '# '].join('\n');
+    expect(extractHeadings(text)).toEqual([
+      { id: 'nw-h-1', level: 1, text: 'One' },
+      { id: 'nw-h-6', level: 2, text: 'Two bold' },
+      { id: 'nw-h-7', level: 3, text: 'Three' },
+    ]);
+  });
+  it('suggests the same rubric first, then the newest, never the current one', () => {
+    const l = [item(1, 10, { category: 'wipe' }), item(2, 30), item(3, 20, { category: 'wipe' }), item(4, 40, { category: 'wipe' }), item(5, 5)];
+    expect(relatedNews(l, 1, 'wipe', 3).map((x) => x.id)).toEqual([4, 3, 2]);
+    expect(relatedNews(l, 2, 'announcement', 2).map((x) => x.id)).toEqual([5, 4]);
+    expect(relatedNews([item(1, 1)], 1, 'wipe')).toEqual([]);
   });
 });
