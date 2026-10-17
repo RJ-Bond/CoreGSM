@@ -8,6 +8,7 @@ import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
 import { parseProxy } from './proxy.js';
 import { syncDiscord } from './sync.js';
+import { updatePresence } from './presence.js';
 
 const TICK_MS = 10_000;
 const LOGIN_RETRY_MS = 60_000;
@@ -394,6 +395,7 @@ async function tick(): Promise<void> {
     await processNews();
     await processDeliveries();
     if (client && state === 'online') await syncDiscord(client, () => stopping);
+    if (client && state === 'online') await updatePresence(client);
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {

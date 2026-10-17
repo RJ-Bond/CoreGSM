@@ -7,9 +7,16 @@ import { renderCard } from '../card.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
 import { refreshServer } from '../gsm.js';
 import { wrap } from '../http.js';
-import { embedFor, intervalParam, serializeBinding } from '../serverData.js';
+import { buildPresence } from '../presence.js';
+import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 
 export const router = express.Router();
+
+// the status line of the bot in the member list: the dot colour and the lines it rotates through
+router.get('/internal/presence', internal, (_req, res) => {
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  res.json(buildPresence(rows.map(serialize).map((s) => ({ name: s.name, online: s.online, players: s.players, maxPlayers: s.maxPlayers, hasStatus: s.hasStatus }))));
+});
 
 router.get('/internal/servers/:id/embed', internal, (req, res) => {
   const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
