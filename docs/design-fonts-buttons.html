@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoreGSM: шрифты и кнопки, 10 вариантов</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400..900&family=Inter+Tight:wght@400..800&family=Inter:wght@400..800&family=Manrope:wght@400..800&family=Onest:wght@400..800&family=Rubik:wght@400..700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --page: 9 10 14; --card: 18 20 27; --ink: 226 228 236; --mute: 148 154 170; --line: 38 41 53; --soft: 30 33 44;
+  --brand: 88 91 235; --brand2: 66 58 196; --link: 165 170 255; --on-brand: #fff;
+}
+[data-theme='light'] {
+  --page: 243 244 248; --card: 255 255 255; --ink: 18 20 26; --mute: 92 99 114; --line: 231 233 240; --soft: 236 238 246;
+  --brand: 79 70 229; --brand2: 61 51 190; --link: 79 70 229;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: rgb(var(--page)); color: rgb(var(--ink)); font: 16px/1.5 system-ui, sans-serif; }
+.top { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; padding: 14px 24px; background: rgb(var(--page) / .88); backdrop-filter: blur(12px); border-bottom: 1px solid rgb(var(--line)); }
+.top h1 { margin: 0; font: 700 18px/1.2 system-ui, sans-serif; }
+.top p { margin: 2px 0 0; font-size: 13px; color: rgb(var(--mute)); }
+.theme { display: inline-flex; padding: 3px; border-radius: 999px; background: rgb(var(--soft)); }
+.theme button { border: 0; padding: 6px 14px; border-radius: 999px; background: transparent; color: rgb(var(--mute)); font: 600 13px system-ui; cursor: pointer; }
+.theme button[aria-pressed='true'] { background: rgb(var(--card)); color: rgb(var(--ink)); box-shadow: 0 1px 3px rgb(0 0 0 / .3); }
+main { max-width: 1280px; margin: 0 auto; padding: 24px; display: grid; gap: 28px 24px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); }
+.v { display: grid; gap: 10px; align-content: start; }
+.v-label { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.v-num { font: 800 13px system-ui; padding: 2px 9px; border-radius: 999px; background: rgb(var(--brand)); color: #fff; }
+.v-name { font: 700 15px system-ui; }
+.v-desc { font-size: 13px; color: rgb(var(--mute)); }
+
+/* ---------- the news card (what the site shows) ---------- */
+.card { font-family: var(--font); border-radius: 26px; overflow: hidden; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: 0 12px 30px -12px rgb(0 0 0 / .45); }
+.cover { position: relative; min-height: 10.5rem; display: flex; align-items: flex-end; overflow: hidden;
+  background: radial-gradient(90% 120% at 8% -10%, #7b70f0 0%, transparent 62%), radial-gradient(80% 110% at 105% 105%, #6d3fd8 0%, transparent 60%), linear-gradient(155deg, #2a2468, #0b0c16 85%); }
+.cover::before { content: ''; position: absolute; inset: 0; background-image: linear-gradient(rgb(255 255 255 / .07) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / .07) 1px, transparent 1px); background-size: 28px 28px; -webkit-mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); }
+.cover .ico { position: absolute; right: 7%; top: 0; bottom: 0; margin: auto 0; height: 62%; aspect-ratio: 1; color: #fff; opacity: .17; }
+.cover .ico svg { width: 100%; height: 100%; }
+.cover-in { position: relative; width: 100%; padding: 2rem 2rem 1.3rem; display: grid; gap: .55rem; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; font-size: 13px; font-weight: var(--cw); background: rgb(12 14 26 / .55); color: #fff; }
+.chip.k { color: #a5aaff; }
+.title { margin: 0; font-size: clamp(1.6rem, 3.4vw, 2.2rem); line-height: 1.12; font-weight: var(--hw); letter-spacing: var(--ht); color: #fff; }
+.body { display: grid; gap: .9rem; padding: 1.4rem 2rem 1.7rem; }
+.by { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.ava { width: 22px; height: 22px; border-radius: 999px; background: #3a3320; color: #e8c56a; display: grid; place-items: center; font-size: 11px; font-weight: 800; }
+.by b { font-weight: var(--cw); }
+.role { padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: var(--cw); background: rgb(var(--soft)); color: rgb(var(--link)); }
+.text { font-size: 17px; line-height: 1.62; font-weight: var(--bw); display: grid; gap: .35rem; }
+.text div { display: flex; gap: 10px; }
+.text div::before { content: '•'; opacity: .75; }
+.acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: .2rem; }
+.btn, .btn2 { font-family: var(--font); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; text-decoration: none; transition: background-color .15s, box-shadow .15s, border-color .15s, color .15s; }
+.btn svg { transition: margin-left .15s; }
+.btn:hover svg { margin-left: 3px; }
+
+/* ===== 1. Manrope, light weights, flat radius 12 ===== */
+.v1 { --font: 'Manrope', sans-serif; --hw: 700; --ht: -.01em; --bw: 450; --cw: 600; }
+.v1 .btn { padding: 11px 18px; border: 0; border-radius: 12px; background: rgb(var(--brand)); color: #fff; font: 600 15px var(--font); box-shadow: 0 1px 2px rgb(0 0 0 / .3); }
+.v1 .btn:hover { background: rgb(var(--brand) / .88); }
+.v1 .btn2 { padding: 10px 16px; border-radius: 12px; border: 1px solid rgb(var(--line)); background: transparent; color: rgb(var(--ink)); font: 600 14px var(--font); }
+.v1 .btn2:hover { background: rgb(var(--soft)); }
+
+/* ===== 2. Inter, neutral, flat radius 10 ===== */
+.v2 { --font: 'Inter', sans-serif; --hw: 700; --ht: -.025em; --bw: 400; --cw: 600; }
+.v2 .btn { padding: 10px 16px; border: 0; border-radius: 10px; background: rgb(var(--brand)); color: #fff; font: 600 14.5px var(--font); letter-spacing: -.005em; box-shadow: inset 0 1px 0 rgb(255 255 255 / .16), 0 1px 2px rgb(0 0 0 / .35); }
+.v2 .btn:hover { background: rgb(var(--brand2)); }
+.v2 .btn2 { padding: 9px 14px; border-radius: 10px; border: 1px solid rgb(var(--line)); background: rgb(var(--soft)); color: rgb(var(--ink)); font: 500 14px var(--font); }
+
+/* ===== 3. Onest, pill with an arrow disc ===== */
+.v3 { --font: 'Onest', sans-serif; --hw: 700; --ht: -.015em; --bw: 400; --cw: 600; }
+.v3 .btn { padding: 6px 6px 6px 18px; border: 0; border-radius: 999px; background: rgb(var(--brand)); color: #fff; font: 600 15px var(--font); }
+.v3 .btn span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 999px; background: rgb(255 255 255 / .2); }
+.v3 .btn:hover span { background: rgb(255 255 255 / .32); }
+.v3 .btn2 { padding: 9px 16px; border-radius: 999px; border: 1px solid rgb(var(--line)); background: transparent; color: rgb(var(--ink)); font: 500 14px var(--font); }
+
+/* ===== 4. Golos Text, solid with a hairline ring ===== */
+.v4 { --font: 'Golos Text', sans-serif; --hw: 700; --ht: -.01em; --bw: 400; --cw: 600; }
+.v4 .btn { padding: 11px 18px; border: 0; border-radius: 12px; background: rgb(var(--brand)); color: #fff; font: 600 15px var(--font); box-shadow: 0 0 0 1px rgb(255 255 255 / .12) inset, 0 6px 14px -8px rgb(var(--brand) / .8); }
+.v4 .btn:hover { background: rgb(var(--brand2)); }
+.v4 .btn2 { padding: 10px 16px; border-radius: 12px; border: 0; background: rgb(var(--soft)); color: rgb(var(--ink)); font: 500 14px var(--font); }
+
+/* ===== 5. Inter, outline primary ===== */
+.v5 { --font: 'Inter', sans-serif; --hw: 650; --ht: -.02em; --bw: 400; --cw: 600; }
+.v5 .btn { padding: 10px 18px; border-radius: 999px; border: 1.5px solid rgb(var(--link)); background: transparent; color: rgb(var(--link)); font: 600 14.5px var(--font); }
+.v5 .btn:hover { background: rgb(var(--link)); color: rgb(var(--page)); }
+.v5 .btn2 { padding: 9px 14px; border: 0; border-radius: 999px; background: transparent; color: rgb(var(--mute)); font: 500 14px var(--font); }
+.v5 .btn2:hover { color: rgb(var(--ink)); background: rgb(var(--soft)); }
+
+/* ===== 6. Manrope, tinted soft primary ===== */
+.v6 { --font: 'Manrope', sans-serif; --hw: 750; --ht: -.015em; --bw: 500; --cw: 650; }
+.v6 .btn { padding: 11px 18px; border: 0; border-radius: 12px; background: rgb(var(--brand) / .2); color: rgb(var(--link)); font: 700 15px var(--font); }
+.v6 .btn:hover { background: rgb(var(--brand) / .32); }
+.v6 .btn2 { padding: 10px 16px; border-radius: 12px; border: 0; background: rgb(var(--soft)); color: rgb(var(--ink)); font: 600 14px var(--font); }
+
+/* ===== 7. Onest, split button: label + arrow block ===== */
+.v7 { --font: 'Onest', sans-serif; --hw: 650; --ht: -.02em; --bw: 400; --cw: 600; }
+.v7 .btn { padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: rgb(var(--brand)); color: #fff; font: 600 15px var(--font); }
+.v7 .btn b { padding: 11px 16px 11px 18px; font-weight: 600; }
+.v7 .btn span { align-self: stretch; display: grid; place-items: center; width: 42px; background: rgb(0 0 0 / .18); }
+.v7 .btn:hover span { background: rgb(0 0 0 / .3); }
+.v7 .btn2 { padding: 10px 16px; border-radius: 12px; border: 1px solid rgb(var(--line)); background: transparent; color: rgb(var(--ink)); font: 500 14px var(--font); }
+
+/* ===== 8. Inter Tight headings + Inter text, monochrome button ===== */
+.v8 { --font: 'Inter', sans-serif; --hw: 700; --ht: -.03em; --bw: 400; --cw: 600; }
+.v8 .title { font-family: 'Inter Tight', 'Inter', sans-serif; }
+.v8 .btn { padding: 11px 18px; border: 0; border-radius: 10px; background: rgb(var(--ink)); color: rgb(var(--page)); font: 600 14.5px var(--font); }
+.v8 .btn:hover { opacity: .88; }
+.v8 .btn2 { padding: 10px 14px; border-radius: 10px; border: 1px solid rgb(var(--line)); background: transparent; color: rgb(var(--ink)); font: 500 14px var(--font); }
+
+/* ===== 9. Golos Text, editorial: text link with an underline ===== */
+.v9 { --font: 'Golos Text', sans-serif; --hw: 800; --ht: -.02em; --bw: 400; --cw: 600; }
+.v9 .btn { padding: 4px 0; border: 0; border-bottom: 2px solid rgb(var(--brand)); border-radius: 0; background: transparent; color: rgb(var(--ink)); font: 700 16px var(--font); }
+.v9 .btn:hover { color: rgb(var(--link)); }
+.v9 .btn2 { padding: 4px 0; margin-left: 12px; border: 0; background: transparent; color: rgb(var(--mute)); font: 500 14px var(--font); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: rgb(var(--line)); }
+.v9 .btn2:hover { color: rgb(var(--ink)); }
+
+/* ===== 10. Rubik, friendly rounded, radius 8 ===== */
+.v10 { --font: 'Rubik', sans-serif; --hw: 600; --ht: -.005em; --bw: 400; --cw: 500; }
+.v10 .btn { padding: 11px 20px; border: 0; border-radius: 8px; background: rgb(var(--brand)); color: #fff; font: 500 15px var(--font); box-shadow: 0 3px 0 rgb(var(--brand2)); }
+.v10 .btn:hover { transform: translateY(1px); box-shadow: 0 2px 0 rgb(var(--brand2)); }
+.v10 .btn2 { padding: 10px 16px; border-radius: 8px; border: 1px solid rgb(var(--line)); background: rgb(var(--card)); color: rgb(var(--ink)); font: 400 14px var(--font); box-shadow: 0 2px 0 rgb(var(--line)); }
+
+@media (max-width: 560px) { main { padding: 14px; } .cover-in, .body { padding-left: 1.2rem; padding-right: 1.2rem; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <div>
+    <h1>CoreGSM: шрифты и кнопки, 10 вариантов</h1>
+    <p>Одна и та же карточка новости. Скажите номер (можно «шрифт из 3, кнопка из 7»).</p>
+  </div>
+  <div class="theme" role="group" aria-label="Тема">
+    <button type="button" data-t="dark" aria-pressed="true">Тёмная</button>
+    <button type="button" data-t="light" aria-pressed="false">Светлая</button>
+  </div>
+</div>
+<main id="grid"></main>
+
+<script>
+const ARROW = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+const LINK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1"/></svg>';
+const MEGA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+const V = [
+  ['Manrope, лёгкий вес, плоская кнопка', 'Текущий шрифт, но заголовок 700, текст 450. Кнопка: плоская заливка, радиус 12. Самое дешёвое изменение.'],
+  ['Inter, нейтральный', 'Самый «продуктовый» вид. Плотный заголовок, кнопка 10 px с тонким бликом.'],
+  ['Onest, таблетка со стрелкой', 'Шрифт с характером (создан для кириллицы). Кнопка-таблетка с кружком-стрелкой.'],
+  ['Golos Text, кнопка с тонким кольцом', 'Мягкий и читаемый. Кнопка с едва заметным внутренним кольцом и лёгкой тенью.'],
+  ['Inter, контурная главная кнопка', 'Лёгкий вид без заливки: контур цвета бренда, заливка при наведении. Вторичные кнопки без рамки.'],
+  ['Manrope, мягкая тонированная кнопка', 'Кнопка не кричит: фон бренда на 20%, текст цвета бренда. Вес чуть выше.'],
+  ['Onest, составная кнопка', 'Надпись и стрелка в отдельном тёмном блоке справа. Выглядит как «действие».'],
+  ['Inter Tight + Inter, монохромная кнопка', 'Заголовок плотным Inter Tight. Главная кнопка белая на тёмном (чёрная на светлом): строго, без цвета.'],
+  ['Golos Text, журнальный стиль', 'Кнопки как ссылки: подчёркивание цветом бренда. Минимум «пластика», максимум текста.'],
+  ['Rubik, дружелюбный, радиус 8', 'Округлый шрифт, кнопка с «объёмным» нижним краем. Игривее остальных.'],
+];
+const card = (n) => `
+<section class="v v${n}">
+  <div class="v-label"><span class="v-num">${n}</span><span class="v-name">${V[n - 1][0]}</span></div>
+  <div class="v-desc">${V[n - 1][1]}</div>
+  <article class="card">
+    <div class="cover"><span class="ico">${MEGA}</span>
+      <div class="cover-in">
+        <div class="chips"><span class="chip k">Объявление</span><span class="chip">14.10.2026</span></div>
+        <h2 class="title">📢 Важное объявление</h2>
+      </div>
+    </div>
+    <div class="body">
+      <div class="by"><span class="ava">J</span><b>RJ Bond</b><span class="role">Администратор</span></div>
+      <div class="text">
+        <div><span>Добавили команду /register, для регистрации игрока через Discord</span></div>
+        <div><span>Добавили команду /nick, чтобы задать ник игрока на сервере и получать статистику, ранги и тд с мониторинга.</span></div>
+        <div><span>Добавили команду /profile, чтобы посмотреть свой профиль, награды и достижения</span></div>
+      </div>
+      <div class="acts">
+        ${n === 3 ? `<a class="btn" href="#"><b style="font-weight:600">Читать полностью</b><span>${ARROW}</span></a>`
+          : n === 7 ? `<a class="btn" href="#"><b>Читать полностью</b><span>${ARROW}</span></a>`
+          : n === 9 ? `<a class="btn" href="#">Читать полностью ${ARROW}</a>`
+          : `<a class="btn" href="#">Читать полностью ${n === 5 || n === 8 || n === 10 || n === 1 || n === 2 || n === 4 || n === 6 ? ARROW : ''}</a>`}
+        <a class="btn2" href="#">${LINK} Скопировать ссылку</a>
+      </div>
+    </div>
+  </article>
+</section>`;
+document.getElementById('grid').innerHTML = Array.from({ length: 10 }, (_, i) => card(i + 1)).join('');
+document.querySelectorAll('.theme button').forEach((b) => b.addEventListener('click', () => {
+  document.documentElement.dataset.theme = b.dataset.t;
+  document.querySelectorAll('.theme button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+}));
+</script>
+</body>
+</html>
