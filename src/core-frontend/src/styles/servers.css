@@ -301,3 +301,24 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .cmp-change { display: inline-flex; align-items: center; gap: 4px; border-radius: var(--r-pill); padding: 2px 9px; font-size: 12.5px; font-weight: 800; background: rgb(var(--soft)); color: rgb(var(--mute)); }
 .cmp-change.is-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .cmp-change.is-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* ---------- attention strip: servers with a problem, one line each (the working servers keep the first screen) ---------- */
+.attn { display: grid; gap: .4rem; padding: .7rem .75rem .75rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
+.attn-h { margin: 0 0 .1rem .35rem; font-size: .9375rem; font-weight: 900; letter-spacing: -.01em; }
+.attn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
+.attn-row { display: flex; align-items: center; gap: .65rem; min-height: 44px; padding: .4rem .7rem; border-radius: var(--r-md); color: inherit; text-decoration: none; background: rgb(var(--badbg)); transition: box-shadow .15s; }
+.attn-row.is-warn { background: rgb(var(--warnbg)); }
+.attn-row:hover { box-shadow: var(--shadow-1); }
+.attn-dot { flex: none; width: .6rem; height: .6rem; border-radius: var(--r-pill); background: rgb(var(--bad)); }
+.attn-row.is-warn .attn-dot { background: rgb(var(--warn)); }
+.attn-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
+.attn-why { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+.attn-go { flex: none; font-weight: 800; color: rgb(var(--link)); }
+.attn-more { margin: 0 0 0 .35rem; font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+/* a phone: the name and the arrow on the first line, the reason under them */
+@media (max-width: 560px) {
+  .attn-row { flex-wrap: wrap; row-gap: .1rem; }
+  .attn-name { order: 1; flex: 1 1 0; }
+  .attn-go { order: 2; }
+  .attn-why { order: 3; flex-basis: 100%; padding-left: 1.25rem; white-space: normal; }
+}

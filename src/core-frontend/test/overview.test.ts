@@ -39,9 +39,11 @@ describe('capacity', () => {
 });
 
 describe('hero pick', () => {
-  it('puts a server with a problem first', () => {
+  it('keeps a server with a problem out of the hero (it goes to the compact strip)', () => {
     const list = [srv(1, { players: 15 }), srv(2, { online: false, players: 0 }), srv(3, { players: 18 })];
-    expect(pickHero(list, [3])).toEqual({ server: list[1], reason: 'attention' });
+    expect(pickHero(list, [3])).toEqual({ server: list[2], reason: 'fav' });
+    expect(pickHero(list, [2])).toEqual({ server: list[2], reason: 'busiest' });
+    expect(pickHero(list, [])?.server.id).toBe(3);
   });
 
   it('ignores a server in maintenance and one that never answered', () => {
@@ -51,9 +53,9 @@ describe('hero pick', () => {
     expect(needsAttention(fresh)).toBe(false);
   });
 
-  it('treats a lagging server as a problem, after the offline ones', () => {
+  it('when every server has a problem the worst one is the hero (offline before laggy)', () => {
     const list = [srv(1, { ping: 250 }), srv(2, { online: false })];
-    expect(pickHero(list, [])?.server.id).toBe(2);
+    expect(pickHero(list, [])).toEqual({ server: list[1], reason: 'attention' });
     expect(pickHero([list[0]], [])).toEqual({ server: list[0], reason: 'attention' });
   });
 
