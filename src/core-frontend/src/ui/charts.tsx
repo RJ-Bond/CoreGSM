@@ -73,7 +73,11 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const raw = set?.servers[serverId];
   const hero = variant === 'hero';
   if (!set) return <div className={`${hero ? 'h-[130px] bg-white/10' : 'h-10 bg-soft/60'} skeleton rounded-2xl`} aria-hidden />;
-  const known = raw ? raw.players.filter((v) => v != null).length : 0;
+  // a young panel: the curve starts at the first bucket that has data instead of a long flat stretch before it
+  const first = raw ? raw.players.findIndex((v) => v != null) : -1;
+  const players = raw && first >= 0 ? raw.players.slice(first) : [];
+  const downs24 = raw && first >= 0 ? raw.down.slice(first) : [];
+  const known = players.filter((v) => v != null).length;
   if (!raw || known < 2) {
     return (
       <div className={`${hero ? 'h-[130px] border-white/30 text-white/80' : 'h-10 border-line text-mute'} grid place-items-center rounded-2xl border border-dashed px-2 text-center text-xs font-bold`}>
@@ -81,12 +85,12 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
       </div>
     );
   }
-  const pts = filled(raw.players);
-  const downs = raw.down.filter(Boolean).length;
+  const pts = filled(players);
+  const downs = downs24.filter(Boolean).length;
   const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
   return hero
-    ? <SmoothArea values={pts} down={raw.down} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
-    : <SmoothArea values={pts} down={raw.down} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+    ? <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
 }
 
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */

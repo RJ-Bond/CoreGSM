@@ -4,7 +4,7 @@ import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
 import type { Server } from '../../api';
-import { chartPoints, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
+import { chartPoints, chartStart, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
 
 const ICON: Record<PulseState, JSX.Element> = {
   ok: <IconOk size={24} />,
@@ -17,11 +17,15 @@ const ICON: Record<PulseState, JSX.Element> = {
 function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
   const gid = useId().replace(/:/g, '');
   const { t: tr } = useI18n();
-  if (!data || !hasEnoughHistory(data.points, data.hours)) {
+  if (!data || !hasEnoughHistory(data.points)) {
     return <div className="pulse-chart pulse-chart-empty">{tr('srv.pulse.noChart')}</div>;
   }
   const end = Math.max(now, data.points[data.points.length - 1].ts + data.bucketMs);
-  const start = end - data.hours * 3_600_000;
+  const start = chartStart(data.points, data.bucketMs, end, data.hours);
+  // the caption tells how much the chart really covers: «За 24 ч» on an old panel, «За 3 ч» / «За 40 мин» on a new one
+  const covered = Math.min(end - start, data.points[data.points.length - 1].ts + data.bucketMs - data.points[0].ts);
+  const spanMin = Math.max(1, Math.round(covered / 60_000));
+  const spanText = spanMin >= 180 ? tr('srv.pulse.hours', { n: Math.round(spanMin / 60) }) : tr('srv.pulse.minutes', { n: spanMin });
   const pts = chartPoints(data.points, start, end);
   const W = 240;
   const H = 56;
@@ -51,7 +55,7 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
         )}
       </div>
       <figcaption>
-        <span>{tr('srv.pulse.hours', { n: data.hours })}</span>
+        <span>{spanText}</span>
         {peak ? <span className="pulse-peak-text">{tr('srv.pulse.peak', { n: peak.players, time: fmtTime(peak.ts) })}</span> : <span>{tr('srv.pulse.noPeak')}</span>}
       </figcaption>
     </figure>

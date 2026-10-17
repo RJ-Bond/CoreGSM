@@ -54,14 +54,16 @@ export interface RecentEvent {
   name?: string;
 }
 
+/** Enough history to draw a curve: at least 3 points (buckets), i.e. about half an hour of polls. */
+export const hasEnoughHistory = (points: { ts: number }[]): boolean => points.length >= 3;
+
 /**
- * Enough history to draw a curve: at least 3 points that cover a tenth of the window. A handful of polls bunched at the
- * right edge would otherwise be drawn as a vertical stroke with the peak dot hanging in the corner.
+ * Where the chart starts: the beginning of the window, but not earlier than the first sample. A young panel (a few
+ * hours of history) then fills the whole chart instead of being squeezed against the right edge of an empty 24 h.
  */
-export function hasEnoughHistory(points: { ts: number }[], hours: number): boolean {
-  if (points.length < 3) return false;
-  const span = points[points.length - 1].ts - points[0].ts;
-  return span >= hours * 3_600_000 * 0.1;
+export function chartStart(points: { ts: number }[], bucketMs: number, end: number, hours: number): number {
+  const windowStart = end - hours * 3_600_000;
+  return points.length ? Math.max(windowStart, points[0].ts - bucketMs) : windowStart;
 }
 
 /** x/y positions (0..1, y up = more players) of the chart points for a window ending at `end` */
