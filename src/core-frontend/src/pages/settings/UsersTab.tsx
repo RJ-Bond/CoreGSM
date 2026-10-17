@@ -5,7 +5,7 @@ import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { confirmDialog, promptDialog } from '../../confirm';
-import { AdminPage, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
   return (
@@ -153,7 +153,10 @@ export function UsersTab() {
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-                <span className="min-w-0 flex-1 truncate font-bold">{u.username}{u.discordName ? ` · Discord: ${u.discordName}` : ''}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
+                  <span className="truncate">{u.username}</span>
+                  {u.discordName && <DiscordBadge name={u.discordName} />}
+                </span>
                 <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
               </li>
@@ -169,7 +172,7 @@ export function UsersTab() {
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
               <span className="min-w-0 flex-1 truncate font-bold">
                 {u.username}{u.username === me?.username ? ' (вы)' : ''}
-                {u.discordName && <span className="ml-2 text-sm font-semibold text-mute">Discord: {u.discordName}</span>}
+                {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
