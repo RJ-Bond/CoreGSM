@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="29a863436fdd"
+COREGSM_BUILD="4b183fa88fb4"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -52984,6 +52984,52 @@ export const isFullNow = (online: boolean, players: number, max: number) => onli
 export const metricFill = (value: number | null | undefined, max: number): number => (value == null || !(max > 0) ? 0 : capacityPct(value, max));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/AttentionStrip.tsx" << '__COREGSM_EOF__'
+// A compact strip for servers that need a look (not answering, or a high ping): one line each, above the tiles.
+import type { Server } from '../../api';
+import { t } from '../../i18n';
+import { LAG_PING, ago } from '../../ui';
+
+const MAX_ROWS = 4;
+
+function reasonOf(s: Server): string {
+  if (!s.online) return `${t('srv.pulse.noAnswer')}${s.updatedAt ? ` · ${t('srv.attn.last', { ago: ago(s.updatedAt) })}` : ''}`;
+  return `${t('srv.pulse.slow')} · ${s.ping ?? LAG_PING} ${t('srv.unit.ms')}`;
+}
+
+export function AttentionStrip({ servers, onOpen }: { servers: Server[]; onOpen: (s: Server) => void }) {
+  if (servers.length === 0) return null;
+  const shown = servers.slice(0, MAX_ROWS);
+  const more = servers.length - shown.length;
+  return (
+    <section className="attn" aria-label={t('srv.attn.title')}>
+      <h2 className="attn-h">{t('srv.attn.title')}</h2>
+      <ul className="attn-list">
+        {shown.map((s) => (
+          <li key={s.id}>
+            <a
+              className={`attn-row ${s.online ? 'is-warn' : 'is-bad'}`}
+              href={`/servers/${s.id}`}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                onOpen(s);
+              }}
+            >
+              <span className="attn-dot" aria-hidden />
+              <span className="attn-name">{s.name}</span>
+              <span className="attn-why">{reasonOf(s)}</span>
+              <span className="attn-go" aria-hidden>→</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+      {more > 0 && <p className="attn-more">{t('srv.attn.more', { n: more })}</p>}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/BulkBar.tsx" << '__COREGSM_EOF__'
 // Administrator bulk actions on the servers page: poll now, maintenance window, favourites. Russian only (admin area).
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -54078,9 +54124,14 @@ export const needsAttention = (s: Server): boolean => !s.maintenance && s.hasSta
 export function pickHero(servers: Server[], favs: number[]): { server: Server; reason: HeroReason } | null {
   if (servers.length === 0) return null;
   const withReason = (server: Server, reason: HeroReason) => ({ server, reason: server.maintenance && reason !== 'attention' ? ('maintenance' as const) : reason });
-  // offline first, then laggy ones
-  const bad = servers.filter(needsAttention).sort((a, b) => Number(a.online) - Number(b.online) || b.players - a.players || a.id - b.id);
-  if (bad[0]) return { server: bad[0], reason: 'attention' };
+  // Servers that need a look are not the hero: they get a compact strip (AttentionStrip) so that the working ones keep
+  // the first screen. Only when every server has a problem is the worst one the hero (a card with the details).
+  const calm = servers.filter((s) => !needsAttention(s));
+  if (calm.length === 0) {
+    const bad = [...servers].sort((a, b) => Number(a.online) - Number(b.online) || b.players - a.players || a.id - b.id);
+    return { server: bad[0], reason: 'attention' };
+  }
+  servers = calm;
   const fav = servers.filter((s) => favs.includes(s.id)).sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players || a.id - b.id);
   if (fav[0]) return withReason(fav[0], 'fav');
   const busiest = servers.filter((s) => s.online).sort((a, b) => b.players - a.players || a.id - b.id);
@@ -57046,6 +57097,9 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pulse.more': 'and {n} more',
   'srv.pulse.slow': 'High ping',
   'srv.pulse.noAnswer': 'Not responding',
+  'srv.attn.title': 'Needs attention',
+  'srv.attn.last': 'last answer {ago}',
+  'srv.attn.more': 'and {n} more',
   'srv.pulse.maint': 'Maintenance in progress',
   'srv.pulse.maintN': '{n} server in maintenance|{n} servers in maintenance',
   'srv.pulse.wait': 'Waiting for the first data',
@@ -57924,6 +57978,9 @@ const ru = {
   'srv.pulse.more': 'и ещё {n}',
   'srv.pulse.slow': 'Высокий пинг',
   'srv.pulse.noAnswer': 'Сервер не отвечает',
+  'srv.attn.title': 'Требует внимания',
+  'srv.attn.last': 'последний ответ {ago}',
+  'srv.attn.more': 'и ещё {n}',
   'srv.pulse.maint': 'Идёт обслуживание',
   'srv.pulse.maintN': '{n} сервер на обслуживании|{n} сервера на обслуживании|{n} серверов на обслуживании',
   'srv.pulse.wait': 'Ждём первые данные',
@@ -64092,11 +64149,11 @@ import { t, useI18n } from '../i18n';
 import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
-import CommunityBento from '../components/servers/CommunityBento';
+import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
-import { pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
+import { needsAttention, pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 
@@ -64236,7 +64293,10 @@ function ServerList() {
   const picked = useMemo(() => pickHero(sorted, me ? favs : []), [sorted, favs, me]);
   const hero = picked?.server ?? null;
   const heroReason: HeroReason = picked?.reason ?? null;
-  const rest = sorted.filter((s) => s.id !== hero?.id);
+  // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
+  const attention = heroReason === 'attention' ? [] : sorted.filter(needsAttention);
+  const attentionIds = new Set(attention.map((s) => s.id));
+  const rest = sorted.filter((s) => s.id !== hero?.id && !attentionIds.has(s.id));
   const offlineCount = servers.filter((s) => !s.online).length;
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
   // a filter other than "all" turns the bento into a plain grid of the matching servers
@@ -64294,7 +64354,8 @@ function ServerList() {
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
       )}
 
-      {loaded && servers.length > 0 && !selOn && <CommunityBento />}
+
+      {effView === 'tiles' && effFilter === 'all' && attention.length > 0 && !selOn && <AttentionStrip servers={attention} onOpen={open} />}
 
       {servers.length > 0 && (
         <div className="srv-bar">
@@ -68451,6 +68512,27 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .cmp-change { display: inline-flex; align-items: center; gap: 4px; border-radius: var(--r-pill); padding: 2px 9px; font-size: 12.5px; font-weight: 800; background: rgb(var(--soft)); color: rgb(var(--mute)); }
 .cmp-change.is-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .cmp-change.is-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* ---------- attention strip: servers with a problem, one line each (the working servers keep the first screen) ---------- */
+.attn { display: grid; gap: .4rem; padding: .7rem .75rem .75rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
+.attn-h { margin: 0 0 .1rem .35rem; font-size: .9375rem; font-weight: 900; letter-spacing: -.01em; }
+.attn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
+.attn-row { display: flex; align-items: center; gap: .65rem; min-height: 44px; padding: .4rem .7rem; border-radius: var(--r-md); color: inherit; text-decoration: none; background: rgb(var(--badbg)); transition: box-shadow .15s; }
+.attn-row.is-warn { background: rgb(var(--warnbg)); }
+.attn-row:hover { box-shadow: var(--shadow-1); }
+.attn-dot { flex: none; width: .6rem; height: .6rem; border-radius: var(--r-pill); background: rgb(var(--bad)); }
+.attn-row.is-warn .attn-dot { background: rgb(var(--warn)); }
+.attn-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
+.attn-why { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+.attn-go { flex: none; font-weight: 800; color: rgb(var(--link)); }
+.attn-more { margin: 0 0 0 .35rem; font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
+/* a phone: the name and the arrow on the first line, the reason under them */
+@media (max-width: 560px) {
+  .attn-row { flex-wrap: wrap; row-gap: .1rem; }
+  .attn-name { order: 1; flex: 1 1 0; }
+  .attn-go { order: 2; }
+  .attn-why { order: 3; flex-basis: 100%; padding-left: 1.25rem; white-space: normal; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
