@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="83846c9aa2d1"
+COREGSM_BUILD="29a863436fdd"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -46257,7 +46257,8 @@ export function DiscordMd({ text }: { text: string }) {
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
     if (h) {
       const size = h[1].length === 1 ? 'text-[1.5em]' : h[1].length === 2 ? 'text-[1.25em]' : 'text-[1.1em]';
-      out.push(<div key={i} className={`${size} mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>{inlineMd(h[2])}</div>);
+      // the id lets the table of contents of the news page jump here (extractHeadings builds the same ids)
+      out.push(<div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>{inlineMd(h[2])}</div>);
       continue;
     }
     const small = /^-#\s+(.*)$/.exec(line);
@@ -46951,20 +46952,43 @@ export const MarkdownField = memo(MarkdownFieldImpl);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/NewsArticle.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
-import type { NewsReaction, PublicNewsFull, Server } from '../../api';
+import { useEffect, useRef, useState } from 'react';
+import type { NewsReaction, PublicNews, PublicNewsFull, Server } from '../../api';
 import { t } from '../../i18n';
 import { toast } from '../../ui';
-import { cardOf, NewsCover } from './PublicFeed';
+import { cardOf, NewsCover, Row } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
-import { readingMinutes } from './newsLogic';
+import { extractHeadings, readingMinutes } from './newsLogic';
 import {
   ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
 } from './NewsParts';
 
+/** a thin bar under the top edge that fills while the article is read */
+function ReadProgress({ target }: { target: React.RefObject<HTMLElement> }) {
+  const [p, setP] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const calc = () => {
+      raf = 0;
+      const el = target.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const total = r.height - window.innerHeight;
+      setP(total <= 0 ? 0 : Math.max(0, Math.min(1, -r.top / total)));
+    };
+    const on = () => { if (!raf) raf = window.requestAnimationFrame(calc); };
+    on();
+    window.addEventListener('scroll', on, { passive: true });
+    window.addEventListener('resize', on);
+    return () => { window.removeEventListener('scroll', on); window.removeEventListener('resize', on); if (raf) window.cancelAnimationFrame(raf); };
+  }, [target]);
+  if (p <= 0.005) return null;
+  return <div className="nw-progress" style={{ width: `${p * 100}%` }} role="progressbar" aria-label={t('nw.progress')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(p * 100)} />;
+}
+
 /** one news item in full: cover, text, what changed, server cards, gallery, buttons, reactions, previous / next */
 export function NewsArticle({
-  item, servers, canReact, onReactions, preview = false,
+  item, servers, canReact, onReactions, preview = false, related = [],
 }: {
   item: PublicNewsFull;
   servers: Server[] | null;
@@ -46972,10 +46996,29 @@ export function NewsArticle({
   onReactions: (r: NewsReaction[]) => void;
   /** the editor's «Как будет на сайте»: no navigation, no reactions */
   preview?: boolean;
+  /** other news to read next («Читайте также») */
+  related?: PublicNews[];
 }) {
   const c = cardOf(item);
   const minutes = readingMinutes(`${c.text} ${c.fields.map((f) => f.value).join(' ')}`);
   const [viewer, setViewer] = useState<number | null>(null);
+  const root = useRef<HTMLElement>(null);
+  const headings = extractHeadings(c.text);
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
+  const jump = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const calm = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    el.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
+  };
+  const share = async () => {
+    try {
+      await navigator.share({ title: c.title, url: window.location.href.split('?')[0] });
+    } catch {
+      /* closed by the person */
+    }
+  };
 
   const copy = async () => {
     try {
@@ -46987,7 +47030,8 @@ export function NewsArticle({
   };
 
   return (
-    <article className="nw-article">
+    <article className="nw-article" ref={root}>
+      {!preview && <ReadProgress target={root} />}
       <NewsCover c={c} servers={servers} as="h1" tall />
       <div className="nw-article-in">
         {(c.author || c.countdownAt || minutes > 0) && (
@@ -46996,6 +47040,18 @@ export function NewsArticle({
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
           </div>
+        )}
+        {headings.length >= 3 && (
+          <nav className="nw-toc" aria-label={t('nw.toc')}>
+            <h2 className="nw-toc-h">{t('nw.toc')}</h2>
+            <ol>
+              {headings.map((h) => (
+                <li key={h.id} className={`nw-toc-l${h.level}`}>
+                  <button type="button" onClick={() => jump(h.id)}>{h.text}</button>
+                </li>
+              ))}
+            </ol>
+          </nav>
         )}
         {(c.text || c.fields.length > 0) && <NewsText className="nw-prose-lg" text={c.text} fields={c.fields} />}
         <ChangesBlock changes={c.changes} />
@@ -47012,6 +47068,7 @@ export function NewsArticle({
             <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
             <div className="nw-toolbar">
               <a className="btn btn-soft" href="/news">{t('nw.back')}</a>
+              {canShare && <button type="button" className="btn btn-soft" onClick={() => void share()}>{t('nw.share')}</button>}
               <button type="button" className="btn btn-soft" onClick={() => void copy()}>
                 <IconCopyLink />
                 {t('nw.copyLink')}
@@ -47020,6 +47077,12 @@ export function NewsArticle({
           </>
         )}
       </div>
+      {!preview && related.length > 0 && (
+        <section className="nw-related" aria-label={t('nw.related')}>
+          <h2 className="nw-h2">{t('nw.related')}</h2>
+          <div className="nf-list">{related.map((n) => <Row key={n.id} c={cardOf(n)} servers={servers} />)}</div>
+        </section>
+      )}
       {!preview && (item.prev || item.next) && (
         <nav className="nw-prevnext" aria-label={t('nw.prevnext')}>
           {item.prev ? (
@@ -47430,7 +47493,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/NewsPublicPages.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull } from '../../api';
+import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { NewsArt } from '../Illustrations';
@@ -47439,8 +47502,8 @@ import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '
 import { NewsArticle } from './NewsArticle';
 import { CategoryIcon, PinIcon } from './NewsIcons';
 import { categoryLabel, useNewsServers } from './NewsParts';
-import { PublicFeed } from './PublicFeed';
-import { RUBRICS, countByCategory, filterByCategory, isRubricFilter, orderFeed, type RubricFilter } from './newsLogic';
+import { cardOf, hasGeneratedCover, PublicFeed } from './PublicFeed';
+import { CATEGORY_HEX, countByCategory, filterByCategory, isRubricFilter, orderFeed, relatedNews, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
 const loadRubric = (): RubricFilter => {
@@ -47544,6 +47607,9 @@ export function NewsListPage() {
   const now = Date.now();
   const upcoming = works.filter((w) => w.endTs > now).sort((a, b) => a.startTs - b.startTs).slice(0, 3);
 
+  const rubrics = visibleRubrics(counts, filter);
+  const liveServers = (servers ?? []).slice(0, 6);
+
   const chip = (id: RubricFilter) => (
     <button key={id} type="button" className="nw-rub" aria-pressed={filter === id} onClick={() => setRubric(id)}>
       {id !== 'all' && <CategoryIcon category={id} size={15} />}
@@ -47552,17 +47618,18 @@ export function NewsListPage() {
     </button>
   );
 
-  const hasSide = pinned.length > 0 || upcoming.length > 0 || ordered.length > 0;
+  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0;
 
   return (
     <div className="nw-page">
+      <div className="nw-glow" aria-hidden />
       <div className={`nw-grid ${hasSide ? 'has-side' : ''}`}>
         <div className="nw-main">
           <PageHead icon={<IconNews />} title={t('nav.news')} subtitle={t('nw.subtitle')} />
-          {ordered.length > 0 && (
+          {ordered.length > 0 && rubrics.length > 0 && (
             <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
               {chip('all')}
-              {RUBRICS.map((r) => chip(r))}
+              {rubrics.map((r) => chip(r))}
             </div>
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
@@ -47601,19 +47668,21 @@ export function NewsListPage() {
                 </ul>
               </AsideSection>
             )}
-            <AsideSection id="rubrics" title={t('nw.rubrics')} wide={wide}>
-              <ul className="nw-side-list">
-                {RUBRICS.map((r) => (
-                  <li key={r}>
-                    <button type="button" className="nw-side-rub" aria-pressed={filter === r} onClick={() => setRubric(filter === r ? 'all' : r)}>
-                      <CategoryIcon category={r} size={15} />
-                      <span>{categoryLabel(r)}</span>
-                      <span className="nw-rub-n tabular-nums">{counts[r]}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </AsideSection>
+            {liveServers.length > 0 && (
+              <AsideSection id="live" title={t('nw.liveNow')} wide={wide}>
+                <ul className="nw-side-list nw-live">
+                  {liveServers.map((sv: Server) => (
+                    <li key={sv.id}>
+                      <a href={`/servers/${sv.id}`}>
+                        <span className={`nw-live-dot ${sv.online ? 'is-on' : 'is-off'}`} aria-hidden />
+                        <span className="nw-live-name">{sv.name}</span>
+                        <span className="nw-live-n tabular-nums">{sv.online ? `${sv.players}/${sv.maxPlayers}` : t('nw.offline')}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </AsideSection>
+            )}
             {upcoming.length > 0 && (
               <AsideSection id="works" title={t('nw.works')} wide={wide}>
                 <ul className="nw-side-list nw-works">
@@ -47642,8 +47711,17 @@ export function NewsArticlePage({ id }: { id: number }) {
   const [item, setItem] = useState<PublicNewsFull | null>(null);
   const [error, setError] = useState<{ status: number; text: string } | null>(null);
   const servers = useNewsServers(30_000, true);
+  const [all, setAll] = useState<PublicNews[]>([]);
 
   useEffect(() => { setItem(null); setError(null); }, [id]);
+  // the other news: «Читайте также» (the same rubric first)
+  useEffect(() => {
+    let alive = true;
+    api<PublicNews[]>('/news').then((n) => { if (alive && Array.isArray(n)) setAll(n); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [id]);
+  const card = item ? cardOf(item) : null;
+  const related = card ? relatedNews(all, id, card.category, 3) : [];
 
   const load = () => api<PublicNewsFull>(`/news/${id}`)
     .then((n) => { setItem((cur) => (cur && cur.id === n.id && cur.reactions && n.reactions === undefined ? { ...n, reactions: cur.reactions } : n)); setError(null); })
@@ -47653,6 +47731,11 @@ export function NewsArticlePage({ id }: { id: number }) {
   const back = <a className="btn btn-soft" href="/news">{t('nw.back')}</a>;
   return (
     <div className="nw-page">
+      {card && (
+        card.image
+          ? <div className="nw-backdrop" aria-hidden style={{ backgroundImage: `url("${card.image}")` }} />
+          : <div className={`nw-backdrop ${hasGeneratedCover(card, servers) ? 'is-flat' : ''}`} aria-hidden style={{ ['--gen' as string]: CATEGORY_HEX[card.category] }} />
+      )}
       <div className="nw-article-wrap">
         {error && !item && (error.status === 404
           ? <StateView kind="notfound" title={t('nw.notfound.title')} text={t('nw.notfound.text')}>{back}</StateView>
@@ -47671,6 +47754,7 @@ export function NewsArticlePage({ id }: { id: number }) {
               item={item}
               servers={servers}
               canReact={!!me}
+              related={related}
               onReactions={(r: NewsReaction[]) => setItem((cur) => (cur ? { ...cur, reactions: r } : cur))}
             />
           </div>
@@ -47813,8 +47897,9 @@ import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Se
 import { useI18n, t } from '../../i18n';
 import { fmtDate } from '../../ui';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
+import { CategoryIcon } from './NewsIcons';
 import {
-  categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isPinned, newsImage, plainExcerpt,
+  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt,
 } from './newsLogic';
 
 export { PANEL_THEME } from './NewsParts';
@@ -47879,11 +47964,21 @@ export function coverStyle(c: Card, servers: Server[] | null | undefined, small 
   return { background: defaultCoverBackground({ game: c.game, statusServerIds: c.statusIds, servers, category: c.category }, small) };
 }
 
+/** no picture and no game: the panel draws the cover itself (see .nw-gen in news-page.css) */
+export const hasGeneratedCover = (c: Card, servers: Server[] | null | undefined): boolean =>
+  isGeneratedCover({ image: c.image, game: c.game, statusServerIds: c.statusIds, servers });
+
+/** the colour a generated cover is drawn in: the rubric's */
+const genVars = (c: Card): CSSProperties => ({ ['--gen' as string]: CATEGORY_HEX[c.category] });
+
 /** big cover with the title over a bottom gradient; used by the feed hero and by the news page */
 export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean }) {
+  const gen = hasGeneratedCover(c, servers);
   return (
-    <div className={`nw-cover ${tall ? 'is-tall' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
-      <div className="nw-cover-bg" style={coverStyle(c, servers)} aria-hidden />
+    <div className={`nw-cover ${tall ? 'is-tall' : ''} ${gen ? 'is-gen' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ...(gen ? genVars(c) : {}) }}>
+      <div className={`nw-cover-bg ${gen ? 'nw-gen' : ''}`} style={gen ? undefined : coverStyle(c, servers)} aria-hidden>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
+      </div>
       <div className="nw-cover-shade" aria-hidden />
       <div className="nw-cover-in">
         <div className="nw-cover-chips">
@@ -47940,11 +48035,14 @@ function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined })
   );
 }
 
-function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
   const href = `/news/${c.id}`;
+  const gen = hasGeneratedCover(c, servers);
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
-      <a className="nf-thumb nw-thumb" href={href} style={coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1} />
+      <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
+      </a>
       <div className="nf-item-in">
         <div className="nw-chips">
           {c.pinned && <PinChip />}
@@ -48491,6 +48589,16 @@ export function countByCategory(items: Pick<PublicNews, 'category' | 'payload'>[
   return out;
 }
 
+/**
+ * Rubrics worth showing as chips: the ones that have news (and the one that is selected, so it can be switched off).
+ * With fewer than two non-empty rubrics there is nothing to filter and the whole row is hidden.
+ */
+export function visibleRubrics(counts: Record<RubricFilter, number>, current: RubricFilter): NewsCategory[] {
+  const filled = RUBRICS.filter((r) => counts[r] > 0);
+  if (filled.length < 2 && current === 'all') return [];
+  return RUBRICS.filter((r) => counts[r] > 0 || r === current);
+}
+
 export function filterByCategory<T extends Pick<PublicNews, 'category' | 'payload'>>(items: T[], f: RubricFilter): T[] {
   return f === 'all' ? items : items.filter((n) => categoryOf(n) === f);
 }
@@ -48593,6 +48701,41 @@ export function coverGradient(i: CoverInput): string {
   return `linear-gradient(135deg, color-mix(in srgb, ${c} 82%, #000), ${c})`;
 }
 
+/**
+ * True when a news has neither a picture nor a game: its cover is drawn by the panel (a mesh in the colour of the
+ * rubric with the rubric's pictogram) instead of a flat gradient.
+ */
+export function isGeneratedCover(i: CoverInput & { image?: string | null }): boolean {
+  return !i.image && !coverGame(i);
+}
+
+/** a heading of a news text: the line it sits on (also the id suffix on the page), its level and its text */
+export interface Heading { id: string; level: 1 | 2 | 3; text: string }
+
+/** `# `, `## `, `### ` lines outside code blocks; the id is `nw-h-<line index>` (DiscordMd puts the same id on the line) */
+export function extractHeadings(text: string): Heading[] {
+  const out: Heading[] = [];
+  let fenced = false;
+  text.split('\n').forEach((line, i) => {
+    if (line.trim().startsWith('```')) {
+      // a single-line ```code``` neither opens nor closes a block
+      if (!/^```.*```$/.test(line.trim())) fenced = !fenced;
+      return;
+    }
+    if (fenced) return;
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (h && h[2].trim()) out.push({ id: `nw-h-${i}`, level: h[1].length as 1 | 2 | 3, text: h[2].replace(/[*_~`|]/g, '').trim() });
+  });
+  return out;
+}
+
+/** up to `n` other news to read next: the same rubric first, then the newest ones */
+export function relatedNews<T extends Pick<PublicNews, 'id' | 'sentAt' | 'category' | 'payload'>>(items: T[], currentId: number, category: NewsCategory, n = 3): T[] {
+  const rest = items.filter((x) => x.id !== currentId).sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0));
+  const same = rest.filter((x) => categoryOf(x) === category);
+  return [...same, ...rest.filter((x) => !same.includes(x))].slice(0, n);
+}
+
 /** CSS `background` of the default cover (the game's artwork when it ships one, else the gradient) */
 export function defaultCoverBackground(i: CoverInput, small = false): string {
   return coverBackground(null, coverGradient(i), { game: coverGame(i), small, strong: true });
@@ -48662,7 +48805,8 @@ export function readingMinutes(text: string): number {
 }
 
 export function plainExcerpt(text: string, max = 180): string {
-  const s = text.replace(/```[\s\S]*?```/g, ' ').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
+  // list items keep a bullet between them (otherwise «- a - b» runs together with stray hyphens)
+  const s = text.replace(/```[\s\S]*?```/g, ' ').replace(/^[ \t]*[-*•]\s+/gm, '• ').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
 }
 
@@ -57097,6 +57241,12 @@ const en: Record<keyof typeof ru, string> = {
   'nw.back': 'Back to news',
   'nw.copyLink': 'Copy link',
   'nw.readTime': '{n} min read',
+  'nw.toc': 'Contents',
+  'nw.share': 'Share',
+  'nw.related': 'Read next',
+  'nw.progress': 'Read so far',
+  'nw.liveNow': 'On the servers now',
+  'nw.offline': 'offline',
   'nw.copied': 'Link copied',
   'nw.copyFail': 'Could not copy the link',
   'nw.prev': 'Newer',
@@ -57969,6 +58119,12 @@ const ru = {
   'nw.back': 'К списку новостей',
   'nw.copyLink': 'Скопировать ссылку',
   'nw.readTime': '{n} мин чтения',
+  'nw.toc': 'Содержание',
+  'nw.share': 'Поделиться',
+  'nw.related': 'Читайте также',
+  'nw.progress': 'Прочитано',
+  'nw.liveNow': 'Сейчас на серверах',
+  'nw.offline': 'офлайн',
   'nw.copied': 'Ссылка скопирована',
   'nw.copyFail': 'Не удалось скопировать ссылку',
   'nw.prev': 'Новее',
@@ -67756,6 +67912,68 @@ __COREGSM_EOF__
   .nw-pn-next { grid-column: auto; }
   .nw-edit-row { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- generated cover: no picture and no game, so the panel draws one in the colour of the rubric (--gen) ---------- */
+.nw-gen {
+  background:
+    radial-gradient(90% 120% at 8% -10%, color-mix(in srgb, var(--gen) 92%, #fff) 0%, transparent 62%),
+    radial-gradient(80% 110% at 105% 105%, color-mix(in srgb, var(--gen) 55%, #7c3aed) 0%, transparent 60%),
+    linear-gradient(155deg, color-mix(in srgb, var(--gen) 38%, #0b0c16), #0b0c16 85%);
+  overflow: hidden;
+}
+/* a faint grid that fades out away from the corner */
+.nw-gen::before { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(rgb(255 255 255 / .07) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / .07) 1px, transparent 1px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); }
+/* the pictogram of the rubric, large and quiet */
+.nw-gen-ico { position: absolute; right: 7%; top: 0; bottom: 0; margin: auto 0; height: 62%; aspect-ratio: 1; display: grid; place-items: center; color: #fff; opacity: .17; pointer-events: none; }
+.nw-gen-ico svg { width: 100%; height: 100%; stroke-width: 1.15; }
+.nf-thumb.nw-gen { position: relative; }
+.nf-thumb .nw-gen-ico { height: 58%; right: 9%; }
+/* without a picture the cover is compact: no empty half above the title */
+.nw-cover.is-gen { min-height: 10.5rem; }
+.nw-cover.is-gen.is-tall { min-height: 13rem; }
+.nw-cover.is-gen .nw-cover-shade { opacity: .5; }
+.nw-cover.is-gen .nw-cover-in { padding-top: 2rem; }
+@media (max-width: 560px) { .nw-cover.is-gen { min-height: 8.5rem; } .nw-cover.is-gen.is-tall { min-height: 10rem; } }
+
+/* ---------- page background: a soft glow behind the content; on an article the picture, blurred (or the rubric's colour) ---------- */
+.nw-page { isolation: isolate; }
+.nw-glow, .nw-backdrop { position: absolute; z-index: -1; pointer-events: none; inset: -4rem -1.5rem auto -1.5rem; }
+.nw-glow { height: 30rem;
+  background: radial-gradient(60% 70% at 18% 0%, rgb(var(--brand) / .2), transparent 70%), radial-gradient(45% 60% at 88% 8%, rgb(236 72 153 / .12), transparent 70%);
+  /* fade out at the sides too: no hard vertical edges */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
+.nw-backdrop { height: 34rem; background-size: cover; background-position: center top; filter: blur(46px) saturate(1.35); opacity: .3;
+  background-image: radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--gen, rgb(var(--brand))) 70%, transparent), transparent 72%);
+  -webkit-mask-image: linear-gradient(#000 25%, transparent), linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  mask-image: linear-gradient(#000 25%, transparent), linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  -webkit-mask-composite: source-in; mask-composite: intersect; }
+.nw-backdrop.is-flat { opacity: .5; }
+
+/* ---------- article: contents, reading progress, read next ---------- */
+.nw-toc { padding: 1rem 1.15rem; border-radius: var(--r-lg); background: rgb(var(--soft)); border: 1px solid rgb(var(--line)); }
+.nw-toc-h { margin: 0 0 .4rem; font-size: .9375rem; font-weight: 900; }
+.nw-toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: .05rem; }
+.nw-toc button { display: block; width: 100%; min-height: 36px; padding: .2rem 0; border: 0; background: none; text-align: left; font: inherit; font-weight: 700; color: rgb(var(--link)); cursor: pointer; }
+.nw-toc button:hover { text-decoration: underline; }
+.nw-toc-l2 { padding-left: 1rem; }
+.nw-toc-l3 { padding-left: 2rem; }
+.nw-prose [id^='nw-h-'] { scroll-margin-top: 5.5rem; }
+.nw-progress { position: fixed; top: 0; left: 0; height: 3px; z-index: 50; pointer-events: none; border-radius: 0 var(--r-pill) var(--r-pill) 0;
+  background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--brand-2))); transition: width .1s linear; }
+.nw-related { display: grid; gap: .5rem; padding: 0 2rem 1.5rem; }
+.nw-related .nf-list { grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); }
+@media (max-width: 560px) { .nw-related { padding: 0 1.1rem 1.25rem; } }
+
+/* ---------- side panel: the servers right now ---------- */
+.nw-live a { justify-content: flex-start; }
+.nw-live-dot { width: .55rem; height: .55rem; flex: none; border-radius: var(--r-pill); background: rgb(var(--field)); }
+.nw-live-dot.is-on { background: rgb(var(--ok)); box-shadow: 0 0 0 3px rgb(var(--ok) / .2); }
+.nw-live-dot.is-off { background: rgb(var(--bad)); }
+.nw-live-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nw-live-n { flex: none; font-size: .8125rem; font-weight: 800; color: rgb(var(--mute)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'
@@ -67796,7 +68014,7 @@ __COREGSM_EOF__
   /* a phone: a compact row again (small picture on the left) instead of tall cards */
   .nf-list { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
   .nf-item { grid-template-rows: none; grid-template-columns: 5.5rem minmax(0, 1fr); gap: .75rem; padding: .65rem; }
-  .nf-thumb { aspect-ratio: auto; min-height: 5.5rem; border-radius: var(--r-md); }
+  .nf-thumb { aspect-ratio: 1; align-self: start; min-height: 0; border-radius: var(--r-md); }
   .nf-item-in { padding: 0; align-content: center; }
 }
 __COREGSM_EOF__
