@@ -1,28 +1,28 @@
 /* the screenshot gallery: a masonry of thumbnails and the full-size viewer */
 .gl-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); align-items: start; }
 .gl-cell { min-width: 0; }
-.gl-shot { position: relative; display: block; width: 100%; overflow: hidden; border-radius: 18px; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); cursor: zoom-in; }
+.gl-shot { position: relative; display: block; width: 100%; overflow: hidden; border-radius: var(--r-lg); background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); cursor: zoom-in; }
 .gl-shot img { display: block; width: 100%; height: auto; transition: transform .5s cubic-bezier(.2, .8, .2, 1); }
 .gl-shot:hover img { transform: scale(1.04); }
 .gl-cap { position: absolute; inset: auto 0 0 0; padding: 26px 12px 10px; text-align: left; color: #fff; background: linear-gradient(180deg, transparent, rgba(8, 10, 20, .8)); opacity: 0; transform: translateY(6px); transition: opacity .2s ease, transform .2s ease; }
 .gl-shot:hover .gl-cap, .gl-shot:focus-visible .gl-cap { opacity: 1; transform: none; }
 @media (hover: none) { .gl-cap { opacity: 1; transform: none; } }
-.gl-star { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9999px; color: #f6b73c; background: rgba(8, 10, 20, .55); font-size: 15px; }
-.gl-badge { position: absolute; top: 8px; right: 8px; border-radius: 9999px; padding: 2px 9px; font-size: 12px; font-weight: 800; color: #fff; background: rgba(8, 10, 20, .65); }
+.gl-star { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-pill); color: #f6b73c; background: rgba(8, 10, 20, .55); font-size: 15px; }
+.gl-badge { position: absolute; top: 8px; right: 8px; border-radius: var(--r-pill); padding: 2px 9px; font-size: 12px; font-weight: 800; color: #fff; background: rgba(8, 10, 20, .65); }
 
 .gl-box { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px 64px; background: rgba(6, 6, 14, .92); animation: gl-in .2s ease both; }
 @keyframes gl-in { from { opacity: 0; } }
 .gl-box-fig { max-width: min(1400px, 100%); display: grid; gap: 10px; color: #fff; }
-.gl-box-fig img { max-width: 100%; max-height: calc(100dvh - 140px); width: auto; height: auto; margin: 0 auto; border-radius: 14px; box-shadow: 0 30px 80px -20px #000; }
+.gl-box-fig img { max-width: 100%; max-height: calc(100dvh - 140px); width: auto; height: auto; margin: 0 auto; border-radius: var(--r-md); box-shadow: 0 30px 80px -20px #000; }
 .gl-box-fig figcaption { display: flex; gap: 12px; align-items: flex-end; }
-.gl-box-nav, .gl-box-close { position: absolute; display: grid; place-items: center; border-radius: 9999px; color: #fff; background: rgba(255, 255, 255, .1); transition: background .15s ease; }
+.gl-box-nav, .gl-box-close { position: absolute; display: grid; place-items: center; border-radius: var(--r-pill); color: #fff; background: rgba(255, 255, 255, .1); transition: background .15s ease; }
 .gl-box-nav:hover, .gl-box-close:hover { background: rgba(255, 255, 255, .22); }
 .gl-box-nav { top: 50%; width: 46px; height: 46px; margin-top: -23px; font-size: 30px; line-height: 1; }
 .gl-box-nav.is-prev { left: 12px; } .gl-box-nav.is-next { right: 12px; }
 .gl-box-close { top: 14px; right: 14px; width: 40px; height: 40px; font-size: 18px; }
 @media (max-width: 639px) { .gl-box { padding: 56px 8px 16px; } .gl-box-nav { top: auto; bottom: 14px; } }
 
-.gl-drop { display: grid; place-items: center; min-height: 10rem; border-radius: 18px; border: 2px dashed rgb(var(--line)); cursor: pointer; overflow: hidden; text-align: center; padding: 12px; transition: border-color .15s ease; }
+.gl-drop { display: grid; place-items: center; min-height: 10rem; border-radius: var(--r-lg); border: 2px dashed rgb(var(--line)); cursor: pointer; overflow: hidden; text-align: center; padding: 12px; transition: border-color .15s ease; }
 .gl-drop:hover { border-color: rgb(var(--brand)); }
 .gl-drop.has-file { padding: 0; border-style: solid; }
 .gl-drop img { display: block; width: 100%; max-height: 18rem; object-fit: contain; background: #000; }
@@ -30,7 +30,7 @@
 
 /* admin: the moderation queue */
 .ga-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
-.ga-card { display: grid; border-radius: 18px; overflow: hidden; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); }
+.ga-card { display: grid; border-radius: var(--r-lg); overflow: hidden; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); }
 .ga-card.is-pending { box-shadow: 0 0 0 2px rgb(var(--warn) / .7); }
 .ga-card.is-rejected { opacity: .55; }
 .ga-img { display: block; aspect-ratio: 16 / 9; background: #000; cursor: zoom-in; }

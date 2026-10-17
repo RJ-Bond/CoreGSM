@@ -4,6 +4,7 @@ import { t } from '../../i18n';
 import { toast } from '../../ui';
 import { cardOf, NewsCover } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
+import { readingMinutes } from './newsLogic';
 import {
   ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
 } from './NewsParts';
@@ -20,6 +21,7 @@ export function NewsArticle({
   preview?: boolean;
 }) {
   const c = cardOf(item);
+  const minutes = readingMinutes(`${c.text} ${c.fields.map((f) => f.value).join(' ')}`);
   const [viewer, setViewer] = useState<number | null>(null);
 
   const copy = async () => {
@@ -35,9 +37,10 @@ export function NewsArticle({
     <article className="nw-article">
       <NewsCover c={c} servers={servers} as="h1" tall />
       <div className="nw-article-in">
-        {(c.author || c.countdownAt) && (
+        {(c.author || c.countdownAt || minutes > 0) && (
           <div className="nf-meta">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
           </div>
         )}

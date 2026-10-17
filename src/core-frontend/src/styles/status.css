@@ -2,7 +2,7 @@
 .st-banner {
   --tone: var(--ok); --toneBg: var(--okbg);
   position: relative; overflow: hidden; display: flex; flex-wrap: wrap; align-items: center; gap: 16px 20px;
-  border-radius: 28px; padding: 22px 24px; color: rgb(var(--tone));
+  border-radius: var(--r-xl); padding: 22px 24px; color: rgb(var(--tone));
   background:
     radial-gradient(120% 140% at 0% 0%, rgb(var(--tone) / .16), transparent 60%),
     rgb(var(--toneBg));
@@ -10,11 +10,11 @@
 }
 .st-banner.is-warn { --tone: var(--warn); --toneBg: var(--warnbg); }
 .st-banner.is-bad { --tone: var(--bad); --toneBg: var(--badbg); }
-.st-banner-dot { position: relative; width: 18px; height: 18px; flex: none; border-radius: 9999px; background: rgb(var(--tone)); }
+.st-banner-dot { position: relative; width: 18px; height: 18px; flex: none; border-radius: var(--r-pill); background: rgb(var(--tone)); }
 .st-banner-dot::after { content: ''; position: absolute; inset: -6px; border-radius: inherit; border: 2px solid rgb(var(--tone)); animation: st-ping 2.2s ease-out infinite; }
 @keyframes st-ping { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(1.8); opacity: 0; } }
 .st-banner-stats { display: flex; flex-wrap: wrap; gap: 8px; }
-.st-banner-stats > div { min-width: 6.5rem; border-radius: 16px; padding: 8px 14px; background: rgb(var(--card) / .7); }
+.st-banner-stats > div { min-width: 6.5rem; border-radius: var(--r-lg); padding: 8px 14px; background: rgb(var(--card) / .7); }
 .st-banner-stats dt { font-size: 12px; font-weight: 800; color: rgb(var(--mute)); }
 .st-banner-stats dd { font-size: 20px; font-weight: 800; color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
 
@@ -44,15 +44,15 @@
 .st-bars-read { flex: 1; text-align: center; color: rgb(var(--ink)); }
 
 /* incidents */
-.st-inc { position: relative; display: flex; align-items: center; gap: 12px; border-radius: 18px; padding: 10px 12px 10px 16px; background: rgb(var(--soft)); }
+.st-inc { position: relative; display: flex; align-items: center; gap: 12px; border-radius: var(--r-lg); padding: 10px 12px 10px 16px; background: rgb(var(--soft)); }
 .st-inc::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 4px; border-radius: 0 4px 4px 0; background: rgb(var(--warn)); }
 .st-inc.is-live::before { background: rgb(var(--bad)); animation: st-blink 1.6s ease-in-out infinite; }
 .st-inc.is-planned::before { background: rgb(var(--link)); }
 @keyframes st-blink { 50% { opacity: .35; } }
-.st-inc-badge { border-radius: 9999px; padding: 1px 9px; font-size: 11.5px; font-weight: 800; background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.st-inc-badge { border-radius: var(--r-pill); padding: 1px 9px; font-size: 11.5px; font-weight: 800; background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .st-inc-badge.is-live { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
 .st-inc-badge.is-planned { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
-.st-calm { display: flex; align-items: center; gap: 14px; border-radius: 18px; padding: 14px 16px; background: rgb(var(--okbg)); }
+.st-calm { display: flex; align-items: center; gap: 14px; border-radius: var(--r-lg); padding: 14px 16px; background: rgb(var(--okbg)); }
 .st-calm > span { font-size: 28px; }
 
 @media (prefers-reduced-motion: reduce) { .st-banner-dot::after, .st-inc.is-live::before { animation: none; } .st-day { transition: none; } }
