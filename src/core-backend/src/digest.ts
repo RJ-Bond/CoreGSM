@@ -254,6 +254,8 @@ export function digestMessage(d: Digest) {
   return {
     content: '',
     mention: 'none' as const,
+    // below the picture: a button to the full numbers on the site
+    ...(base ? { actions: [{ label: '📈 Подробности на сайте', url: `${base}/status` }] } : {}),
     embed: {
       title: `📊 Неделя на ${brand().name}: ${dateRu(d.from)} – ${dateRu(d.to)}`,
       description: lines.join('\n'),

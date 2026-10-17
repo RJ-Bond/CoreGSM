@@ -1,5 +1,5 @@
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
-import { ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleInteraction, registerCommands } from './commands.js';
 import { deliveryFailure, humanDiscordError, newNonce, retryAfterOf, retrySocket } from './errors.js';
@@ -302,7 +302,19 @@ interface DeliveryItem {
   id: number;
   kind: 'alert' | 'dm' | 'status';
   target: string;
-  payload: { content?: string; mention?: 'none' | 'here' | 'everyone'; embed?: ConstructorParameters<typeof EmbedBuilder>[0] };
+  payload: {
+    content?: string;
+    mention?: 'none' | 'here' | 'everyone';
+    embed?: ConstructorParameters<typeof EmbedBuilder>[0];
+    /** link buttons under the message (e.g. «Подробности на сайте» in the weekly digest) */
+    actions?: { label: string; url: string }[];
+  };
+}
+/** one row of link buttons (Discord allows 5 per row; https links only) */
+function linkRows(actions: { label: string; url: string }[] | undefined) {
+  const links = (actions ?? []).filter((a) => a.label && /^https?:\/\//i.test(a.url)).slice(0, 5);
+  if (!links.length) return [];
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(links.map((l) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(l.label.slice(0, 80)).setURL(l.url)))];
 }
 async function processDeliveries(): Promise<void> {
   const c = client;
@@ -324,6 +336,7 @@ async function processDeliveries(): Promise<void> {
         await channel.send({
           content: it.payload.content || undefined,
           embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
+          components: linkRows(it.payload.actions),
           allowedMentions: { parse: ((it.payload.mention ?? 'none') === 'none' ? [] : ['everyone']) as 'everyone'[] },
         });
       }
