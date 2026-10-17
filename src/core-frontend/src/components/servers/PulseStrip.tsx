@@ -4,7 +4,7 @@ import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
 import type { Server } from '../../api';
-import { chartPoints, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
+import { chartPoints, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
 
 const ICON: Record<PulseState, JSX.Element> = {
   ok: <IconOk size={24} />,
@@ -17,7 +17,7 @@ const ICON: Record<PulseState, JSX.Element> = {
 function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
   const gid = useId().replace(/:/g, '');
   const { t: tr } = useI18n();
-  if (!data || data.points.length < 2) {
+  if (!data || !hasEnoughHistory(data.points, data.hours)) {
     return <div className="pulse-chart pulse-chart-empty">{tr('srv.pulse.noChart')}</div>;
   }
   const end = Math.max(now, data.points[data.points.length - 1].ts + data.bucketMs);
