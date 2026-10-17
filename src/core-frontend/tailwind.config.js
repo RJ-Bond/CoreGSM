@@ -30,10 +30,13 @@ export default {
         badbg: c('badbg'),
       },
       fontFamily: {
-        sans: ['"Manrope Variable"', 'Manrope', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
+        sans: ['"Golos Text Variable"', '"Golos Text"', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
       // radius scale: rounded-ui-sm / -md / -lg / -xl / -pill (values in index.css); the stock rounded-* names stay as they were
+      // Golos Text is lighter in the eye than the old font at the same weight: the heavy steps are pulled down so
+      // that headings and labels get a hierarchy (body 400, labels 600, headings 800)
+      fontWeight: { bold: '600', extrabold: '650', black: '800' },
       borderRadius: {
         '4xl': '2rem',
         tile: 'var(--r-xl)',
