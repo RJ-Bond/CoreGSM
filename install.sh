@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="335c8833ea05"
+COREGSM_BUILD="a30f76fb852c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8084,7 +8084,7 @@ export const GAME_ICON: Record<string, keyof typeof ICON_PATHS> = {
   rust: 'axe', valheim: 'shield', garrysmod: 'wrench', l4d2: 'warning', dayz: 'warning',
   terraria: 'sword', conanexiles: 'sword', sdtd: 'calendar', ase: 'leaf', asa: 'leaf',
   palworld: 'paw', factorio: 'gear', vrising: 'drop', projectzomboid: 'skull',
-  gta5f: 'car', gtasam: 'car', teamspeak3: 'headset', icarus: 'planet',
+  gta5f: 'car', gtasam: 'car', m2o: 'car', teamspeak3: 'headset', icarus: 'planet',
 };
 
 export const gameIconPath = (game: string): string | null => {
@@ -8250,6 +8250,15 @@ export const GAME_PROFILES: GameProfile[] = [
     fields: F(false, false, true),
     connect: { note: 'Open Missions → Dedicated Servers → найдите сервер по имени.' },
     accent: 0xf5b01e,
+  },
+  {
+    id: 'm2o',
+    label: 'Mafia II: Online',
+    defaultPort: 27015,
+    queryPortHint: 'Mafia II: Online: игра идёт по UDP на порту 27015, а панель спрашивает сервер по TCP на порту игры + 1 (по умолчанию 27016). Откройте оба.',
+    fields: F(true, false, true),
+    connect: { note: 'В клиенте Mafia II: Online выберите сервер в списке или подключитесь напрямую: {address}.' },
+    accent: 0xc9a24a,
   },
   { id: 'projectzomboid', label: 'Project Zomboid', defaultPort: 16261, fields: F(true, false, true), connect: { steam: STEAM, note: 'Join → введите IP {host}, порт {port}.' } },
   { id: 'gta5f', label: 'FiveM (GTA V)', defaultPort: 30120, fields: F(false, true, true), connect: { command: 'connect {address}', note: 'В клиенте FiveM: F8 → connect {address}.' } },
@@ -9199,6 +9208,89 @@ export function guardDelete(scope: GuardScope, key: string): void {
 }
 
 setInterval(() => db.prepare('DELETE FROM login_guard WHERE expires_at <= ?').run(Date.now()), 3600_000).unref();
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/m2oInfo.ts" << '__COREGSM_EOF__'
+/**
+ * Mafia II: Online (GameDig id `m2o`).
+ *
+ * The current server (MafiaHub framework, https://docs.mafia2online.com/guides/basics/server-setup/) listens on
+ *   port      UDP   game traffic (27015 by default)
+ *   port + 1  TCP   a small HTTP endpoint with the server metadata as JSON (used by the server browser and masterlist)
+ * The documentation names `max_players` and the `mod` config but gives neither the path nor the other keys, so the
+ * answer is read tolerantly: the usual spellings of every value are accepted and a missing value is simply left out.
+ * An answer of any JSON object already proves that the server is up, which is what monitoring needs most.
+ * The old UDP query (GameDig `m2o`, header «M2Online») stays as the fallback in query.ts.
+ */
+
+export interface M2oInfo {
+  name: string | null;
+  players: number;
+  maxPlayers: number;
+  map: string | null;
+  version: string | null;
+  playerNames: string[];
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 120) : null);
+const num = (v: unknown): number | null => {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+};
+const first = <T>(...vals: (T | null | undefined)[]): T | null => vals.find((v) => v != null) ?? null;
+
+/** Reads the JSON of the info endpoint; null when it is not an object. */
+export function parseM2oInfo(raw: unknown): M2oInfo | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const mod = o.mod && typeof o.mod === 'object' && !Array.isArray(o.mod) ? (o.mod as Record<string, unknown>) : {};
+
+  let players = 0;
+  let playerNames: string[] = [];
+  if (Array.isArray(o.players)) {
+    playerNames = o.players
+      .map((p) => (typeof p === 'string' ? p : p && typeof p === 'object' ? str((p as { name?: unknown }).name) : null))
+      .filter((n): n is string => !!n && n.trim().length > 0)
+      .map((n) => n.trim().slice(0, 64));
+    players = o.players.length;
+  } else {
+    players = first(num(o.players), num(o.numplayers), num(o.player_count), num(o.playerCount), num(o.players_online), num(o.online), num(o.current_players)) ?? 0;
+  }
+  return {
+    name: first(str(o.name), str(o.hostname), str(o.server_name), str(o.serverName), str(o.title)),
+    players,
+    maxPlayers: first(num(o.max_players), num(o.maxplayers), num(o.maxPlayers), num(o.slots)) ?? 0,
+    map: first(str(o.map), str(mod.map)),
+    version: first(str(o.version), str(mod.version), str(o.mod_version)),
+    playerNames: playerNames.slice(0, 200),
+  };
+}
+
+/** GET the info endpoint (`/`, then `/info`); resolves with the parsed answer and the round trip in ms. */
+export async function fetchM2oInfo(host: string, port: number, timeoutMs = 3000): Promise<{ info: M2oInfo; ping: number }> {
+  let lastError: unknown = new Error('no answer');
+  for (const path of ['/', '/info']) {
+    const started = Date.now();
+    try {
+      const res = await fetch(`http://${host.includes(':') ? `[${host}]` : host}:${port}${path}`, {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { accept: 'application/json' },
+        redirect: 'manual',
+      });
+      if (!res.ok) {
+        lastError = new Error(`HTTP ${res.status}`);
+        continue;
+      }
+      const text = (await res.text()).slice(0, 200_000);
+      const info = parseM2oInfo(JSON.parse(text));
+      if (info) return { info, ping: Date.now() - started };
+      lastError = new Error('not a JSON object');
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/mail.ts" << '__COREGSM_EOF__'
@@ -11482,6 +11574,52 @@ export async function runPool<T>(items: T[], limit: number, worker: (item: T, in
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/presence.ts" << '__COREGSM_EOF__'
+/**
+ * What the bot shows under its name in the member list of a Discord server («Смотрит 26 игроков · 3/3 онлайн»):
+ * the colour of the dot (green = all up, yellow = some server is down, red = all down) and a few lines it rotates
+ * through: the totals, then every server, then a hint at the commands. Pure, so it is easy to test.
+ */
+export interface PresenceServer {
+  name: string;
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+  /** a server that never answered yet: not counted as a problem */
+  hasStatus: boolean;
+}
+
+export type PresenceStatus = 'online' | 'idle' | 'dnd';
+
+const MAX_SERVERS = 6;
+const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+const plural = (n: number, one: string, few: string, many: string) => {
+  const m = n % 100;
+  const d = n % 10;
+  return m >= 11 && m <= 14 ? many : d === 1 ? one : d >= 2 && d <= 4 ? few : many;
+};
+
+export function buildPresence(servers: PresenceServer[]): { status: PresenceStatus; lines: string[] } {
+  const known = servers.filter((s) => s.hasStatus);
+  const up = known.filter((s) => s.online);
+  const players = up.reduce((n, s) => n + s.players, 0);
+  const lines: string[] = [];
+  if (servers.length === 0) return { status: 'online', lines: ['/register · /profile · /status'] };
+
+  if (known.length === 0) lines.push('ждёт первого опроса серверов');
+  else lines.push(`${players} ${plural(players, 'игрок', 'игрока', 'игроков')} · ${up.length}/${servers.length} онлайн`);
+  // the busiest first; the offline ones last
+  const ranked = [...known].sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players);
+  for (const s of ranked.slice(0, MAX_SERVERS)) {
+    lines.push(cut(s.online ? `${s.name}: ${s.players}/${s.maxPlayers || '?'}` : `${s.name}: офлайн`, 100));
+  }
+  lines.push('/status · /online · /top');
+
+  const status: PresenceStatus = known.length > 0 && up.length === 0 ? 'dnd' : known.some((s) => !s.online) ? 'idle' : 'online';
+  return { status, lines };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/probeAgent.ts" << '__COREGSM_EOF__'
 /**
  * The probe: a small program that runs on another machine (another city, another provider), queries the panel's
@@ -12725,6 +12863,7 @@ __COREGSM_EOF__
 /** One query of a game server over its game protocol (GameDig). No database: the poller and the probes share it. */
 import { GameDig } from 'gamedig';
 import type { ServerRow } from './db.js';
+import { fetchM2oInfo } from './m2oInfo.js';
 
 export interface QueryResult {
   online: boolean;
@@ -12759,6 +12898,15 @@ const clean = (s: unknown): string | null => {
 };
 
 export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 'query_port'> & Partial<ServerRow>): Promise<QueryResult> {
+  // Mafia II: Online: the current server answers over HTTP (TCP, game port + 1); the old UDP query below is the fallback
+  if (s.game === 'm2o') {
+    try {
+      const { info, ping } = await fetchM2oInfo(s.host, s.query_port ?? s.port + 1);
+      return { online: true, name: info.name, players: info.players, maxPlayers: info.maxPlayers, map: info.map, version: info.version, ping, playerNames: info.playerNames, error: null };
+    } catch {
+      /* not the HTTP kind of server: try the GameDig protocol */
+    }
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const r: any = await GameDig.query({
@@ -14459,9 +14607,16 @@ import { renderCard } from '../card.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
 import { refreshServer } from '../gsm.js';
 import { wrap } from '../http.js';
-import { embedFor, intervalParam, serializeBinding } from '../serverData.js';
+import { buildPresence } from '../presence.js';
+import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 
 export const router = express.Router();
+
+// the status line of the bot in the member list: the dot colour and the lines it rotates through
+router.get('/internal/presence', internal, (_req, res) => {
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  res.json(buildPresence(rows.map(serialize).map((s) => ({ name: s.name, online: s.online, players: s.players, maxPlayers: s.maxPlayers, hasStatus: s.hasStatus }))));
+});
 
 router.get('/internal/servers/:id/embed', internal, (req, res) => {
   const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
@@ -17809,6 +17964,7 @@ import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
 import { parseProxy } from './proxy.js';
 import { syncDiscord } from './sync.js';
+import { updatePresence } from './presence.js';
 
 const TICK_MS = 10_000;
 const LOGIN_RETRY_MS = 60_000;
@@ -18195,6 +18351,7 @@ async function tick(): Promise<void> {
     await processNews();
     await processDeliveries();
     if (client && state === 'online') await syncDiscord(client, () => stopping);
+    if (client && state === 'online') await updatePresence(client);
   } catch (e) {
     log('tick failed:', (e as Error).message);
   } finally {
@@ -18849,6 +19006,37 @@ export async function buildNews(p: NewsPayload, statusEmbeds: Record<string, unk
     components: linkRow((p.actions ?? []).slice(0, 3).map((a) => ({ label: a.label.slice(0, 80), url: a.url }))),
     allowedMentions: { parse: (p.mention === 'none' ? [] : ['everyone']) as 'everyone'[] },
   };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/presence.ts" << '__COREGSM_EOF__'
+/** The line under the bot's name in the member list: «Смотрит 26 игроков · 3/3 онлайн», rotated every 30 seconds. */
+import { ActivityType, type Client } from 'discord.js';
+import { backendJson } from './backend.js';
+import { log } from './log.js';
+
+const EVERY_MS = 30_000;
+let lastAt = 0;
+let index = 0;
+
+interface PresenceData {
+  status: 'online' | 'idle' | 'dnd';
+  lines: string[];
+}
+
+export async function updatePresence(client: Client, now = Date.now()): Promise<void> {
+  // Discord allows 5 presence updates per 20 s; one per 30 s is far below that
+  if (now - lastAt < EVERY_MS) return;
+  lastAt = now;
+  try {
+    const r = await backendJson<PresenceData>('/internal/presence');
+    const data = r.ok ? r.data : null;
+    if (!data || !Array.isArray(data.lines) || data.lines.length === 0) return;
+    const line = String(data.lines[index++ % data.lines.length]).slice(0, 128);
+    client.user?.setPresence({ status: data.status, activities: [{ type: ActivityType.Watching, name: line }] });
+  } catch (e) {
+    log('presence update failed:', (e as Error).message);
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -55167,7 +55355,7 @@ export const GAME_ICON: Record<string, keyof typeof ICON_PATHS> = {
   rust: 'axe', valheim: 'shield', garrysmod: 'wrench', l4d2: 'warning', dayz: 'warning',
   terraria: 'sword', conanexiles: 'sword', sdtd: 'calendar', ase: 'leaf', asa: 'leaf',
   palworld: 'paw', factorio: 'gear', vrising: 'drop', projectzomboid: 'skull',
-  gta5f: 'car', gtasam: 'car', teamspeak3: 'headset', icarus: 'planet',
+  gta5f: 'car', gtasam: 'car', m2o: 'car', teamspeak3: 'headset', icarus: 'planet',
 };
 
 export const gameIconPath = (game: string): string | null => {
@@ -55318,6 +55506,7 @@ export const GAMES: Game[] = [
   { id: 'unturned', label: 'Unturned', port: 27015, abbr: 'UT', color: '#4aa86a' },
   { id: 'vrising', label: 'V Rising', port: 27015, abbr: 'VR', color: '#7c3aed' },
   { id: 'icarus', label: 'Icarus', port: 27015, abbr: 'IC', color: '#f5b01e' },
+  { id: 'm2o', label: 'Mafia II: Online', port: 27015, abbr: 'M2', color: '#c9a24a' },
   { id: 'projectzomboid', label: 'Project Zomboid', port: 16261, abbr: 'PZ', color: '#7a8a4a' },
   { id: 'gta5f', label: 'FiveM (GTA V)', port: 30120, abbr: '5M', color: '#f26a3d' },
   { id: 'gtasam', label: 'SA-MP', port: 7777, abbr: 'SA', color: '#8a6ad9' },
