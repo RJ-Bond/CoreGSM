@@ -43,6 +43,8 @@ export interface Payload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
   embed: Record<string, unknown>;
+  /** link buttons under the message (the bot adds them as Discord link buttons) */
+  actions?: { label: string; url: string }[];
 }
 
 export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';

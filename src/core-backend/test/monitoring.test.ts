@@ -108,6 +108,21 @@ describe('weekly digest (data)', () => {
     assert.ok(d.top.some((p) => p.name === 'Ann' && p.hours === 2));
   });
 
+  it('adds a «Подробности на сайте» button under the picture when the public address is known', async () => {
+    const { digestMessage } = await import('../src/digest.ts');
+    const prev = process.env.PUBLIC_URL;
+    try {
+      process.env.PUBLIC_URL = 'https://panel.example.com';
+      const m = digestMessage(buildDigest(Date.now())) as { actions?: unknown };
+      assert.deepEqual(m.actions, [{ label: '📈 Подробности на сайте', url: 'https://panel.example.com/status' }]);
+      process.env.PUBLIC_URL = '';
+      assert.equal('actions' in digestMessage(buildDigest(Date.now())), false, 'no address, no button');
+    } finally {
+      if (prev === undefined) delete process.env.PUBLIC_URL;
+      else process.env.PUBLIC_URL = prev;
+    }
+  });
+
   it('is due only on the chosen weekday and hour, once a week', () => {
     setSetting('timezone', 'UTC');
     setSetting('digest_enabled', '1');
