@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9fceeb8652da"
+COREGSM_BUILD="d80bd1f23aa4"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8256,7 +8256,7 @@ export const GAME_PROFILES: GameProfile[] = [
     id: 'm2o',
     label: 'Mafia II: Online',
     defaultPort: 27015,
-    queryPortHint: 'Mafia II: Online: игра идёт по UDP на порту 27015, а панель спрашивает сервер по TCP на порту игры + 1 (по умолчанию 27016). Откройте оба.',
+    queryPortHint: 'Mafia II: Online: игра идёт по UDP на порту 27015, а панель спрашивает версию и слоты по TCP на порту игры + 1 (27016). Имя сервера и число игроков панель берёт из публичного мастер-листа, если сервер в нём есть (задан server-token).',
     fields: F(true, false, true),
     connect: { note: 'В клиенте Mafia II: Online выберите сервер в списке или подключитесь напрямую: {address}.' },
     accent: 0xc9a24a,
@@ -9218,9 +9218,12 @@ __COREGSM_EOF__
  * The current server (MafiaHub framework, https://docs.mafia2online.com/guides/basics/server-setup/) listens on
  *   port      UDP   game traffic (27015 by default)
  *   port + 1  TCP   a small HTTP endpoint with the server metadata as JSON (used by the server browser and masterlist)
- * The documentation names `max_players` and the `mod` config but gives neither the path nor the other keys, so the
- * answer is read tolerantly: the usual spellings of every value are accepted and a missing value is simply left out.
+ * Its JSON (MafiaHub Framework, integrations/server/instance.cpp, route "/") is: mod_name, mod_slug, mod_version,
+ * framework_version, host, port, password_required, max_players, mod_config. There is NO server name and NO number
+ * of players in it (those are in the masterlist, see m2oMasterlist.ts). Other usual spellings are accepted too and a
+ * missing value is simply left out.
  * An answer of any JSON object already proves that the server is up, which is what monitoring needs most.
+ * The version shown is the mod version (`mod_version`).
  * The old UDP query (GameDig `m2o`, header «M2Online») stays as the fallback in query.ts.
  */
 
@@ -9262,7 +9265,7 @@ export function parseM2oInfo(raw: unknown): M2oInfo | null {
     players,
     maxPlayers: first(num(o.max_players), num(o.maxplayers), num(o.maxPlayers), num(o.slots)) ?? 0,
     map: first(str(o.map), str(mod.map)),
-    version: first(str(o.version), str(mod.version), str(o.mod_version)),
+    version: first(str(o.mod_version), str(o.version), str(mod.version)),
     playerNames: playerNames.slice(0, 200),
   };
 }
@@ -9291,6 +9294,118 @@ export async function fetchM2oInfo(host: string, port: number, timeoutMs = 3000)
     }
   }
   throw lastError;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/m2oMasterlist.ts" << '__COREGSM_EOF__'
+/**
+ * The public masterlist of Mafia II: Online (https://masterlist.mafiahub.dev/servers, one list for all MafiaHub games).
+ *
+ * A server announces itself there when it has a `server-token`; the name of the entry belongs to the masterlist
+ * account of that token, the server itself never says its name (neither its HTTP info nor the UDP query does).
+ * So the name and the number of players of a listed server come from here, matched by IP and game port;
+ * a server that is not announced simply has no name and the panel shows the one an administrator typed.
+ * The list is fetched at most once a minute for every server together; a failure is silent (the old data is kept).
+ */
+import dns from 'node:dns/promises';
+import net from 'node:net';
+
+export const MASTERLIST_URL = 'https://masterlist.mafiahub.dev/servers';
+const GAMEMODE = 'm2o';
+const TTL_MS = 60_000;
+/** an entry that was not pinged for this long is a server that is gone */
+export const FRESH_MS = 150_000;
+
+export interface MasterEntry {
+  name: string | null;
+  ip: string;
+  port: number;
+  players: number;
+  maxPlayers: number;
+  version: string | null;
+  passworded: boolean;
+  /** ms since epoch of the last ping of the server to the masterlist; 0 when unknown */
+  lastPing: number;
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 120) : null);
+const int = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+
+/** Entries of the Mafia II: Online game mode out of the list's JSON; anything else in it is ignored. */
+export function parseMasterlist(raw: unknown): MasterEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MasterEntry[] = [];
+  for (const it of raw) {
+    if (!it || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    if (typeof o.gamemode !== 'string' || o.gamemode.toLowerCase() !== GAMEMODE) continue;
+    const ip = str(o.ip);
+    if (!ip) continue;
+    const ts = typeof o.last_ping === 'string' ? Date.parse(o.last_ping) : NaN;
+    out.push({
+      name: str(o.name),
+      ip,
+      port: int(o.port) || 27015,
+      players: int(o.current_players),
+      maxPlayers: int(o.max_players),
+      version: str(o.version),
+      passworded: o.passworded === true,
+      lastPing: Number.isFinite(ts) ? ts : 0,
+    });
+  }
+  return out;
+}
+
+async function realSource(): Promise<unknown> {
+  const res = await fetch(MASTERLIST_URL, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return JSON.parse((await res.text()).slice(0, 2_000_000));
+}
+
+let cache: { at: number; entries: MasterEntry[] } | null = null;
+let loading: Promise<MasterEntry[]> | null = null;
+let source: () => Promise<unknown> = realSource;
+
+/** for the tests: replace the source of the list (null = the real one) and forget the cache */
+export function setMasterlistSource(fn: (() => Promise<unknown>) | null): void {
+  cache = null;
+  loading = null;
+  source = fn ?? realSource;
+}
+
+async function entries(now: number): Promise<MasterEntry[]> {
+  if (cache && now - cache.at < TTL_MS) return cache.entries;
+  loading ??= source()
+    .then((raw) => {
+      cache = { at: Date.now(), entries: parseMasterlist(raw) };
+      return cache.entries;
+    })
+    // masterlist down: keep what we had and try again in a minute, a poll must not fail because of it
+    .catch(() => {
+      cache = { at: Date.now(), entries: cache?.entries ?? [] };
+      return cache.entries;
+    })
+    .finally(() => {
+      loading = null;
+    });
+  return loading;
+}
+
+async function addressesOf(host: string): Promise<string[]> {
+  if (net.isIP(host)) return [host];
+  try {
+    return (await dns.lookup(host, { all: true })).map((a) => a.address);
+  } catch {
+    return [];
+  }
+}
+
+/** The entry of the server with this host and game port, or null (not announced, or the list is unreachable). */
+export async function findInMasterlist(host: string, port: number, now = Date.now()): Promise<MasterEntry | null> {
+  const list = await entries(now);
+  if (list.length === 0) return null;
+  const addrs = await addressesOf(host);
+  return list.find((e) => e.port === port && addrs.includes(e.ip)) ?? null;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -12865,6 +12980,7 @@ __COREGSM_EOF__
 import { GameDig } from 'gamedig';
 import type { ServerRow } from './db.js';
 import { fetchM2oInfo } from './m2oInfo.js';
+import { FRESH_MS, findInMasterlist } from './m2oMasterlist.js';
 
 export interface QueryResult {
   online: boolean;
@@ -12899,13 +13015,30 @@ const clean = (s: unknown): string | null => {
 };
 
 export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 'query_port'> & Partial<ServerRow>): Promise<QueryResult> {
-  // Mafia II: Online: the current server answers over HTTP (TCP, game port + 1); the old UDP query below is the fallback
+  // Mafia II: Online. The server answers over HTTP (TCP, game port + 1) with its version and slots; its name and the
+  // number of players are only in the public masterlist (when it is announced there). The old UDP query is the fallback.
   if (s.game === 'm2o') {
+    const listed = await findInMasterlist(s.host, s.port).catch(() => null);
+    const fresh = listed && listed.lastPing > 0 && Date.now() - listed.lastPing < FRESH_MS ? listed : null;
     try {
       const { info, ping } = await fetchM2oInfo(s.host, s.query_port ?? s.port + 1);
-      return { online: true, name: info.name, players: info.players, maxPlayers: info.maxPlayers, map: info.map, version: info.version, ping, playerNames: info.playerNames, error: null };
+      return {
+        online: true,
+        name: listed?.name ?? info.name,
+        players: fresh ? fresh.players : info.players,
+        maxPlayers: info.maxPlayers || listed?.maxPlayers || 0,
+        map: info.map,
+        version: info.version ?? listed?.version ?? null,
+        ping,
+        playerNames: info.playerNames,
+        error: null,
+      };
     } catch {
-      /* not the HTTP kind of server: try the GameDig protocol */
+      // the HTTP port is closed but the server keeps announcing itself: it is up, and the list knows the rest
+      if (fresh) {
+        return { online: true, name: fresh.name, players: fresh.players, maxPlayers: fresh.maxPlayers, map: null, version: fresh.version, ping: null, playerNames: [], error: null };
+      }
+      /* not announced and no HTTP: try the GameDig protocol */
     }
   }
   try {
