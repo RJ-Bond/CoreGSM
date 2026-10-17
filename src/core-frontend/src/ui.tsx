@@ -26,6 +26,6 @@ export type { ProxyType } from './ui/blocks';
 export { Spark, smoothPath, SmoothArea, FleetBar } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
-export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, OrDivider } from './ui/authParts';
+export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
 export { AdminPage, Section, Strip, SaveBadge, TextField } from './ui/admin';
 export { noAutofill } from './ui/noAutofill';

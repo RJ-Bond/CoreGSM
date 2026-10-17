@@ -253,11 +253,24 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   );
 }
 
-const IconDiscordLogo = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+export const IconDiscordLogo = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
     <path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 2.9c-.2.4-.5.9-.6 1.3a18.3 18.3 0 0 0-5.5 0c-.2-.4-.4-.9-.6-1.3A19.7 19.7 0 0 0 3.8 4.4C.5 9 -.3 13.600.1 18.100a19.900 19.900 0 0 0 6 3c.5-.6.9-1.300 1.200-2-.7-.2-1.300-.5-1.900-.9l.4-.3a14.200 14.200 0 0 0 12.100 0l.4.3c-.6.4-1.200.7-1.900.9.4.7.8 1.400 1.200 2a19.900 19.900 0 0 0 6-3c.5-5.200-.8-9.700-3.500-13.700zM8 15.300c-1.200 0-2.200-1.100-2.200-2.400S6.800 10.500 8 10.500s2.200 1.100 2.200 2.400-1 2.400-2.200 2.400zm8 0c-1.200 0-2.200-1.100-2.200-2.400s1-2.400 2.200-2.400 2.200 1.100 2.200 2.400-1 2.400-2.200 2.400z" />
   </svg>
 );
+
+/** «linked Discord account» badge: the logo and the Discord name in the brand colour, so it reads without a label */
+export function DiscordBadge({ name }: { name: string }) {
+  return (
+    <span
+      className="inline-flex max-w-[11rem] items-center gap-1.5 rounded-full bg-[#5865f2]/15 py-0.5 pl-1.5 pr-2.5 text-xs font-bold text-[#7983f5]"
+      title={`Привязан аккаунт Discord: ${name}`}
+    >
+      <IconDiscordLogo size={14} />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
 
 /** full-page redirect to Discord; the backend returns to the panel afterwards */
 export function DiscordButton({ label, href, className = '' }: { label: string; href: string; className?: string }) {
