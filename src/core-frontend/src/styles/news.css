@@ -1,32 +1,40 @@
-/* public news feed: the latest news large, the rest as a list with previews. Colours and shadows only; no transforms. */
-.nf { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.25rem; }
-.nf-hero { position: relative; overflow: hidden; border-radius: 1.75rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: 0 1px 2px rgb(20 24 40 / .06); }
+/* public news feed: the latest news large, the rest as a grid of cards with a cover. Colours and shadows only; no transforms. */
+.nf { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.5rem; }
+.nf-hero { position: relative; overflow: hidden; border-radius: var(--r-xl); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-2); }
 .nf-hero::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 6px; background: var(--nf-accent, rgb(var(--brand))); opacity: .85; z-index: 1; }
 .nf-hero-img { height: 15rem; background-size: cover; background-position: center; background-color: rgb(var(--soft)); }
-.nf-hero-in { padding: 1.75rem 2rem 2rem; display: grid; gap: .75rem; background-image: linear-gradient(180deg, color-mix(in srgb, var(--nf-accent, #5b4fe0) 9%, transparent), transparent 9rem); }
+.nf-hero-in { padding: 1.5rem 2rem 1.75rem; display: grid; gap: .85rem; }
 .nf-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .9rem; font-size: .875rem; font-weight: 700; color: rgb(var(--mute)); }
-.nf-date { padding: .15rem .7rem; border-radius: 9999px; background: color-mix(in srgb, var(--nf-accent, #5b4fe0) 14%, rgb(var(--card))); color: rgb(var(--ink)); }
+.nf-date { padding: .15rem .7rem; border-radius: var(--r-pill); background: color-mix(in srgb, var(--nf-accent, #5b4fe0) 14%, rgb(var(--card))); color: rgb(var(--ink)); }
 .nf-author { display: inline-flex; align-items: center; gap: .4rem; }
-.nf-author img, .nf-ava { width: 22px; height: 22px; border-radius: 9999px; object-fit: cover; }
+.nf-author img, .nf-ava { width: 22px; height: 22px; border-radius: var(--r-pill); object-fit: cover; }
 .nf-ava { display: inline-grid; place-items: center; background: rgb(var(--brand)); color: #fff; font-size: .75rem; font-weight: 800; }
 .nf-title { margin: 0; font-size: clamp(1.6rem, 4vw, 2.3rem); line-height: 1.12; font-weight: 900; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .nf-text { font-size: 1.0625rem; line-height: 1.6; color: rgb(var(--ink)); overflow-wrap: anywhere; }
-.nf-text.is-clamped { display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
-.nf-text.is-clamped-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: .98rem; color: rgb(var(--mute)); }
+.nf-text.is-clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.nf-text.is-clamped-2 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: .96rem; line-height: 1.5; color: rgb(var(--mute)); }
 .nf-actions { display: flex; flex-wrap: wrap; gap: .5rem .75rem; align-items: center; margin-top: .25rem; }
 .nf-fields { display: grid; gap: .5rem; margin: .9rem 0 0; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
-.nf-fields > div { padding: .6rem .8rem; border-radius: 1rem; background: rgb(var(--soft)); }
+.nf-fields > div { padding: .6rem .8rem; border-radius: var(--r-md); background: rgb(var(--soft)); }
 .nf-fields dt { font-size: .8125rem; font-weight: 800; color: rgb(var(--mute)); }
 .nf-fields dd { margin: .1rem 0 0; font-weight: 700; }
-.nf-more { margin: .5rem .25rem 0; font-size: .875rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
-.nf-list { display: grid; gap: .75rem; }
-.nf-item { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 1rem; padding: .75rem; border-radius: 1.25rem; background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
-.nf-thumb { border-radius: .9rem; min-height: 6.5rem; background-size: cover; background-position: center; background-color: rgb(var(--soft)); }
-.nf-item-in { display: grid; gap: .3rem; align-content: center; min-width: 0; padding-right: .25rem; }
-.nf-item-title { margin: 0; font-size: 1.15rem; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+/* section headings: a plain heading, not a shouting label */
+.nf-more { margin: .75rem .25rem 0; font-size: 1.125rem; font-weight: 900; letter-spacing: -.01em; color: rgb(var(--ink)); }
+
+/* the rest of the news: cards in a grid, the cover on top, the whole card reacts to the pointer */
+.nf-list { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); }
+.nf-item { position: relative; display: grid; grid-template-rows: auto 1fr; overflow: hidden; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); transition: box-shadow .18s, border-color .18s; }
+.nf-item:hover { box-shadow: var(--shadow-3); border-color: rgb(var(--field)); }
+.nf-item:focus-within { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+.nf-thumb { aspect-ratio: 16 / 9; background-size: cover; background-position: center; background-color: rgb(var(--soft)); }
+.nf-item-in { display: grid; gap: .5rem; align-content: start; min-width: 0; padding: 1rem 1.1rem 1.1rem; }
+.nf-item-title { margin: 0; font-size: 1.15rem; font-weight: 800; line-height: 1.25; letter-spacing: -.01em; overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .nf-hero-in { padding: 1.25rem 1.1rem 1.4rem; }
   .nf-hero-img { height: 11rem; }
-  .nf-item { grid-template-columns: 5.5rem minmax(0, 1fr); gap: .75rem; }
-  .nf-thumb { min-height: 5.5rem; }
+  /* a phone: a compact row again (small picture on the left) instead of tall cards */
+  .nf-list { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
+  .nf-item { grid-template-rows: none; grid-template-columns: 5.5rem minmax(0, 1fr); gap: .75rem; padding: .65rem; }
+  .nf-thumb { aspect-ratio: auto; min-height: 5.5rem; border-radius: var(--r-md); }
+  .nf-item-in { padding: 0; align-content: center; }
 }

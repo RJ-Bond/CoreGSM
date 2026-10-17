@@ -32,7 +32,7 @@
 ) {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--b-gap, .5rem);
   min-height: max(var(--b-h, 2.625rem), var(--tap, 0px));
-  border-radius: 9999px;
+  border-radius: var(--r-pill);
   text-align: center; text-decoration: none; letter-spacing: .01em;
   cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
 }
@@ -232,7 +232,7 @@
 .btn-group > * { border-radius: 0; flex: 0 1 auto; }
 .btn-group > :first-child { border-top-left-radius: 9999px; border-bottom-left-radius: 9999px; }
 .btn-group > :last-child { border-top-right-radius: 9999px; border-bottom-right-radius: 9999px; }
-.btn-group > :only-child { border-radius: 9999px; }
+.btn-group > :only-child { border-radius: var(--r-pill); }
 .btn-group > :focus-visible { z-index: 1; }
 
 /* ---------- split button (main action + chevron) ---------- */

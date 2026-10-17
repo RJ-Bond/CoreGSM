@@ -637,6 +637,7 @@ const en: Record<keyof typeof ru, string> = {
   'nw.untitled': 'News',
   'nw.back': 'Back to news',
   'nw.copyLink': 'Copy link',
+  'nw.readTime': '{n} min read',
   'nw.copied': 'Link copied',
   'nw.copyFail': 'Could not copy the link',
   'nw.prev': 'Newer',

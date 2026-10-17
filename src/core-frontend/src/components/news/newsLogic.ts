@@ -216,6 +216,12 @@ export function validActions(a: NewsAction[] | undefined | null): NewsAction[] {
 }
 
 /** plain-text preview of markdown-ish text (list cards) */
+/** minutes to read a text (about 200 words a minute), at least 1; 0 for a text too short to mention */
+export function readingMinutes(text: string): number {
+  const words = text.split(/\s+/).filter(Boolean).length;
+  return words < 60 ? 0 : Math.max(1, Math.round(words / 200));
+}
+
 export function plainExcerpt(text: string, max = 180): string {
   const s = text.replace(/```[\s\S]*?```/g, ' ').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
