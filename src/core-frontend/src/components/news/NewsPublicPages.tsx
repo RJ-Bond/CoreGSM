@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull } from '../../api';
+import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { NewsArt } from '../Illustrations';
@@ -8,8 +8,8 @@ import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '
 import { NewsArticle } from './NewsArticle';
 import { CategoryIcon, PinIcon } from './NewsIcons';
 import { categoryLabel, useNewsServers } from './NewsParts';
-import { PublicFeed } from './PublicFeed';
-import { RUBRICS, countByCategory, filterByCategory, isRubricFilter, orderFeed, type RubricFilter } from './newsLogic';
+import { cardOf, hasGeneratedCover, PublicFeed } from './PublicFeed';
+import { CATEGORY_HEX, countByCategory, filterByCategory, isRubricFilter, orderFeed, relatedNews, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
 const loadRubric = (): RubricFilter => {
@@ -113,6 +113,9 @@ export function NewsListPage() {
   const now = Date.now();
   const upcoming = works.filter((w) => w.endTs > now).sort((a, b) => a.startTs - b.startTs).slice(0, 3);
 
+  const rubrics = visibleRubrics(counts, filter);
+  const liveServers = (servers ?? []).slice(0, 6);
+
   const chip = (id: RubricFilter) => (
     <button key={id} type="button" className="nw-rub" aria-pressed={filter === id} onClick={() => setRubric(id)}>
       {id !== 'all' && <CategoryIcon category={id} size={15} />}
@@ -121,17 +124,18 @@ export function NewsListPage() {
     </button>
   );
 
-  const hasSide = pinned.length > 0 || upcoming.length > 0 || ordered.length > 0;
+  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0;
 
   return (
     <div className="nw-page">
+      <div className="nw-glow" aria-hidden />
       <div className={`nw-grid ${hasSide ? 'has-side' : ''}`}>
         <div className="nw-main">
           <PageHead icon={<IconNews />} title={t('nav.news')} subtitle={t('nw.subtitle')} />
-          {ordered.length > 0 && (
+          {ordered.length > 0 && rubrics.length > 0 && (
             <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
               {chip('all')}
-              {RUBRICS.map((r) => chip(r))}
+              {rubrics.map((r) => chip(r))}
             </div>
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
@@ -170,19 +174,21 @@ export function NewsListPage() {
                 </ul>
               </AsideSection>
             )}
-            <AsideSection id="rubrics" title={t('nw.rubrics')} wide={wide}>
-              <ul className="nw-side-list">
-                {RUBRICS.map((r) => (
-                  <li key={r}>
-                    <button type="button" className="nw-side-rub" aria-pressed={filter === r} onClick={() => setRubric(filter === r ? 'all' : r)}>
-                      <CategoryIcon category={r} size={15} />
-                      <span>{categoryLabel(r)}</span>
-                      <span className="nw-rub-n tabular-nums">{counts[r]}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </AsideSection>
+            {liveServers.length > 0 && (
+              <AsideSection id="live" title={t('nw.liveNow')} wide={wide}>
+                <ul className="nw-side-list nw-live">
+                  {liveServers.map((sv: Server) => (
+                    <li key={sv.id}>
+                      <a href={`/servers/${sv.id}`}>
+                        <span className={`nw-live-dot ${sv.online ? 'is-on' : 'is-off'}`} aria-hidden />
+                        <span className="nw-live-name">{sv.name}</span>
+                        <span className="nw-live-n tabular-nums">{sv.online ? `${sv.players}/${sv.maxPlayers}` : t('nw.offline')}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </AsideSection>
+            )}
             {upcoming.length > 0 && (
               <AsideSection id="works" title={t('nw.works')} wide={wide}>
                 <ul className="nw-side-list nw-works">
@@ -211,8 +217,17 @@ export function NewsArticlePage({ id }: { id: number }) {
   const [item, setItem] = useState<PublicNewsFull | null>(null);
   const [error, setError] = useState<{ status: number; text: string } | null>(null);
   const servers = useNewsServers(30_000, true);
+  const [all, setAll] = useState<PublicNews[]>([]);
 
   useEffect(() => { setItem(null); setError(null); }, [id]);
+  // the other news: «Читайте также» (the same rubric first)
+  useEffect(() => {
+    let alive = true;
+    api<PublicNews[]>('/news').then((n) => { if (alive && Array.isArray(n)) setAll(n); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [id]);
+  const card = item ? cardOf(item) : null;
+  const related = card ? relatedNews(all, id, card.category, 3) : [];
 
   const load = () => api<PublicNewsFull>(`/news/${id}`)
     .then((n) => { setItem((cur) => (cur && cur.id === n.id && cur.reactions && n.reactions === undefined ? { ...n, reactions: cur.reactions } : n)); setError(null); })
@@ -222,6 +237,11 @@ export function NewsArticlePage({ id }: { id: number }) {
   const back = <a className="btn btn-soft" href="/news">{t('nw.back')}</a>;
   return (
     <div className="nw-page">
+      {card && (
+        card.image
+          ? <div className="nw-backdrop" aria-hidden style={{ backgroundImage: `url("${card.image}")` }} />
+          : <div className={`nw-backdrop ${hasGeneratedCover(card, servers) ? 'is-flat' : ''}`} aria-hidden style={{ ['--gen' as string]: CATEGORY_HEX[card.category] }} />
+      )}
       <div className="nw-article-wrap">
         {error && !item && (error.status === 404
           ? <StateView kind="notfound" title={t('nw.notfound.title')} text={t('nw.notfound.text')}>{back}</StateView>
@@ -240,6 +260,7 @@ export function NewsArticlePage({ id }: { id: number }) {
               item={item}
               servers={servers}
               canReact={!!me}
+              related={related}
               onReactions={(r: NewsReaction[]) => setItem((cur) => (cur ? { ...cur, reactions: r } : cur))}
             />
           </div>

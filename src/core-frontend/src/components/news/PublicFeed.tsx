@@ -3,8 +3,9 @@ import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Se
 import { useI18n, t } from '../../i18n';
 import { fmtDate } from '../../ui';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
+import { CategoryIcon } from './NewsIcons';
 import {
-  categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isPinned, newsImage, plainExcerpt,
+  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt,
 } from './newsLogic';
 
 export { PANEL_THEME } from './NewsParts';
@@ -69,11 +70,21 @@ export function coverStyle(c: Card, servers: Server[] | null | undefined, small 
   return { background: defaultCoverBackground({ game: c.game, statusServerIds: c.statusIds, servers, category: c.category }, small) };
 }
 
+/** no picture and no game: the panel draws the cover itself (see .nw-gen in news-page.css) */
+export const hasGeneratedCover = (c: Card, servers: Server[] | null | undefined): boolean =>
+  isGeneratedCover({ image: c.image, game: c.game, statusServerIds: c.statusIds, servers });
+
+/** the colour a generated cover is drawn in: the rubric's */
+const genVars = (c: Card): CSSProperties => ({ ['--gen' as string]: CATEGORY_HEX[c.category] });
+
 /** big cover with the title over a bottom gradient; used by the feed hero and by the news page */
 export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean }) {
+  const gen = hasGeneratedCover(c, servers);
   return (
-    <div className={`nw-cover ${tall ? 'is-tall' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
-      <div className="nw-cover-bg" style={coverStyle(c, servers)} aria-hidden />
+    <div className={`nw-cover ${tall ? 'is-tall' : ''} ${gen ? 'is-gen' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ...(gen ? genVars(c) : {}) }}>
+      <div className={`nw-cover-bg ${gen ? 'nw-gen' : ''}`} style={gen ? undefined : coverStyle(c, servers)} aria-hidden>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
+      </div>
       <div className="nw-cover-shade" aria-hidden />
       <div className="nw-cover-in">
         <div className="nw-cover-chips">
@@ -130,11 +141,14 @@ function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined })
   );
 }
 
-function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
   const href = `/news/${c.id}`;
+  const gen = hasGeneratedCover(c, servers);
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
-      <a className="nf-thumb nw-thumb" href={href} style={coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1} />
+      <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
+      </a>
       <div className="nf-item-in">
         <div className="nw-chips">
           {c.pinned && <PinChip />}

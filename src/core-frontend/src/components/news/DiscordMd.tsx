@@ -211,7 +211,8 @@ export function DiscordMd({ text }: { text: string }) {
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
     if (h) {
       const size = h[1].length === 1 ? 'text-[1.5em]' : h[1].length === 2 ? 'text-[1.25em]' : 'text-[1.1em]';
-      out.push(<div key={i} className={`${size} mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>{inlineMd(h[2])}</div>);
+      // the id lets the table of contents of the news page jump here (extractHeadings builds the same ids)
+      out.push(<div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>{inlineMd(h[2])}</div>);
       continue;
     }
     const small = /^-#\s+(.*)$/.exec(line);

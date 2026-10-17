@@ -52,6 +52,16 @@ export function countByCategory(items: Pick<PublicNews, 'category' | 'payload'>[
   return out;
 }
 
+/**
+ * Rubrics worth showing as chips: the ones that have news (and the one that is selected, so it can be switched off).
+ * With fewer than two non-empty rubrics there is nothing to filter and the whole row is hidden.
+ */
+export function visibleRubrics(counts: Record<RubricFilter, number>, current: RubricFilter): NewsCategory[] {
+  const filled = RUBRICS.filter((r) => counts[r] > 0);
+  if (filled.length < 2 && current === 'all') return [];
+  return RUBRICS.filter((r) => counts[r] > 0 || r === current);
+}
+
 export function filterByCategory<T extends Pick<PublicNews, 'category' | 'payload'>>(items: T[], f: RubricFilter): T[] {
   return f === 'all' ? items : items.filter((n) => categoryOf(n) === f);
 }
@@ -154,6 +164,41 @@ export function coverGradient(i: CoverInput): string {
   return `linear-gradient(135deg, color-mix(in srgb, ${c} 82%, #000), ${c})`;
 }
 
+/**
+ * True when a news has neither a picture nor a game: its cover is drawn by the panel (a mesh in the colour of the
+ * rubric with the rubric's pictogram) instead of a flat gradient.
+ */
+export function isGeneratedCover(i: CoverInput & { image?: string | null }): boolean {
+  return !i.image && !coverGame(i);
+}
+
+/** a heading of a news text: the line it sits on (also the id suffix on the page), its level and its text */
+export interface Heading { id: string; level: 1 | 2 | 3; text: string }
+
+/** `# `, `## `, `### ` lines outside code blocks; the id is `nw-h-<line index>` (DiscordMd puts the same id on the line) */
+export function extractHeadings(text: string): Heading[] {
+  const out: Heading[] = [];
+  let fenced = false;
+  text.split('\n').forEach((line, i) => {
+    if (line.trim().startsWith('```')) {
+      // a single-line ```code``` neither opens nor closes a block
+      if (!/^```.*```$/.test(line.trim())) fenced = !fenced;
+      return;
+    }
+    if (fenced) return;
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (h && h[2].trim()) out.push({ id: `nw-h-${i}`, level: h[1].length as 1 | 2 | 3, text: h[2].replace(/[*_~`|]/g, '').trim() });
+  });
+  return out;
+}
+
+/** up to `n` other news to read next: the same rubric first, then the newest ones */
+export function relatedNews<T extends Pick<PublicNews, 'id' | 'sentAt' | 'category' | 'payload'>>(items: T[], currentId: number, category: NewsCategory, n = 3): T[] {
+  const rest = items.filter((x) => x.id !== currentId).sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0));
+  const same = rest.filter((x) => categoryOf(x) === category);
+  return [...same, ...rest.filter((x) => !same.includes(x))].slice(0, n);
+}
+
 /** CSS `background` of the default cover (the game's artwork when it ships one, else the gradient) */
 export function defaultCoverBackground(i: CoverInput, small = false): string {
   return coverBackground(null, coverGradient(i), { game: coverGame(i), small, strong: true });
@@ -223,7 +268,8 @@ export function readingMinutes(text: string): number {
 }
 
 export function plainExcerpt(text: string, max = 180): string {
-  const s = text.replace(/```[\s\S]*?```/g, ' ').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
+  // list items keep a bullet between them (otherwise «- a - b» runs together with stray hyphens)
+  const s = text.replace(/```[\s\S]*?```/g, ' ').replace(/^[ \t]*[-*•]\s+/gm, '• ').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
 }
 

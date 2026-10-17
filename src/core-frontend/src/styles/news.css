@@ -35,6 +35,6 @@
   /* a phone: a compact row again (small picture on the left) instead of tall cards */
   .nf-list { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
   .nf-item { grid-template-rows: none; grid-template-columns: 5.5rem minmax(0, 1fr); gap: .75rem; padding: .65rem; }
-  .nf-thumb { aspect-ratio: auto; min-height: 5.5rem; border-radius: var(--r-md); }
+  .nf-thumb { aspect-ratio: 1; align-self: start; min-height: 0; border-radius: var(--r-md); }
   .nf-item-in { padding: 0; align-content: center; }
 }
