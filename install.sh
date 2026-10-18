@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="331b61cd9e07"
+COREGSM_BUILD="75d10be8162f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -49789,6 +49789,7 @@ export function ImageDrop({
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/LimitsPanel.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
 import { LIMITS, totalLength, type Draft } from './model';
 
 function Bar({ label, value, max, detail }: { label: string; value: number; max: number; detail?: string }) {
@@ -49810,18 +49811,26 @@ function Bar({ label, value, max, detail }: { label: string; value: number; max:
 
 /** One panel with every Discord limit that matters for the open embed and the whole message. */
 export function LimitsPanel({ d, active }: { d: Draft; active: number }) {
+  const [open, setOpen] = useState(false);
   const e = d.embeds[active] ?? d.embeds[0];
   if (!e) return null;
   const worstName = e.fields.reduce((m, f) => Math.max(m, f.name.length), 0);
   const worstValue = e.fields.reduce((m, f) => Math.max(m, f.value.length), 0);
   const total = totalLength(d);
+  // the worst share of any limit: the panel stays folded while everything is comfortably inside, opens itself near a limit
+  const worst = Math.max(d.content.length / LIMITS.content, e.title.length / LIMITS.title, e.description.length / LIMITS.description, worstName / LIMITS.fieldName, worstValue / LIMITS.fieldValue, e.footer.length / LIMITS.footer, e.fields.length / LIMITS.fields, d.embeds.length / LIMITS.embeds, total / LIMITS.total);
+  const shown = open || worst >= 0.8;
   return (
     <section className="panel space-y-3 p-4" aria-label="Лимиты Discord">
-      <div>
+      <div className="flex items-center gap-3">
         <h2 className="text-lg font-black">Лимиты</h2>
-        <p className="text-xs font-semibold text-mute">{d.embeds.length > 1 ? `Показаны значения для блока ${active + 1}; сумма: по всему сообщению.` : 'Ограничения Discord для этого сообщения.'}</p>
+        <span className={`pill ${worst > 1 ? 'pill-bad' : worst >= 0.8 ? 'pill-warn' : 'pill-ok'}`}>{worst > 1 ? 'превышены' : worst >= 0.8 ? 'почти предел' : 'в норме'}</span>
+        {worst < 0.8 && <button type="button" className="btn-link ml-auto text-sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? 'Скрыть' : 'Подробнее'}</button>}
       </div>
-      <ul className="space-y-2.5">
+      {shown && <div>
+        <p className="text-xs font-semibold text-mute">{d.embeds.length > 1 ? `Показаны значения для блока ${active + 1}; сумма: по всему сообщению.` : 'Ограничения Discord для этого сообщения.'}</p>
+      </div>}
+      {shown && <ul className="space-y-2.5">
         <Bar label="Текст сообщения" value={d.content.length} max={LIMITS.content} />
         <Bar label="Заголовок" value={e.title.length} max={LIMITS.title} />
         <Bar label="Основной текст" value={e.description.length} max={LIMITS.description} />
@@ -49831,7 +49840,7 @@ export function LimitsPanel({ d, active }: { d: Draft; active: number }) {
         <Bar label="Полей" value={e.fields.length} max={LIMITS.fields} />
         <Bar label="Embed-блоков" value={d.embeds.length} max={LIMITS.embeds} />
         <Bar label="Всего символов во всех embed" value={total} max={LIMITS.total} />
-      </ul>
+      </ul>}
     </section>
   );
 }
@@ -58986,9 +58995,12 @@ __COREGSM_EOF__
 
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 .pop { animation: pop .25s ease-out both; }
+/* a drawer slides in from the right */
+@keyframes drawer-in { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+.drawer-in { animation: drawer-in .22s ease-out both; }
 @keyframes shimmer { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .skeleton { animation: shimmer 1.4s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .pop, .skeleton { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .pop, .drawer-in, .skeleton { animation: none; } }
 
 /* a gently pulsing ring on the ONLINE pill */
 @keyframes live-ring {
@@ -62309,7 +62321,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
               </thead>
               <tbody>
                 {rows.map((s) => (
-                  <tr key={s.id} data-selected={sel.includes(s.id) ? 'true' : undefined}>
+                  <tr key={s.id} data-selected={sel.includes(s.id) ? 'true' : undefined} className="cursor-pointer" onClick={(e) => { if (!(e.target as HTMLElement).closest('a, button, input, label')) a.onEdit(s); }}>
                     <td><input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`Выбрать: ${s.name}`} /></td>
                     <td>
                       <div className="flex min-w-0 items-center gap-3">
@@ -67437,7 +67449,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   };
 
   return (
-    <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
+    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
         <div>
           <span className="label">Игра</span>
@@ -72624,7 +72636,7 @@ import { noAutofill } from './noAutofill';
  * Dialog: a bottom sheet on phones, a centred card on larger screens.
  * Focus moves inside and is trapped, Escape closes, focus returns to the opener, only a real click on the backdrop closes it.
  */
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, side = false }: { title: string; onClose: () => void; children: ReactNode; /** a drawer from the right edge (full height) instead of a centred dialog: the list stays visible behind it */ side?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // keyboards: first field; touch screens: the dialog itself (no on-screen keyboard popping up)
@@ -72634,14 +72646,16 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
   const bd = useBackdropClose(onClose);
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" {...bd}>
+    <div className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4'} {...bd}>
       <div
         ref={box}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
+        className={side
+          ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-l-ui-xl sm:p-6'
+          : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6'}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
