@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { CONC_MAX, CONC_MIN, FAIL_MAX, FAIL_MIN, confirmDelayText, durationText, validatePoll, type PollSettings } from '../pollSettings';
 import { FieldError, SaveBadge, Section, ago, plural, useAutosave } from '../ui';
+import { useSaveBar, useSaveBarActive } from '../saveBar';
 
 /** «Опрос серверов»: when a failure is confirmed, how many servers are asked at once, and the numbers of the last poll. */
 export default function PollSettingsCard() {
@@ -25,7 +26,9 @@ export default function PollSettingsCard() {
 
   const value = { failThreshold: Number(fail), concurrency: Number(conc) };
   const err = validatePoll(value);
+  const bar = useSaveBarActive();
   const auto = useAutosave({
+    manual: bar,
     value,
     saved: srv ? { failThreshold: srv.failThreshold, concurrency: srv.concurrency } : value,
     enabled: !!srv,
@@ -36,6 +39,8 @@ export default function PollSettingsCard() {
       setSrv((s) => (s ? { ...s, last: r.last ?? s.last } : s));
     },
   });
+
+  useSaveBar('poll', 'опрос серверов', auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); } });
 
   // the backend is older than the panel (or the poll settings are not available): the card is simply not shown
   if (gone) return null;

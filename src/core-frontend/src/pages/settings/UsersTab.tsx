@@ -6,6 +6,7 @@ import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { confirmDialog, promptDialog } from '../../confirm';
 import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
   return (
@@ -21,7 +22,12 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
 
 const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
+/** The users page: the rules text joins the common save bar. */
 export function UsersTab() {
+  return <SaveBarProvider><UsersTabInner /></SaveBarProvider>;
+}
+
+function UsersTabInner() {
   const { me, reload } = useAuth();
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -52,7 +58,9 @@ export function UsersTab() {
     load();
   };
   // the rules text is saved as you type (after a pause and on leaving the field); the text is never replaced under the cursor
+  const bar = useSaveBarActive();
   const rulesAuto = useAutosave({
+    manual: bar,
     value: rules,
     saved: access?.rules ?? '',
     enabled: !!access,
@@ -65,6 +73,7 @@ export function UsersTab() {
       void reload();
     },
   });
+  useSaveBar('rules', 'правила сообщества', rulesAuto.status, rulesAuto.saveNow, () => setRules(access?.rules ?? ''));
   const setPerms = async (u: UserRow, perms: Perm[]) => {
     await api(`/users/${u.id}`, 'PUT', { role: u.role, perms }).then(() => { toast('Права модератора сохранены'); void load(); }).catch((e) => setError(e.message));
   };

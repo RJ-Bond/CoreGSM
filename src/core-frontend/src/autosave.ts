@@ -16,6 +16,8 @@ export interface AutosaveOptions<V> {
   /** false: nothing is sent (the form is not loaded yet) */
   enabled?: boolean;
   equal?: (a: V, b: V) => boolean;
+  /** true: nothing is sent by itself (no pause timer, no send on leaving); a common bar calls saveNow() */
+  manual?: boolean;
 }
 
 const sameJson = <V,>(a: V, b: V) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -28,7 +30,7 @@ const sameJson = <V,>(a: V, b: V) => a === b || JSON.stringify(a) === JSON.strin
  *  - edits made while a request is in flight are sent after it, never dropped
  *  - leaving the page (unmount) with a valid unsaved edit sends it once more
  */
-export function useAutosave<V>({ value, saved, validate, save, delay = 900, enabled = true, equal = sameJson }: AutosaveOptions<V>) {
+export function useAutosave<V>({ value, saved, validate, save, delay = 900, enabled = true, equal = sameJson, manual = false }: AutosaveOptions<V>) {
   const [status, setStatus] = useState<SaveStatus>('idle');
   const [error, setError] = useState('');
   const baseline = useRef(saved);
@@ -36,8 +38,8 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
   const inflight = useRef(false);
   const timer = useRef(0);
   const fade = useRef(0);
-  const opts = useRef({ validate, save, equal, enabled });
-  opts.current = { validate, save, equal, enabled };
+  const opts = useRef({ validate, save, equal, enabled, manual });
+  opts.current = { validate, save, equal, enabled, manual };
   latest.current = value;
 
   const validation = validate ? validate(value) : null;
@@ -80,13 +82,15 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
     window.clearTimeout(timer.current);
     if (!opts.current.enabled) return;
     if (equal(value, baseline.current)) {
-      setStatus((s) => (s === 'saved' || s === 'saving' || s === 'error' ? s : 'idle'));
+      // an edit taken back (or discarded from a bar) is not an error any more
+      setStatus((s) => (s === 'saved' || s === 'saving' || (s === 'error' && !manual) ? s : 'idle'));
       return;
     }
     if (validate?.(value)) { setStatus('invalid'); return; }
     if (inflight.current) return;
     setStatus('dirty');
     setError('');
+    if (manual) return undefined;
     timer.current = window.setTimeout(() => void run(), delay);
     return () => window.clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -97,7 +101,7 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
     window.clearTimeout(timer.current);
     window.clearTimeout(fade.current);
     const o = opts.current;
-    if (o.enabled && !inflight.current && !o.equal(latest.current, baseline.current) && !o.validate?.(latest.current)) void o.save(latest.current).catch(() => undefined);
+    if (!o.manual && o.enabled && !inflight.current && !o.equal(latest.current, baseline.current) && !o.validate?.(latest.current)) void o.save(latest.current).catch(() => undefined);
   }, []);
 
   return {
@@ -106,8 +110,10 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
     error: validation && dirty ? validation : error,
     /** validation message even when nothing was edited yet is not shown: only a changed value is judged */
     invalid: !!validation && dirty,
-    /** send now (onBlur) */
-    flush: () => void run(),
+    /** send now (onBlur); in manual mode leaving a field sends nothing */
+    flush: () => { if (!opts.current.manual) void run(); },
     retry: () => void run(),
+    /** send now, whatever the mode (the button of a common bar); resolves when the request is over */
+    saveNow: () => run(),
   };
 }
