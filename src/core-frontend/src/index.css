@@ -159,10 +159,10 @@
   body {
     background-image:
       var(--noise),
-      radial-gradient(70% 55% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 64%),
-      radial-gradient(55% 48% at 96% 8%, rgb(45 212 191 / var(--au2)), transparent 64%),
-      radial-gradient(70% 52% at 50% 58%, rgb(79 70 229 / var(--au3)), transparent 70%),
-      radial-gradient(70% 55% at 72% 100%, rgb(236 72 153 / var(--au4)), transparent 68%);
+      radial-gradient(70% 50% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 100%),
+      radial-gradient(55% 44% at 96% 6%, rgb(45 212 191 / var(--au2)), transparent 100%),
+      radial-gradient(60% 34% at 50% 46%, rgb(79 70 229 / var(--au3)), transparent 100%),
+      radial-gradient(60% 30% at 72% 66%, rgb(236 72 153 / var(--au4)), transparent 100%);
     background-size: 200px 200px, 100% 130vh, 100% 130vh, 100% 130vh, 100% 130vh;
     background-repeat: repeat, no-repeat, no-repeat, no-repeat, no-repeat;
     background-position: 0 0, top, top, top, top;
