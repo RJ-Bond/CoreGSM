@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="232193d5b92d"
+COREGSM_BUILD="331b61cd9e07"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -47349,7 +47349,8 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
   const v = value == null ? 0 : Math.max(0, Math.min(1, value));
   const t = tone ?? usageTone(value);
   return (
-    <div className={`gauge gauge-${t} mx-auto w-full max-w-[9.5rem]`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
+    <div className={`gauge-${t} mx-auto w-full max-w-[9.5rem]`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
+      <div className="gauge">
       <svg viewBox="0 0 120 120" aria-hidden>
         <g transform="rotate(135 60 60)" fill="none" strokeWidth="11" strokeLinecap="round">
           <circle className="gauge-track" cx="60" cy="60" r={R} strokeDasharray={`${C * SWEEP} ${C}`} />
@@ -47359,8 +47360,9 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
       <div className="gauge-value">
         {icon && <span className="mx-auto mb-0.5 text-mute">{icon}</span>}
         <span className="text-xl font-black leading-none tabular-nums">{display}</span>
-        {caption && <span className="mt-1 text-xs font-bold text-mute">{caption}</span>}
       </div>
+      </div>
+      {caption && <div className="-mt-1 text-center text-xs font-bold text-mute">{caption}</div>}
     </div>
   );
 }
@@ -48884,7 +48886,9 @@ export default function Tour() {
   useEffect(() => {
     if (!isAdmin || !username || seen(username)) { setOffer(false); return; }
     const t = window.setTimeout(() => setOffer(true), 2500);
-    return () => window.clearTimeout(t);
+    // the offer must not sit over the content for ever: it goes away by itself (and comes again next time)
+    const gone = window.setTimeout(() => setOffer(false), 16_000);
+    return () => { window.clearTimeout(t); window.clearTimeout(gone); };
   }, [isAdmin, username]);
 
   useEffect(() => {
@@ -48902,15 +48906,12 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel fixed bottom-24 right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] space-y-3 p-4 shadow-soft md:bottom-6">
-      <div>
-        <div className="font-black">Впервые в Админке?</div>
-        <p className="text-sm font-semibold text-mute">Покажу за минуту, с чего начать: сервер, бот, канал, новости.</p>
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-black">Впервые в Админке?</div>
+        <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>
       </div>
-      <div className="flex gap-2">
-        <button className="btn btn-sm" onClick={() => { setOffer(false); setOpen(true); }}>Показать</button>
-        <button className="btn btn-soft btn-sm" onClick={() => { setOffer(false); if (username) markSeen(username); }}>Не нужно</button>
-      </div>
+      <button className="btn-icon-ghost btn-icon-sm" aria-label="Не показывать" title="Не показывать" onClick={() => { setOffer(false); if (username) markSeen(username); }}>✕</button>
     </div>
   );
 }
@@ -68547,7 +68548,7 @@ export default function SystemPage() {
   const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
   const status: { k: string; v: string; sub?: string; tone: GaugeTone }[] = h
     ? [
-        { k: 'Версия', v: h.version ? h.version.slice(0, 7) : 'не задана', sub: `Node ${h.node}`, tone: 'mute' },
+        { k: 'Версия', v: h.version ? h.version.slice(0, 7) : 'сборка из исходников', sub: `Node ${h.node}`, tone: 'mute' },
         { k: 'Работает', v: dur(h.uptimeSec), tone: 'ok' },
         { k: 'Серверы', v: `${h.counts.online} из ${h.counts.servers} онлайн`, tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
         { k: 'Привязки Discord', v: String(h.counts.bindings), sub: `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`, tone: 'mute' },
@@ -70400,6 +70401,12 @@ __COREGSM_EOF__
 .adm-progress:hover { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .5); }
 .adm-table .row-act { --b-i: 2.125rem; }
 .adm-table td:last-child { padding-right: 10px; }
+
+/* the cross of a hint strip */
+.hint-strip { position: relative; }
+.hint-close { position: absolute; top: 6px; right: 8px; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-pill); color: rgb(var(--mute)); font-size: 13px; font-weight: 650; transition: background-color .15s ease, color .15s ease; }
+.hint-close:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+.hint-strip > div { padding-right: 24px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -70554,7 +70561,7 @@ __COREGSM_EOF__
   .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
   .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
   .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
-):is(:disabled, [aria-disabled='true']) { opacity: .5; cursor: not-allowed; box-shadow: none; }
+):is(:disabled, [aria-disabled='true']) { opacity: .62; cursor: not-allowed; box-shadow: none; }
 /* busy: the label stays, a spinner precedes it (Button component); the button is disabled but should not look dead */
 :is(
   .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
@@ -72156,6 +72163,7 @@ __COREGSM_EOF__
 .pill-maint { background: rgb(var(--soft)); color: rgb(var(--link)); }
 .pill-glass-maint { --dot: #a5b4fc; }
 .pill-glass-maint::before { animation: none; }
+.gauge-cap { max-width: 62%; overflow-wrap: anywhere; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
@@ -72208,9 +72216,9 @@ import { noAutofill } from './noAutofill';
  */
 export function AdminPage({ head, narrow = false, children }: { head: ReactNode; narrow?: boolean; children: ReactNode }) {
   return (
-    <div className="space-y-5">
+    <div className={`space-y-5 ${narrow ? 'max-w-4xl' : ''}`}>
       {head}
-      <div className={`space-y-5 ${narrow ? 'max-w-3xl' : ''}`}>{children}</div>
+      <div className="space-y-5">{children}</div>
     </div>
   );
 }
@@ -72725,6 +72733,11 @@ export function FillBar({ value, max, color }: { value: number; max: number; col
 export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const helpId = useId();
+  // a hint is read once: the cross hides it (remembered per page in this browser), the «i» button next to the actions brings it back
+  const hintKey = `coregsm_hint_${title}`;
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(hintKey) === '1'; } catch { return false; } });
+  const setHint = (off: boolean) => { setHidden(off); try { if (off) localStorage.setItem(hintKey, '1'); else localStorage.removeItem(hintKey); } catch { /* not remembered */ } };
+  const hasHint = !!(hint || help);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -72735,9 +72748,14 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
             {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
           </div>
         </div>
-        {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+        {(children || (hasHint && hidden)) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {hasHint && hidden && <button type="button" className="btn-icon-ghost btn-icon-sm" title="Показать подсказку" aria-label="Показать подсказку" onClick={() => setHint(false)}><span aria-hidden className="hint-ico">i</span></button>}
+            {children}
+          </div>
+        )}
       </div>
-      {(hint || help) && (
+      {hasHint && !hidden && (
         <div className="hint-strip">
           <span aria-hidden className="hint-ico">i</span>
           <div className="min-w-0 flex-1">
@@ -72754,6 +72772,7 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
             </p>
             {help && open && <div id={helpId} className="hint-help">{help}</div>}
           </div>
+          <button type="button" className="hint-close" aria-label="Скрыть подсказку" title="Скрыть подсказку" onClick={() => setHint(true)}>✕</button>
         </div>
       )}
     </div>
