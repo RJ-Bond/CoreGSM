@@ -92,7 +92,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
               </thead>
               <tbody>
                 {rows.map((s) => (
-                  <tr key={s.id} data-selected={sel.includes(s.id) ? 'true' : undefined}>
+                  <tr key={s.id} data-selected={sel.includes(s.id) ? 'true' : undefined} className="cursor-pointer" onClick={(e) => { if (!(e.target as HTMLElement).closest('a, button, input, label')) a.onEdit(s); }}>
                     <td><input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`Выбрать: ${s.name}`} /></td>
                     <td>
                       <div className="flex min-w-0 items-center gap-3">

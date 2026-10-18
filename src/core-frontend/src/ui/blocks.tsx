@@ -15,7 +15,7 @@ import { noAutofill } from './noAutofill';
  * Dialog: a bottom sheet on phones, a centred card on larger screens.
  * Focus moves inside and is trapped, Escape closes, focus returns to the opener, only a real click on the backdrop closes it.
  */
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, side = false }: { title: string; onClose: () => void; children: ReactNode; /** a drawer from the right edge (full height) instead of a centred dialog: the list stays visible behind it */ side?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // keyboards: first field; touch screens: the dialog itself (no on-screen keyboard popping up)
@@ -25,14 +25,16 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
   const bd = useBackdropClose(onClose);
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" {...bd}>
+    <div className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4'} {...bd}>
       <div
         ref={box}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
+        className={side
+          ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-l-ui-xl sm:p-6'
+          : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6'}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>

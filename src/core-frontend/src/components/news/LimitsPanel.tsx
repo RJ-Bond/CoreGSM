@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { LIMITS, totalLength, type Draft } from './model';
 
 function Bar({ label, value, max, detail }: { label: string; value: number; max: number; detail?: string }) {
@@ -19,18 +20,26 @@ function Bar({ label, value, max, detail }: { label: string; value: number; max:
 
 /** One panel with every Discord limit that matters for the open embed and the whole message. */
 export function LimitsPanel({ d, active }: { d: Draft; active: number }) {
+  const [open, setOpen] = useState(false);
   const e = d.embeds[active] ?? d.embeds[0];
   if (!e) return null;
   const worstName = e.fields.reduce((m, f) => Math.max(m, f.name.length), 0);
   const worstValue = e.fields.reduce((m, f) => Math.max(m, f.value.length), 0);
   const total = totalLength(d);
+  // the worst share of any limit: the panel stays folded while everything is comfortably inside, opens itself near a limit
+  const worst = Math.max(d.content.length / LIMITS.content, e.title.length / LIMITS.title, e.description.length / LIMITS.description, worstName / LIMITS.fieldName, worstValue / LIMITS.fieldValue, e.footer.length / LIMITS.footer, e.fields.length / LIMITS.fields, d.embeds.length / LIMITS.embeds, total / LIMITS.total);
+  const shown = open || worst >= 0.8;
   return (
     <section className="panel space-y-3 p-4" aria-label="Лимиты Discord">
-      <div>
+      <div className="flex items-center gap-3">
         <h2 className="text-lg font-black">Лимиты</h2>
-        <p className="text-xs font-semibold text-mute">{d.embeds.length > 1 ? `Показаны значения для блока ${active + 1}; сумма: по всему сообщению.` : 'Ограничения Discord для этого сообщения.'}</p>
+        <span className={`pill ${worst > 1 ? 'pill-bad' : worst >= 0.8 ? 'pill-warn' : 'pill-ok'}`}>{worst > 1 ? 'превышены' : worst >= 0.8 ? 'почти предел' : 'в норме'}</span>
+        {worst < 0.8 && <button type="button" className="btn-link ml-auto text-sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? 'Скрыть' : 'Подробнее'}</button>}
       </div>
-      <ul className="space-y-2.5">
+      {shown && <div>
+        <p className="text-xs font-semibold text-mute">{d.embeds.length > 1 ? `Показаны значения для блока ${active + 1}; сумма: по всему сообщению.` : 'Ограничения Discord для этого сообщения.'}</p>
+      </div>}
+      {shown && <ul className="space-y-2.5">
         <Bar label="Текст сообщения" value={d.content.length} max={LIMITS.content} />
         <Bar label="Заголовок" value={e.title.length} max={LIMITS.title} />
         <Bar label="Основной текст" value={e.description.length} max={LIMITS.description} />
@@ -40,7 +49,7 @@ export function LimitsPanel({ d, active }: { d: Draft; active: number }) {
         <Bar label="Полей" value={e.fields.length} max={LIMITS.fields} />
         <Bar label="Embed-блоков" value={d.embeds.length} max={LIMITS.embeds} />
         <Bar label="Всего символов во всех embed" value={total} max={LIMITS.total} />
-      </ul>
+      </ul>}
     </section>
   );
 }

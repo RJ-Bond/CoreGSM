@@ -114,7 +114,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   };
 
   return (
-    <Modal title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
+    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
         <div>
           <span className="label">Игра</span>
