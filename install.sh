@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9705aaf07305"
+COREGSM_BUILD="613609ba17e3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -58926,10 +58926,10 @@ __COREGSM_EOF__
   body {
     background-image:
       var(--noise),
-      radial-gradient(70% 55% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 64%),
-      radial-gradient(55% 48% at 96% 8%, rgb(45 212 191 / var(--au2)), transparent 64%),
-      radial-gradient(70% 52% at 50% 58%, rgb(79 70 229 / var(--au3)), transparent 70%),
-      radial-gradient(70% 55% at 72% 100%, rgb(236 72 153 / var(--au4)), transparent 68%);
+      radial-gradient(70% 50% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 100%),
+      radial-gradient(55% 44% at 96% 6%, rgb(45 212 191 / var(--au2)), transparent 100%),
+      radial-gradient(60% 34% at 50% 46%, rgb(79 70 229 / var(--au3)), transparent 100%),
+      radial-gradient(60% 30% at 72% 66%, rgb(236 72 153 / var(--au4)), transparent 100%);
     background-size: 200px 200px, 100% 130vh, 100% 130vh, 100% 130vh, 100% 130vh;
     background-repeat: repeat, no-repeat, no-repeat, no-repeat, no-repeat;
     background-position: 0 0, top, top, top, top;
@@ -67930,7 +67930,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
           {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="sh-actions flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
         </div>
@@ -72116,12 +72116,18 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-grid > .srv-hero { grid-column: 1 / -1; }
 /* wide screens: the hero is split, the figures on the left and the day's curve on the right (not a tall card with an empty middle) */
 @media (min-width: 900px) {
-  .srv-hero.is-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); column-gap: 32px; row-gap: 10px; align-items: start; grid-template-rows: auto auto auto 1fr; }
+  .srv-hero.is-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); column-gap: 32px; row-gap: 10px; align-items: start; grid-template-rows: auto auto auto 1fr; }
   .srv-hero.is-split > .sh-head, .srv-hero.is-split > .sh-count, .srv-hero.is-split > .sh-bar { grid-column: 1; }
   .srv-hero.is-split > .sh-chart { grid-column: 2; grid-row: 1 / span 4; align-self: stretch; display: flex; padding-top: 0; }
   .srv-hero.is-split > .sh-chart > * { flex: 1; align-self: stretch; }
   .srv-hero.is-split > .sh-chart .h-\[130px\] { height: 100%; min-height: 190px; }
   .srv-hero.is-split > .sh-foot { grid-column: 1 / -1; }
+  /* the status and the star go to the corner of the card: the name gets the whole width of the left column */
+  .srv-hero.is-split .sh-head { position: static; }
+  .srv-hero.is-split .sh-actions { position: absolute; top: 20px; right: 20px; z-index: 3; }
+  .srv-hero.is-split .sh-head h2 { font-size: 1.5rem; }
+  /* a scrim under the curve keeps it readable over a busy cover */
+  .srv-hero.is-split > .sh-chart { position: relative; border-radius: var(--r-lg); background: linear-gradient(180deg, rgb(0 0 0 / .08), rgb(0 0 0 / .32)); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .1); padding: 10px 6px 0; }
 }
 /* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
 .srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
@@ -72200,6 +72206,10 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   background: linear-gradient(to top, rgb(var(--bad) / .4), rgb(var(--bad) / .1) 55%, rgb(var(--bad) / 0));
 }
 .chart-down::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: rgb(var(--bad)); }
+
+/* outage marks on the big curve: a low glow with a thin line, not a column up to the top */
+.srv-hero .chart-down { top: auto; height: 46%; }
+.srv-hero .chart-down::after { height: 2px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
