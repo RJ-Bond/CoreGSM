@@ -371,7 +371,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
           {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="sh-actions flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
         </div>

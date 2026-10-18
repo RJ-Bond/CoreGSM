@@ -268,12 +268,18 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-grid > .srv-hero { grid-column: 1 / -1; }
 /* wide screens: the hero is split, the figures on the left and the day's curve on the right (not a tall card with an empty middle) */
 @media (min-width: 900px) {
-  .srv-hero.is-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); column-gap: 32px; row-gap: 10px; align-items: start; grid-template-rows: auto auto auto 1fr; }
+  .srv-hero.is-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); column-gap: 32px; row-gap: 10px; align-items: start; grid-template-rows: auto auto auto 1fr; }
   .srv-hero.is-split > .sh-head, .srv-hero.is-split > .sh-count, .srv-hero.is-split > .sh-bar { grid-column: 1; }
   .srv-hero.is-split > .sh-chart { grid-column: 2; grid-row: 1 / span 4; align-self: stretch; display: flex; padding-top: 0; }
   .srv-hero.is-split > .sh-chart > * { flex: 1; align-self: stretch; }
   .srv-hero.is-split > .sh-chart .h-\[130px\] { height: 100%; min-height: 190px; }
   .srv-hero.is-split > .sh-foot { grid-column: 1 / -1; }
+  /* the status and the star go to the corner of the card: the name gets the whole width of the left column */
+  .srv-hero.is-split .sh-head { position: static; }
+  .srv-hero.is-split .sh-actions { position: absolute; top: 20px; right: 20px; z-index: 3; }
+  .srv-hero.is-split .sh-head h2 { font-size: 1.5rem; }
+  /* a scrim under the curve keeps it readable over a busy cover */
+  .srv-hero.is-split > .sh-chart { position: relative; border-radius: var(--r-lg); background: linear-gradient(180deg, rgb(0 0 0 / .08), rgb(0 0 0 / .32)); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .1); padding: 10px 6px 0; }
 }
 /* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
 .srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
@@ -352,3 +358,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   background: linear-gradient(to top, rgb(var(--bad) / .4), rgb(var(--bad) / .1) 55%, rgb(var(--bad) / 0));
 }
 .chart-down::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: rgb(var(--bad)); }
+
+/* outage marks on the big curve: a low glow with a thin line, not a column up to the top */
+.srv-hero .chart-down { top: auto; height: 46%; }
+.srv-hero .chart-down::after { height: 2px; }
