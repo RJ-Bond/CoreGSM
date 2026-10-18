@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="75d10be8162f"
+COREGSM_BUILD="9705aaf07305"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -45715,6 +45715,8 @@ export interface AutosaveOptions<V> {
   /** false: nothing is sent (the form is not loaded yet) */
   enabled?: boolean;
   equal?: (a: V, b: V) => boolean;
+  /** true: nothing is sent by itself (no pause timer, no send on leaving); a common bar calls saveNow() */
+  manual?: boolean;
 }
 
 const sameJson = <V,>(a: V, b: V) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -45727,7 +45729,7 @@ const sameJson = <V,>(a: V, b: V) => a === b || JSON.stringify(a) === JSON.strin
  *  - edits made while a request is in flight are sent after it, never dropped
  *  - leaving the page (unmount) with a valid unsaved edit sends it once more
  */
-export function useAutosave<V>({ value, saved, validate, save, delay = 900, enabled = true, equal = sameJson }: AutosaveOptions<V>) {
+export function useAutosave<V>({ value, saved, validate, save, delay = 900, enabled = true, equal = sameJson, manual = false }: AutosaveOptions<V>) {
   const [status, setStatus] = useState<SaveStatus>('idle');
   const [error, setError] = useState('');
   const baseline = useRef(saved);
@@ -45735,8 +45737,8 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
   const inflight = useRef(false);
   const timer = useRef(0);
   const fade = useRef(0);
-  const opts = useRef({ validate, save, equal, enabled });
-  opts.current = { validate, save, equal, enabled };
+  const opts = useRef({ validate, save, equal, enabled, manual });
+  opts.current = { validate, save, equal, enabled, manual };
   latest.current = value;
 
   const validation = validate ? validate(value) : null;
@@ -45779,13 +45781,15 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
     window.clearTimeout(timer.current);
     if (!opts.current.enabled) return;
     if (equal(value, baseline.current)) {
-      setStatus((s) => (s === 'saved' || s === 'saving' || s === 'error' ? s : 'idle'));
+      // an edit taken back (or discarded from a bar) is not an error any more
+      setStatus((s) => (s === 'saved' || s === 'saving' || (s === 'error' && !manual) ? s : 'idle'));
       return;
     }
     if (validate?.(value)) { setStatus('invalid'); return; }
     if (inflight.current) return;
     setStatus('dirty');
     setError('');
+    if (manual) return undefined;
     timer.current = window.setTimeout(() => void run(), delay);
     return () => window.clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45796,7 +45800,7 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
     window.clearTimeout(timer.current);
     window.clearTimeout(fade.current);
     const o = opts.current;
-    if (o.enabled && !inflight.current && !o.equal(latest.current, baseline.current) && !o.validate?.(latest.current)) void o.save(latest.current).catch(() => undefined);
+    if (!o.manual && o.enabled && !inflight.current && !o.equal(latest.current, baseline.current) && !o.validate?.(latest.current)) void o.save(latest.current).catch(() => undefined);
   }, []);
 
   return {
@@ -45805,9 +45809,11 @@ export function useAutosave<V>({ value, saved, validate, save, delay = 900, enab
     error: validation && dirty ? validation : error,
     /** validation message even when nothing was edited yet is not shown: only a changed value is judged */
     invalid: !!validation && dirty,
-    /** send now (onBlur) */
-    flush: () => void run(),
+    /** send now (onBlur); in manual mode leaving a field sends nothing */
+    flush: () => { if (!opts.current.manual) void run(); },
     retry: () => void run(),
+    /** send now, whatever the mode (the button of a common bar); resolves when the request is over */
+    saveNow: () => run(),
   };
 }
 __COREGSM_EOF__
@@ -48009,6 +48015,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { CONC_MAX, CONC_MIN, FAIL_MAX, FAIL_MIN, confirmDelayText, durationText, validatePoll, type PollSettings } from '../pollSettings';
 import { FieldError, SaveBadge, Section, ago, plural, useAutosave } from '../ui';
+import { useSaveBar, useSaveBarActive } from '../saveBar';
 
 /** «Опрос серверов»: when a failure is confirmed, how many servers are asked at once, and the numbers of the last poll. */
 export default function PollSettingsCard() {
@@ -48032,7 +48039,9 @@ export default function PollSettingsCard() {
 
   const value = { failThreshold: Number(fail), concurrency: Number(conc) };
   const err = validatePoll(value);
+  const bar = useSaveBarActive();
   const auto = useAutosave({
+    manual: bar,
     value,
     saved: srv ? { failThreshold: srv.failThreshold, concurrency: srv.concurrency } : value,
     enabled: !!srv,
@@ -48043,6 +48052,8 @@ export default function PollSettingsCard() {
       setSrv((s) => (s ? { ...s, last: r.last ?? s.last } : s));
     },
   });
+
+  useSaveBar('poll', 'опрос серверов', auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); } });
 
   // the backend is older than the panel (or the poll settings are not available): the card is simply not shown
   if (gone) return null;
@@ -48906,7 +48917,7 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex md:left-4 md:right-auto w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-black">Впервые в Админке?</div>
         <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>
@@ -68032,6 +68043,7 @@ import { BotCard } from './settings/BotCard';
 import { BrandCard } from './settings/BrandCard';
 import { PasswordCard } from './settings/PasswordCard';
 import { UpdateCard } from './settings/UpdateCard';
+import { SaveBarProvider } from '../saveBar';
 export { BotPill } from './settings/BotCard';
 export { UsersTab } from './settings/UsersTab';
 
@@ -68055,7 +68067,7 @@ const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
   },
   brand: {
     hint: 'Название, цвет и логотип сообщества: их видят все посетители панели и участники в подвале сообщений Discord.',
-    help: <p>Готовые темы меняют цвета всей панели сразу. Изменения применяются и сохраняются сами; пока идёт сохранение или если оно не удалось, цвета видны только вам как предпросмотр. «Акцент по игре» действует только в вашем браузере.</p>,
+    help: <p>Готовые темы меняют цвета всей панели сразу. Изменения можно посмотреть сразу, а сохраняются кнопкой «Сохранить» внизу; пока идёт сохранение или если оно не удалось, цвета видны только вам как предпросмотр. «Акцент по игре» действует только в вашем браузере.</p>,
   },
   security: {
     hint: 'Пароль администратора и сведения о доступе: кто может входить в панель и регистрироваться.',
@@ -68074,6 +68086,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       narrow
       head={<PageHead key={tab} icon={<IconSettings />} title="Настройки" subtitle="Бот, оформление, безопасность, обновления и копии" hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />}
     >
+      <SaveBarProvider>
       <nav className="flex w-full max-w-2xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
@@ -68113,6 +68126,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
           <ConfigTransfer />
         </>
       )}
+      </SaveBarProvider>
     </AdminPage>
   );
 }
@@ -69518,6 +69532,7 @@ import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
 import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { useSaveBar, useSaveBarActive } from '../../saveBar';
 import { errorText } from '../../apiErrors';
 
 
@@ -69558,7 +69573,9 @@ export function BrandCard() {
   const savedForm = { name: b.name, color: b.color, color2: b.color2 ?? '', preset: b.preset ?? '' };
   const nameError = !name.trim() ? 'Введите название сообщества' : name.trim().length > 32 ? 'Не длиннее 32 символов' : '';
   const colorError = parseHex(color) ? '' : 'Цвет должен быть в формате #RRGGBB';
+  const bar = useSaveBarActive();
   const auto = useAutosave({
+    manual: bar,
     value: form,
     saved: savedForm,
     delay: 800,
@@ -69568,6 +69585,8 @@ export function BrandCard() {
       await reload();
     },
   });
+
+  useSaveBar('brand', 'оформление', auto.status, auto.saveNow, () => { setName(b.name); setColor(b.color); setColor2(b.color2 ?? ''); setPreset(b.preset ?? ''); });
 
   const upload = async (file: File) => {
     setBusy(true);
@@ -70032,6 +70051,7 @@ import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { confirmDialog, promptDialog } from '../../confirm';
 import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
   return (
@@ -70047,7 +70067,12 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
 
 const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
+/** The users page: the rules text joins the common save bar. */
 export function UsersTab() {
+  return <SaveBarProvider><UsersTabInner /></SaveBarProvider>;
+}
+
+function UsersTabInner() {
   const { me, reload } = useAuth();
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -70078,7 +70103,9 @@ export function UsersTab() {
     load();
   };
   // the rules text is saved as you type (after a pause and on leaving the field); the text is never replaced under the cursor
+  const bar = useSaveBarActive();
   const rulesAuto = useAutosave({
+    manual: bar,
     value: rules,
     saved: access?.rules ?? '',
     enabled: !!access,
@@ -70091,6 +70118,7 @@ export function UsersTab() {
       void reload();
     },
   });
+  useSaveBar('rules', 'правила сообщества', rulesAuto.status, rulesAuto.saveNow, () => setRules(access?.rules ?? ''));
   const setPerms = async (u: UserRow, perms: Perm[]) => {
     await api(`/users/${u.id}`, 'PUT', { role: u.role, perms }).then(() => { toast('Права модератора сохранены'); void load(); }).catch((e) => setError(e.message));
   };
@@ -70267,6 +70295,122 @@ export function confirmDelayText(failThreshold: number): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/saveBar.tsx" << '__COREGSM_EOF__'
+// A common «Есть несохранённые изменения: Отмена / Сохранить» bar for pages with several forms (settings, users).
+// A form joins it with useSaveBar(); without a provider around it a form keeps saving by itself (useAutosave).
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { SaveStatus } from './autosave';
+import { needsBar, summarize } from './saveBarLogic';
+import { Spinner } from './ui';
+
+interface Entry { label: string; status: SaveStatus; save: () => Promise<unknown>; discard: () => void }
+interface Ctx { set: (id: string, e: Entry | null) => void }
+const BarCtx = createContext<Ctx | null>(null);
+
+/** true inside a provider: the forms switch their autosave to «manual» and use the bar */
+export const useSaveBarActive = (): boolean => useContext(BarCtx) !== null;
+
+/** Registers a form in the bar; call it every render with the current status and the two actions. */
+export function useSaveBar(id: string, label: string, status: SaveStatus, save: () => Promise<unknown>, discard: () => void): void {
+  const ctx = useContext(BarCtx);
+  const act = useRef({ save, discard });
+  act.current = { save, discard };
+  useEffect(() => {
+    ctx?.set(id, { label, status, save: () => act.current.save(), discard: () => act.current.discard() });
+  }, [ctx, id, label, status]);
+  useEffect(() => () => ctx?.set(id, null), [ctx, id]);
+}
+
+export function SaveBarProvider({ children }: { children: ReactNode }) {
+  const [entries, setEntries] = useState<Record<string, Entry>>({});
+  const set = useCallback((id: string, e: Entry | null) => {
+    setEntries((cur) => {
+      if (!e) {
+        if (!(id in cur)) return cur;
+        const { [id]: _gone, ...rest } = cur;
+        return rest;
+      }
+      return { ...cur, [id]: e };
+    });
+  }, []);
+  // a stable value: the forms re-register only when their own status changes (a new object every render would loop)
+  const api = useMemo(() => ({ set }), [set]);
+  const state = summarize(Object.fromEntries(Object.entries(entries).map(([id, e]) => [id, { label: e.label, status: e.status }])));
+
+  // leaving the page or closing the tab with unsaved edits: the browser asks
+  useEffect(() => {
+    if (!state.show) return undefined;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [state.show]);
+
+  const save = () => void Promise.allSettled(state.saveIds.map((id) => entries[id]?.save()));
+  const discard = () => Object.values(entries).forEach((e) => { if (needsBar(e.status)) e.discard(); });
+
+  return (
+    <BarCtx.Provider value={api}>
+      <div className="space-y-5">
+        {children}
+        {state.show && (
+          <div className="save-bar" role="region" aria-label="Несохранённые изменения">
+            <i aria-hidden className={`save-bar-dot ${state.failed ? 'is-bad' : ''}`} />
+            <b className="min-w-0 flex-1 truncate" title={state.text}>{state.text}</b>
+            {state.blocked && <span className="hidden text-sm font-semibold text-bad sm:inline">Исправьте поля с ошибкой</span>}
+            <button type="button" className="btn btn-ghost btn-sm" disabled={state.saving} onClick={discard}>Отмена</button>
+            <button type="button" className="btn btn-sm" disabled={state.saving || state.blocked || state.saveIds.length === 0} onClick={save}>
+              {state.saving ? <><Spinner className="h-3.5 w-3.5" />Сохраняется…</> : 'Сохранить'}
+            </button>
+          </div>
+        )}
+      </div>
+    </BarCtx.Provider>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/saveBarLogic.ts" << '__COREGSM_EOF__'
+// Pure part of the common «Save / Cancel» bar of the settings pages: what the bar says and which forms it saves.
+import type { SaveStatus } from './autosave';
+
+export interface BarEntry { label: string; status: SaveStatus }
+
+/** a form has something the bar must offer to save: an edit, a refused edit or a failed save */
+export const needsBar = (s: SaveStatus): boolean => s === 'dirty' || s === 'invalid' || s === 'error';
+
+export interface BarState {
+  /** the bar is shown */
+  show: boolean;
+  /** ids of the forms that can be saved now (valid) */
+  saveIds: string[];
+  /** some form is invalid: «Сохранить» is off until it is fixed */
+  blocked: boolean;
+  /** a request is running */
+  saving: boolean;
+  /** the failed save is the news */
+  failed: boolean;
+  /** «Изменено: A, B» */
+  text: string;
+}
+
+export function summarize(entries: Record<string, BarEntry>): BarState {
+  const all = Object.entries(entries);
+  const dirty = all.filter(([, e]) => needsBar(e.status));
+  const saving = all.some(([, e]) => e.status === 'saving');
+  const blocked = dirty.some(([, e]) => e.status === 'invalid');
+  const labels = dirty.map(([, e]) => e.label);
+  const failed = dirty.some(([, e]) => e.status === 'error');
+  return {
+    show: dirty.length > 0 || saving,
+    saveIds: dirty.filter(([, e]) => e.status === 'dirty' || e.status === 'error').map(([id]) => id),
+    blocked,
+    saving,
+    failed,
+    text: failed ? `Не сохранено: ${labels.join(', ')}` : labels.length ? `Есть несохранённые изменения: ${labels.join(', ')}` : 'Сохраняется…',
+  };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/security.ts" << '__COREGSM_EOF__'
 import { t, type TKey } from './i18n';
 
@@ -70419,6 +70563,12 @@ __COREGSM_EOF__
 .hint-close { position: absolute; top: 6px; right: 8px; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-pill); color: rgb(var(--mute)); font-size: 13px; font-weight: 650; transition: background-color .15s ease, color .15s ease; }
 .hint-close:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
 .hint-strip > div { padding-right: 24px; }
+
+/* ---------- the common save bar (settings, users): sticks to the bottom of the content column ---------- */
+.save-bar { position: sticky; bottom: 5.5rem; z-index: 30; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--brand) / .5); }
+@media (min-width: 768px) { .save-bar { bottom: 1rem; } }
+.save-bar-dot { flex: none; width: 9px; height: 9px; border-radius: var(--r-pill); background: rgb(var(--warn)); }
+.save-bar-dot.is-bad { background: rgb(var(--bad)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
