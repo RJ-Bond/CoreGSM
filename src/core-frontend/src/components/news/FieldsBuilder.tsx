@@ -20,7 +20,7 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
         {rows.map((row, i) => (
           <div key={i} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
             {row.map((f) => (
-              <div key={f.k} className="h-4 truncate rounded bg-brand/25 px-1.5 text-[10px] font-bold leading-4 text-ink">{f.name || '…'}</div>
+              <div key={f.k} className="h-4 truncate rounded bg-brand/25 px-1.5 text-xs font-bold leading-4 text-ink">{f.name || '…'}</div>
             ))}
           </div>
         ))}

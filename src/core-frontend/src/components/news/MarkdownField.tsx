@@ -200,7 +200,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
               <Btn onClick={() => prefixLines('# ', 'Заголовок')} title="Заголовок 1"><span className="text-xs">H1</span></Btn>
               <Btn onClick={() => prefixLines('## ', 'Заголовок')} title="Заголовок 2"><span className="text-xs">H2</span></Btn>
               <Btn onClick={() => prefixLines('### ', 'Заголовок')} title="Заголовок 3"><span className="text-xs">H3</span></Btn>
-              <Btn onClick={() => prefixLines('-# ')} title="Мелкий текст"><span className="text-[10px]">-#</span></Btn>
+              <Btn onClick={() => prefixLines('-# ')} title="Мелкий текст"><span className="text-xs">-#</span></Btn>
             </>
           )}
           <Btn onClick={() => prefixLines('> ')} title="Цитата">❝</Btn>

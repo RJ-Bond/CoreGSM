@@ -188,7 +188,7 @@ export function EmbedView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 text-[15px] leading-tight">
                   <span className="font-bold" style={{ color: t.title }}>{botName}</span>
-                  <span className="rounded px-1 text-[10px] font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
+                  <span className="rounded px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
                   <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
                 </div>
                 {content && (

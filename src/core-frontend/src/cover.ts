@@ -1,3 +1,4 @@
+import { GAME_IMAGE } from './games';
 /** Games that ship a default cover (files in public/games/covers: <game>.jpg 1280x720 and <game>@s.jpg 640x360). */
 const DEFAULT_COVERS = new Set(['vrising', 'icarus', 'm2o']);
 
@@ -5,6 +6,15 @@ const DEFAULT_COVERS = new Set(['vrising', 'icarus', 'm2o']);
 export function coverUrlOf(coverUrl: string | null | undefined, game: string, small = true): string | null {
   if (coverUrl) return small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
   return DEFAULT_COVERS.has(game) ? `/games/covers/${game}${small ? '@s' : ''}.jpg` : null;
+}
+
+/**
+ * A server without a picture of its own and without a default cover gets its game's emblem as a faint watermark
+ * on the plain gradient (see .emblem-bg in servers.css). Returns the style variable for it, or {}.
+ */
+export function emblemStyle(coverUrl: string | null | undefined, game: string): { className: string; style: Record<string, string> } {
+  const url = coverUrlOf(coverUrl, game, false) ? null : GAME_IMAGE[game];
+  return url ? { className: 'emblem-bg', style: { '--emblem': `url("${url}")` } } : { className: '', style: {} };
 }
 
 /**
