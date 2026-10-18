@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1abdf64f309c"
+COREGSM_BUILD="862f66c1c831"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -58756,6 +58756,7 @@ __COREGSM_EOF__
    --line is decorative only (tile borders, dividers).
    --brand-2 (the darker end of every brand gradient) is set by useBrand() from the chosen brand colour. */
 :root {
+  --noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .07 0'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
   --page: 243 244 248;
   --card: 255 255 255;
   --raised: 255 255 255;
@@ -58791,6 +58792,9 @@ __COREGSM_EOF__
   --shadow-3: 0 1px 2px rgba(20, 24, 40, 0.06), 0 18px 38px rgba(40, 50, 110, 0.13);
   --horizon-a: rgb(var(--brand) / 0.14);
   --horizon-b: rgb(236 72 153 / 0.22);
+  /* page background «Аврора»: strength of the four glows; glass: how much of the card colour stays, and the sheen on it */
+  --au1: .2; --au2: .16; --au3: .08; --au4: .16;
+  --glass-a: .84; --glass-sheen: none;
   --wash-a: rgb(var(--brand) / 0.15);
   --wash-b: rgb(70 190 235 / 0.14);
   color-scheme: light;
@@ -58839,6 +58843,8 @@ __COREGSM_EOF__
     --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
     --horizon-a: rgb(var(--brand) / 0.2);
     --horizon-b: rgb(236 72 153 / 0.2);
+    --au1: .5; --au2: .3; --au3: .12; --au4: .26;
+    --glass-a: .68; --glass-sheen: linear-gradient(160deg, rgb(255 255 255 / .09), rgb(255 255 255 / .02) 55%);
     --wash-a: rgb(var(--brand) / 0.2);
     --wash-b: rgb(40 170 210 / 0.09);
     color-scheme: dark;
@@ -58877,6 +58883,8 @@ __COREGSM_EOF__
   --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
   --horizon-a: rgb(var(--brand) / 0.2);
   --horizon-b: rgb(236 72 153 / 0.2);
+  --au1: .5; --au2: .3; --au3: .12; --au4: .26;
+  --glass-a: .68; --glass-sheen: linear-gradient(160deg, rgb(255 255 255 / .09), rgb(255 255 255 / .02) 55%);
   --wash-a: rgb(var(--brand) / 0.2);
   --wash-b: rgb(40 170 210 / 0.09);
   color-scheme: dark;
@@ -58891,26 +58899,31 @@ __COREGSM_EOF__
     @apply bg-page text-ink font-sans text-[15px] antialiased;
     -webkit-text-size-adjust: 100%;
   }
-  /* page background "Горизонт": a glow along the lower edge of the first screen (brand + pink) fading both ways.
-     Painted on the body itself and static: no fixed layer, no animation (a fixed full-screen layer once showed as a black tile) */
+  /* page background «Аврора»: four soft glows over the first screen (brand violet top left, teal top right, indigo in the
+     middle, pink along the lower edge) and a fine grain. Painted on the body itself and static: no fixed layer, no
+     animation (a fixed full-screen layer once showed as a black tile) */
   body {
     background-image:
-      radial-gradient(90% 30% at 50% 77%, var(--horizon-b), transparent 72%),
-      linear-gradient(180deg, transparent 32%, var(--horizon-a) 77%, transparent 100%);
-    background-size: 100% 130vh;
-    background-repeat: no-repeat;
-    background-position: top;
+      var(--noise),
+      radial-gradient(70% 55% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 64%),
+      radial-gradient(55% 48% at 96% 8%, rgb(45 212 191 / var(--au2)), transparent 64%),
+      radial-gradient(70% 52% at 50% 58%, rgb(79 70 229 / var(--au3)), transparent 70%),
+      radial-gradient(70% 55% at 72% 100%, rgb(236 72 153 / var(--au4)), transparent 68%);
+    background-size: 200px 200px, 100% 130vh, 100% 130vh, 100% 130vh, 100% 130vh;
+    background-repeat: repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+    background-position: 0 0, top, top, top, top;
   }
   /* a game theme: the game's picture across the top of the page, dimmed into the page colour */
   html[data-game-art] body {
     background-image:
       linear-gradient(180deg, rgb(var(--page) / .78) 0, rgb(var(--page) / .93) 34vh, rgb(var(--page)) 62vh),
       var(--game-art),
-      radial-gradient(90% 30% at 50% 77%, var(--horizon-b), transparent 72%),
-      linear-gradient(180deg, transparent 32%, var(--horizon-a) 77%, transparent 100%);
-    background-size: 100% 100vh, 100% auto, 100% 130vh, 100% 130vh;
-    background-repeat: no-repeat;
-    background-position: top, top center, top, top;
+      var(--noise),
+      radial-gradient(70% 55% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 64%),
+      radial-gradient(70% 55% at 72% 100%, rgb(236 72 153 / var(--au4)), transparent 68%);
+    background-size: 100% 100vh, 100% auto, 200px 200px, 100% 130vh, 100% 130vh;
+    background-repeat: no-repeat, no-repeat, repeat, no-repeat, no-repeat;
+    background-position: top, top center, 0 0, top, top;
   }
 
   ::selection { @apply bg-brand/30; }
@@ -58925,8 +58938,9 @@ __COREGSM_EOF__
   .input { @apply w-full rounded-ui-lg border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-none disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px]; }
   .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
   /* the tile: white card, 26px radius, layered soft shadow */
-  .panel { @apply rounded-ui-xl bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
-  .tile { @apply rounded-ui-xl bg-card; border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
+  /* glass: the card colour is a little translucent (the aurora of the page shows through) with a faint sheen; no backdrop-filter */
+  .panel { @apply rounded-ui-xl; background-color: rgb(var(--card) / var(--glass-a)); background-image: var(--glass-sheen); border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
+  .tile { @apply rounded-ui-xl; background-color: rgb(var(--card) / var(--glass-a)); background-image: var(--glass-sheen); border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
   /* floating surfaces (dialogs, menus, popovers): one step above the card in the dark theme, identical in the light one */
   .panel-raised { background-color: rgb(var(--raised)); box-shadow: var(--shadow-3); }
   .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
@@ -67676,7 +67690,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const emb = emblemStyle(s.coverUrl, s.game);
   return (
     <article
-      className={`${emb.className ? 'emblem-host' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
+      className={`${emb.className ? 'emblem-host' : ''} ${s.online ? 'is-split' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
         ...emb.style,
@@ -67691,7 +67705,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
       {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
 
-      <div className="relative flex items-start gap-3">
+      <div className="sh-head relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
@@ -67713,13 +67727,13 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
 
       {s.online ? (
         <>
-          <div className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
+          <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
             {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
           </div>
-          <CapacityBar className="relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-          <div className="relative mt-auto pt-2">
+          <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
+          <div className="sh-chart relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
         </>
@@ -67738,7 +67752,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         </div>
       )}
 
-      <div className="relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
+      <div className="sh-foot relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
         <span>{spanCaption(sparkSpan)}</span>
         {uptime != null && <span>аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
         <span className="truncate">{s.online && s.map ? `карта ${s.map}` : `обновлено ${ago(s.updatedAt)}`}</span>
@@ -71696,11 +71710,17 @@ __COREGSM_EOF__
 }
 html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check, html[data-motion='reduce'] .pulse { transition: none; }
 
-/* cards grid: as many comfortable columns as fit (min 270px); the hero takes two columns and two rows on wide screens */
+/* cards grid: as many comfortable columns as fit (min 270px); the hero is a full-width card */
 .srv-grid { display: grid; gap: 16px; grid-auto-flow: dense; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); }
 .srv-grid > .srv-hero { grid-column: 1 / -1; }
+/* wide screens: the hero is split, the figures on the left and the day's curve on the right (not a tall card with an empty middle) */
 @media (min-width: 900px) {
-  .srv-grid > .srv-hero { grid-column: span 2; grid-row: span 2; }
+  .srv-hero.is-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); column-gap: 32px; row-gap: 10px; align-items: start; grid-template-rows: auto auto auto 1fr; }
+  .srv-hero.is-split > .sh-head, .srv-hero.is-split > .sh-count, .srv-hero.is-split > .sh-bar { grid-column: 1; }
+  .srv-hero.is-split > .sh-chart { grid-column: 2; grid-row: 1 / span 4; align-self: stretch; display: flex; padding-top: 0; }
+  .srv-hero.is-split > .sh-chart > * { flex: 1; align-self: stretch; }
+  .srv-hero.is-split > .sh-chart .h-[130px] { height: 100%; min-height: 190px; }
+  .srv-hero.is-split > .sh-foot { grid-column: 1 / -1; }
 }
 /* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
 .srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
@@ -72727,6 +72747,18 @@ function useSparkSet(): SparkSet | null {
   return sparkSet;
 }
 
+/** A short moving average (radius `r` samples each way): takes the jitter of 10-minute samples out of the curve, keeps its shape. */
+export function smoothValues(vals: number[], r = 2): number[] {
+  if (r <= 0 || vals.length < 3) return vals;
+  return vals.map((_, i) => {
+    const a = Math.max(0, i - r);
+    const b = Math.min(vals.length - 1, i + r);
+    let sum = 0;
+    for (let k = a; k <= b; k++) sum += vals[k];
+    return sum / (b - a + 1);
+  });
+}
+
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
 export function useSparkSpanMin(serverId: number): number | null {
   const set = useSparkSet();
@@ -72768,7 +72800,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
       </div>
     );
   }
-  const pts = filled(players);
+  const pts = smoothValues(filled(players), hero ? 2 : 1);
   const downs = downs24.filter(Boolean).length;
   const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
   return hero
