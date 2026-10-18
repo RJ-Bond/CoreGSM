@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="862f66c1c831"
+COREGSM_BUILD="bf74f33fcfe2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -71719,7 +71719,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-hero.is-split > .sh-head, .srv-hero.is-split > .sh-count, .srv-hero.is-split > .sh-bar { grid-column: 1; }
   .srv-hero.is-split > .sh-chart { grid-column: 2; grid-row: 1 / span 4; align-self: stretch; display: flex; padding-top: 0; }
   .srv-hero.is-split > .sh-chart > * { flex: 1; align-self: stretch; }
-  .srv-hero.is-split > .sh-chart .h-[130px] { height: 100%; min-height: 190px; }
+  .srv-hero.is-split > .sh-chart .h-\[130px\] { height: 100%; min-height: 190px; }
   .srv-hero.is-split > .sh-foot { grid-column: 1 / -1; }
 }
 /* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
