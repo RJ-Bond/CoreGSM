@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="176129bd3e3b"
+COREGSM_BUILD="1abdf64f309c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -44633,7 +44633,7 @@ export default function App() {
             >
               <IconSearch />
               <span className="hidden lg:inline">{t('hdr.search')}</span>
-              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute lg:inline">Ctrl K</kbd>
+              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute lg:inline">Ctrl K</kbd>
             </button>
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
@@ -44703,7 +44703,7 @@ export default function App() {
                   <a
                     href={`/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}
@@ -44716,7 +44716,7 @@ export default function App() {
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '/register' : '/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
+                <a href={access.registration ? '/register' : '/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold text-link">
                   <span className="grid h-7 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   {t('hdr.login')}
                 </a>
@@ -45969,7 +45969,9 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api, type StatusInfo, type StatusServer } from '../api';
 import { gameGradient, gameLabel } from '../games';
-import { AnimatedNumber, GameAvatar, Logo } from '../ui';
+// straight from the modules, not through ../ui (that one re-exports authParts, which imports this file: a cycle)
+import { AnimatedNumber } from '../ui/motion';
+import { GameAvatar, Logo } from '../ui/blocks';
 
 /**
  * Decorative "bento" tiles around the sign-in card (wide screens only). They show live numbers when the panel
@@ -46459,7 +46461,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
                       <span className="block truncate font-extrabold leading-tight">{it.label}</span>
                       <span className="block truncate text-sm font-semibold text-mute">{it.hint}</span>
                     </span>
-                    {idx === safeActive && <span aria-hidden className="hidden rounded-md bg-card px-1.5 py-0.5 text-[11px] font-extrabold text-mute sm:inline">Enter</span>}
+                    {idx === safeActive && <span aria-hidden className="hidden rounded-md bg-card px-1.5 py-0.5 text-xs font-extrabold text-mute sm:inline">Enter</span>}
                   </div>
                 ))}
               </div>
@@ -47888,7 +47890,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
       >
         <IconBell size={20} />
         {badge && (
-          <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-[11px] font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]" aria-hidden>
+          <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-xs font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]" aria-hidden>
             {badge}
           </span>
         )}
@@ -49099,7 +49101,7 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
       onDragStart={(e) => { setDrag(n.id); e.dataTransfer.setData('text/plain', String(n.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onDragEnd={() => { setDrag(null); setOver(null); }}
       title={`${n.title}${movable(n) ? ' (можно перетащить на другой день)' : ''}`}
-      className={`block truncate rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-4 ${tone(n)} ${drag === n.id ? 'opacity-50' : ''}`}
+      className={`block truncate rounded-md px-1.5 py-0.5 text-xs font-bold leading-4 ${tone(n)} ${drag === n.id ? 'opacity-50' : ''}`}
       style={{ borderLeft: `3px solid #${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}` }}
     >
       {dateOf(n) ? `${new Date(dateOf(n) as number).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} ` : ''}{n.title || 'Без названия'}
@@ -49137,8 +49139,8 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
               }}
               className={`min-h-[72px] rounded-xl border-2 p-1 sm:min-h-[96px] ${over === k ? 'border-brand bg-brand/10' : k === todayKey ? 'border-brand/60' : 'border-line'} ${inMonth ? '' : 'opacity-50'}`}
             >
-              <div className={`mb-0.5 text-right text-[11px] font-extrabold tabular-nums ${k === todayKey ? 'text-link' : 'text-mute'}`}>{d.getDate()}</div>
-              <div className="space-y-0.5">{list.slice(0, 3).map(chip)}{list.length > 3 && <div className="text-[11px] font-bold text-mute">ещё {list.length - 3}</div>}</div>
+              <div className={`mb-0.5 text-right text-xs font-extrabold tabular-nums ${k === todayKey ? 'text-link' : 'text-mute'}`}>{d.getDate()}</div>
+              <div className="space-y-0.5">{list.slice(0, 3).map(chip)}{list.length > 3 && <div className="text-xs font-bold text-mute">ещё {list.length - 3}</div>}</div>
             </div>
           );
         })}
@@ -49466,7 +49468,7 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
         {rows.map((row, i) => (
           <div key={i} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
             {row.map((f) => (
-              <div key={f.k} className="h-4 truncate rounded bg-brand/25 px-1.5 text-[10px] font-bold leading-4 text-ink">{f.name || '…'}</div>
+              <div key={f.k} className="h-4 truncate rounded bg-brand/25 px-1.5 text-xs font-bold leading-4 text-ink">{f.name || '…'}</div>
             ))}
           </div>
         ))}
@@ -50037,7 +50039,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
               <Btn onClick={() => prefixLines('# ', 'Заголовок')} title="Заголовок 1"><span className="text-xs">H1</span></Btn>
               <Btn onClick={() => prefixLines('## ', 'Заголовок')} title="Заголовок 2"><span className="text-xs">H2</span></Btn>
               <Btn onClick={() => prefixLines('### ', 'Заголовок')} title="Заголовок 3"><span className="text-xs">H3</span></Btn>
-              <Btn onClick={() => prefixLines('-# ')} title="Мелкий текст"><span className="text-[10px]">-#</span></Btn>
+              <Btn onClick={() => prefixLines('-# ')} title="Мелкий текст"><span className="text-xs">-#</span></Btn>
             </>
           )}
           <Btn onClick={() => prefixLines('> ')} title="Цитата">❝</Btn>
@@ -53949,7 +53951,7 @@ export default function Hero({
             </>
           ) : (
             <>
-              <span className="srv-hero-n">–</span>
+              <span className="srv-hero-n srv-hero-none" aria-hidden>–</span>
               <span className="srv-hero-unit">{hasStatus ? t('srv.hero.offline') : t('srv.hero.waiting')}</span>
             </>
           )}
@@ -55016,14 +55018,14 @@ export default function PlayersList({
                   {(dur != null || rank) && (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
-                      {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-[11px]">новичок</span>}
+                      {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-xs">новичок</span>}
                       {rank && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-extrabold" style={{ color: rank.color }} title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
+                        <span className="inline-flex items-center gap-1 text-xs font-extrabold" style={{ color: rank.color }} title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
                           <RankEmblem rank={rank} size={20} />
                           {rankName(rank)}
                         </span>
                       )}
-                      {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-[11px]">ветеран</span>}
+                      {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-xs">ветеран</span>}
                     </span>
                   )}
                 </span>
@@ -56759,9 +56761,10 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
   let title: string;
   let sub = '';
   if (state === 'bad' || state === 'warn') {
-    const first = problems[0];
-    title = t('srv.pulse.problems', { name: first.name });
-    sub = problems.length > 1 ? t('srv.pulse.more', { n: problems.length - 1 }) : first.online ? t('srv.pulse.slow') : t('srv.pulse.noAnswer');
+    // the count here, the servers and the reasons in the «Needs attention» strip below (no second copy of them)
+    title = t('srv.pulse.problemsN', { n: problems.length, total: servers.length });
+    const names = problems.slice(0, 2).map((s) => s.name).join(', ');
+    sub = problems.length > 2 ? `${names} ${t('srv.pulse.more', { n: problems.length - 2 })}` : names;
   } else if (state === 'maint') {
     const m = servers.filter((s) => s.maintenance);
     title = t('srv.pulse.maint');
@@ -57425,7 +57428,7 @@ export function CountReact({ r, onDark = false, children }: { r: Reaction; onDar
   return (
     <span key={dir ? r.dk : 'idle'} className={`srv-num ${dir ? `srv-num-${dir}` : ''} ${onDark ? 'on-dark' : ''}`}>
       {children}
-      {dir && <span className={`srv-chip ${dir}`} aria-hidden>{r.d > 0 ? `+${r.d}` : `−${-r.d}`}</span>}
+      {dir && <span className={`srv-delta ${dir}`} aria-hidden>{r.d > 0 ? `+${r.d}` : `−${-r.d}`}</span>}
     </span>
   );
 }
@@ -58128,6 +58131,7 @@ export const COUNTRIES: [string, string][] = CODES.map((c): [string, string] => 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/cover.ts" << '__COREGSM_EOF__'
+import { GAME_IMAGE } from './games';
 /** Games that ship a default cover (files in public/games/covers: <game>.jpg 1280x720 and <game>@s.jpg 640x360). */
 const DEFAULT_COVERS = new Set(['vrising', 'icarus', 'm2o']);
 
@@ -58135,6 +58139,15 @@ const DEFAULT_COVERS = new Set(['vrising', 'icarus', 'm2o']);
 export function coverUrlOf(coverUrl: string | null | undefined, game: string, small = true): string | null {
   if (coverUrl) return small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
   return DEFAULT_COVERS.has(game) ? `/games/covers/${game}${small ? '@s' : ''}.jpg` : null;
+}
+
+/**
+ * A server without a picture of its own and without a default cover gets its game's emblem as a faint watermark
+ * on the plain gradient (see .emblem-bg in servers.css). Returns the style variable for it, or {}.
+ */
+export function emblemStyle(coverUrl: string | null | undefined, game: string): { className: string; style: Record<string, string> } {
+  const url = coverUrlOf(coverUrl, game, false) ? null : GAME_IMAGE[game];
+  return url ? { className: 'emblem-bg', style: { '--emblem': `url("${url}")` } } : { className: '', style: {} };
 }
 
 /**
@@ -58634,6 +58647,7 @@ export const IconCards = make(<><rect x="3" y="4" width="18" height="16" rx="3" 
 export const IconDiscord = make(<path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" />);
 export const IconSettings = make(<><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></>);
 export const IconNews = make(<><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8 8 0 0 1 0 12" /></>);
+export const IconUser = make(<><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>, 22);
 export const IconUsers = make(<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>, 22);
 export const IconJournal = make(<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />, 22);
 /** heartbeat line: the System and Status pages */
@@ -59478,7 +59492,7 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 .adm-link:hover .adm-ic { background: rgb(var(--brand) / .14); color: rgb(var(--link)); transform: scale(1.06); }
 .adm-link.is-on .adm-ic, .adm-link.is-on:hover .adm-ic { background: rgb(255 255 255 / .18); color: #fff; box-shadow: inset 0 1px 0 rgb(255 255 255 / .2); }
 @media (prefers-reduced-motion: reduce) { .adm-ic { transition: none; } }
-.adm-group-title { padding: 10px 14px 4px; font-size: 11px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; color: rgb(var(--mute)); }
+.adm-group-title { padding: 10px 14px 4px; font-size: 12px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; color: rgb(var(--mute)); }
 
 /* ---------- black-square safeguard (Chrome) ----------
    Elements with backdrop-filter inside content that animates opacity/transform (every route change re-mounts <main>
@@ -60268,6 +60282,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pulse.ok': 'All systems running',
   'srv.pulse.okSub': '{n} server online|{n} servers online',
   'srv.pulse.problems': 'Problems: {name}',
+  'srv.pulse.problemsN': 'Problems: {n} of {total}',
   'srv.pulse.more': 'and {n} more',
   'srv.pulse.slow': 'High ping',
   'srv.pulse.noAnswer': 'Not responding',
@@ -61150,6 +61165,7 @@ const ru = {
   'srv.pulse.ok': 'Всё работает',
   'srv.pulse.okSub': '{n} сервер онлайн|{n} сервера онлайн|{n} серверов онлайн',
   'srv.pulse.problems': 'Есть проблемы: {name}',
+  'srv.pulse.problemsN': 'Есть проблемы: {n} из {total}',
   'srv.pulse.more': 'и ещё {n}',
   'srv.pulse.slow': 'Высокий пинг',
   'srv.pulse.noAnswer': 'Сервер не отвечает',
@@ -61758,7 +61774,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         ) : (
           <>
-            <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
+            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
             {sections.map((s) => link(s))}
           </>
         )}
@@ -63948,7 +63964,7 @@ export function EmbedView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 text-[15px] leading-tight">
                   <span className="font-bold" style={{ color: t.title }}>{botName}</span>
-                  <span className="rounded px-1 text-[10px] font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
+                  <span className="rounded px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
                   <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
                 </div>
                 {content && (
@@ -65777,7 +65793,8 @@ import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
-import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
+import { IconUser } from '../icons';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
 const TABS: { id: Tab; label: TKey }[] = [
@@ -65798,7 +65815,7 @@ export default function ProfilePage() {
 
   return (
     <div className="space-y-5">
-      <PageHead title={t('pf.title')} subtitle={t('pf.subtitle')} icon={<IconServers />} />
+      <PageHead title={t('pf.title')} subtitle={t('pf.subtitle')} icon={<IconUser />} />
 
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>
@@ -66575,7 +66592,7 @@ import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameGradient, gameLabel } from '../games';
-import { coverBackground, coverUrlOf, gameBackdrop } from '../cover';
+import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
 import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
@@ -66986,10 +67003,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {back}
 
       <article
-        className={`srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
-        style={{ background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
+        className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
+        style={{ ...emblemStyle(s.coverUrl, s.game).style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
         {...depth}
       >
+        {emblemStyle(s.coverUrl, s.game).className && <span aria-hidden className="emblem-layer" />}
         {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
         <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
           <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
@@ -67318,7 +67336,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } fro
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
-import { coverBackground, gameBackdrop } from '../cover';
+import { coverBackground, emblemStyle, gameBackdrop } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useDepth, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
@@ -67655,17 +67673,20 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const lag = isLag(s);
   const depth = useDepth<HTMLElement>();
   const r = reactionOf(rx, s.id);
+  const emb = emblemStyle(s.coverUrl, s.game);
   return (
     <article
-      className={`srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
+      className={`${emb.className ? 'emblem-host' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
+        ...emb.style,
         background: coverBackground(s.coverUrl, gameBackdrop(c1), { strong: true, game: s.game }),
         boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
       }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
       {...depth}
     >
+      {emb.className && <span aria-hidden className="emblem-layer" />}
       <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
       <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
       {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
@@ -67730,6 +67751,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
   const [c1, c2] = gameGradient(s.game);
   const lag = isLag(s);
   const r = reactionOf(rx, s.id);
+  const emb = emblemStyle(s.coverUrl, s.game);
   return (
     <article
       className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
@@ -67738,7 +67760,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
+      <div className={`${emb.className} flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -68493,7 +68515,7 @@ function NotifyExtras() {
         {[0, 3, 99, 150].map((n) => (
           <span key={n} className="relative grid h-10 w-10 place-items-center rounded-full bg-soft text-mute">
             <IconBell size={20} />
-            {badgeText(n) && <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-[11px] font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]">{badgeText(n)}</span>}
+            {badgeText(n) && <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-xs font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]">{badgeText(n)}</span>}
           </span>
         ))}
       </Row>
@@ -70147,7 +70169,7 @@ __COREGSM_EOF__
 
 /* weekday x hour */
 .an-heat { display: grid; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); gap: 3px; align-items: center; }
-.an-heat-hour { font-size: 11px; font-weight: 600; color: rgb(var(--mute)); text-align: left; }
+.an-heat-hour { font-size: 12px; font-weight: 600; color: rgb(var(--mute)); text-align: left; }
 .an-heat-dow { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
 .an-heat-cell {
   height: clamp(12px, 2.6vw, 28px); border-radius: 5px;
@@ -70172,7 +70194,7 @@ __COREGSM_EOF__
 .an-bar-new { background: color-mix(in srgb, var(--an) 40%, rgb(var(--card))); }
 .an-bar.is-hover > span { filter: brightness(1.12) saturate(1.1); }
 .an-bars-axis { display: flex; gap: 3px; margin-top: 6px; }
-.an-bars-axis span { flex: 1 1 0; min-width: 2px; font-size: 11px; font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; overflow: visible; }
+.an-bars-axis span { flex: 1 1 0; min-width: 2px; font-size: 12px; font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; overflow: visible; }
 .an-legend { display: inline-flex; align-items: center; gap: 6px; }
 .an-legend i { width: 12px; height: 12px; border-radius: 4px; }
 
@@ -70586,19 +70608,19 @@ __COREGSM_EOF__
 .cm-now.is-record .cm-meter > span { background: linear-gradient(90deg, #f6b73c, #ff7a59); }
 .cm-mini { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .cm-mini > div { border-radius: var(--r-md); background: rgb(var(--soft)); padding: 6px 10px; }
-.cm-mini dt { font-size: 11px; font-weight: 650; color: rgb(var(--mute)); line-height: 1.2; }
+.cm-mini dt { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); line-height: 1.2; }
 .cm-mini dd { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
 
 .cm-heat { display: grid; grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
 .cm-heat.is-big { gap: 3px; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); }
-.cm-heat-d { font-size: 11px; font-weight: 650; color: rgb(var(--mute)); }
-.cm-heat-h { font-size: 11px; font-weight: 600; color: rgb(var(--mute)); }
+.cm-heat-d { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.cm-heat-h { font-size: 12px; font-weight: 600; color: rgb(var(--mute)); }
 .cm-heat-c { height: 15px; border-radius: 3px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
 .cm-heat.is-big .cm-heat-c { height: clamp(14px, 2.4vw, 26px); border-radius: 5px; }
 
 .cm-feed-list { margin-top: 2px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .cm-feed-i { display: flex; align-items: center; gap: 10px; }
-.cm-live, .cm-new { border-radius: var(--r-pill); padding: 0 7px; font-size: 11px; font-weight: 650; }
+.cm-live, .cm-new { border-radius: var(--r-pill); padding: 0 7px; font-size: 12px; font-weight: 650; }
 .cm-live { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .cm-new { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
 .cm-feed-i { animation: cm-in .5s cubic-bezier(.2, .8, .2, 1) both; }
@@ -70638,7 +70660,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .pl-hours { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
 .pl-hour { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
 .pl-hour i { display: block; width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, rgb(var(--link)), rgb(var(--brand))); }
-.pl-hour b { height: 14px; font-size: 10.5px; font-weight: 600; color: rgb(var(--mute)); }
+.pl-hour b { height: 14px; font-size: 12px; font-weight: 600; color: rgb(var(--mute)); }
 
 /* seasons */
 .cm-season { background: radial-gradient(120% 140% at 100% 0%, rgb(var(--warn) / .12), transparent 55%), rgb(var(--card)); }
@@ -70678,7 +70700,7 @@ __COREGSM_EOF__
 }
 .pp-i { min-width: 0; padding: 9px 12px; background: rgba(0, 0, 0, 0.26); }
 .pp-i.wide { grid-column: 1 / -1; }
-.pp-k { font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.72); }
+.pp-k { font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.72); }
 .pp-v { margin-top: 1px; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 650; color: #fff; }
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
@@ -70779,6 +70801,8 @@ __COREGSM_EOF__
   display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: var(--r-pill); font-size: 14px; font-weight: 650;
   background: rgba(255, 255, 255, 0.16); color: #fff;
 }
+/* no number while the server is down: a thin, quiet dash instead of a heavy white block */
+.srv-hero-none { font-weight: 300; opacity: .55; }
 @media (min-width: 640px) { .srv-hero-n { font-size: 56px; } .srv-hero-max { font-size: 26px; } }
 
 /* ---------- compact passport ---------- */
@@ -71453,14 +71477,14 @@ __COREGSM_EOF__
   0%, 20% { background-color: rgb(255 255 255 / .32); }
   100% { background-color: rgb(255 255 255 / 0); }
 }
-.srv-chip {
+.srv-delta {
   position: absolute; right: -2px; bottom: 100%; margin-bottom: 1px; z-index: 3; pointer-events: none;
   padding: 2px 7px; border-radius: var(--r-pill); font-size: 12px; line-height: 1.2; font-weight: 650; letter-spacing: 0; white-space: nowrap;
-  opacity: 0; animation: srv-chip 2.2s ease-out backwards;
+  opacity: 0; animation: srv-delta 2.2s ease-out backwards;
 }
-.srv-chip.up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
-.srv-chip.down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
-@keyframes srv-chip {
+.srv-delta.up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.srv-delta.down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+@keyframes srv-delta {
   0% { opacity: 0; }
   10%, 65% { opacity: 1; }
   100% { opacity: 0; }
@@ -71514,7 +71538,7 @@ __COREGSM_EOF__
   .srv-c-ping { grid-area: ping; }
   .srv-c-up { grid-area: up; }
   .srv-c-addr { grid-area: addr; min-width: 0; }
-  .srv-c-ping::before, .srv-c-up::before { content: attr(data-label) ' '; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); }
+  .srv-c-ping::before, .srv-c-up::before { content: attr(data-label) ' '; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); }
 }
 
 /* ---------- TV mode ---------- */
@@ -71554,9 +71578,9 @@ __COREGSM_EOF__
 .srv-tv-foot b.text-warn { color: rgb(var(--warn)); }
 
 @media (prefers-reduced-motion: reduce) {
-  .srv-num-up, .srv-num-down, .srv-chip, .srv-flash-bad, .srv-flash-ok { animation: none !important; }
+  .srv-num-up, .srv-num-down, .srv-delta, .srv-flash-bad, .srv-flash-ok { animation: none !important; }
   .srv-cap > i { transition: none; }
-  .srv-chip { opacity: 1; }
+  .srv-delta { opacity: 1; }
 }
 
 /* ---------- pulse strip ---------- */
@@ -71576,7 +71600,7 @@ __COREGSM_EOF__
 .pulse-title { font-size: 17px; font-weight: 650; line-height: 1.2; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .pulse-sub { margin-top: 2px; font-size: 13px; font-weight: 600; color: rgb(var(--mute)); overflow-wrap: anywhere; }
 .pulse-nums { display: grid; grid-template-columns: repeat(4, auto); gap: 4px 22px; margin: 0; }
-.pulse-nums dt { font-size: 11.5px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
+.pulse-nums dt { font-size: 12px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
 .pulse-nums dd { margin: 2px 0 0; font-size: 22px; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pulse-nums dd small { font-size: .62em; font-weight: 600; color: rgb(var(--mute)); letter-spacing: 0; }
 .pulse-chart { margin: 0; min-width: 0; color: rgb(var(--pulse)); }
@@ -71731,6 +71755,30 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .attn-go { order: 2; }
   .attn-why { order: 3; flex-basis: 100%; padding-left: 1.25rem; white-space: normal; }
 }
+
+/* ---------- a server without a cover picture: the emblem of its game as a faint watermark on the gradient ----------
+   (the pseudo-element sits at z-index -1 inside an isolated box: above the box's own background, below its content) */
+.emblem-bg { position: relative; isolation: isolate; }
+.emblem-bg::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background: var(--emblem) no-repeat right 7% center / auto 74%; opacity: .22;
+  -webkit-mask-image: linear-gradient(90deg, transparent 30%, #000 75%); mask-image: linear-gradient(90deg, transparent 30%, #000 75%);
+}
+.srv-tile .emblem-bg::before { background-position: right 12px center; background-size: auto 88%; opacity: .26; }
+/* the big cards (hero, server banner) use a real layer: their pseudo-elements belong to the depth effect */
+.emblem-host { position: relative; isolation: isolate; }
+.emblem-layer {
+  position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background: var(--emblem) no-repeat right 6% center / auto 70%; opacity: .2;
+  -webkit-mask-image: linear-gradient(90deg, transparent 30%, #000 75%); mask-image: linear-gradient(90deg, transparent 30%, #000 75%);
+}
+
+/* ---------- «the server was down» on the sparklines ---------- */
+.chart-down {
+  position: absolute; top: 4px; bottom: 0; min-width: 5px; pointer-events: none; border-radius: 6px 6px 0 0;
+  background: linear-gradient(to top, rgb(var(--bad) / .4), rgb(var(--bad) / .1) 55%, rgb(var(--bad) / 0));
+}
+.chart-down::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: rgb(var(--bad)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
@@ -71785,7 +71833,7 @@ __COREGSM_EOF__
 .st-inc.is-live::before { background: rgb(var(--bad)); animation: st-blink 1.6s ease-in-out infinite; }
 .st-inc.is-planned::before { background: rgb(var(--link)); }
 @keyframes st-blink { 50% { opacity: .35; } }
-.st-inc-badge { border-radius: var(--r-pill); padding: 1px 9px; font-size: 11.5px; font-weight: 650; background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.st-inc-badge { border-radius: var(--r-pill); padding: 1px 9px; font-size: 12px; font-weight: 650; background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .st-inc-badge.is-live { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
 .st-inc-badge.is-planned { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
 .st-calm { display: flex; align-items: center; gap: 14px; border-radius: var(--r-lg); padding: 14px 16px; background: rgb(var(--okbg)); }
@@ -71820,7 +71868,7 @@ __COREGSM_EOF__
 /* ---------- UI kit page ---------- */
 .kit-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
 .kit-swatch { height: 3rem; border-radius: var(--r-md); border: 1px solid var(--tile-border); }
-.kit-icon { display: grid; justify-items: center; gap: .35rem; padding: .75rem .25rem; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--ink)); font-size: 11px; font-weight: 600; text-align: center; overflow-wrap: anywhere; }
+.kit-icon { display: grid; justify-items: center; gap: .35rem; padding: .75rem .25rem; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--ink)); font-size: 12px; font-weight: 600; text-align: center; overflow-wrap: anywhere; }
 .kit-icon span { color: rgb(var(--mute)); }
 /* a frame that shows a component in the other theme next to the current one */
 .kit-theme { border-radius: var(--r-xl); padding: 1.25rem; background: rgb(var(--page)); color: rgb(var(--ink)); border: 1px solid var(--tile-border); }
@@ -72638,7 +72686,8 @@ function loadSparks(): Promise<void> {
   sparkLoading = (async () => {
     try {
       const token = getToken();
-      const res = await fetch('/api/servers/sparks?hours=24', { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+      // 144 points = 10-minute buckets: a short outage is a narrow band, a young panel gets a curve after ~20 minutes
+      const res = await fetch('/api/servers/sparks?hours=24&points=144', { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
       if (res.ok) {
         const d = (await res.json()) as { servers: SparkSet['servers'] };
         sparkSet = { at: Date.now(), servers: d.servers ?? {} };
@@ -72740,6 +72789,23 @@ export function downBand(i: number, n: number, w: number, pad = 3): { x: number;
   return { x: x0, width: Math.max(0, x1 - x0) };
 }
 
+/** Consecutive «down» samples as one stretch each (an outage is one mark, not a comb of bands). */
+export function downRuns(down: boolean[], n: number, w: number, pad = 3): { x: number; width: number }[] {
+  const out: { x: number; width: number }[] = [];
+  let start = -1;
+  for (let i = 0; i <= down.length; i++) {
+    const d = i < down.length && down[i];
+    if (d && start < 0) start = i;
+    if (!d && start >= 0) {
+      const a = downBand(start, n, w, pad);
+      const b = downBand(i - 1, n, w, pad);
+      out.push({ x: a.x, width: b.x + b.width - a.x });
+      start = -1;
+    }
+  }
+  return out;
+}
+
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
 export function smoothPath(pts: [number, number][]): string {
   if (pts.length === 0) return '';
@@ -72773,6 +72839,10 @@ export function SmoothArea({
   const last = pts[pts.length - 1];
   return (
     <div className={`relative w-full ${className}`}>
+      {/* outages: a soft red glow rising from the axis with a thin red line on it (HTML, so the edges stay crisp) */}
+      {downRuns(down ?? [], values.length, w, pad).map((r, i) => (
+        <span key={i} aria-hidden className="chart-down" style={{ left: `${(r.x / w) * 100}%`, width: `${(r.width / w) * 100}%` }} />
+      ))}
       <svg viewBox={`0 0 ${w} ${h}`} className="chart-reveal absolute inset-0 h-full w-full overflow-visible" preserveAspectRatio="none" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
         <defs>
           <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
@@ -72783,11 +72853,6 @@ export function SmoothArea({
         {grid && [1, 2, 3].map((k) => (
           <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
         ))}
-        {down?.map((d, i) => {
-          if (!d || !pts[i]) return null;
-          const b = downBand(i, values.length, w, pad);
-          return <rect key={i} x={b.x} y={0} width={b.width} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
-        })}
         <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>
