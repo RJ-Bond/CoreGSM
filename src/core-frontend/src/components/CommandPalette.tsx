@@ -260,7 +260,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
                       <span className="block truncate font-extrabold leading-tight">{it.label}</span>
                       <span className="block truncate text-sm font-semibold text-mute">{it.hint}</span>
                     </span>
-                    {idx === safeActive && <span aria-hidden className="hidden rounded-md bg-card px-1.5 py-0.5 text-[11px] font-extrabold text-mute sm:inline">Enter</span>}
+                    {idx === safeActive && <span aria-hidden className="hidden rounded-md bg-card px-1.5 py-0.5 text-xs font-extrabold text-mute sm:inline">Enter</span>}
                   </div>
                 ))}
               </div>

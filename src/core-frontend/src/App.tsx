@@ -430,7 +430,7 @@ export default function App() {
             >
               <IconSearch />
               <span className="hidden lg:inline">{t('hdr.search')}</span>
-              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-[11px] font-bold text-mute lg:inline">Ctrl K</kbd>
+              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute lg:inline">Ctrl K</kbd>
             </button>
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
@@ -500,7 +500,7 @@ export default function App() {
                   <a
                     href={`/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}
@@ -513,7 +513,7 @@ export default function App() {
             })}
             {!me && (
               <li className="flex-1">
-                <a href={access.registration ? '/register' : '/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[11px] font-extrabold text-link">
+                <a href={access.registration ? '/register' : '/login'} className="flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold text-link">
                   <span className="grid h-7 w-14 place-items-center rounded-full bg-soft text-lg" aria-hidden>→</span>
                   {t('hdr.login')}
                 </a>

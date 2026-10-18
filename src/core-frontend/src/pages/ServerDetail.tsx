@@ -6,7 +6,7 @@ import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameGradient, gameLabel } from '../games';
-import { coverBackground, coverUrlOf, gameBackdrop } from '../cover';
+import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
 import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
@@ -417,10 +417,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {back}
 
       <article
-        className={`srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
-        style={{ background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
+        className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
+        style={{ ...emblemStyle(s.coverUrl, s.game).style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
         {...depth}
       >
+        {emblemStyle(s.coverUrl, s.game).className && <span aria-hidden className="emblem-layer" />}
         {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
         <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
           <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />

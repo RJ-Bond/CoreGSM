@@ -10,7 +10,7 @@
 
 /* weekday x hour */
 .an-heat { display: grid; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); gap: 3px; align-items: center; }
-.an-heat-hour { font-size: 11px; font-weight: 600; color: rgb(var(--mute)); text-align: left; }
+.an-heat-hour { font-size: 12px; font-weight: 600; color: rgb(var(--mute)); text-align: left; }
 .an-heat-dow { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
 .an-heat-cell {
   height: clamp(12px, 2.6vw, 28px); border-radius: 5px;
@@ -35,7 +35,7 @@
 .an-bar-new { background: color-mix(in srgb, var(--an) 40%, rgb(var(--card))); }
 .an-bar.is-hover > span { filter: brightness(1.12) saturate(1.1); }
 .an-bars-axis { display: flex; gap: 3px; margin-top: 6px; }
-.an-bars-axis span { flex: 1 1 0; min-width: 2px; font-size: 11px; font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; overflow: visible; }
+.an-bars-axis span { flex: 1 1 0; min-width: 2px; font-size: 12px; font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; overflow: visible; }
 .an-legend { display: inline-flex; align-items: center; gap: 6px; }
 .an-legend i { width: 12px; height: 12px; border-radius: 4px; }
 

@@ -50,7 +50,7 @@ function NotifyExtras() {
         {[0, 3, 99, 150].map((n) => (
           <span key={n} className="relative grid h-10 w-10 place-items-center rounded-full bg-soft text-mute">
             <IconBell size={20} />
-            {badgeText(n) && <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-[11px] font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]">{badgeText(n)}</span>}
+            {badgeText(n) && <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-bad px-1 text-center text-xs font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))]">{badgeText(n)}</span>}
           </span>
         ))}
       </Row>

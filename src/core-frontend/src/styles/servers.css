@@ -44,14 +44,14 @@
   0%, 20% { background-color: rgb(255 255 255 / .32); }
   100% { background-color: rgb(255 255 255 / 0); }
 }
-.srv-chip {
+.srv-delta {
   position: absolute; right: -2px; bottom: 100%; margin-bottom: 1px; z-index: 3; pointer-events: none;
   padding: 2px 7px; border-radius: var(--r-pill); font-size: 12px; line-height: 1.2; font-weight: 650; letter-spacing: 0; white-space: nowrap;
-  opacity: 0; animation: srv-chip 2.2s ease-out backwards;
+  opacity: 0; animation: srv-delta 2.2s ease-out backwards;
 }
-.srv-chip.up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
-.srv-chip.down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
-@keyframes srv-chip {
+.srv-delta.up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.srv-delta.down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+@keyframes srv-delta {
   0% { opacity: 0; }
   10%, 65% { opacity: 1; }
   100% { opacity: 0; }
@@ -105,7 +105,7 @@
   .srv-c-ping { grid-area: ping; }
   .srv-c-up { grid-area: up; }
   .srv-c-addr { grid-area: addr; min-width: 0; }
-  .srv-c-ping::before, .srv-c-up::before { content: attr(data-label) ' '; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); }
+  .srv-c-ping::before, .srv-c-up::before { content: attr(data-label) ' '; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); }
 }
 
 /* ---------- TV mode ---------- */
@@ -145,9 +145,9 @@
 .srv-tv-foot b.text-warn { color: rgb(var(--warn)); }
 
 @media (prefers-reduced-motion: reduce) {
-  .srv-num-up, .srv-num-down, .srv-chip, .srv-flash-bad, .srv-flash-ok { animation: none !important; }
+  .srv-num-up, .srv-num-down, .srv-delta, .srv-flash-bad, .srv-flash-ok { animation: none !important; }
   .srv-cap > i { transition: none; }
-  .srv-chip { opacity: 1; }
+  .srv-delta { opacity: 1; }
 }
 
 /* ---------- pulse strip ---------- */
@@ -167,7 +167,7 @@
 .pulse-title { font-size: 17px; font-weight: 650; line-height: 1.2; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .pulse-sub { margin-top: 2px; font-size: 13px; font-weight: 600; color: rgb(var(--mute)); overflow-wrap: anywhere; }
 .pulse-nums { display: grid; grid-template-columns: repeat(4, auto); gap: 4px 22px; margin: 0; }
-.pulse-nums dt { font-size: 11.5px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
+.pulse-nums dt { font-size: 12px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
 .pulse-nums dd { margin: 2px 0 0; font-size: 22px; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pulse-nums dd small { font-size: .62em; font-weight: 600; color: rgb(var(--mute)); letter-spacing: 0; }
 .pulse-chart { margin: 0; min-width: 0; color: rgb(var(--pulse)); }
@@ -322,3 +322,27 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .attn-go { order: 2; }
   .attn-why { order: 3; flex-basis: 100%; padding-left: 1.25rem; white-space: normal; }
 }
+
+/* ---------- a server without a cover picture: the emblem of its game as a faint watermark on the gradient ----------
+   (the pseudo-element sits at z-index -1 inside an isolated box: above the box's own background, below its content) */
+.emblem-bg { position: relative; isolation: isolate; }
+.emblem-bg::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background: var(--emblem) no-repeat right 7% center / auto 74%; opacity: .22;
+  -webkit-mask-image: linear-gradient(90deg, transparent 30%, #000 75%); mask-image: linear-gradient(90deg, transparent 30%, #000 75%);
+}
+.srv-tile .emblem-bg::before { background-position: right 12px center; background-size: auto 88%; opacity: .26; }
+/* the big cards (hero, server banner) use a real layer: their pseudo-elements belong to the depth effect */
+.emblem-host { position: relative; isolation: isolate; }
+.emblem-layer {
+  position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background: var(--emblem) no-repeat right 6% center / auto 70%; opacity: .2;
+  -webkit-mask-image: linear-gradient(90deg, transparent 30%, #000 75%); mask-image: linear-gradient(90deg, transparent 30%, #000 75%);
+}
+
+/* ---------- «the server was down» on the sparklines ---------- */
+.chart-down {
+  position: absolute; top: 4px; bottom: 0; min-width: 5px; pointer-events: none; border-radius: 6px 6px 0 0;
+  background: linear-gradient(to top, rgb(var(--bad) / .4), rgb(var(--bad) / .1) 55%, rgb(var(--bad) / 0));
+}
+.chart-down::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: rgb(var(--bad)); }

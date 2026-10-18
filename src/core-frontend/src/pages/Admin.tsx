@@ -123,7 +123,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         ) : (
           <>
-            <div className="hidden px-3 pb-1 pt-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
+            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
             {sections.map((s) => link(s))}
           </>
         )}

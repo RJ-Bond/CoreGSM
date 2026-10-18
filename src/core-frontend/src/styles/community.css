@@ -19,19 +19,19 @@
 .cm-now.is-record .cm-meter > span { background: linear-gradient(90deg, #f6b73c, #ff7a59); }
 .cm-mini { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .cm-mini > div { border-radius: var(--r-md); background: rgb(var(--soft)); padding: 6px 10px; }
-.cm-mini dt { font-size: 11px; font-weight: 650; color: rgb(var(--mute)); line-height: 1.2; }
+.cm-mini dt { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); line-height: 1.2; }
 .cm-mini dd { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
 
 .cm-heat { display: grid; grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
 .cm-heat.is-big { gap: 3px; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); }
-.cm-heat-d { font-size: 11px; font-weight: 650; color: rgb(var(--mute)); }
-.cm-heat-h { font-size: 11px; font-weight: 600; color: rgb(var(--mute)); }
+.cm-heat-d { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.cm-heat-h { font-size: 12px; font-weight: 600; color: rgb(var(--mute)); }
 .cm-heat-c { height: 15px; border-radius: 3px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
 .cm-heat.is-big .cm-heat-c { height: clamp(14px, 2.4vw, 26px); border-radius: 5px; }
 
 .cm-feed-list { margin-top: 2px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .cm-feed-i { display: flex; align-items: center; gap: 10px; }
-.cm-live, .cm-new { border-radius: var(--r-pill); padding: 0 7px; font-size: 11px; font-weight: 650; }
+.cm-live, .cm-new { border-radius: var(--r-pill); padding: 0 7px; font-size: 12px; font-weight: 650; }
 .cm-live { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .cm-new { background: rgb(var(--link) / .14); color: rgb(var(--link)); }
 .cm-feed-i { animation: cm-in .5s cubic-bezier(.2, .8, .2, 1) both; }
@@ -71,7 +71,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .pl-hours { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
 .pl-hour { flex: 1 1 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
 .pl-hour i { display: block; width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, rgb(var(--link)), rgb(var(--brand))); }
-.pl-hour b { height: 14px; font-size: 10.5px; font-weight: 600; color: rgb(var(--mute)); }
+.pl-hour b { height: 14px; font-size: 12px; font-weight: 600; color: rgb(var(--mute)); }
 
 /* seasons */
 .cm-season { background: radial-gradient(120% 140% at 100% 0%, rgb(var(--warn) / .12), transparent 55%), rgb(var(--card)); }

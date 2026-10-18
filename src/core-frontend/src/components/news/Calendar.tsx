@@ -43,7 +43,7 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
       onDragStart={(e) => { setDrag(n.id); e.dataTransfer.setData('text/plain', String(n.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onDragEnd={() => { setDrag(null); setOver(null); }}
       title={`${n.title}${movable(n) ? ' (можно перетащить на другой день)' : ''}`}
-      className={`block truncate rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-4 ${tone(n)} ${drag === n.id ? 'opacity-50' : ''}`}
+      className={`block truncate rounded-md px-1.5 py-0.5 text-xs font-bold leading-4 ${tone(n)} ${drag === n.id ? 'opacity-50' : ''}`}
       style={{ borderLeft: `3px solid #${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}` }}
     >
       {dateOf(n) ? `${new Date(dateOf(n) as number).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} ` : ''}{n.title || 'Без названия'}
@@ -81,8 +81,8 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
               }}
               className={`min-h-[72px] rounded-xl border-2 p-1 sm:min-h-[96px] ${over === k ? 'border-brand bg-brand/10' : k === todayKey ? 'border-brand/60' : 'border-line'} ${inMonth ? '' : 'opacity-50'}`}
             >
-              <div className={`mb-0.5 text-right text-[11px] font-extrabold tabular-nums ${k === todayKey ? 'text-link' : 'text-mute'}`}>{d.getDate()}</div>
-              <div className="space-y-0.5">{list.slice(0, 3).map(chip)}{list.length > 3 && <div className="text-[11px] font-bold text-mute">ещё {list.length - 3}</div>}</div>
+              <div className={`mb-0.5 text-right text-xs font-extrabold tabular-nums ${k === todayKey ? 'text-link' : 'text-mute'}`}>{d.getDate()}</div>
+              <div className="space-y-0.5">{list.slice(0, 3).map(chip)}{list.length > 3 && <div className="text-xs font-bold text-mute">ещё {list.length - 3}</div>}</div>
             </div>
           );
         })}
