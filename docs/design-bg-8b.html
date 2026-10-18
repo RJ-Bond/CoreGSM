@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoreGSM: варианты фона главной, набор 2</title>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400..900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; }
+html { background: #15161c; }
+body { margin: 0; color: #e6e8f0; font: 14.5px/1.45 'Golos Text', system-ui, sans-serif; }
+.head { max-width: 1180px; margin: 0 auto; padding: 26px 0 6px; }
+.head h1 { margin: 0; font-size: 24px; font-weight: 800; }
+.head p { margin: 4px 0 12px; color: #9a9db0; }
+.nav { display: flex; flex-wrap: wrap; gap: 6px; }
+.nav a { padding: 5px 12px; border-radius: 999px; background: #23242d; color: #c8cad6; font-size: 13px; font-weight: 600; text-decoration: none; }
+.vl { max-width: 1180px; margin: 34px auto 10px; }
+.vl .n { display: inline-block; font-weight: 800; font-size: 13px; padding: 2px 10px; border-radius: 999px; background: #5b4fe0; color: #fff; margin-right: 10px; }
+.vl b { font-size: 17px; } .vl p { margin: 4px 0 0; color: #9a9db0; font-size: 13.5px; }
+body.single .head, body.single .vl { display: none; }
+.frame { position: relative; width: 1180px; max-width: 100%; height: 760px; margin: 0 auto; border-radius: 20px; overflow: hidden; isolation: isolate; box-shadow: 0 30px 80px -30px #000; padding: 18px 28px; }
+.bg { position: absolute; inset: 0; z-index: -1; }
+/* the same page on every background */
+:root { --card: rgba(21,23,31,.72); --line: rgba(255,255,255,.09); --mute: #8c90a6; }
+.light { --card: rgba(255,255,255,.8); --line: rgba(20,20,60,.1); --mute: #6c7088; color: #171923; }
+.top { display: flex; align-items: center; gap: 14px; padding: 9px 14px; border-radius: 20px; background: var(--card); border: 1px solid var(--line); margin-bottom: 18px; }
+.logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg,#7c6cf6,#4a3fe0); display: grid; place-items: center; font-weight: 800; color: #fff; }
+.top b { font-weight: 800; font-size: 17px; margin-right: 8px; }
+.top a { padding: 6px 13px; border-radius: 999px; font-weight: 650; color: var(--mute); }
+.top a.on { background: rgba(127,127,160,.2); color: inherit; }
+.btn { margin-left: auto; padding: 7px 15px; border-radius: 999px; background: #5b5ff0; color: #fff; font-weight: 700; }
+.h1 { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; }
+.h1 i { width: 44px; height: 44px; border-radius: 15px; background: linear-gradient(135deg,#6366f1,#4338ca); }
+.h1 h2 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
+.h1 span { color: var(--mute); }
+.kpi { display: grid; grid-template-columns: 1.2fr repeat(4, auto) 1.3fr; gap: 26px; align-items: center; padding: 14px 20px; border-radius: 20px; background: rgba(34,197,94,.1); border: 1px solid rgba(34,197,94,.35); margin-bottom: 14px; }
+.kpi small { display: block; color: var(--mute); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+.kpi b { font-size: 22px; font-weight: 800; }
+.hero { position: relative; border-radius: 24px; padding: 20px 24px; height: 200px; margin-bottom: 14px; color: #fff; overflow: hidden; background: linear-gradient(135deg, #7a2a1f, #1e0d12); box-shadow: 0 24px 60px -28px #e0502d99; display: grid; grid-template-columns: 1fr 1.35fr; gap: 24px; }
+.hero h3 { margin: 0; font-size: 24px; font-weight: 800; } .hero .big { font-size: 74px; font-weight: 800; letter-spacing: -.04em; line-height: 1; margin-top: 14px; }
+.hero .pl { position: absolute; top: 18px; right: 20px; background: rgba(0,0,0,.4); border-radius: 999px; padding: 4px 12px; font-weight: 700; font-size: 13px; }
+.hero svg { width: 100%; height: 100%; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.tile { border-radius: 22px; padding: 12px; background: var(--card); border: 1px solid var(--line); }
+.tile .cv { height: 92px; border-radius: 14px; margin-bottom: 10px; }
+.tile b { display: block; font-size: 15px; } .tile .num { font-size: 30px; font-weight: 800; margin-top: 4px; } .tile .num small { color: var(--mute); font-size: 15px; }
+
+/* 9 smooth mesh, no grain */
+.b1 { background: #070a14; }
+.b1 .bg { background: radial-gradient(90% 70% at 15% 10%, #1d2a6b88, transparent 100%), radial-gradient(80% 70% at 85% 30%, #4c1d9566, transparent 100%), radial-gradient(90% 60% at 50% 100%, #0e4a6a55, transparent 100%); filter: blur(10px); }
+/* 10 rays from the top */
+.b2 { background: #08090f; }
+.b2 .bg { background: conic-gradient(from 180deg at 50% -12%, transparent 0deg, rgba(99,102,241,.0) 20deg, rgba(99,102,241,.5) 40deg, transparent 58deg, rgba(45,212,191,.34) 74deg, transparent 92deg, rgba(236,72,153,.34) 112deg, transparent 134deg, rgba(99,102,241,.38) 158deg, transparent 180deg); -webkit-mask-image: linear-gradient(#000 20%, transparent 80%); mask-image: linear-gradient(#000 20%, transparent 80%); }
+/* 11 hexagons */
+.b3 { background: #090a10; }
+.b3 .bg { background: radial-gradient(60% 40% at 50% 0%, rgba(99,102,241,.3), transparent 100%); }
+.b3 .bg::after { content: ''; position: absolute; inset: 0; opacity: .9; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white' stroke-opacity='.06'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 L-0 81 M56 48 V81'/></svg>"); -webkit-mask-image: linear-gradient(#000, transparent 75%); mask-image: linear-gradient(#000, transparent 75%); }
+/* 12 waves at the bottom */
+.b4 { background: #080b12; }
+.b4 .bg { background: radial-gradient(60% 40% at 80% 0%, rgba(99,102,241,.22), transparent 100%); }
+.b4 .bg::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 55%; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='400' viewBox='0 0 1200 400' preserveAspectRatio='none'><defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%236366f1' stop-opacity='.35'/><stop offset='1' stop-color='%236366f1' stop-opacity='0'/></linearGradient></defs><path d='M0 200 C200 120 400 280 600 200 S1000 120 1200 200 V400 H0Z' fill='url(%23g)'/><path d='M0 260 C200 180 400 340 600 260 S1000 180 1200 260 V400 H0Z' fill='%232dd4bf' fill-opacity='.08'/></svg>"); background-size: 100% 100%; }
+/* 13 the blurred cover of the busiest server */
+.b5 { background: #07070a; }
+.b5 .bg { background: url('../src/core-frontend/public/games/covers/m2o.jpg') center top / cover; filter: blur(42px) saturate(1.3) brightness(.5); transform: scale(1.2); -webkit-mask-image: linear-gradient(#000 25%, transparent 92%); mask-image: linear-gradient(#000 25%, transparent 92%); }
+/* 14 aurora ribbons */
+.b6 { background: #060812; }
+.b6 .bg { background: linear-gradient(100deg, transparent 8%, rgba(45,212,191,.22) 22%, transparent 38%), linear-gradient(80deg, transparent 30%, rgba(99,102,241,.3) 46%, transparent 62%), linear-gradient(110deg, transparent 55%, rgba(236,72,153,.2) 70%, transparent 86%); filter: blur(34px); -webkit-mask-image: linear-gradient(#000 10%, transparent 75%); mask-image: linear-gradient(#000 10%, transparent 75%); }
+/* 15 film: warm, strong grain and vignette */
+.b7 { background: #0c0a08; }
+.b7 .bg { background: radial-gradient(80% 60% at 50% 0%, rgba(214,158,88,.22), transparent 100%), radial-gradient(130% 100% at 50% 50%, transparent 50%, rgba(0,0,0,.6)); }
+.b7 .bg::after { content: ''; position: absolute; inset: 0; opacity: .22; mix-blend-mode: overlay; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>"); }
+/* 16 edge glow */
+.b8 { background: #090a0f; }
+.b8 .bg { background: radial-gradient(90% 50% at 50% 0%, rgba(99,102,241,.2), transparent 100%); box-shadow: inset 0 0 120px 10px rgba(99,102,241,.28), inset 0 0 40px rgba(45,212,191,.12); }
+</style>
+</head>
+<body>
+<div class="head"><h1>CoreGSM: варианты фона главной, набор 2</h1><p>Ещё 8 фонов (9–16) на той же странице. Скажите номер (можно «фон 2, но светлее»).</p><div class="nav" id="nav"></div></div>
+<div id="root"></div>
+<script>
+const curve = (c) => { const pts = Array.from({ length: 50 }, (_, k) => [k / 49 * 520, 170 - (0.3 + 0.7 * Math.sin(k / 49 * Math.PI)) * 140 - Math.sin(k) * 2]); let d = 'M' + pts[0]; for (let i = 1; i < pts.length; i++) { const cx = (pts[i - 1][0] + pts[i][0]) / 2; d += ` C${cx},${pts[i - 1][1]} ${cx},${pts[i][1]} ${pts[i][0]},${pts[i][1]}`; } return `<svg viewBox="0 0 520 180" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="${c}" stroke-width="2.5" vector-effect="non-scaling-stroke"/></svg>`; };
+const tiles = [['Empire Bay RP | Mafia II', '21', '32', 'linear-gradient(135deg,#6b5320,#1d1608)'], ['[RU] Just-Skill.Ru | PvE', '27', '40', 'linear-gradient(135deg,#4a1d96,#150a2c)'], ['Minecraft Survival', '14', '40', 'linear-gradient(135deg,#3b7a2a,#13230d)']];
+const page = (cls) => `<div class="frame ${cls}"><div class="bg"></div>
+<div class="top"><span class="logo">C</span><b>CoreGSM</b><a class="on">Серверы</a><a>Новости</a><a>Статус</a><a>Сообщество</a><span class="btn">Войти</span></div>
+<div class="h1"><i></i><div><h2>Серверы</h2><span>Состояние ваших игровых серверов в реальном времени</span></div></div>
+<div class="kpi"><div><b style="font-size:17px">Всё работает</b><small>7 серверов онлайн</small></div><div><small>Игроков</small><b>143</b></div><div><small>Онлайн</small><b>7/7</b></div><div><small>Пинг</small><b>43 мс</b></div><div><small>Аптайм</small><b>99,1%</b></div><div></div></div>
+<div class="hero"><div><h3>Rust | Vanilla x2</h3><div style="opacity:.8;margin-top:2px">Rust · 203.0.113.13:28015</div><div class="big">52<span style="font-size:20px;font-weight:600;opacity:.8"> / 100 игроков</span></div></div><div class="pl">● Онлайн</div>${curve('#fff')}</div>
+<div class="grid">${tiles.map(([n, p, m, g]) => `<div class="tile"><div class="cv" style="background:${g}"></div><b>${n}</b><div class="num">${p}<small> / ${m}</small></div></div>`).join('')}</div></div>`;
+const NAMES = [
+  ['Мягкий градиент без шума', 'Плавное размытое переливание синего, фиолетового и бирюзового. Чище авроры: без зерна и резких пятен.'],
+  ['Лучи сверху', 'Расходящиеся световые лучи из верхней середины, растворяются к низу. Эффектно, как сцена.'],
+  ['Соты', 'Тонкая сетка шестиугольников и свет сверху. Игровая, «технологичная» фактура.'],
+  ['Волны внизу', 'Тёмный фон, а снизу плавные полупрозрачные волны. Спокойный, живой вариант.'],
+  ['Размытая обложка', 'Картинка самого загруженного сервера, сильно размытая и затемнённая, как фон (здесь Mafia II). Меняется вместе с сервером.'],
+  ['Сияющие ленты', 'Три размытые ленты (бирюзовая, фиолетовая, розовая) на тёмном небе. Северное сияние.'],
+  ['Плёнка', 'Тёплый тёмный фон с заметным зерном и тёмными краями. Кинематографично, но без цветов.'],
+  ['Свечение по краям', 'Тёмная страница с мягким свечением по периметру, как рамка из света. Минимум, но не плоско.'],
+];
+const only = Number(new URLSearchParams(location.search).get('v')); if (only) document.body.classList.add('single');
+const root = document.getElementById('root'), nav = document.getElementById('nav');
+NAMES.forEach(([n, d], i) => { const k = i + 1; const num = k + 8; if (only && only !== num) return; root.insertAdjacentHTML('beforeend', `<div class="vl" id="v${num}"><span class="n">${num}</span><b>${n}</b><p>${d}</p></div>${page('b' + k)}`); nav.insertAdjacentHTML('beforeend', `<a href="#v${num}">${num}. ${n}</a>`); });
+</script>
+</body>
+</html>
