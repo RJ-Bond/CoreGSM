@@ -79,7 +79,7 @@
   .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,
   .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act,
   .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy
-):is(:disabled, [aria-disabled='true']) { opacity: .5; cursor: not-allowed; box-shadow: none; }
+):is(:disabled, [aria-disabled='true']) { opacity: .62; cursor: not-allowed; box-shadow: none; }
 /* busy: the label stays, a spinner precedes it (Button component); the button is disabled but should not look dead */
 :is(
   .btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-link-danger,

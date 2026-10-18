@@ -124,6 +124,11 @@ export function FillBar({ value, max, color }: { value: number; max: number; col
 export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const helpId = useId();
+  // a hint is read once: the cross hides it (remembered per page in this browser), the «i» button next to the actions brings it back
+  const hintKey = `coregsm_hint_${title}`;
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(hintKey) === '1'; } catch { return false; } });
+  const setHint = (off: boolean) => { setHidden(off); try { if (off) localStorage.setItem(hintKey, '1'); else localStorage.removeItem(hintKey); } catch { /* not remembered */ } };
+  const hasHint = !!(hint || help);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -134,9 +139,14 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
             {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
           </div>
         </div>
-        {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+        {(children || (hasHint && hidden)) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {hasHint && hidden && <button type="button" className="btn-icon-ghost btn-icon-sm" title="Показать подсказку" aria-label="Показать подсказку" onClick={() => setHint(false)}><span aria-hidden className="hint-ico">i</span></button>}
+            {children}
+          </div>
+        )}
       </div>
-      {(hint || help) && (
+      {hasHint && !hidden && (
         <div className="hint-strip">
           <span aria-hidden className="hint-ico">i</span>
           <div className="min-w-0 flex-1">
@@ -153,6 +163,7 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
             </p>
             {help && open && <div id={helpId} className="hint-help">{help}</div>}
           </div>
+          <button type="button" className="hint-close" aria-label="Скрыть подсказку" title="Скрыть подсказку" onClick={() => setHint(true)}>✕</button>
         </div>
       )}
     </div>

@@ -83,7 +83,9 @@ export default function Tour() {
   useEffect(() => {
     if (!isAdmin || !username || seen(username)) { setOffer(false); return; }
     const t = window.setTimeout(() => setOffer(true), 2500);
-    return () => window.clearTimeout(t);
+    // the offer must not sit over the content for ever: it goes away by itself (and comes again next time)
+    const gone = window.setTimeout(() => setOffer(false), 16_000);
+    return () => { window.clearTimeout(t); window.clearTimeout(gone); };
   }, [isAdmin, username]);
 
   useEffect(() => {
@@ -101,15 +103,12 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel fixed bottom-24 right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] space-y-3 p-4 shadow-soft md:bottom-6">
-      <div>
-        <div className="font-black">Впервые в Админке?</div>
-        <p className="text-sm font-semibold text-mute">Покажу за минуту, с чего начать: сервер, бот, канал, новости.</p>
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-black">Впервые в Админке?</div>
+        <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>
       </div>
-      <div className="flex gap-2">
-        <button className="btn btn-sm" onClick={() => { setOffer(false); setOpen(true); }}>Показать</button>
-        <button className="btn btn-soft btn-sm" onClick={() => { setOffer(false); if (username) markSeen(username); }}>Не нужно</button>
-      </div>
+      <button className="btn-icon-ghost btn-icon-sm" aria-label="Не показывать" title="Не показывать" onClick={() => { setOffer(false); if (username) markSeen(username); }}>✕</button>
     </div>
   );
 }

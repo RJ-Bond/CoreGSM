@@ -20,7 +20,8 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
   const v = value == null ? 0 : Math.max(0, Math.min(1, value));
   const t = tone ?? usageTone(value);
   return (
-    <div className={`gauge gauge-${t} mx-auto w-full max-w-[9.5rem]`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
+    <div className={`gauge-${t} mx-auto w-full max-w-[9.5rem]`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
+      <div className="gauge">
       <svg viewBox="0 0 120 120" aria-hidden>
         <g transform="rotate(135 60 60)" fill="none" strokeWidth="11" strokeLinecap="round">
           <circle className="gauge-track" cx="60" cy="60" r={R} strokeDasharray={`${C * SWEEP} ${C}`} />
@@ -30,8 +31,9 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
       <div className="gauge-value">
         {icon && <span className="mx-auto mb-0.5 text-mute">{icon}</span>}
         <span className="text-xl font-black leading-none tabular-nums">{display}</span>
-        {caption && <span className="mt-1 text-xs font-bold text-mute">{caption}</span>}
       </div>
+      </div>
+      {caption && <div className="-mt-1 text-center text-xs font-bold text-mute">{caption}</div>}
     </div>
   );
 }
