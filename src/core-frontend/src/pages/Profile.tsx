@@ -18,7 +18,8 @@ import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
-import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, IconServers, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
+import { IconUser } from '../icons';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
 const TABS: { id: Tab; label: TKey }[] = [
@@ -39,7 +40,7 @@ export default function ProfilePage() {
 
   return (
     <div className="space-y-5">
-      <PageHead title={t('pf.title')} subtitle={t('pf.subtitle')} icon={<IconServers />} />
+      <PageHead title={t('pf.title')} subtitle={t('pf.subtitle')} icon={<IconUser />} />
 
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>

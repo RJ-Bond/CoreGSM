@@ -441,6 +441,7 @@ const ru = {
   'srv.pulse.ok': 'Всё работает',
   'srv.pulse.okSub': '{n} сервер онлайн|{n} сервера онлайн|{n} серверов онлайн',
   'srv.pulse.problems': 'Есть проблемы: {name}',
+  'srv.pulse.problemsN': 'Есть проблемы: {n} из {total}',
   'srv.pulse.more': 'и ещё {n}',
   'srv.pulse.slow': 'Высокий пинг',
   'srv.pulse.noAnswer': 'Сервер не отвечает',

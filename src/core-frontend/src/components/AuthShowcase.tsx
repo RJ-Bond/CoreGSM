@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api, type StatusInfo, type StatusServer } from '../api';
 import { gameGradient, gameLabel } from '../games';
-import { AnimatedNumber, GameAvatar, Logo } from '../ui';
+// straight from the modules, not through ../ui (that one re-exports authParts, which imports this file: a cycle)
+import { AnimatedNumber } from '../ui/motion';
+import { GameAvatar, Logo } from '../ui/blocks';
 
 /**
  * Decorative "bento" tiles around the sign-in card (wide screens only). They show live numbers when the panel

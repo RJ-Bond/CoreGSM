@@ -34,7 +34,7 @@ export default function Hero({
             </>
           ) : (
             <>
-              <span className="srv-hero-n">–</span>
+              <span className="srv-hero-n srv-hero-none" aria-hidden>–</span>
               <span className="srv-hero-unit">{hasStatus ? t('srv.hero.offline') : t('srv.hero.waiting')}</span>
             </>
           )}

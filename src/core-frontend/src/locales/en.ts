@@ -440,6 +440,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pulse.ok': 'All systems running',
   'srv.pulse.okSub': '{n} server online|{n} servers online',
   'srv.pulse.problems': 'Problems: {name}',
+  'srv.pulse.problemsN': 'Problems: {n} of {total}',
   'srv.pulse.more': 'and {n} more',
   'srv.pulse.slow': 'High ping',
   'srv.pulse.noAnswer': 'Not responding',

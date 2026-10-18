@@ -4,7 +4,7 @@ import { capLevel, capacityPct, slotsInfo } from '../src/components/servers/capa
 import { chartPoints, chartStart, hasEnoughHistory, needsAttention, pickHero, pulseOf } from '../src/components/servers/overviewLogic';
 import { excerptOf } from '../src/components/servers/WhatsNew';
 import { t } from '../src/i18n';
-import { downBand, spanCaption } from '../src/ui/charts';
+import { downBand, downRuns, spanCaption } from '../src/ui/charts';
 
 const srv = (id: number, o: Partial<Server> = {}): Server => ({
   id, name: `S${id}`, customName: '', nameAuto: false, game: 'minecraft', host: '', port: 0, queryPort: null, displayAddress: '', country: '', coverUrl: null,
@@ -92,6 +92,21 @@ describe('down bands on the sparkline', () => {
       expect(d.x).toBeGreaterThanOrEqual(0);
       expect(d.x + d.width).toBeLessThanOrEqual(w + 1e-9);
     }
+  });
+});
+
+describe('outage marks on the sparkline', () => {
+  it('joins consecutive down samples into one stretch each', () => {
+    const w = 240;
+    const runs = downRuns([false, true, true, false, true, false], 6, w);
+    expect(runs).toHaveLength(2);
+    const a = downBand(1, 6, w);
+    const b = downBand(2, 6, w);
+    expect(runs[0].x).toBeCloseTo(a.x, 5);
+    expect(runs[0].width).toBeCloseTo(b.x + b.width - a.x, 5);
+    expect(downRuns([true, true], 2, w)).toHaveLength(1);
+    expect(downRuns([false, false], 2, w)).toEqual([]);
+    expect(downRuns([], 0, w)).toEqual([]);
   });
 });
 
