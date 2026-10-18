@@ -4,7 +4,7 @@ import { capLevel, capacityPct, slotsInfo } from '../src/components/servers/capa
 import { chartPoints, chartStart, hasEnoughHistory, needsAttention, pickHero, pulseOf } from '../src/components/servers/overviewLogic';
 import { excerptOf } from '../src/components/servers/WhatsNew';
 import { t } from '../src/i18n';
-import { downBand, downRuns, spanCaption } from '../src/ui/charts';
+import { downBand, downRuns, smoothValues, spanCaption } from '../src/ui/charts';
 
 const srv = (id: number, o: Partial<Server> = {}): Server => ({
   id, name: `S${id}`, customName: '', nameAuto: false, game: 'minecraft', host: '', port: 0, queryPort: null, displayAddress: '', country: '', coverUrl: null,
@@ -107,6 +107,16 @@ describe('outage marks on the sparkline', () => {
     expect(downRuns([true, true], 2, w)).toHaveLength(1);
     expect(downRuns([false, false], 2, w)).toEqual([]);
     expect(downRuns([], 0, w)).toEqual([]);
+  });
+});
+
+describe('smoothing of the sparkline', () => {
+  it('averages the neighbours, keeps the length, the flat parts and the short series', () => {
+    expect(smoothValues([0, 10, 0, 10, 0], 1)).toEqual([5, 10 / 3, 20 / 3, 10 / 3, 5]);
+    expect(smoothValues([4, 4, 4, 4], 2)).toEqual([4, 4, 4, 4]);
+    expect(smoothValues([1, 9], 2)).toEqual([1, 9]);
+    expect(smoothValues([1, 2, 3], 0)).toEqual([1, 2, 3]);
+    expect(smoothValues([], 2)).toEqual([]);
   });
 });
 

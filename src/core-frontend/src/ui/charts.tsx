@@ -59,6 +59,18 @@ function useSparkSet(): SparkSet | null {
   return sparkSet;
 }
 
+/** A short moving average (radius `r` samples each way): takes the jitter of 10-minute samples out of the curve, keeps its shape. */
+export function smoothValues(vals: number[], r = 2): number[] {
+  if (r <= 0 || vals.length < 3) return vals;
+  return vals.map((_, i) => {
+    const a = Math.max(0, i - r);
+    const b = Math.min(vals.length - 1, i + r);
+    let sum = 0;
+    for (let k = a; k <= b; k++) sum += vals[k];
+    return sum / (b - a + 1);
+  });
+}
+
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
 export function useSparkSpanMin(serverId: number): number | null {
   const set = useSparkSet();
@@ -100,7 +112,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
       </div>
     );
   }
-  const pts = filled(players);
+  const pts = smoothValues(filled(players), hero ? 2 : 1);
   const downs = downs24.filter(Boolean).length;
   const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
   return hero
