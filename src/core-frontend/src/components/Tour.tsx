@@ -103,7 +103,7 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex md:left-4 md:right-auto w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-black">Впервые в Админке?</div>
         <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>

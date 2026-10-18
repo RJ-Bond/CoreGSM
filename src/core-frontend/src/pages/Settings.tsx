@@ -9,6 +9,7 @@ import { BotCard } from './settings/BotCard';
 import { BrandCard } from './settings/BrandCard';
 import { PasswordCard } from './settings/PasswordCard';
 import { UpdateCard } from './settings/UpdateCard';
+import { SaveBarProvider } from '../saveBar';
 export { BotPill } from './settings/BotCard';
 export { UsersTab } from './settings/UsersTab';
 
@@ -32,7 +33,7 @@ const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
   },
   brand: {
     hint: 'Название, цвет и логотип сообщества: их видят все посетители панели и участники в подвале сообщений Discord.',
-    help: <p>Готовые темы меняют цвета всей панели сразу. Изменения применяются и сохраняются сами; пока идёт сохранение или если оно не удалось, цвета видны только вам как предпросмотр. «Акцент по игре» действует только в вашем браузере.</p>,
+    help: <p>Готовые темы меняют цвета всей панели сразу. Изменения можно посмотреть сразу, а сохраняются кнопкой «Сохранить» внизу; пока идёт сохранение или если оно не удалось, цвета видны только вам как предпросмотр. «Акцент по игре» действует только в вашем браузере.</p>,
   },
   security: {
     hint: 'Пароль администратора и сведения о доступе: кто может входить в панель и регистрироваться.',
@@ -51,6 +52,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
       narrow
       head={<PageHead key={tab} icon={<IconSettings />} title="Настройки" subtitle="Бот, оформление, безопасность, обновления и копии" hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />}
     >
+      <SaveBarProvider>
       <nav className="flex w-full max-w-2xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
         {TABS.map((t) => (
           <a
@@ -90,6 +92,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
           <ConfigTransfer />
         </>
       )}
+      </SaveBarProvider>
     </AdminPage>
   );
 }

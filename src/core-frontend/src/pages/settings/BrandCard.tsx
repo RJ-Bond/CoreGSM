@@ -8,6 +8,7 @@ import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
 import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { useSaveBar, useSaveBarActive } from '../../saveBar';
 import { errorText } from '../../apiErrors';
 
 
@@ -48,7 +49,9 @@ export function BrandCard() {
   const savedForm = { name: b.name, color: b.color, color2: b.color2 ?? '', preset: b.preset ?? '' };
   const nameError = !name.trim() ? 'Введите название сообщества' : name.trim().length > 32 ? 'Не длиннее 32 символов' : '';
   const colorError = parseHex(color) ? '' : 'Цвет должен быть в формате #RRGGBB';
+  const bar = useSaveBarActive();
   const auto = useAutosave({
+    manual: bar,
     value: form,
     saved: savedForm,
     delay: 800,
@@ -58,6 +61,8 @@ export function BrandCard() {
       await reload();
     },
   });
+
+  useSaveBar('brand', 'оформление', auto.status, auto.saveNow, () => { setName(b.name); setColor(b.color); setColor2(b.color2 ?? ''); setPreset(b.preset ?? ''); });
 
   const upload = async (file: File) => {
     setBusy(true);

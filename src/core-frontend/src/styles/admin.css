@@ -41,3 +41,9 @@
 .hint-close { position: absolute; top: 6px; right: 8px; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-pill); color: rgb(var(--mute)); font-size: 13px; font-weight: 650; transition: background-color .15s ease, color .15s ease; }
 .hint-close:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
 .hint-strip > div { padding-right: 24px; }
+
+/* ---------- the common save bar (settings, users): sticks to the bottom of the content column ---------- */
+.save-bar { position: sticky; bottom: 5.5rem; z-index: 30; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--brand) / .5); }
+@media (min-width: 768px) { .save-bar { bottom: 1rem; } }
+.save-bar-dot { flex: none; width: 9px; height: 9px; border-radius: var(--r-pill); background: rgb(var(--warn)); }
+.save-bar-dot.is-bad { background: rgb(var(--bad)); }
