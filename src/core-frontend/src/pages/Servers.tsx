@@ -342,7 +342,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
   const emb = emblemStyle(s.coverUrl, s.game);
   return (
     <article
-      className={`${emb.className ? 'emblem-host' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
+      className={`${emb.className ? 'emblem-host' : ''} ${s.online ? 'is-split' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
         ...emb.style,
@@ -357,7 +357,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
       {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
 
-      <div className="relative flex items-start gap-3">
+      <div className="sh-head relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
@@ -379,13 +379,13 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
 
       {s.online ? (
         <>
-          <div className="relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
+          <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
             {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
           </div>
-          <CapacityBar className="relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-          <div className="relative mt-auto pt-2">
+          <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
+          <div className="sh-chart relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
         </>
@@ -404,7 +404,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         </div>
       )}
 
-      <div className="relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
+      <div className="sh-foot relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
         <span>{spanCaption(sparkSpan)}</span>
         {uptime != null && <span>аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
         <span className="truncate">{s.online && s.map ? `карта ${s.map}` : `обновлено ${ago(s.updatedAt)}`}</span>
