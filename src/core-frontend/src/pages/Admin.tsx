@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type CertInfo, type Server, type ServerInput, type UpdateInfo } from '../api';
+import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
@@ -13,6 +13,8 @@ import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
+import { AdminServersTable } from './AdminServersTable';
+import { SetupProgress } from './AdminStart';
 import JournalPage from './Journal';
 import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
@@ -94,6 +96,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {isAdmin ? (
           <>
             {link(START_SECTION)}
+            <SetupProgress />
             {pinned.length > 0 && (
               <div className="contents md:block">
                 {divider}
@@ -250,6 +253,12 @@ function ServersManage({ sub }: { sub: string }) {
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
+  // 30-day availability of every server (the public status endpoint); a column stays «–» without it
+  const [uptime, setUptime] = useState<Map<number, number>>(new Map());
+  usePoll(
+    () => api<StatusInfo>('/status').then((r) => setUptime(new Map(r.servers.filter((x) => x.uptime30 != null).map((x) => [x.id, x.uptime30 as number])))).catch(() => undefined),
+    5 * 60_000,
+  );
 
   const load = () =>
     api<Server[]>('/servers')
@@ -276,6 +285,17 @@ function ServersManage({ sub }: { sub: string }) {
     if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e: Error) => setError(e.message));
     void load();
+  };
+  const refreshMany = async (list: Server[]) => {
+    await Promise.allSettled(list.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
+    toast(`Опрошено серверов: ${list.length}`);
+    await load();
+  };
+  const removeMany = async (list: Server[]) => {
+    const res = await Promise.allSettled(list.map((s) => api(`/servers/${s.id}`, 'DELETE')));
+    const failed = res.filter((r) => r.status === 'rejected').length;
+    toast(failed ? `Удалено: ${list.length - failed}, не удалось: ${failed}` : `Удалено серверов: ${list.length}`, failed ? 'err' : undefined);
+    await load();
   };
   const refresh = async (s: Server) => {
     setBusyId(s.id);
@@ -312,35 +332,23 @@ function ServersManage({ sub }: { sub: string }) {
         </Empty>
       )}
 
-      <div className="fade-in space-y-3">
-        {servers.map((s) => (
-          <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
-            <GameAvatar game={s.game} size={44} />
-            <div className="min-w-0 flex-1 basis-56">
-              <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
-              <div className="truncate text-sm font-semibold text-mute">
-                {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
-                {s.displayAddress ? <> · показывается как <span className="font-mono">{s.displayAddress}</span></> : null}
-              </div>
-            </div>
-            <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
-            <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} maintenance={!!s.maintenance} />
-            <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
-            <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
-              <a className="btn btn-soft btn-sm" href={`/admin/discord/new/${s.id}`}>Привязать к Discord</a>
-              <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
-                <IconRefresh spinning={busyId === s.id} />
-              </button>
-              <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
-                <IconEdit />
-              </button>
-              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)} hidden={!isAdmin}>
-                <IconTrash />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+      {servers.length > 0 && (
+        <div className="fade-in">
+          <AdminServersTable
+            servers={servers}
+            a={{
+              isAdmin,
+              busyId,
+              uptime,
+              onRefresh: (sv) => void refresh(sv),
+              onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
+              onRemove: (sv) => void remove(sv),
+              onRefreshMany: refreshMany,
+              onRemoveMany: removeMany,
+            }}
+          />
+        </div>
+      )}
 
       {editing && (
         <ServerForm
