@@ -18,7 +18,8 @@ function loadSparks(): Promise<void> {
   sparkLoading = (async () => {
     try {
       const token = getToken();
-      const res = await fetch('/api/servers/sparks?hours=24', { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+      // 144 points = 10-minute buckets: a short outage is a narrow band, a young panel gets a curve after ~20 minutes
+      const res = await fetch('/api/servers/sparks?hours=24&points=144', { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
       if (res.ok) {
         const d = (await res.json()) as { servers: SparkSet['servers'] };
         sparkSet = { at: Date.now(), servers: d.servers ?? {} };
@@ -120,6 +121,23 @@ export function downBand(i: number, n: number, w: number, pad = 3): { x: number;
   return { x: x0, width: Math.max(0, x1 - x0) };
 }
 
+/** Consecutive «down» samples as one stretch each (an outage is one mark, not a comb of bands). */
+export function downRuns(down: boolean[], n: number, w: number, pad = 3): { x: number; width: number }[] {
+  const out: { x: number; width: number }[] = [];
+  let start = -1;
+  for (let i = 0; i <= down.length; i++) {
+    const d = i < down.length && down[i];
+    if (d && start < 0) start = i;
+    if (!d && start >= 0) {
+      const a = downBand(start, n, w, pad);
+      const b = downBand(i - 1, n, w, pad);
+      out.push({ x: a.x, width: b.x + b.width - a.x });
+      start = -1;
+    }
+  }
+  return out;
+}
+
 /** Smooth curve through the points (cubic Bezier with horizontal tangents at the midpoints). */
 export function smoothPath(pts: [number, number][]): string {
   if (pts.length === 0) return '';
@@ -153,6 +171,10 @@ export function SmoothArea({
   const last = pts[pts.length - 1];
   return (
     <div className={`relative w-full ${className}`}>
+      {/* outages: a soft red glow rising from the axis with a thin red line on it (HTML, so the edges stay crisp) */}
+      {downRuns(down ?? [], values.length, w, pad).map((r, i) => (
+        <span key={i} aria-hidden className="chart-down" style={{ left: `${(r.x / w) * 100}%`, width: `${(r.width / w) * 100}%` }} />
+      ))}
       <svg viewBox={`0 0 ${w} ${h}`} className="chart-reveal absolute inset-0 h-full w-full overflow-visible" preserveAspectRatio="none" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
         <defs>
           <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
@@ -163,11 +185,6 @@ export function SmoothArea({
         {grid && [1, 2, 3].map((k) => (
           <line key={k} x1="0" x2={w} y1={(h / 4) * k} y2={(h / 4) * k} stroke={color} strokeOpacity=".22" strokeDasharray="3 6" vectorEffect="non-scaling-stroke" />
         ))}
-        {down?.map((d, i) => {
-          if (!d || !pts[i]) return null;
-          const b = downBand(i, values.length, w, pad);
-          return <rect key={i} x={b.x} y={0} width={b.width} height={h} fill="rgb(var(--bad))" fillOpacity=".22" />;
-        })}
         <path d={`${line} L${last[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`} fill={`url(#${gid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>

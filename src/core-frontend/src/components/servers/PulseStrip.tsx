@@ -73,9 +73,10 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
   let title: string;
   let sub = '';
   if (state === 'bad' || state === 'warn') {
-    const first = problems[0];
-    title = t('srv.pulse.problems', { name: first.name });
-    sub = problems.length > 1 ? t('srv.pulse.more', { n: problems.length - 1 }) : first.online ? t('srv.pulse.slow') : t('srv.pulse.noAnswer');
+    // the count here, the servers and the reasons in the «Needs attention» strip below (no second copy of them)
+    title = t('srv.pulse.problemsN', { n: problems.length, total: servers.length });
+    const names = problems.slice(0, 2).map((s) => s.name).join(', ');
+    sub = problems.length > 2 ? `${names} ${t('srv.pulse.more', { n: problems.length - 2 })}` : names;
   } else if (state === 'maint') {
     const m = servers.filter((s) => s.maintenance);
     title = t('srv.pulse.maint');

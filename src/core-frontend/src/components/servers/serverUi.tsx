@@ -75,7 +75,7 @@ export function CountReact({ r, onDark = false, children }: { r: Reaction; onDar
   return (
     <span key={dir ? r.dk : 'idle'} className={`srv-num ${dir ? `srv-num-${dir}` : ''} ${onDark ? 'on-dark' : ''}`}>
       {children}
-      {dir && <span className={`srv-chip ${dir}`} aria-hidden>{r.d > 0 ? `+${r.d}` : `−${-r.d}`}</span>}
+      {dir && <span className={`srv-delta ${dir}`} aria-hidden>{r.d > 0 ? `+${r.d}` : `−${-r.d}`}</span>}
     </span>
   );
 }
