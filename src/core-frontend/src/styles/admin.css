@@ -35,3 +35,9 @@
 .adm-progress:hover { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .5); }
 .adm-table .row-act { --b-i: 2.125rem; }
 .adm-table td:last-child { padding-right: 10px; }
+
+/* the cross of a hint strip */
+.hint-strip { position: relative; }
+.hint-close { position: absolute; top: 6px; right: 8px; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-pill); color: rgb(var(--mute)); font-size: 13px; font-weight: 650; transition: background-color .15s ease, color .15s ease; }
+.hint-close:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+.hint-strip > div { padding-right: 24px; }

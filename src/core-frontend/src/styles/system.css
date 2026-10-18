@@ -58,3 +58,4 @@
 .pill-maint { background: rgb(var(--soft)); color: rgb(var(--link)); }
 .pill-glass-maint { --dot: #a5b4fc; }
 .pill-glass-maint::before { animation: none; }
+.gauge-cap { max-width: 62%; overflow-wrap: anywhere; }
