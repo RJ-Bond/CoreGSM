@@ -101,6 +101,23 @@ function useStartSteps() {
   return { loading: steps === null, steps: steps ?? [], skipped, skip, unskip, doneCount, total: 5, resolved };
 }
 
+/** A compact progress card for the sidebar: «Настройка 4 из 5» with the first step left; hidden when everything is done or skipped. */
+export function SetupProgress() {
+  const s = useStartSteps();
+  if (s.loading || s.resolved || s.steps.length === 0) return null;
+  const left = s.steps.find((x) => x.state !== 'done' && !s.skipped.includes(x.id));
+  const pct = Math.round((s.doneCount / s.total) * 100);
+  return (
+    <div className="hidden md:block">
+      <a href="/admin/start" className="adm-progress" aria-label={`Настройка: ${s.doneCount} из ${s.total}`}>
+        <span className="flex items-baseline justify-between gap-2"><b>Настройка</b><span>{s.doneCount} из {s.total}</span></span>
+        <span className="adm-progress-bar" aria-hidden><i style={{ width: `${pct}%` }} /></span>
+        {left && <span className="adm-progress-left">Дальше: {left.short}</span>}
+      </a>
+    </div>
+  );
+}
+
 /** `/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
 export function AdminHome() {
   const s = useStartSteps();

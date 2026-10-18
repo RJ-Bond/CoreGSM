@@ -71,6 +71,16 @@ export function smoothValues(vals: number[], r = 2): number[] {
   });
 }
 
+/** A small 24 h curve for table rows (no dot, no band, 24 px high); empty while there is no history. */
+export function MiniSpark({ serverId, color }: { serverId: number; color: string }) {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  const first = raw ? raw.players.findIndex((v) => v != null) : -1;
+  const vals = raw && first >= 0 ? smoothValues(filled(raw.players.slice(first)), 1) : [];
+  if (vals.length < 3) return <span className="text-mute" aria-hidden>–</span>;
+  return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label="График игроков за сутки" /></div>;
+}
+
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
 export function useSparkSpanMin(serverId: number): number | null {
   const set = useSparkSet();
