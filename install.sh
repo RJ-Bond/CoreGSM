@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="bf74f33fcfe2"
+COREGSM_BUILD="232193d5b92d"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -61664,7 +61664,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type CertInfo, type Server, type ServerInput, type UpdateInfo } from '../api';
+import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
@@ -61678,6 +61678,8 @@ import CardsPage from './Cards';
 import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
+import { AdminServersTable } from './AdminServersTable';
+import { SetupProgress } from './AdminStart';
 import JournalPage from './Journal';
 import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
@@ -61759,6 +61761,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {isAdmin ? (
           <>
             {link(START_SECTION)}
+            <SetupProgress />
             {pinned.length > 0 && (
               <div className="contents md:block">
                 {divider}
@@ -61915,6 +61918,12 @@ function ServersManage({ sub }: { sub: string }) {
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
+  // 30-day availability of every server (the public status endpoint); a column stays «–» without it
+  const [uptime, setUptime] = useState<Map<number, number>>(new Map());
+  usePoll(
+    () => api<StatusInfo>('/status').then((r) => setUptime(new Map(r.servers.filter((x) => x.uptime30 != null).map((x) => [x.id, x.uptime30 as number])))).catch(() => undefined),
+    5 * 60_000,
+  );
 
   const load = () =>
     api<Server[]>('/servers')
@@ -61941,6 +61950,17 @@ function ServersManage({ sub }: { sub: string }) {
     if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
     await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e: Error) => setError(e.message));
     void load();
+  };
+  const refreshMany = async (list: Server[]) => {
+    await Promise.allSettled(list.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
+    toast(`Опрошено серверов: ${list.length}`);
+    await load();
+  };
+  const removeMany = async (list: Server[]) => {
+    const res = await Promise.allSettled(list.map((s) => api(`/servers/${s.id}`, 'DELETE')));
+    const failed = res.filter((r) => r.status === 'rejected').length;
+    toast(failed ? `Удалено: ${list.length - failed}, не удалось: ${failed}` : `Удалено серверов: ${list.length}`, failed ? 'err' : undefined);
+    await load();
   };
   const refresh = async (s: Server) => {
     setBusyId(s.id);
@@ -61977,35 +61997,23 @@ function ServersManage({ sub }: { sub: string }) {
         </Empty>
       )}
 
-      <div className="fade-in space-y-3">
-        {servers.map((s) => (
-          <div key={s.id} className="tile flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5">
-            <GameAvatar game={s.game} size={44} />
-            <div className="min-w-0 flex-1 basis-56">
-              <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight hover:text-link">{s.name}</a>
-              <div className="truncate text-sm font-semibold text-mute">
-                {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
-                {s.displayAddress ? <> · показывается как <span className="font-mono">{s.displayAddress}</span></> : null}
-              </div>
-            </div>
-            <div className="min-w-[3.5rem] text-right text-sm font-bold tabular-nums text-mute">{s.online ? <><b className="text-lg font-extrabold text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</div>
-            <StatusPill online={s.online} known={s.hasStatus} lag={s.ping != null && s.ping > 100} maintenance={!!s.maintenance} />
-            <span className="hidden text-sm font-semibold text-mute lg:inline">{ago(s.updatedAt)}</span>
-            <div className="ml-auto flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:justify-end" role="group" aria-label={`Действия: ${s.name}`}>
-              <a className="btn btn-soft btn-sm" href={`/admin/discord/new/${s.id}`}>Привязать к Discord</a>
-              <button type="button" className="row-act" title="Опросить сейчас" aria-label="Опросить сейчас" onClick={() => void refresh(s)} disabled={busyId === s.id} aria-busy={busyId === s.id || undefined}>
-                <IconRefresh spinning={busyId === s.id} />
-              </button>
-              <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setEditing({ id: s.id, data: { name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }, cover: s.coverUrl })}>
-                <IconEdit />
-              </button>
-              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(s)} hidden={!isAdmin}>
-                <IconTrash />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+      {servers.length > 0 && (
+        <div className="fade-in">
+          <AdminServersTable
+            servers={servers}
+            a={{
+              isAdmin,
+              busyId,
+              uptime,
+              onRefresh: (sv) => void refresh(sv),
+              onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
+              onRemove: (sv) => void remove(sv),
+              onRefreshMany: refreshMany,
+              onRemoveMany: removeMany,
+            }}
+          />
+        </div>
+      )}
 
       {editing && (
         <ServerForm
@@ -62205,6 +62213,168 @@ function GalleryAdmin() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/AdminServersTable.tsx" << '__COREGSM_EOF__'
+// The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
+// server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
+import { useMemo, useState } from 'react';
+import type { Server } from '../api';
+import { confirmDialog } from '../confirm';
+import { gameColor, gameLabel } from '../games';
+import { GameAvatar, IconEdit, IconRefresh, IconTrash, MiniSpark, StatusPill, ago, isLag } from '../ui';
+import { countServers, filterServers, type ServerFilter } from './adminServersLogic';
+
+export interface TableActions {
+  isAdmin: boolean;
+  busyId: number | null;
+  uptime: Map<number, number>;
+  onRefresh: (s: Server) => void;
+  onEdit: (s: Server) => void;
+  onRemove: (s: Server) => void;
+  /** refresh / delete several at once; resolve when done */
+  onRefreshMany: (list: Server[]) => Promise<void>;
+  onRemoveMany: (list: Server[]) => Promise<void>;
+}
+
+const FILTERS: [ServerFilter, string][] = [['all', 'Все'], ['online', 'Онлайн'], ['problems', 'Проблемы']];
+const pct = (v: number | undefined) => (v == null ? '–' : `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`);
+
+export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableActions }) {
+  const [filter, setFilter] = useState<ServerFilter>('all');
+  const [query, setQuery] = useState('');
+  const [sel, setSel] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const counts = useMemo(() => countServers(servers), [servers]);
+  const rows = useMemo(() => filterServers(servers, filter, query), [servers, filter, query]);
+  const shownIds = rows.map((s) => s.id);
+  const picked = servers.filter((s) => sel.includes(s.id));
+  const allOn = rows.length > 0 && shownIds.every((id) => sel.includes(id));
+  const toggle = (id: number) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const toggleAll = () => setSel((l) => (allOn ? l.filter((id) => !shownIds.includes(id)) : [...new Set([...l, ...shownIds])]));
+
+  const many = async (fn: (list: Server[]) => Promise<void>) => {
+    setBusy(true);
+    try { await fn(picked); setSel([]); } finally { setBusy(false); }
+  };
+  const removeMany = async () => {
+    if (!(await confirmDialog({ title: `Удалить серверов: ${picked.length}?`, text: 'Серверы будут удалены вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
+    await many(a.onRemoveMany);
+  };
+
+  return (
+    <div className="adm-st space-y-3">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+          {FILTERS.map(([id, label]) => (
+            <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={filter === id} onClick={() => setFilter(id)}>
+              {label} · {counts[id]}
+            </button>
+          ))}
+        </nav>
+        <label className="adm-search ml-auto">
+          <span aria-hidden>⌕</span>
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Найти сервер" aria-label="Найти сервер" />
+        </label>
+      </div>
+
+      {picked.length > 0 && (
+        <div className="adm-bulk" role="region" aria-label="Выбранные серверы">
+          <b>Выбрано: {picked.length}</b>
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>Опросить сейчас</button>
+          {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>Удалить</button>}
+          <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => setSel([])}>Снять выбор</button>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="tile px-5 py-8 text-center font-semibold text-mute">
+          Ничего не найдено. <button type="button" className="font-extrabold text-link underline" onClick={() => { setFilter('all'); setQuery(''); }}>Сбросить фильтры</button>
+        </div>
+      ) : (
+        <>
+          {/* wide screens: a table */}
+          <div className="tile hidden overflow-x-auto p-1.5 md:block">
+            <table className="adm-table">
+              <thead>
+                <tr>
+                  <th className="w-9"><input type="checkbox" className="srv-check" checked={allOn} onChange={toggleAll} aria-label="Выбрать все" /></th>
+                  <th>Сервер</th>
+                  <th>Статус</th>
+                  <th>Игроки</th>
+                  <th>Пинг</th>
+                  <th className="hidden 2xl:table-cell">Аптайм 30 д</th>
+                  <th className="hidden lg:table-cell">24 ч</th>
+                  <th aria-label="Действия" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.id} data-selected={sel.includes(s.id) ? 'true' : undefined}>
+                    <td><input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`Выбрать: ${s.name}`} /></td>
+                    <td>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <GameAvatar game={s.game} size={38} />
+                        <div className="min-w-0">
+                          <a href={`/servers/${s.id}`} className="block max-w-[12.5rem] xl:max-w-[15rem] truncate font-extrabold leading-tight hover:text-link" title={s.name}>{s.name}</a>
+                          <div className="max-w-[12.5rem] xl:max-w-[15rem] truncate text-xs font-semibold text-mute" title={s.displayAddress ? `Показывается как ${s.displayAddress}` : undefined}>
+                            {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td><StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} /></td>
+                    <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</td>
+                    <td className="tabular-nums text-mute">{s.online && s.ping != null ? `${s.ping} мс` : '—'}</td>
+                    <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
+                    <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
+                    <td>
+                      <div className="flex items-center justify-end gap-1" role="group" aria-label={`Действия: ${s.name}`}>
+                        <a className="row-act" href={`/admin/discord/new/${s.id}`} title="Привязать к Discord" aria-label={`Привязать к Discord: ${s.name}`}>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></svg>
+                        </a>
+                        <button type="button" className="row-act" title="Опросить сейчас" aria-label={`Опросить сейчас: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
+                          <IconRefresh spinning={a.busyId === s.id} />
+                        </button>
+                        <button type="button" className="row-act" title="Изменить" aria-label={`Изменить: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
+                        {a.isAdmin && <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* a phone: a card per server */}
+          <div className="space-y-2.5 md:hidden">
+            {rows.map((s) => (
+              <div key={s.id} className="tile flex flex-wrap items-center gap-x-3 gap-y-2 p-3.5" data-selected={sel.includes(s.id) ? 'true' : undefined}>
+                <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`Выбрать: ${s.name}`} />
+                <GameAvatar game={s.game} size={40} />
+                <div className="min-w-0 flex-1 basis-40">
+                  <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight">{s.name}</a>
+                  <div className="truncate text-xs font-semibold text-mute">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
+                </div>
+                <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
+                <div className="flex w-full items-center gap-2 text-sm font-semibold text-mute">
+                  <span className="tabular-nums">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</span>
+                  <span>· {ago(s.updatedAt)}</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    <a className="row-act" href={`/admin/discord/new/${s.id}`} aria-label={`Привязать к Discord: ${s.name}`}>◔</a>
+                    <button type="button" className="row-act" aria-label={`Опросить сейчас: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id}><IconRefresh spinning={a.busyId === s.id} /></button>
+                    <button type="button" className="row-act" aria-label={`Изменить: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
+                    {a.isAdmin && <button type="button" className="row-act row-act-danger" aria-label={`Удалить: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminStart.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
@@ -62307,6 +62477,23 @@ function useStartSteps() {
   // «resolved»: finished or consciously skipped: the start page then stops being the default
   const resolved = steps ? steps.every((s) => s.state === 'done' || skipped.includes(s.id)) : false;
   return { loading: steps === null, steps: steps ?? [], skipped, skip, unskip, doneCount, total: 5, resolved };
+}
+
+/** A compact progress card for the sidebar: «Настройка 4 из 5» with the first step left; hidden when everything is done or skipped. */
+export function SetupProgress() {
+  const s = useStartSteps();
+  if (s.loading || s.resolved || s.steps.length === 0) return null;
+  const left = s.steps.find((x) => x.state !== 'done' && !s.skipped.includes(x.id));
+  const pct = Math.round((s.doneCount / s.total) * 100);
+  return (
+    <div className="hidden md:block">
+      <a href="/admin/start" className="adm-progress" aria-label={`Настройка: ${s.doneCount} из ${s.total}`}>
+        <span className="flex items-baseline justify-between gap-2"><b>Настройка</b><span>{s.doneCount} из {s.total}</span></span>
+        <span className="adm-progress-bar" aria-hidden><i style={{ width: `${pct}%` }} /></span>
+        {left && <span className="adm-progress-left">Дальше: {left.short}</span>}
+      </a>
+    </div>
+  );
 }
 
 /** `/admin` without a section: «Начало работы» while something is left, «Серверы» when everything is done. */
@@ -69049,6 +69236,31 @@ export const ADMIN_LINKS: AdminLink[] = [
 ];
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/adminServersLogic.ts" << '__COREGSM_EOF__'
+// Pure logic of the «Серверы» table in the admin area: filters, search and counts. Covered by tests.
+import type { Server } from '../api';
+import { LAG_PING } from '../ui/poll';
+
+export type ServerFilter = 'all' | 'online' | 'problems';
+
+/** not answering after a first answer, or slow; a server in a maintenance window is not a problem */
+export const isProblem = (s: Server): boolean => !s.maintenance && s.hasStatus && (!s.online || (s.ping != null && s.ping > LAG_PING));
+
+export function filterServers(list: Server[], filter: ServerFilter, query: string): Server[] {
+  const q = query.trim().toLowerCase();
+  return list.filter((s) => {
+    if (filter === 'online' && !s.online) return false;
+    if (filter === 'problems' && !isProblem(s)) return false;
+    if (!q) return true;
+    return [s.name, s.customName, s.game, s.host, String(s.port), s.displayAddress, s.map ?? ''].some((v) => (v ?? '').toLowerCase().includes(q));
+  });
+}
+
+export function countServers(list: Server[]): Record<ServerFilter, number> {
+  return { all: list.length, online: list.filter((s) => s.online).length, problems: list.filter(isProblem).length };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminShortcuts.ts" << '__COREGSM_EOF__'
 // «Недавние» and «Закреплённые» of the admin sidebar: plain list helpers (no DOM) plus the localStorage glue.
 
@@ -70168,6 +70380,26 @@ __COREGSM_EOF__
 .gt-card:hover { box-shadow: var(--shadow-1); }
 .gt-card.is-on { border-color: transparent; box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 4px rgb(var(--ink)); }
 .gt-art { display: flex; align-items: flex-end; height: 64px; padding: 8px; border-radius: var(--r-md); background-size: cover; background-position: center; }
+
+/* ---------- servers table, search, bulk bar, sidebar progress ---------- */
+.adm-table { width: 100%; border-collapse: collapse; }
+.adm-table th { padding: 9px 8px; text-align: left; font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
+.adm-table td { padding: 8px 8px; border-top: 1px solid rgb(var(--line)); vertical-align: middle; white-space: nowrap; }
+.adm-table tbody tr { transition: background-color .15s ease; }
+.adm-table tbody tr:hover { background: rgb(var(--soft) / .6); }
+.adm-table tr[data-selected='true'], .adm-st .tile[data-selected='true'] { background: rgb(var(--brand) / .1); }
+.adm-search { display: flex; align-items: center; gap: 8px; min-width: min(100%, 15rem); padding: 0 12px; border-radius: var(--r-md); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); color: rgb(var(--mute)); }
+.adm-search:focus-within { box-shadow: inset 0 0 0 2px rgb(var(--brand)); }
+.adm-search input { flex: 1; min-width: 0; height: 2.375rem; background: transparent; border: 0; outline: 0; color: rgb(var(--ink)); font: inherit; font-weight: 600; }
+.adm-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 12px; border-radius: var(--r-lg); background: rgb(var(--brand) / .12); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .35); }
+.adm-progress { display: grid; gap: 6px; margin: 4px 0 2px; padding: 10px 12px; border-radius: var(--r-md); background: rgb(var(--soft) / .7); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: 13px; font-weight: 650; color: rgb(var(--mute)); }
+.adm-progress b { color: rgb(var(--ink)); }
+.adm-progress-bar { display: block; height: 6px; border-radius: var(--r-pill); background: rgb(var(--line)); overflow: hidden; }
+.adm-progress-bar i { display: block; height: 100%; border-radius: var(--r-pill); background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--brand-2))); }
+.adm-progress-left { font-size: 12px; }
+.adm-progress:hover { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .5); }
+.adm-table .row-act { --b-i: 2.125rem; }
+.adm-table td:last-child { padding-right: 10px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -71952,7 +72184,7 @@ export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/fo
 export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
-export { Spark, smoothPath, SmoothArea, FleetBar, useSparkSpanMin, spanCaption } from './ui/charts';
+export { Spark, MiniSpark, smoothPath, SmoothArea, FleetBar, useSparkSpanMin, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
@@ -72757,6 +72989,16 @@ export function smoothValues(vals: number[], r = 2): number[] {
     for (let k = a; k <= b; k++) sum += vals[k];
     return sum / (b - a + 1);
   });
+}
+
+/** A small 24 h curve for table rows (no dot, no band, 24 px high); empty while there is no history. */
+export function MiniSpark({ serverId, color }: { serverId: number; color: string }) {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  const first = raw ? raw.players.findIndex((v) => v != null) : -1;
+  const vals = raw && first >= 0 ? smoothValues(filled(raw.players.slice(first)), 1) : [];
+  if (vals.length < 3) return <span className="text-mute" aria-hidden>–</span>;
+  return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label="График игроков за сутки" /></div>;
 }
 
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
