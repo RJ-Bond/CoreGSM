@@ -326,6 +326,12 @@ export function registerNews(deps: {
   statusEmbed: (serverId: number) => StatusEmbed | null;
   /** public https address of the panel (for the «read in full» link), or null when unknown */
   publicBase: () => string | null;
+  /** may guests look at the panel (the link preview page is public only then) */
+  publicPanel?: () => boolean;
+  /** the address the request came to, when the public one is not set */
+  baseOf?: (req: Request) => string;
+  /** name and colour of the site for the preview page */
+  brand?: () => { name: string; color: string };
 }) {
   const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
   const authed = deps.auth ?? staff;
@@ -653,12 +659,38 @@ export function registerNews(deps: {
   /** the order of published items by time, newest first */
   const byTime = (a: NewsRow, b: NewsRow) => (b.sent_at ?? b.created_at) - (a.sent_at ?? a.created_at) || b.id - a.id;
 
+  /** ?limit=N&offset=M: a page of the list (without limit: everything, as before) */
+  const pageOf = <T,>(list: T[], req: Request): T[] => {
+    const limit = Number(req.query.limit);
+    if (!Number.isInteger(limit) || limit < 1) return list;
+    const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
+    return list.slice(offset, offset + Math.min(100, limit));
+  };
+  const PUBLISHED_SQL = "status IN ('sent','edit_queued')";
   app.get('/api/news', viewer, (req, res) => {
     const uid = uidOf(req);
-    const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
-    if (isAdmin(req)) return res.json(rows.map((r) => serialize(r, uid)));
-    const pub = rows.filter(isPublished).sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
-    res.json(pub.map((r) => publicNews(r, uid)));
+    if (isAdmin(req)) {
+      const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
+      return res.json(pageOf(rows, req).map((r) => serialize(r, uid)));
+    }
+    // only the published rows are read, and only the requested page is turned into the public shape (reactions are a query each)
+    const cat = typeof req.query.category === 'string' && (NEWS_CATEGORIES as readonly string[]).includes(req.query.category) ? req.query.category : '';
+    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}`).all(...(cat ? [cat] : [])) as NewsRow[];
+    const pub = rows.sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
+    res.json(pageOf(pub, req).map((r) => publicNews(r, uid)));
+  });
+
+  /** how many published items every rubric has (the chips of the news page; a page of the list cannot tell) */
+  app.get('/api/news/counts', viewer, (_req, res) => {
+    const out: Record<string, number> = { all: 0 };
+    for (const c of NEWS_CATEGORIES) out[c] = 0;
+    const rows = db.prepare(`SELECT COALESCE(json_extract(payload, '$.category'), 'announcement') AS cat, COUNT(*) AS n FROM news WHERE test = 0 AND ${PUBLISHED_SQL} GROUP BY cat`).all() as { cat: string; n: number }[];
+    for (const r of rows) {
+      const k = (NEWS_CATEGORIES as readonly string[]).includes(r.cat) ? r.cat : 'announcement';
+      out[k] += r.n;
+      out.all += r.n;
+    }
+    res.json(out);
   });
 
   app.get('/api/news/:id', viewer, (req, res) => {
@@ -666,11 +698,89 @@ export function registerNews(deps: {
     const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
     if (!r || (!isAdmin(req) && !isPublished(r))) return res.status(404).json({ error: 'Новость не найдена' });
     const base = isAdmin(req) ? serialize(r, uid) : publicNews(r, uid);
-    // neighbours among published items: prev is the one before it in the list (newer), next the one after (older)
-    const pub = (db.prepare('SELECT * FROM news WHERE test = 0').all() as NewsRow[]).filter(isPublished).sort(byTime);
-    const i = pub.findIndex((x) => x.id === r.id);
-    const ref = (x: NewsRow | undefined) => (x ? { id: x.id, title: titleOf(JSON.parse(x.payload) as NewsPayload) } : null);
-    res.json({ ...base, prev: i > 0 ? ref(pub[i - 1]) : null, next: i >= 0 ? ref(pub[i + 1]) : null });
+    // neighbours among published items: prev is the one before it in the list (newer), next the one after (older).
+    // Only ids (and the rubric) are read for the whole list; the two neighbours and the suggestions are loaded by id.
+    const order = db
+      .prepare(`SELECT id, COALESCE(json_extract(payload, '$.category'), 'announcement') AS cat FROM news WHERE test = 0 AND ${PUBLISHED_SQL} ORDER BY COALESCE(sent_at, created_at) DESC, id DESC`)
+      .all() as { id: number; cat: string }[];
+    const i = order.findIndex((x) => x.id === r.id);
+    const byId = db.prepare('SELECT * FROM news WHERE id = ?');
+    const ref = (x: { id: number } | undefined) => {
+      const row = x ? (byId.get(x.id) as NewsRow | undefined) : undefined;
+      return row ? { id: row.id, title: titleOf(JSON.parse(row.payload) as NewsPayload) } : null;
+    };
+    // «Read next»: the same rubric first, then the newest ones, never this item
+    const mine = i >= 0 ? order[i].cat : 'announcement';
+    const others = order.filter((x) => x.id !== r.id);
+    const suggested = [...others.filter((x) => x.cat === mine), ...others.filter((x) => x.cat !== mine)].slice(0, 3);
+    const related = suggested.map((x) => byId.get(x.id) as NewsRow | undefined).filter((x): x is NewsRow => !!x).map((x) => publicNews(x, uid));
+    res.json({ ...base, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
+  });
+
+  // ---------- a link that looks good when pasted into Discord/Telegram: /n/<id> (redirects to the news page) ----------
+  const esc = (v: unknown) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  /** a plain teaser out of Discord markdown */
+  const teaser = (text: string, max = 200) => {
+    const t = text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/^[ \t]*[-*•]\s+/gm, '• ')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[*_~`>#|]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+  };
+  /** the picture of a news item for the preview: its image, else the first gallery picture, else the default one */
+  const previewImage = (p: NewsPayload, base: string): string => {
+    const e = p.embed;
+    if (e?.image?.upload) return `${base}/api/news/images/${e.image.upload}`;
+    if (e?.image?.url && /^https:\/\//i.test(e.image.url)) return e.image.url;
+    const g = p.gallery?.find((x) => x.upload || (x.url && /^https:\/\//i.test(x.url)));
+    if (g?.upload) return `${base}/api/news/images/${g.upload}`;
+    if (g?.url) return g.url;
+    return `${base}/og-default.png`;
+  };
+  app.get('/n/:id(\\d+)', (req, res) => {
+    res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
+    const gone = () => void res.status(404).type('html').send('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Не найдено</title></head><body><p>Новость не найдена.</p></body></html>');
+    if (deps.publicPanel && !deps.publicPanel()) return gone();
+    const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
+    if (!r || !isPublished(r)) return gone();
+    const p = JSON.parse(r.payload) as NewsPayload;
+    const base = deps.publicBase() ?? deps.baseOf?.(req) ?? `${req.protocol}://${req.get('host')}`;
+    const b = deps.brand?.() ?? { name: 'CoreGSM', color: '#4f46e5' };
+    const title = titleOf(p);
+    const desc = teaser(p.embed?.description || p.content || '') || b.name;
+    const target = `/news/${r.id}`;
+    const url = `${base}/n/${r.id}`;
+    const image = previewImage(p, base);
+    res.type('html').send(`<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · ${esc(b.name)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta name="theme-color" content="${esc(b.color)}">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="${esc(b.name)}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:url" content="${esc(url)}">
+<meta property="og:locale" content="ru_RU">
+${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sent_at).toISOString()}">` : ''}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(desc)}">
+<meta name="twitter:image" content="${esc(image)}">
+<meta http-equiv="refresh" content="0;url=${esc(target)}">
+<script>location.replace(${JSON.stringify(target).replace(/</g, '\\u003c')});</script>
+</head>
+<body>
+<p><a href="${esc(target)}">${esc(title)}</a></p>
+</body>
+</html>`);
   });
 
   // a signed-in user's single reaction on a published item

@@ -1,7 +1,7 @@
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { registerAlerts } from './alerts.js';
-import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
+import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, publicPanel, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
@@ -94,6 +94,9 @@ app.use(internalRouter);
 registerNews({
   app,
   publicBase,
+  publicPanel,
+  baseOf,
+  brand: () => ({ name: brand().name, color: brand().color }),
   staff: allow('news'),
   auth,
   viewer,

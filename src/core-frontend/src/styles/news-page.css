@@ -249,3 +249,26 @@
   font-size: .9375rem; font-weight: 500; text-decoration-thickness: 1px; text-decoration-color: rgb(var(--field));
 }
 :is(.nw-hero, .nw-article) .nw-toolbar, :is(.nw-hero, .nw-article) .nw-actions-wrap, .nw-hero .nf-actions { gap: .25rem 1.5rem; }
+
+/* ---------- the generated covers differ: the rubric colour, but another pattern and light for every fourth news (data-v = id % 4) ---------- */
+.nw-gen[data-v='1'] { background:
+    radial-gradient(70% 100% at 92% 108%, color-mix(in srgb, var(--gen) 90%, #fff) 0%, transparent 60%),
+    radial-gradient(60% 90% at -6% -10%, color-mix(in srgb, var(--gen) 50%, #7c3aed) 0%, transparent 62%),
+    linear-gradient(200deg, color-mix(in srgb, var(--gen) 34%, #0b0c16), #0b0c16 85%); }
+.nw-gen[data-v='1']::before { background-image: radial-gradient(rgb(255 255 255 / .16) 1.2px, transparent 1.6px); background-size: 16px 16px;
+  -webkit-mask-image: radial-gradient(80% 90% at 18% 85%, #000, transparent 75%); mask-image: radial-gradient(80% 90% at 18% 85%, #000, transparent 75%); }
+.nw-gen[data-v='2'] { background:
+    radial-gradient(90% 120% at 50% -20%, color-mix(in srgb, var(--gen) 95%, #fff) 0%, transparent 64%),
+    radial-gradient(70% 90% at 100% 100%, color-mix(in srgb, var(--gen) 55%, #0ea5e9) 0%, transparent 60%),
+    linear-gradient(170deg, color-mix(in srgb, var(--gen) 36%, #0b0c16), #0b0c16 85%); }
+.nw-gen[data-v='2']::before { background-image: repeating-linear-gradient(135deg, rgb(255 255 255 / .1) 0 1px, transparent 1px 14px);
+  -webkit-mask-image: radial-gradient(90% 90% at 80% 10%, #000, transparent 80%); mask-image: radial-gradient(90% 90% at 80% 10%, #000, transparent 80%); }
+.nw-gen[data-v='3'] { background:
+    radial-gradient(80% 110% at 100% 0%, color-mix(in srgb, var(--gen) 90%, #fff) 0%, transparent 60%),
+    radial-gradient(70% 100% at 0% 100%, color-mix(in srgb, var(--gen) 55%, #ec4899) 0%, transparent 62%),
+    linear-gradient(120deg, color-mix(in srgb, var(--gen) 34%, #0b0c16), #0b0c16 85%); }
+.nw-gen[data-v='3']::before { background-image: repeating-radial-gradient(circle at 82% 22%, rgb(255 255 255 / .12) 0 1px, transparent 1px 18px);
+  background-size: auto; -webkit-mask-image: radial-gradient(90% 100% at 82% 22%, #000, transparent 78%); mask-image: radial-gradient(90% 100% at 82% 22%, #000, transparent 78%); }
+.nw-soon { display: grid; gap: .35rem; padding: .35rem 0 .6rem; color: inherit; text-decoration: none; }
+.nw-soon b { font-weight: 650; overflow-wrap: anywhere; }
+.nw-soon:hover b { text-decoration: underline; }

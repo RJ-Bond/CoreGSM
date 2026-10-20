@@ -685,6 +685,8 @@ export interface NewsReaction { emoji: string; count: number; mine: boolean }
 export interface PublicNewsFull extends PublicNews {
   prev?: { id: number; title: string } | null;
   next?: { id: number; title: string } | null;
+  /** up to three other news to read next (the same rubric first) */
+  related?: PublicNews[];
 }
 
 /** who signs a news item (the Discord display name 1:1 and picture when linked, else the site login and picture) */
