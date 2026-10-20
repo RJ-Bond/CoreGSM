@@ -41,9 +41,9 @@ export default function Hero({
         </div>
         {maintenance && <MaintenanceChip m={maintenance} glass />}
       </div>
-      {online && max > 0 && <CapacityBar className="mt-2.5" players={players} max={max} color="#fff" onDark big />}
+      {online && max > 0 && <CapacityBar className="srv-hero-bar mt-2.5" players={players} max={max} color="#fff" onDark big />}
       {freeSlot !== 'hidden' && (
-        <div className="mt-3">
+        <div className="srv-hero-free mt-3">
           {freeSlot === 'subscribed' ? (
             <p className="srv-hero-sub"><IconBell size={16} />{t('srv.freeSlot.subscribed')}</p>
           ) : freeSlot === 'guest' ? (

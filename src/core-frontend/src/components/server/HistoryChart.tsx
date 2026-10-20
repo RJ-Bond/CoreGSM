@@ -371,7 +371,7 @@ export default function HistoryChart({
           )}
           {series === 'players' && allPoints.some((p) => p.ping != null) && (
             <button type="button" className="hc-chip" aria-pressed={showPing} onClick={() => setShowPing((v) => !v)}>
-              <i className="hc-chip-ping" aria-hidden />пинг, мс (справа)
+              <i className="hc-chip-ping" aria-hidden />{showPing ? 'пинг, мс (справа)' : 'показать пинг'}
             </button>
           )}
           {zoom ? (

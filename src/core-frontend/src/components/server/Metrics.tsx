@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, fmtDateTime, num } from '../../ui';
+import { useI18n } from '../../i18n';
+import { fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
 import { metricFill } from './serverLogic';
 
@@ -37,16 +37,8 @@ export const uptimeLevel = (pct: number | null): 'good' | 'warm' | 'hot' | undef
  *  never in the cover's colour: a red cover must not make a healthy server look broken. */
 export default function Metrics({ d, withSamples = false }: { d: MetricsData; withSamples?: boolean }) {
   useI18n();
-  const nowPct = metricFill(d.players, d.maxPlayers);
   return (
-    <div className={`srv-metrics ${withSamples ? 'has-5' : ''}`}>
-      <Cell
-        k="Сейчас"
-        v={d.online ? <><AnimatedNumber value={d.players} delta />{d.maxPlayers > 0 && <span className="srv-metric-of">/{d.maxPlayers}</span>}</> : '–'}
-        hint={d.online ? (d.maxPlayers > 0 ? t('srv.cap.taken', { pct: nowPct }) : '') : d.hasStatus ? 'недоступен' : 'ждём ответ'}
-        fill={d.online ? nowPct : 0}
-        level={capLevel(nowPct)}
-      />
+    <div className={`srv-metrics ${withSamples ? 'has-4' : ''}`}>
       <Cell
         k="Пик"
         v={d.peak == null ? '–' : String(d.peak)}

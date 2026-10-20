@@ -139,7 +139,8 @@
 
 /* ---------- metrics row ---------- */
 .srv-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-@media (min-width: 560px) { .srv-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); } .srv-metrics.has-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.srv-metrics > .srv-metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+@media (min-width: 560px) { .srv-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .srv-metrics.has-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } .srv-metrics > .srv-metric:last-child:nth-child(odd) { grid-column: auto; } }
 .srv-metric { min-width: 0; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
 .srv-metric-v { margin-top: 2px; font-size: 22px; font-weight: 800; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .srv-metric-of { font-size: 14px; font-weight: 650; color: rgb(var(--mute)); }
@@ -279,3 +280,16 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .pr-dot { width: 10px; height: 10px; flex: none; border-radius: var(--r-pill); background: rgb(var(--mute)); }
 .pr-dot.is-up { background: rgb(var(--ok)); box-shadow: 0 0 0 4px rgb(var(--ok) / .18); }
 .pr-dot.is-down { background: rgb(var(--bad)); box-shadow: 0 0 0 4px rgb(var(--bad) / .18); }
+
+/* ---------- the server banner: a scrim, the counter and the fill bar in one row, the address on the copy button ---------- */
+.srv-scrim { background: linear-gradient(90deg, rgb(8 10 20 / .5) 0%, rgb(8 10 20 / .22) 62%, rgb(8 10 20 / .08) 100%), linear-gradient(180deg, transparent 55%, rgb(8 10 20 / .3)); }
+@media (min-width: 640px) {
+  .srv-hero { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 28px; align-items: center; }
+  .srv-hero > .srv-hero-top { grid-column: 1; }
+  .srv-hero > .srv-hero-bar { grid-column: 2; margin-top: 0; }
+  .srv-hero > .srv-hero-free { grid-column: 1 / -1; }
+}
+.srv-addr-btn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; max-width: 100%; }
+@media (max-width: 639px) { .srv-addr-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; } }
+/* reviews: an empty block is one line */
+.rv-none { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
