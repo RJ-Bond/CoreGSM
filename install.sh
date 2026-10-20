@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="aa152c4ba8cb"
+COREGSM_BUILD="35e91e0af66d"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -51344,44 +51344,34 @@ function monthFormatter(lang: 'ru' | 'en') {
   };
 }
 
-/** the day and the short month for the date column of an entry: «18» / «окт» */
-function dateParts(ts: number | null, lang: 'ru' | 'en'): { day: string; mon: string; year: string } | null {
-  if (!ts) return null;
-  const d = new Date(ts);
-  const mon = new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ru-RU', { month: 'short' }).format(d).replace('.', '');
-  return { day: String(d.getDate()), mon, year: String(d.getFullYear()) };
-}
-
-/** One entry of the editorial list: the date on the left, the rubric and a serif headline with a teaser, the cover on the right. */
-function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
+/**
+ * One news as a small article: a banner (the picture, or a cover drawn by the panel) with the rubric, the date and the
+ * headline on it, and the whole text below (a list stays a list), the author and a link.
+ */
+function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
-  const dp = dateParts(c.at, lang);
   return (
-    <article className="ne" style={{ ['--nf-accent' as string]: c.accent }}>
-      {/* the parts are for the eyes, the screen reader reads the whole date once */}
-      <time className="ne-date" dateTime={c.at ? new Date(c.at).toISOString() : undefined}>
-        {dp && <>
-          <span className="sr-only">{fmtDate(c.at as number)}</span>
-          <b aria-hidden>{dp.day}</b><span aria-hidden>{dp.mon}</span><small aria-hidden>{dp.year}</small>
-        </>}
-      </time>
-      <div className="ne-body">
-        <div className="nw-chips">
-          {c.pinned && <PinChip />}
-          <CategoryChip category={c.category} />
-          {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
-        </div>
-        <h3 className="ne-title"><a href={href}>{c.title}</a></h3>
-        {c.text && <p className="ne-text">{plainExcerpt(c.text, 260)}</p>}
-        <div className="ne-foot">
+    <article className="nb" style={{ ['--nf-accent' as string]: c.accent }}>
+      <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
+        <span className="nb-banner-in">
+          <span className="nb-chips">
+            {c.pinned && <PinChip />}
+            <CategoryChip category={c.category} />
+            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()}>{fmtDate(c.at)}</time>}
+          </span>
+          <h3 className="nb-title">{c.title}</h3>
+        </span>
+      </a>
+      <div className="nb-body">
+        {(c.text || c.fields.length > 0) && <div className="nb-text"><NewsText text={c.text} fields={c.fields} /></div>}
+        {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+        <div className="nb-foot">
           {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
-      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
-        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
-      </a>
     </article>
   );
 }
@@ -71952,6 +71942,25 @@ __COREGSM_EOF__
 }
 
 .ne-more { display: flex; justify-content: center; padding: 1.25rem 0 .5rem; }
+
+/* ---------- the news as a small article: a banner with the headline on it, the whole text below ---------- */
+.ne-list { gap: 1.1rem; }
+.ne-list .nw-group { display: grid; gap: 1.1rem; }
+.nb { overflow: hidden; border-radius: var(--r-xl); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-2); }
+.nb-banner { position: relative; display: flex; align-items: flex-end; min-height: 9.5rem; padding: 1.25rem 1.5rem; color: #fff; text-decoration: none; background-size: cover; background-position: center; background-color: rgb(var(--soft)); isolation: isolate; }
+.nb-banner:not(.nw-gen)::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgb(8 10 20 / .15), rgb(8 10 20 / .78)); }
+.nb-banner.nw-gen .nw-gen-ico { height: 70%; right: 6%; }
+.nb-banner-in { position: relative; z-index: 2; display: grid; gap: .5rem; max-width: 46rem; }
+.nb-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; }
+.nb-date { padding: .2rem .65rem; border-radius: var(--r-pill); background: rgb(0 0 0 / .45); font-size: .8125rem; font-weight: 650; }
+.nb-title { margin: 0; font-size: clamp(1.45rem, 3vw, 2rem); font-weight: 800; line-height: 1.12; letter-spacing: -.015em; overflow-wrap: anywhere; text-shadow: 0 2px 18px rgb(0 0 0 / .35); }
+.nb-banner:hover .nb-title { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: .18em; }
+.nb-body { display: grid; gap: .9rem; padding: 1.15rem 1.5rem 1.3rem; }
+.nb-text { display: -webkit-box; -webkit-line-clamp: 9; -webkit-box-orient: vertical; overflow: hidden; font-size: 1.0625rem; line-height: 1.6; overflow-wrap: anywhere; }
+.nb-text .nw-prose { max-width: none; }
+.nb-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .35rem 1rem; }
+.nb:focus-within { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+@media (max-width: 560px) { .nb-banner { min-height: 8rem; padding: 1rem 1.1rem; } .nb-body { padding: 1rem 1.1rem 1.15rem; } .nb-text { font-size: 1rem; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
