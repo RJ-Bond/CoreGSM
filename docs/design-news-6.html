@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoreGSM: новости, 6 вариантов</title>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400..900&family=Newsreader:ital,wght@0,400..700;1,400..600&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; }
+html { background: #15161c; }
+body { margin: 0; color: #e6e8f0; font: 14.5px/1.5 'Golos Text', system-ui, sans-serif; }
+a { color: inherit; text-decoration: none; }
+.head { max-width: 1180px; margin: 0 auto; padding: 26px 0 6px; }
+.head h1 { margin: 0; font-size: 24px; font-weight: 800; } .head p { margin: 4px 0 12px; color: #9a9db0; }
+.nav { display: flex; flex-wrap: wrap; gap: 6px; } .nav a { padding: 5px 12px; border-radius: 999px; background: #23242d; color: #c8cad6; font-size: 13px; font-weight: 600; }
+.vl { max-width: 1180px; margin: 34px auto 10px; } .vl .n { display: inline-block; font-weight: 800; font-size: 13px; padding: 2px 10px; border-radius: 999px; background: #5b4fe0; color: #fff; margin-right: 10px; } .vl b { font-size: 17px; } .vl p { margin: 4px 0 0; color: #9a9db0; font-size: 13.5px; }
+body.single .head, body.single .vl { display: none; }
+.frame { position: relative; width: 1180px; max-width: 100%; height: 860px; margin: 0 auto; border-radius: 20px; overflow: hidden; isolation: isolate; box-shadow: 0 30px 80px -30px #000; padding: 18px 28px; background: #090a0f; }
+.bg { position: absolute; inset: 0; z-index: -1; background: radial-gradient(60% 38% at 50% -4%, rgba(88,91,235,.4), transparent 100%), radial-gradient(40% 30% at 98% 2%, rgba(45,212,191,.14), transparent 100%); }
+:root { --card: rgba(21,23,31,.78); --line: rgba(255,255,255,.09); --mute: #8c90a6; }
+.top { display: flex; align-items: center; gap: 14px; padding: 9px 14px; border-radius: 20px; background: var(--card); border: 1px solid var(--line); margin-bottom: 20px; }
+.logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg,#7c6cf6,#4a3fe0); display: grid; place-items: center; font-weight: 800; color: #fff; }
+.top b { font-weight: 800; font-size: 17px; margin-right: 8px; } .top a { padding: 6px 13px; border-radius: 999px; font-weight: 650; color: var(--mute); } .top a.on { background: rgba(127,127,160,.2); color: #fff; }
+.btn { margin-left: auto; padding: 7px 15px; border-radius: 999px; background: #5b5ff0; color: #fff; font-weight: 700; }
+.h1 { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; } .h1 i { width: 44px; height: 44px; border-radius: 15px; background: linear-gradient(135deg,#6366f1,#4338ca); } .h1 h2 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -.02em; } .h1 span { color: var(--mute); }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; } .chips span { padding: 6px 14px; border-radius: 999px; background: rgba(255,255,255,.06); color: #c3c6d8; font-weight: 650; font-size: 13.5px; } .chips span.on { background: #5b5ff0; color: #fff; }
+.tag { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(0,0,0,.45); color: #fff; backdrop-filter: blur(6px); }
+.tag.up { color: #6ee7a3; } .tag.wipe { color: #ff9a6a; } .tag.ev { color: #f9a8d4; }
+.meta { display: flex; align-items: center; gap: 10px; color: var(--mute); font-size: 12.5px; }
+.ava { width: 22px; height: 22px; border-radius: 50%; background: #3a3320; color: #e8c56a; display: grid; place-items: center; font-size: 11px; font-weight: 800; }
+.cv { position: relative; overflow: hidden; }
+.g-ev { background: radial-gradient(90% 120% at 8% -10%, #e5427f, transparent 62%), radial-gradient(80% 110% at 105% 105%, #7a2fd0, transparent 60%), linear-gradient(155deg, #4a1736, #120a18 85%); }
+.g-up { background: radial-gradient(90% 120% at 8% -10%, #22c55e, transparent 62%), radial-gradient(80% 110% at 105% 105%, #2b7fb8, transparent 60%), linear-gradient(155deg, #0f3d26, #0a1210 85%); }
+.g-wipe { background: radial-gradient(90% 120% at 8% -10%, #f97316, transparent 62%), radial-gradient(80% 110% at 105% 105%, #be3a5e, transparent 60%), linear-gradient(155deg, #5a2208, #140a0a 85%); }
+.g-m2o { background: url('../src/core-frontend/public/games/covers/m2o.jpg') center/cover; }
+.cv::after { content: ''; position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px); background-size: 26px 26px; -webkit-mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); pointer-events: none; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; overflow: hidden; }
+.react { display: inline-flex; gap: 10px; color: var(--mute); font-size: 12.5px; }
+h3 { margin: 0; }
+.side { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 14px 16px; }
+.side h6 { margin: 0 0 10px; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--mute); }
+.srv { display: flex; align-items: center; gap: 9px; padding: 6px 0; } .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc84; } .dot.off { background: #ff5d6c; } .srv i { margin-left: auto; font-style: normal; color: var(--mute); font-weight: 650; }
+
+/* 1: magazine */
+.v1 .wrap { display: grid; grid-template-columns: 1.7fr 1fr; gap: 16px; }
+.v1 .big { height: 360px; border-radius: 26px; position: relative; display: flex; align-items: flex-end; padding: 26px; }
+.v1 .big h3 { font-size: 38px; line-height: 1.08; font-weight: 800; letter-spacing: -.02em; max-width: 520px; margin: 10px 0; position: relative; z-index: 2; }
+.v1 .big::before { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 30%, rgba(0,0,0,.7)); z-index: 1; }
+.v1 .stack { display: grid; gap: 12px; align-content: start; }
+.v1 .mini { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 10px; } .v1 .mini .cv { border-radius: 14px; height: 88px; } .v1 .mini h4 { margin: 4px 0 2px; font-size: 15px; line-height: 1.25; }
+.v1 .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
+.v1 .row3 .card .cv { height: 120px; } .v1 .row3 .card div.t { padding: 12px 14px; }
+
+/* 2: timeline */
+.v2 .wrap { display: grid; grid-template-columns: 1fr 250px; gap: 22px; }
+.v2 .tl { position: relative; padding-left: 26px; } .v2 .tl::before { content: ''; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(#5b5ff0, rgba(91,95,240,0)); }
+.v2 .day { margin: 0 0 8px; color: var(--mute); font-weight: 700; font-size: 13px; position: relative; } .v2 .day::before { content: ''; position: absolute; left: -26px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: #090a0f; border: 3px solid #5b5ff0; }
+.v2 .it { display: grid; grid-template-columns: 1fr 220px; gap: 16px; padding: 16px; margin-bottom: 14px; } .v2 .it h3 { font-size: 21px; line-height: 1.2; margin: 8px 0 6px; } .v2 .it p { margin: 0 0 10px; color: #b7bbd0; } .v2 .it .cv { border-radius: 16px; min-height: 130px; }
+
+/* 3: cards with big covers */
+.v3 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.v3 .card .cv { height: 190px; padding: 14px; } .v3 .card .t { padding: 14px 16px 16px; } .v3 .card h3 { font-size: 18px; line-height: 1.25; margin: 8px 0 6px; } .v3 .card p { margin: 0 0 12px; color: #b7bbd0; }
+.v3 .span2 { grid-column: span 2; } .v3 .span2 .cv { height: 230px; }
+
+/* 4: editorial list */
+.v4 .lst { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.v4 .li { display: grid; grid-template-columns: 90px 1fr 190px; gap: 22px; padding: 22px 6px; border-bottom: 1px solid var(--line); align-items: center; }
+.v4 .li .d { color: var(--mute); font-weight: 700; } .v4 .li h3 { font-family: 'Newsreader', Georgia, serif; font-size: 30px; font-weight: 600; line-height: 1.12; letter-spacing: -.01em; margin: 6px 0; } .v4 .li p { margin: 0; color: #b7bbd0; max-width: 560px; } .v4 .li .cv { height: 100px; border-radius: 16px; }
+
+/* 5: wide hero + compact list + side */
+.v5 .wrap { display: grid; grid-template-columns: 1fr 270px; gap: 16px; }
+.v5 .hero { align-items: flex-start; height: 300px; border-radius: 26px; padding: 22px; display: flex; flex-direction: column; justify-content: flex-end; position: relative; } .v5 .hero::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(0,0,0,.65), transparent 70%); z-index: 1; } .v5 .hero > * { position: relative; z-index: 2; } .v5 .hero h3 { font-size: 34px; font-weight: 800; letter-spacing: -.02em; margin: 8px 0 4px; max-width: 480px; } .v5 .hero p { margin: 0 0 12px; max-width: 440px; color: #d7d9e8; }
+.v5 .cl { margin-top: 14px; display: grid; gap: 10px; } .v5 .cr { display: grid; grid-template-columns: 56px 1fr auto; gap: 14px; align-items: center; padding: 10px 14px; } .v5 .cr .cv { width: 56px; height: 56px; border-radius: 14px; } .v5 .cr h4 { margin: 0; font-size: 15.5px; } .v5 .cr small { color: var(--mute); }
+.v5 .bar { height: 5px; border-radius: 5px; background: rgba(255,255,255,.1); overflow: hidden; margin-top: 6px; } .v5 .bar i { display: block; height: 100%; width: 66%; background: #5b5ff0; }
+
+/* 6: feed cards with actions */
+.v6 .feed { max-width: 720px; margin: 0 auto; display: grid; gap: 16px; }
+.v6 .post { padding: 16px; } .v6 .post .hd { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; } .v6 .post .hd b { font-size: 14px; } .v6 .post .cv { height: 220px; border-radius: 18px; margin: 10px 0; } .v6 .post h3 { font-size: 20px; line-height: 1.25; } .v6 .post p { margin: 6px 0 12px; color: #b7bbd0; }
+.v6 .acts { display: flex; gap: 8px; align-items: center; } .v6 .acts span { padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,.06); font-weight: 650; font-size: 13px; } .v6 .acts .rd { margin-left: auto; background: #5b5ff0; color: #fff; }
+</style>
+</head>
+<body>
+<div class="head"><h1>CoreGSM: вкладка «Новости», 6 вариантов</h1><p>Те же новости, разная подача. Скажите номер (можно по частям, например «сетка из 3, боковой блок из 5»).</p><div class="nav" id="nav"></div></div>
+<div id="root"></div>
+<script>
+const SRV = [['Empire Bay RP', '21/32', 1], ['[RU] Just-Skill.Ru PvE', '27/40', 1], ['Minecraft Survival', '14/40', 1], ['Rust | Vanilla x2', 'офлайн', 0], ['Palworld PvE', '17/32', 1]];
+const N = [
+  { t: 'Вайп Rust в субботу в 18:00', d: 'Карта 4000, x2, новые правила рейдов. Заходите заранее, места на старте ограничены.', k: 'Вайп', c: 'wipe', g: 'g-wipe', date: '18 окт', ago: 'сегодня', r: '🔥 24  👍 12' },
+  { t: 'Обновление Mafia II Online 1.6.0', d: 'Новые машины, исправлены вылеты и ускорен вход на сервер.', k: 'Обновление', c: 'up', g: 'g-m2o', date: '17 окт', ago: 'вчера', r: '👍 31  ❤️ 8' },
+  { t: 'Ивент выходного дня', d: 'Двойной опыт на всех серверах до понедельника. Награды за топ-10.', k: 'Ивент', c: 'ev', g: 'g-ev', date: '16 окт', ago: '2 дня назад', r: '🎉 17' },
+  { t: 'Технические работы на Palworld', d: 'Перезапуск и обновление мира, около 15 минут.', k: 'Обслуживание', c: 'up', g: 'g-up', date: '14 окт', ago: '4 дня назад', r: '👍 5' },
+];
+const OLD = [{ t: 'Правила рейдов на Rust', d: '', k: 'Объявление', c: 'ev', g: 'g-ev', date: '12 окт', ago: '6 дней назад', r: '👍 9' }, { t: 'Новый сезон и зал славы', d: '', k: 'Объявление', c: 'up', g: 'g-up', date: '9 окт', ago: 'неделю назад', r: '🔥 14' }];
+const tag = (n) => `<span class="tag ${n.c}">${n.k}</span>`;
+const side = () => `<aside class="side"><h6>Сейчас на серверах</h6>${SRV.map(([n, p, o]) => `<div class="srv"><i class="dot ${o ? '' : 'off'}" style="margin:0"></i>${n}<i>${p}</i></div>`).join('')}</aside>`;
+const frame = (cls, body) => `<div class="frame ${cls}"><div class="bg"></div><div class="top"><span class="logo">C</span><b>CoreGSM</b><a>Серверы</a><a class="on">Новости</a><a>Статус</a><a>Сообщество</a><span class="btn">Войти</span></div><div class="h1"><i></i><div><h2>Новости</h2><span>Объявления, обновления и ивенты</span></div></div><div class="chips"><span class="on">Все · 4</span><span>Вайпы · 1</span><span>Обновления · 2</span><span>Ивенты · 1</span></div>${body}</div>`;
+const V = {};
+V[1] = () => frame('v1', `<div class="wrap"><div class="big cv ${N[1].g}"><div style="position:relative;z-index:2">${tag(N[1])}<h3>${N[1].t}</h3><div class="meta"><span class="ava">J</span>RJ Bond · ${N[1].ago} · ${N[1].r}</div></div></div><div class="stack">${[N[0], N[2], N[3]].map((n) => `<div class="card mini"><div class="cv ${n.g}"></div><div>${tag(n)}<h4>${n.t}</h4><div class="meta">${n.ago}</div></div></div>`).join('')}</div></div>
+<div class="row3">${[OLD[0], OLD[1], { ...N[3], t: 'Старые новости', k: 'Архив', c: 'up', date: 'все →', r: '' }].map((n) => `<div class="card"><div class="cv ${n.g}"></div><div class="t">${tag(n)}<h4 style="margin:8px 0 4px;font-size:15.5px">${n.t}</h4><div class="meta">${n.date} · ${n.r}</div></div></div>`).join('')}</div>`);
+V[2] = () => frame('v2', `<div class="wrap"><div class="tl">${N.map((n) => `<div class="day">${n.date}</div><div class="card it"><div>${tag(n)}<h3>${n.t}</h3><p>${n.d}</p><div class="meta"><span class="ava">J</span>RJ Bond · ${n.r}</div></div><div class="cv ${n.g}"></div></div>`).join('')}</div>${side()}</div>`);
+V[3] = () => frame('v3', `<div class="grid"><div class="card span2"><div class="cv ${N[0].g}" style="display:flex;align-items:flex-end;padding:18px"><div style="position:relative;z-index:2">${tag(N[0])}</div></div><div class="t"><h3 style="font-size:24px">${N[0].t}</h3><p>${N[0].d}</p><div class="meta"><span class="ava">J</span>RJ Bond · ${N[0].ago} · ${N[0].r}</div></div></div><div class="card"><div class="cv ${N[1].g}"></div><div class="t">${tag(N[1])}<h3>${N[1].t}</h3><p>${N[1].d}</p><div class="meta">${N[1].ago} · ${N[1].r}</div></div></div>${[N[2], N[3]].map((n) => `<div class="card"><div class="cv ${n.g}"></div><div class="t">${tag(n)}<h3>${n.t}</h3><p>${n.d}</p><div class="meta">${n.ago} · ${n.r}</div></div></div>`).join('')}</div>`);
+V[4] = () => frame('v4', `<div class="lst">${N.map((n) => `<div class="li"><div class="d">${n.date}</div><div>${tag(n)}<h3>${n.t}</h3><p>${n.d}</p></div><div class="cv ${n.g}"></div></div>`).join('')}</div>`);
+V[5] = () => frame('v5', `<div class="wrap"><div><div class="hero cv ${N[0].g}">${tag(N[0])}<h3>${N[0].t}</h3><p>${N[0].d}</p><div class="meta"><span class="ava">J</span>RJ Bond · ${N[0].ago} · ${N[0].r}</div></div><div class="cl">${N.slice(1).map((n) => `<div class="card cr"><div class="cv ${n.g}"></div><div><h4>${n.t}</h4><small>${n.k} · ${n.date}</small></div><span class="meta">${n.r}</span></div>`).join('')}</div></div><div style="display:grid;gap:14px;align-content:start">${side()}<div class="side"><h6>Ближайшее</h6><b>Вайп Rust</b><div class="meta">через 2 д 4 ч</div><div class="bar"><i></i></div></div><div class="side"><h6>Закреплено</h6><div>Правила сервера</div><div style="margin-top:6px">Как подключиться</div></div></div></div>`);
+V[6] = () => frame('v6', `<div class="feed">${N.slice(0, 3).map((n) => `<div class="card post"><div class="hd"><span class="ava">J</span><b>RJ Bond</b><span class="meta">· ${n.ago}</span><span style="margin-left:auto">${tag(n)}</span></div><h3>${n.t}</h3><p>${n.d}</p><div class="cv ${n.g}"></div><div class="acts"><span>👍 ${n.r.split(' ')[1] || '5'}</span><span>🔥</span><span>🔗 Скопировать ссылку</span><span class="rd">Читать →</span></div></div>`).join('')}</div>`);
+const NAMES = {
+  1: ['Журнал', 'Главная новость крупной обложкой с заголовком на ней, рядом стопка свежих, ниже ряд карточек. Выглядит как сайт издания.'],
+  2: ['Лента-хроника', 'Вертикальная линия времени с датами, каждая новость карточкой с обложкой справа. Справа блок «Сейчас на серверах». Видно «что и когда».'],
+  3: ['Сетка с крупными обложками', 'Первая новость шире, остальные в сетке 3 в ряд, обложки выше. Самый «визуальный» вариант.'],
+  4: ['Редакционный список', 'Крупные заголовки с засечками, дата слева, миниатюра справа, тонкие линии. Строго и читаемо, мало цвета.'],
+  5: ['Главная + компактный список + боковые блоки', 'Широкая главная новость, под ней компактные строки, справа «Сейчас на серверах», «Ближайшее» (таймер) и «Закреплено».'],
+  6: ['Лента как в соцсети', 'Одна колонка постов: автор, обложка, реакции и кнопки «Скопировать ссылку» и «Читать» прямо на карточке.'],
+};
+const only = Number(new URLSearchParams(location.search).get('v')); if (only) document.body.classList.add('single');
+const root = document.getElementById('root'), nav = document.getElementById('nav');
+for (let i = 1; i <= 6; i++) { if (only && only !== i) continue; root.insertAdjacentHTML('beforeend', `<div class="vl" id="v${i}"><span class="n">${i}</span><b>${NAMES[i][0]}</b><p>${NAMES[i][1]}</p></div>${V[i]()}`); nav.insertAdjacentHTML('beforeend', `<a href="#v${i}">${i}. ${NAMES[i][0]}</a>`); }
+</script>
+</body>
+</html>
