@@ -2,6 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 // variable Manrope: has Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800)
 import '@fontsource-variable/golos-text/wght.css';
+// the serif of the news headlines (Cyrillic)
+import '@fontsource-variable/literata/wght.css';
 import './index.css';
 import './styles/servers.css';
 import './styles/detail.css';

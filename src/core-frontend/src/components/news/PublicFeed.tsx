@@ -106,37 +106,40 @@ function monthFormatter(lang: 'ru' | 'en') {
   };
 }
 
-function Thumbs({ c, href }: { c: Card; href: string }) {
-  if (c.gallery.length === 0) return null;
-  const shown = c.gallery.slice(0, 4);
-  const more = c.gallery.length - shown.length;
-  return (
-    <a className="nw-strip" href={href} aria-label={t('nw.gallery')}>
-      {shown.map((u, i) => <img key={u + i} src={u} alt="" loading="lazy" decoding="async" />)}
-      {more > 0 && <span className="nw-strip-more">+{more}</span>}
-    </a>
-  );
+/** the day and the short month for the date column of an entry: «18» / «окт» */
+function dateParts(ts: number | null, lang: 'ru' | 'en'): { day: string; mon: string; year: string } | null {
+  if (!ts) return null;
+  const d = new Date(ts);
+  const mon = new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ru-RU', { month: 'short' }).format(d).replace('.', '');
+  return { day: String(d.getDate()), mon, year: String(d.getFullYear()) };
 }
 
-function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+/** One entry of the editorial list: the date on the left, the rubric and a serif headline with a teaser, the cover on the right. */
+function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
   const href = `/news/${c.id}`;
+  const gen = hasGeneratedCover(c, servers);
+  const dp = dateParts(c.at, lang);
   return (
-    <article className="nf-hero nw-hero" style={{ ['--nf-accent' as string]: c.accent }}>
-      <NewsCover c={c} servers={servers} href={href} />
-      <div className="nf-hero-in">
-        {(c.author || c.countdownAt) && (
-          <div className="nf-meta">
-            {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
-            {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
-          </div>
-        )}
-        {(c.text || c.fields.length > 0) && <div className="nf-text is-clamped"><NewsText text={c.text} fields={c.fields} /></div>}
-        <Thumbs c={c} href={href} />
-        <div className="nf-actions">
-          <a className="btn" href={href}>{t('nw.read')}</a>
-          {c.link && <a className="btn btn-soft" href={c.link} target="_blank" rel="noopener noreferrer">{t('nw.openLink')}</a>}
+    <article className="ne" style={{ ['--nf-accent' as string]: c.accent }}>
+      <div className="ne-date" aria-label={c.at ? fmtDate(c.at) : undefined}>
+        {dp && <><b>{dp.day}</b><span>{dp.mon}</span><small>{dp.year}</small></>}
+      </div>
+      <div className="ne-body">
+        <div className="nw-chips">
+          {c.pinned && <PinChip />}
+          <CategoryChip category={c.category} />
+          {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+        </div>
+        <h3 className="ne-title"><a href={href}>{c.title}</a></h3>
+        {c.text && <p className="ne-text">{plainExcerpt(c.text, 260)}</p>}
+        <div className="ne-foot">
+          {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+          <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
+      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
+      </a>
     </article>
   );
 }
@@ -167,31 +170,29 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
 }
 
 /**
- * The feed column: the first item large, then pinned ones, then the rest grouped by month.
+ * The feed: an editorial list, pinned items first and then the rest grouped by month.
  * `items` must already be ordered (pinned first, newest first) and filtered.
  */
 export function PublicFeed({ items, servers, flat = false }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean }) {
   const { lang } = useI18n();
   if (items.length === 0) return null;
   const cards = items.map(cardOf);
-  const [hero, ...rest] = cards;
-  const pinned = rest.filter((c) => c.pinned);
-  const normal = rest.filter((c) => !c.pinned);
+  const pinned = cards.filter((c) => c.pinned);
+  const normal = cards.filter((c) => !c.pinned);
   const groups = flat ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
 
   return (
-    <div className="nf nw-feed">
-      <Hero c={hero!} servers={servers} />
+    <div className="nw-feed ne-list">
       {pinned.length > 0 && (
         <section className="nw-group">
-          <h3 className="nf-more">{t('nw.pinned')}</h3>
-          <div className="nf-list">{pinned.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+          <h3 className="ne-h">{t('nw.pinned')}</h3>
+          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
-          <h3 className="nf-more">{g.label || t('nw.earlier')}</h3>
-          <div className="nf-list">{g.items.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+          {(g.label || pinned.length > 0) && <h3 className="ne-h">{g.label || t('nw.earlier')}</h3>}
+          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       ))}
     </div>
