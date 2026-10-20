@@ -106,44 +106,34 @@ function monthFormatter(lang: 'ru' | 'en') {
   };
 }
 
-/** the day and the short month for the date column of an entry: «18» / «окт» */
-function dateParts(ts: number | null, lang: 'ru' | 'en'): { day: string; mon: string; year: string } | null {
-  if (!ts) return null;
-  const d = new Date(ts);
-  const mon = new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ru-RU', { month: 'short' }).format(d).replace('.', '');
-  return { day: String(d.getDate()), mon, year: String(d.getFullYear()) };
-}
-
-/** One entry of the editorial list: the date on the left, the rubric and a serif headline with a teaser, the cover on the right. */
-function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
+/**
+ * One news as a small article: a banner (the picture, or a cover drawn by the panel) with the rubric, the date and the
+ * headline on it, and the whole text below (a list stays a list), the author and a link.
+ */
+function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
-  const dp = dateParts(c.at, lang);
   return (
-    <article className="ne" style={{ ['--nf-accent' as string]: c.accent }}>
-      {/* the parts are for the eyes, the screen reader reads the whole date once */}
-      <time className="ne-date" dateTime={c.at ? new Date(c.at).toISOString() : undefined}>
-        {dp && <>
-          <span className="sr-only">{fmtDate(c.at as number)}</span>
-          <b aria-hidden>{dp.day}</b><span aria-hidden>{dp.mon}</span><small aria-hidden>{dp.year}</small>
-        </>}
-      </time>
-      <div className="ne-body">
-        <div className="nw-chips">
-          {c.pinned && <PinChip />}
-          <CategoryChip category={c.category} />
-          {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
-        </div>
-        <h3 className="ne-title"><a href={href}>{c.title}</a></h3>
-        {c.text && <p className="ne-text">{plainExcerpt(c.text, 260)}</p>}
-        <div className="ne-foot">
+    <article className="nb" style={{ ['--nf-accent' as string]: c.accent }}>
+      <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
+        <span className="nb-banner-in">
+          <span className="nb-chips">
+            {c.pinned && <PinChip />}
+            <CategoryChip category={c.category} />
+            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()}>{fmtDate(c.at)}</time>}
+          </span>
+          <h3 className="nb-title">{c.title}</h3>
+        </span>
+      </a>
+      <div className="nb-body">
+        {(c.text || c.fields.length > 0) && <div className="nb-text"><NewsText text={c.text} fields={c.fields} /></div>}
+        {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+        <div className="nb-foot">
           {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
-      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
-        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
-      </a>
     </article>
   );
 }
