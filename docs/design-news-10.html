@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoreGSM: новости, 10 вариантов</title>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400..900&family=Literata:ital,opsz,wght@0,7..72,400..700;1,7..72,400..600&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; }
+html { background: #15161c; }
+body { margin: 0; color: #e6e8f0; font: 14.5px/1.5 'Golos Text', system-ui, sans-serif; }
+a { color: inherit; text-decoration: none; }
+.head { max-width: 1180px; margin: 0 auto; padding: 26px 0 6px; }
+.head h1 { margin: 0; font-size: 24px; font-weight: 800; } .head p { margin: 4px 0 12px; color: #9a9db0; }
+.nav { display: flex; flex-wrap: wrap; gap: 6px; } .nav a { padding: 5px 12px; border-radius: 999px; background: #23242d; color: #c8cad6; font-size: 13px; font-weight: 600; }
+.vl { max-width: 1180px; margin: 34px auto 10px; } .vl .n { display: inline-block; font-weight: 800; font-size: 13px; padding: 2px 10px; border-radius: 999px; background: #5b4fe0; color: #fff; margin-right: 10px; } .vl b { font-size: 17px; } .vl p { margin: 4px 0 0; color: #9a9db0; font-size: 13.5px; }
+body.single .head, body.single .vl { display: none; }
+.frame { position: relative; width: 1180px; max-width: 100%; height: 760px; margin: 0 auto; border-radius: 20px; overflow: hidden; isolation: isolate; box-shadow: 0 30px 80px -30px #000; padding: 18px 28px; background: #090a0f; }
+.bg { position: absolute; inset: 0; z-index: -1; background: radial-gradient(60% 38% at 50% -4%, rgba(88,91,235,.4), transparent 100%), radial-gradient(40% 30% at 98% 2%, rgba(45,212,191,.14), transparent 100%); }
+:root { --card: rgba(21,23,31,.8); --line: rgba(255,255,255,.09); --mute: #8c90a6; --soft: #b7bbd0; }
+.top { display: flex; align-items: center; gap: 14px; padding: 9px 14px; border-radius: 20px; background: var(--card); border: 1px solid var(--line); margin-bottom: 20px; }
+.logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg,#7c6cf6,#4a3fe0); display: grid; place-items: center; font-weight: 800; color: #fff; }
+.top b { font-weight: 800; font-size: 17px; margin-right: 8px; } .top a { padding: 6px 13px; border-radius: 999px; font-weight: 650; color: var(--mute); } .top a.on { background: rgba(127,127,160,.2); color: #fff; }
+.h1 { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; } .h1 i { width: 44px; height: 44px; border-radius: 15px; background: linear-gradient(135deg,#6366f1,#4338ca); } .h1 h2 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -.02em; } .h1 span { color: var(--mute); }
+.cols { display: grid; grid-template-columns: 1fr 270px; gap: 22px; align-items: start; } .cols.one { grid-template-columns: 1fr; }
+.side { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 14px 16px; } .side h6 { margin: 0 0 10px; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--mute); }
+.srv { display: flex; align-items: center; gap: 9px; padding: 6px 0; } .dot { width: 8px; height: 8px; border-radius: 50%; background: #3ddc84; flex: none; } .srv i { margin-left: auto; font-style: normal; color: var(--mute); font-weight: 650; }
+.tag { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(129,140,248,.16); color: #a5b4fc; }
+.tag.dark { background: rgba(0,0,0,.5); color: #fff; }
+.meta { display: flex; align-items: center; gap: 8px; color: var(--mute); font-size: 13px; }
+.ava { width: 26px; height: 26px; border-radius: 50%; background: #3a3320; color: #e8c56a; display: grid; place-items: center; font-size: 12px; font-weight: 800; flex: none; }
+.role { padding: 1px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: rgba(91,95,240,.22); color: #a5b4fc; }
+.emo { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 13px; background: rgba(236,72,153,.16); font-size: 22px; flex: none; }
+.cv { position: relative; overflow: hidden; background: radial-gradient(90% 120% at 8% -10%, #6d5cf0, transparent 62%), radial-gradient(80% 110% at 105% 105%, #2b7fe8, transparent 60%), linear-gradient(155deg, #251f6b, #0b0c16 85%); }
+.cv.b { background: radial-gradient(70% 100% at 92% 108%, #8b5cf6, transparent 60%), radial-gradient(60% 90% at -6% -10%, #4f46e5, transparent 62%), linear-gradient(200deg, #1e1b4b, #0b0c16 85%); }
+.cv::after { content: ''; position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px); background-size: 24px 24px; -webkit-mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); mask-image: radial-gradient(80% 90% at 85% 12%, #000, transparent 75%); }
+.cv svg { position: absolute; right: 8%; top: 50%; transform: translateY(-50%); height: 56%; opacity: .2; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; overflow: hidden; }
+ul.li { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; } ul.li li { display: grid; grid-template-columns: 22px 1fr; gap: 6px; color: #d4d7e6; line-height: 1.45; } ul.li li::before { content: '✓'; color: #6ee7a3; font-weight: 800; }
+.code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; background: rgba(255,255,255,.08); padding: 1px 6px; border-radius: 6px; }
+h3 { margin: 0; }
+.rd { color: #a5b4fc; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="head"><h1>CoreGSM: блок новостей, 10 вариантов</h1><p>Ваши настоящие данные: две новости и те же серверы справа. Скажите номер (можно по частям: «карточки из 3, список из 1»).</p><div class="nav" id="nav"></div></div>
+<div id="root"></div>
+<script>
+const MEGA = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+const N1 = { title: 'Важное объявление', emo: '📢', day: '14', mon: 'окт', date: '14 октября 2026', items: ['Добавили команду <span class="code">/register</span> для регистрации игрока через Discord', 'Добавили команду <span class="code">/nick</span>, чтобы задать ник игрока на сервере и получать статистику, ранги и т. д. с мониторинга', 'Добавили команду <span class="code">/profile</span>, чтобы посмотреть свой профиль, награды и достижения'], short: 'Три новые команды бота: /register, /nick и /profile.' };
+const N2 = { title: 'Важное объявление', emo: '📢', day: '13', mon: 'окт', date: '13 октября 2026', text: 'Запустили в тестовом режиме мониторинг наших серверов по адресу <b>coregsm.just-skill.ru</b>', items: ['Запустили в тестовом режиме мониторинг наших серверов по адресу coregsm.just-skill.ru'], short: 'Мониторинг серверов запущен в тестовом режиме: coregsm.just-skill.ru.' };
+const SRV = [['[RU] Just-Skill.Ru | Standart PvE', '7/40'], ['[RU] Just-Skill.Ru | Lite Brutal PvE', '1/40'], ['[RU] Just-Skill.Ru', '0/8'], ['[RU] Just-Skill.Ru | Roleplay [Alpha]', '0/64']];
+const side = () => `<aside class="side"><h6>Сейчас на серверах</h6>${SRV.map(([n, p]) => `<div class="srv"><i class="dot" style="margin:0"></i>${n}<i>${p}</i></div>`).join('')}</aside>`;
+const author = (r = true) => `<div class="meta"><span class="ava">J</span><b style="color:#e6e8f0">RJ Bond</b>${r ? '<span class="role">Администратор</span>' : ''}</div>`;
+const list = (n) => `<ul class="li">${n.items.map((t) => `<li><span>${t}</span></li>`).join('')}</ul>`;
+const frame = (inner, one = false) => `<div class="frame"><div class="bg"></div><div class="top"><span class="logo">C</span><b>CoreGSM</b><a>Серверы</a><a class="on">Новости</a><a>Статус</a><a>Сообщество</a></div><div class="h1"><i></i><div><h2>Новости</h2><span>Объявления, обновления и ивенты</span></div></div><div class="cols ${one ? 'one' : ''}">${inner}${one ? '' : side()}</div></div>`;
+const V = {};
+// 1 readable cards: full text as a list, emoji as the icon, a distinguishing subtitle
+V[1] = () => frame(`<div style="display:grid;gap:14px">${[N1, N2].map((n) => `<article class="card" style="padding:20px 22px"><div style="display:flex;gap:14px;align-items:flex-start"><span class="emo">${n.emo}</span><div style="flex:1"><div class="meta"><span class="tag">Объявление</span>${n.date}</div><h3 style="font-size:24px;margin:6px 0 2px;font-weight:800;letter-spacing:-.01em">${n.title}</h3>${list(n)}<div style="display:flex;align-items:center;margin-top:14px">${author()}<span class="rd" style="margin-left:auto">Открыть →</span></div></div></div></article>`).join('')}</div>`);
+// 2 two columns of covered cards, text inside
+V[2] = () => frame(`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">${[N1, N2].map((n, i) => `<article class="card"><div class="cv ${i ? 'b' : ''}" style="height:170px;padding:16px"><span class="tag dark">📢 Объявление</span>${MEGA}</div><div style="padding:16px 18px 18px"><div class="meta" style="margin-bottom:4px">${n.date}</div><h3 style="font-size:21px;font-weight:800">${n.title}</h3><p style="margin:8px 0 12px;color:var(--soft)">${n.short}</p><div style="display:flex;align-items:center">${author(false)}<span class="rd" style="margin-left:auto">Читать →</span></div></div></article>`).join('')}</div>`);
+// 3 discord-like embeds
+V[3] = () => frame(`<div style="display:grid;gap:14px">${[N1, N2].map((n) => `<article style="display:grid;grid-template-columns:44px 1fr;gap:12px"><span class="ava" style="width:44px;height:44px;font-size:18px">J</span><div><div class="meta" style="margin-bottom:6px"><b style="color:#e6e8f0;font-size:15px">RJ Bond</b><span class="role">Администратор</span>· ${n.date}</div><div style="border-left:4px solid #5865f2;background:rgba(255,255,255,.05);border-radius:0 14px 14px 0;padding:14px 18px"><h3 style="font-size:19px;font-weight:800">${n.emo} ${n.title}</h3>${list(n)}</div><div class="meta" style="margin-top:8px">👍 12 &nbsp; 🔥 4 &nbsp; <span class="rd">Читать на сайте →</span></div></div></article>`).join('')}</div>`);
+// 4 changelog
+V[4] = () => frame(`<div style="display:grid;gap:22px">${[N1, N2].map((n, i) => `<article style="display:grid;grid-template-columns:120px 1fr;gap:20px"><div style="position:sticky;top:0"><div style="font-weight:800;font-size:17px">${n.day} ${n.mon}</div><div class="meta">2026</div></div><div class="card" style="padding:18px 20px"><div style="display:flex;align-items:center;gap:10px"><h3 style="font-size:20px;font-weight:800">${n.title}</h3><span class="tag">Объявление</span></div><div style="margin-top:12px;display:grid;gap:9px">${n.items.map((t, k) => `<div style="display:flex;gap:10px;align-items:flex-start"><span style="margin-top:2px;padding:1px 8px;border-radius:6px;font-size:11.5px;font-weight:800;background:rgba(61,220,132,.16);color:#6ee7a3;flex:none">Добавлено</span><span>${t}</span></div>`).join('')}</div></div></article>`).join('')}</div>`);
+// 5 hero banner per news
+V[5] = () => frame(`<div style="display:grid;gap:14px">${[N1, N2].map((n, i) => `<article class="card"><div class="cv ${i ? 'b' : ''}" style="height:130px;padding:18px 22px;display:flex;align-items:flex-end"><div style="position:relative;z-index:2"><span class="tag dark">Объявление · ${n.date}</span><h3 style="font-size:28px;font-weight:800;margin-top:8px;letter-spacing:-.015em">${n.emo} ${n.title}</h3></div>${MEGA}</div><div style="padding:16px 22px 18px">${list(n)}<div style="display:flex;align-items:center;margin-top:12px">${author()}<span class="rd" style="margin-left:auto">Открыть →</span></div></div></article>`).join('')}</div>`);
+// 6 text blog
+V[6] = () => frame(`<div style="max-width:660px;margin:0 auto">${[N1, N2].map((n) => `<article style="padding:8px 0 26px;border-bottom:1px solid var(--line);margin-bottom:22px"><div class="meta">${n.date} · Объявление</div><h3 style="font-family:Literata,Georgia,serif;font-size:34px;font-weight:600;line-height:1.1;margin:8px 0 12px;letter-spacing:-.01em">${n.title}</h3>${list(n)}<div style="margin-top:14px">${author()}</div></article>`).join('')}</div>`, true);
+// 7 timeline
+V[7] = () => frame(`<div style="position:relative;padding-left:34px">${'<div style="position:absolute;left:9px;top:8px;bottom:8px;width:2px;background:linear-gradient(#5b5ff0,rgba(91,95,240,0))"></div>'}${[N1, N2].map((n) => `<article style="position:relative;margin-bottom:18px"><span style="position:absolute;left:-34px;top:4px;width:20px;height:20px;border-radius:50%;background:#090a0f;border:3px solid #5b5ff0"></span><div class="meta" style="margin-bottom:6px;font-weight:700">${n.date}</div><div class="card" style="padding:18px 20px"><div style="display:flex;gap:12px;align-items:center"><span class="emo">${n.emo}</span><h3 style="font-size:22px;font-weight:800">${n.title}</h3><span class="tag" style="margin-left:auto">Объявление</span></div>${list(n)}<div style="margin-top:12px">${author()}</div></div></article>`).join('')}</div>`);
+// 8 big feature + small
+V[8] = () => frame(`<div style="display:grid;gap:14px"><article class="card" style="display:grid;grid-template-columns:1.1fr 1fr"><div class="cv" style="min-height:300px"><span class="tag dark" style="position:absolute;left:18px;top:18px;z-index:2">Свежее · ${N1.date}</span>${MEGA}</div><div style="padding:22px 24px"><h3 style="font-size:28px;font-weight:800;letter-spacing:-.01em">${N1.title}</h3>${list(N1)}<div style="display:flex;align-items:center;margin-top:16px">${author()}<span class="rd" style="margin-left:auto">Читать →</span></div></div></article><article class="card" style="display:grid;grid-template-columns:90px 1fr auto;gap:16px;padding:14px 18px;align-items:center"><div class="cv b" style="height:70px;border-radius:14px"></div><div><div class="meta">${N2.date} · Объявление</div><b style="font-size:17px">${N2.title}</b><div style="color:var(--soft)">${N2.short}</div></div><span class="rd">Читать →</span></article></div>`);
+// 9 accordion: first open, rest folded
+V[9] = () => frame(`<div style="display:grid;gap:12px"><article class="card" style="padding:20px 22px"><div style="display:flex;align-items:center;gap:12px"><span class="emo">${N1.emo}</span><div style="flex:1"><h3 style="font-size:22px;font-weight:800">${N1.title}</h3><div class="meta">${N1.date} · Объявление</div></div><span style="color:var(--mute)">▾</span></div>${list(N1)}<div style="margin-top:14px">${author()}</div></article><article class="card" style="padding:16px 22px;display:flex;align-items:center;gap:12px"><span class="emo" style="width:34px;height:34px;font-size:18px">${N2.emo}</span><div style="flex:1"><h3 style="font-size:17px;font-weight:700">${N2.title}</h3><div class="meta">${N2.date} · ${N2.short}</div></div><span style="color:var(--mute)">▸</span></article></div>`);
+// 10 compact notes with readers
+V[10] = () => frame(`<div style="display:grid;gap:10px">${[N1, N2].map((n) => `<article class="card" style="display:grid;grid-template-columns:76px 1fr auto;gap:18px;padding:16px 20px;align-items:center"><div style="text-align:center;border-radius:16px;background:rgba(255,255,255,.06);padding:8px 0"><div style="font-size:26px;font-weight:800;line-height:1">${n.day}</div><div class="meta" style="justify-content:center;font-size:12px">${n.mon}</div></div><div><div style="display:flex;align-items:center;gap:8px"><b style="font-size:19px">${n.emo} ${n.title}</b><span class="tag">Объявление</span></div><div style="color:var(--soft);margin-top:3px">${n.short}</div></div><div style="text-align:right"><span class="rd">Читать →</span><div class="meta" style="justify-content:flex-end;margin-top:4px">👍 12 · 🔥 4</div></div></article>`).join('')}<div style="text-align:center;color:var(--mute);padding:26px 0">Это все новости. Когда их станет больше, лента подгрузится сама.</div></div>`);
+const NAMES = {
+  1: ['Читаемые карточки', 'Текст раскрыт полностью: список вместо склеенной строки, эмодзи вынесено в значок рядом с заголовком, дата и автор внятно.'],
+  2: ['Две колонки с обложками', 'Новости плитками по две, обложка сверху, ниже короткое описание. Плотно при большом числе новостей.'],
+  3: ['Как в Discord', 'Привычный вид сообщения бота: аватар автора, цветная полоса слева, реакции под сообщением. Узнаваемо для игроков.'],
+  4: ['Журнал изменений', 'Слева дата, справа карточка, а пункты с метками «Добавлено / Исправлено». Идеально для обновлений и вайпов.'],
+  5: ['Баннер у каждой новости', 'Широкая обложка-шапка с заголовком, под ней весь текст. Каждая новость как маленькая статья.'],
+  6: ['Текстовый блог', 'Одна колонка без картинок, крупные заголовки с засечками. Максимум текста и спокойствия, боковой блок убран.'],
+  7: ['Лента-хроника', 'Вертикальная линия времени с датами, новости карточками. Чувствуется «история сервера».'],
+  8: ['Главная + компактная', 'Свежая новость крупно с обложкой, остальные узкими строками. Хорошо работает, когда новостей 2–5.'],
+  9: ['Аккордеон', 'Свежая раскрыта, остальные свёрнуты в строку, раскрываются по клику. Компактно и без перехода на другую страницу.'],
+  10: ['Компактные заметки', 'Дата плиткой, заголовок и одна строка, реакции справа, внизу подсказка при малом числе новостей.'],
+};
+const only = Number(new URLSearchParams(location.search).get('v')); if (only) document.body.classList.add('single');
+const root = document.getElementById('root'), nav = document.getElementById('nav');
+for (let i = 1; i <= 10; i++) { if (only && only !== i) continue; root.insertAdjacentHTML('beforeend', `<div class="vl" id="v${i}"><span class="n">${i}</span><b>${NAMES[i][0]}</b><p>${NAMES[i][1]}</p></div>${V[i]()}`); nav.insertAdjacentHTML('beforeend', `<a href="#v${i}">${i}. ${NAMES[i][0]}</a>`); }
+</script>
+</body>
+</html>
