@@ -67,3 +67,22 @@
 }
 
 .ne-more { display: flex; justify-content: center; padding: 1.25rem 0 .5rem; }
+
+/* ---------- the news as a small article: a banner with the headline on it, the whole text below ---------- */
+.ne-list { gap: 1.1rem; }
+.ne-list .nw-group { display: grid; gap: 1.1rem; }
+.nb { overflow: hidden; border-radius: var(--r-xl); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-2); }
+.nb-banner { position: relative; display: flex; align-items: flex-end; min-height: 9.5rem; padding: 1.25rem 1.5rem; color: #fff; text-decoration: none; background-size: cover; background-position: center; background-color: rgb(var(--soft)); isolation: isolate; }
+.nb-banner:not(.nw-gen)::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgb(8 10 20 / .15), rgb(8 10 20 / .78)); }
+.nb-banner.nw-gen .nw-gen-ico { height: 70%; right: 6%; }
+.nb-banner-in { position: relative; z-index: 2; display: grid; gap: .5rem; max-width: 46rem; }
+.nb-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; }
+.nb-date { padding: .2rem .65rem; border-radius: var(--r-pill); background: rgb(0 0 0 / .45); font-size: .8125rem; font-weight: 650; }
+.nb-title { margin: 0; font-size: clamp(1.45rem, 3vw, 2rem); font-weight: 800; line-height: 1.12; letter-spacing: -.015em; overflow-wrap: anywhere; text-shadow: 0 2px 18px rgb(0 0 0 / .35); }
+.nb-banner:hover .nb-title { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: .18em; }
+.nb-body { display: grid; gap: .9rem; padding: 1.15rem 1.5rem 1.3rem; }
+.nb-text { display: -webkit-box; -webkit-line-clamp: 9; -webkit-box-orient: vertical; overflow: hidden; font-size: 1.0625rem; line-height: 1.6; overflow-wrap: anywhere; }
+.nb-text .nw-prose { max-width: none; }
+.nb-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .35rem 1rem; }
+.nb:focus-within { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+@media (max-width: 560px) { .nb-banner { min-height: 8rem; padding: 1rem 1.1rem; } .nb-body { padding: 1rem 1.1rem 1.15rem; } .nb-text { font-size: 1rem; } }
