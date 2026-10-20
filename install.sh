@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fee6fa10a115"
+COREGSM_BUILD="f6fd941f270c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19630,6 +19630,7 @@ __COREGSM_EOF__
       "version": "1.0.0",
       "dependencies": {
         "@fontsource-variable/golos-text": "^5.3.0",
+        "@fontsource-variable/literata": "^5.3.0",
         "qrcode-generator": "^2.0.4",
         "react": "^18.3.1",
         "react-dom": "^18.3.1"
@@ -20336,6 +20337,15 @@ __COREGSM_EOF__
       "version": "5.3.0",
       "resolved": "https://registry.npmjs.org/@fontsource-variable/golos-text/-/golos-text-5.3.0.tgz",
       "integrity": "sha512-D+Evz5yqXYh6tsalc537FS+cPDWn2FTdO8j/K1ZZuFAvA7ib6WnusTiihciq7mMnm6GBo6XTlh0JXPrhBsam2g==",
+      "license": "OFL-1.1",
+      "funding": {
+        "url": "https://github.com/sponsors/ayuhito"
+      }
+    },
+    "node_modules/@fontsource-variable/literata": {
+      "version": "5.3.0",
+      "resolved": "https://registry.npmjs.org/@fontsource-variable/literata/-/literata-5.3.0.tgz",
+      "integrity": "sha512-1Jw7xvOcoGyB83lxB2nG4bfNbqtX2/TTbdh9sHAOmU064SvmSdulDtA5RBu5JYWf64fdaKX7xU+z3GO1T2bCHA==",
       "license": "OFL-1.1",
       "funding": {
         "url": "https://github.com/sponsors/ayuhito"
@@ -22740,6 +22750,7 @@ __COREGSM_EOF__
   },
   "dependencies": {
     "@fontsource-variable/golos-text": "^5.3.0",
+    "@fontsource-variable/literata": "^5.3.0",
     "qrcode-generator": "^2.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -51178,37 +51189,40 @@ function monthFormatter(lang: 'ru' | 'en') {
   };
 }
 
-function Thumbs({ c, href }: { c: Card; href: string }) {
-  if (c.gallery.length === 0) return null;
-  const shown = c.gallery.slice(0, 4);
-  const more = c.gallery.length - shown.length;
-  return (
-    <a className="nw-strip" href={href} aria-label={t('nw.gallery')}>
-      {shown.map((u, i) => <img key={u + i} src={u} alt="" loading="lazy" decoding="async" />)}
-      {more > 0 && <span className="nw-strip-more">+{more}</span>}
-    </a>
-  );
+/** the day and the short month for the date column of an entry: «18» / «окт» */
+function dateParts(ts: number | null, lang: 'ru' | 'en'): { day: string; mon: string; year: string } | null {
+  if (!ts) return null;
+  const d = new Date(ts);
+  const mon = new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ru-RU', { month: 'short' }).format(d).replace('.', '');
+  return { day: String(d.getDate()), mon, year: String(d.getFullYear()) };
 }
 
-function Hero({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
+/** One entry of the editorial list: the date on the left, the rubric and a serif headline with a teaser, the cover on the right. */
+function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
   const href = `/news/${c.id}`;
+  const gen = hasGeneratedCover(c, servers);
+  const dp = dateParts(c.at, lang);
   return (
-    <article className="nf-hero nw-hero" style={{ ['--nf-accent' as string]: c.accent }}>
-      <NewsCover c={c} servers={servers} href={href} />
-      <div className="nf-hero-in">
-        {(c.author || c.countdownAt) && (
-          <div className="nf-meta">
-            {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
-            {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
-          </div>
-        )}
-        {(c.text || c.fields.length > 0) && <div className="nf-text is-clamped"><NewsText text={c.text} fields={c.fields} /></div>}
-        <Thumbs c={c} href={href} />
-        <div className="nf-actions">
-          <a className="btn" href={href}>{t('nw.read')}</a>
-          {c.link && <a className="btn btn-soft" href={c.link} target="_blank" rel="noopener noreferrer">{t('nw.openLink')}</a>}
+    <article className="ne" style={{ ['--nf-accent' as string]: c.accent }}>
+      <div className="ne-date" aria-label={c.at ? fmtDate(c.at) : undefined}>
+        {dp && <><b>{dp.day}</b><span>{dp.mon}</span><small>{dp.year}</small></>}
+      </div>
+      <div className="ne-body">
+        <div className="nw-chips">
+          {c.pinned && <PinChip />}
+          <CategoryChip category={c.category} />
+          {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+        </div>
+        <h3 className="ne-title"><a href={href}>{c.title}</a></h3>
+        {c.text && <p className="ne-text">{plainExcerpt(c.text, 260)}</p>}
+        <div className="ne-foot">
+          {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+          <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
+      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
+      </a>
     </article>
   );
 }
@@ -51239,31 +51253,29 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
 }
 
 /**
- * The feed column: the first item large, then pinned ones, then the rest grouped by month.
+ * The feed: an editorial list, pinned items first and then the rest grouped by month.
  * `items` must already be ordered (pinned first, newest first) and filtered.
  */
 export function PublicFeed({ items, servers, flat = false }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean }) {
   const { lang } = useI18n();
   if (items.length === 0) return null;
   const cards = items.map(cardOf);
-  const [hero, ...rest] = cards;
-  const pinned = rest.filter((c) => c.pinned);
-  const normal = rest.filter((c) => !c.pinned);
+  const pinned = cards.filter((c) => c.pinned);
+  const normal = cards.filter((c) => !c.pinned);
   const groups = flat ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
 
   return (
-    <div className="nf nw-feed">
-      <Hero c={hero!} servers={servers} />
+    <div className="nw-feed ne-list">
       {pinned.length > 0 && (
         <section className="nw-group">
-          <h3 className="nf-more">{t('nw.pinned')}</h3>
-          <div className="nf-list">{pinned.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+          <h3 className="ne-h">{t('nw.pinned')}</h3>
+          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
-          <h3 className="nf-more">{g.label || t('nw.earlier')}</h3>
-          <div className="nf-list">{g.items.map((c) => <Row key={c.id} c={c} servers={servers} />)}</div>
+          {(g.label || pinned.length > 0) && <h3 className="ne-h">{g.label || t('nw.earlier')}</h3>}
+          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       ))}
     </div>
@@ -61462,6 +61474,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 // variable Manrope: has Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800)
 import '@fontsource-variable/golos-text/wght.css';
+// the serif of the news headlines (Cyrillic)
+import '@fontsource-variable/literata/wght.css';
 import './index.css';
 import './styles/servers.css';
 import './styles/detail.css';
@@ -71720,6 +71734,33 @@ __COREGSM_EOF__
   .nf-item { grid-template-rows: none; grid-template-columns: 5.5rem minmax(0, 1fr); gap: .75rem; padding: .65rem; }
   .nf-thumb { aspect-ratio: 1; align-self: start; min-height: 0; border-radius: var(--r-md); }
   .nf-item-in { padding: 0; align-content: center; }
+}
+
+/* ---------- the editorial list of the news page: date | rubric, serif headline, teaser | cover ---------- */
+.ne-list { max-width: none; margin: 0; display: grid; gap: 0; }
+.ne-h { margin: 1.5rem 0 .25rem; font-size: .9375rem; font-weight: 650; letter-spacing: .02em; color: rgb(var(--mute)); }
+.ne-h:first-child { margin-top: 0; }
+.ne { display: grid; grid-template-columns: 4.25rem minmax(0, 1fr) 11rem; gap: 1.25rem 1.5rem; align-items: center; padding: 1.4rem .25rem; border-top: 1px solid rgb(var(--line)); }
+.ne-date { display: grid; justify-items: start; line-height: 1; color: rgb(var(--mute)); }
+.ne-date b { font-size: 1.9rem; font-weight: 650; letter-spacing: -.02em; color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
+.ne-date span { margin-top: .2rem; font-size: .9375rem; font-weight: 650; text-transform: lowercase; }
+.ne-date small { margin-top: .15rem; font-size: .75rem; font-weight: 500; opacity: .8; }
+.ne-body { display: grid; gap: .5rem; min-width: 0; }
+.ne-title { margin: 0; font-family: 'Literata Variable', Literata, Georgia, 'Times New Roman', serif; font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 600; line-height: 1.16; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.ne-title a { color: inherit; text-decoration: none; }
+.ne-title a:hover { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: .18em; text-decoration-color: var(--nf-accent, rgb(var(--brand))); }
+.ne-text { margin: 0; max-width: 60ch; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.55; color: rgb(var(--mute)); }
+.ne-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1.25rem; }
+.ne-cover { position: relative; display: block; aspect-ratio: 16 / 10; border-radius: var(--r-lg); background-size: cover; background-position: center; background-color: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); overflow: hidden; }
+.ne:hover .ne-cover { box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--field)); }
+.ne:focus-within { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: var(--r-md); }
+.ne-cover .nw-gen-ico { height: 62%; right: 10%; }
+@media (max-width: 760px) {
+  .ne { grid-template-columns: minmax(0, 1fr) 6.5rem; gap: .75rem 1rem; padding: 1.1rem 0; }
+  .ne-date { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: baseline; gap: .4rem; }
+  .ne-date b { font-size: 1rem; } .ne-date small { display: none; }
+  .ne-body { grid-column: 1; grid-row: 2; } .ne-cover { grid-column: 2; grid-row: 2; align-self: start; }
+  .ne-text { -webkit-line-clamp: 2; }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
