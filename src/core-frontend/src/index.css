@@ -1045,3 +1045,6 @@ html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline
 .bg-ok { background-color: rgb(var(--ok-fill)); }
 .bg-warn { background-color: rgb(var(--warn-fill)); }
 .bg-bad { background-color: rgb(var(--bad-fill)); }
+
+/* the tabs of the server page scroll on a phone: the right edge fades so that it is visible there are more */
+@media (max-width: 639px) { .srv-tabs { -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent); } }

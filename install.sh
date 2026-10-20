@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="35e91e0af66d"
+COREGSM_BUILD="737f1e8c3475"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -54140,9 +54140,9 @@ export default function Hero({
         </div>
         {maintenance && <MaintenanceChip m={maintenance} glass />}
       </div>
-      {online && max > 0 && <CapacityBar className="mt-2.5" players={players} max={max} color="#fff" onDark big />}
+      {online && max > 0 && <CapacityBar className="srv-hero-bar mt-2.5" players={players} max={max} color="#fff" onDark big />}
       {freeSlot !== 'hidden' && (
-        <div className="mt-3">
+        <div className="srv-hero-free mt-3">
           {freeSlot === 'subscribed' ? (
             <p className="srv-hero-sub"><IconBell size={16} />{t('srv.freeSlot.subscribed')}</p>
           ) : freeSlot === 'guest' ? (
@@ -54531,7 +54531,7 @@ export default function HistoryChart({
           )}
           {series === 'players' && allPoints.some((p) => p.ping != null) && (
             <button type="button" className="hc-chip" aria-pressed={showPing} onClick={() => setShowPing((v) => !v)}>
-              <i className="hc-chip-ping" aria-hidden />пинг, мс (справа)
+              <i className="hc-chip-ping" aria-hidden />{showPing ? 'пинг, мс (справа)' : 'показать пинг'}
             </button>
           )}
           {zoom ? (
@@ -54782,8 +54782,8 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/Metrics.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
-import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, fmtDateTime, num } from '../../ui';
+import { useI18n } from '../../i18n';
+import { fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
 import { metricFill } from './serverLogic';
 
@@ -54820,16 +54820,8 @@ export const uptimeLevel = (pct: number | null): 'good' | 'warm' | 'hot' | undef
  *  never in the cover's colour: a red cover must not make a healthy server look broken. */
 export default function Metrics({ d, withSamples = false }: { d: MetricsData; withSamples?: boolean }) {
   useI18n();
-  const nowPct = metricFill(d.players, d.maxPlayers);
   return (
-    <div className={`srv-metrics ${withSamples ? 'has-5' : ''}`}>
-      <Cell
-        k="Сейчас"
-        v={d.online ? <><AnimatedNumber value={d.players} delta />{d.maxPlayers > 0 && <span className="srv-metric-of">/{d.maxPlayers}</span>}</> : '–'}
-        hint={d.online ? (d.maxPlayers > 0 ? t('srv.cap.taken', { pct: nowPct }) : '') : d.hasStatus ? 'недоступен' : 'ждём ответ'}
-        fill={d.online ? nowPct : 0}
-        level={capLevel(nowPct)}
-      />
+    <div className={`srv-metrics ${withSamples ? 'has-4' : ''}`}>
       <Cell
         k="Пик"
         v={d.peak == null ? '–' : String(d.peak)}
@@ -55202,7 +55194,7 @@ export default function PlayersList({
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
                       {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-xs">новичок</span>}
                       {rank && (
-                        <span className="inline-flex items-center gap-1 text-xs font-extrabold" style={{ color: rank.color }} title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
+                        <span className="inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
                           <RankEmblem rank={rank} size={20} />
                           {rankName(rank)}
                         </span>
@@ -55434,9 +55426,11 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
   const formOpen = !!me && (editing || !r.mine);
   const others = r.items.filter((x) => x.id !== r.mine?.id);
+  const empty = r.count === 0;
   return (
     <div className="rv">
-      <div className="rv-score">
+      {empty && <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>}
+      {!empty && <div className="rv-score">
         <div className="text-center">
           <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
           <Stars value={r.avg ?? 0} size={18} />
@@ -55451,7 +55445,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
             </li>
           ))}
         </ul>
-      </div>
+      </div>}
 
       {r.mine && !editing && (
         <div className="rv-item is-mine">
@@ -59973,6 +59967,9 @@ html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline
 .bg-ok { background-color: rgb(var(--ok-fill)); }
 .bg-warn { background-color: rgb(var(--warn-fill)); }
 .bg-bad { background-color: rgb(var(--bad-fill)); }
+
+/* the tabs of the server page scroll on a phone: the right edge fades so that it is visible there are more */
+@media (max-width: 639px) { .srv-tabs { -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent); } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/lazyPage.tsx" << '__COREGSM_EOF__'
@@ -67011,7 +67008,7 @@ import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { useCoverAccent } from '../components/server/coverAccent';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
-import { SectionCard, SectionChips, useSectionState, type SectionDef } from '../components/server/Sections';
+import { SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
   countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
@@ -67358,7 +67355,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-5" style={stagger(2)} title="Последние события">
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-5 lg:self-start" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
@@ -67413,6 +67410,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
           <span className="depth-l2 absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
         </span>
+        {/* a soft dark scrim: the text stays readable over any cover picture */}
+        <span aria-hidden className="srv-scrim pointer-events-none absolute inset-0 rounded-[26px]" />
         {wentOffline && <span className="flash-ring" aria-hidden />}
 
         {/* title row: name, status, game */}
@@ -67466,7 +67465,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             (and «Подписаться») floats above the bottom navigation. */}
         <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>{connectLabel}</a>
-          <CopyButton text={s.address} label={t('srv.act.copyAddr')} tone="glass" />
+          <CopyButton text={s.address} label={s.address} tone="glass" className="srv-addr-btn" />
           {canSub && (
             <button type="button" className="btn-glass max-sm:hidden" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
               <IconBell size={18} />
@@ -67482,7 +67481,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         id={id}
         tab={tab}
         counts={{ events: events.length, players: s.online ? s.players : 0 }}
-        toc={tab === '' ? <SectionChips defs={OVERVIEW_SECTIONS} state={sections} /> : tab === 'history' ? <SectionChips defs={HISTORY_SECTIONS} state={sections} /> : tab === 'connect' ? <SectionChips defs={CONNECT_SECTIONS} state={sections} /> : undefined}
       />
 
       <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
@@ -71410,7 +71408,8 @@ __COREGSM_EOF__
 
 /* ---------- metrics row ---------- */
 .srv-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-@media (min-width: 560px) { .srv-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); } .srv-metrics.has-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.srv-metrics > .srv-metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+@media (min-width: 560px) { .srv-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .srv-metrics.has-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } .srv-metrics > .srv-metric:last-child:nth-child(odd) { grid-column: auto; } }
 .srv-metric { min-width: 0; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
 .srv-metric-v { margin-top: 2px; font-size: 22px; font-weight: 800; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .srv-metric-of { font-size: 14px; font-weight: 650; color: rgb(var(--mute)); }
@@ -71550,6 +71549,19 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .pr-dot { width: 10px; height: 10px; flex: none; border-radius: var(--r-pill); background: rgb(var(--mute)); }
 .pr-dot.is-up { background: rgb(var(--ok)); box-shadow: 0 0 0 4px rgb(var(--ok) / .18); }
 .pr-dot.is-down { background: rgb(var(--bad)); box-shadow: 0 0 0 4px rgb(var(--bad) / .18); }
+
+/* ---------- the server banner: a scrim, the counter and the fill bar in one row, the address on the copy button ---------- */
+.srv-scrim { background: linear-gradient(90deg, rgb(8 10 20 / .5) 0%, rgb(8 10 20 / .22) 62%, rgb(8 10 20 / .08) 100%), linear-gradient(180deg, transparent 55%, rgb(8 10 20 / .3)); }
+@media (min-width: 640px) {
+  .srv-hero { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 28px; align-items: center; }
+  .srv-hero > .srv-hero-top { grid-column: 1; }
+  .srv-hero > .srv-hero-bar { grid-column: 2; margin-top: 0; }
+  .srv-hero > .srv-hero-free { grid-column: 1 / -1; }
+}
+.srv-addr-btn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; max-width: 100%; }
+@media (max-width: 639px) { .srv-addr-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; } }
+/* reviews: an empty block is one line */
+.rv-none { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'

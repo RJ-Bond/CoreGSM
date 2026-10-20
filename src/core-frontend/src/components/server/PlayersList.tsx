@@ -130,7 +130,7 @@ export default function PlayersList({
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
                       {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-xs">новичок</span>}
                       {rank && (
-                        <span className="inline-flex items-center gap-1 text-xs font-extrabold" style={{ color: rank.color }} title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
+                        <span className="inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
                           <RankEmblem rank={rank} size={20} />
                           {rankName(rank)}
                         </span>

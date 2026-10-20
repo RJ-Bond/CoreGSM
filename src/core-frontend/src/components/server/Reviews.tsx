@@ -65,9 +65,11 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
   const formOpen = !!me && (editing || !r.mine);
   const others = r.items.filter((x) => x.id !== r.mine?.id);
+  const empty = r.count === 0;
   return (
     <div className="rv">
-      <div className="rv-score">
+      {empty && <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>}
+      {!empty && <div className="rv-score">
         <div className="text-center">
           <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
           <Stars value={r.avg ?? 0} size={18} />
@@ -82,7 +84,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
             </li>
           ))}
         </ul>
-      </div>
+      </div>}
 
       {r.mine && !editing && (
         <div className="rv-item is-mine">
