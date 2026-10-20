@@ -60,7 +60,7 @@ export function NewsArticle({
   };
   const share = async () => {
     try {
-      await navigator.share({ title: c.title, url: window.location.href.split('?')[0] });
+      await navigator.share({ title: c.title, url: `${window.location.origin}/n/${item.id}` });
     } catch {
       /* closed by the person */
     }
@@ -68,7 +68,8 @@ export function NewsArticle({
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(window.location.href.split('?')[0]);
+      // /n/<id> carries the meta tags of a link preview and sends people on to the page
+      await navigator.clipboard.writeText(`${window.location.origin}/n/${item.id}`);
       toast(t('nw.copied'));
     } catch {
       toast(t('nw.copyFail'), 'err');

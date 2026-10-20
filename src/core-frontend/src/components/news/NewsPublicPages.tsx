@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
@@ -7,11 +7,14 @@ import type { OverviewData } from '../servers/overviewLogic';
 import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '../../ui';
 import { NewsArticle } from './NewsArticle';
 import { CategoryIcon, PinIcon } from './NewsIcons';
-import { categoryLabel, useNewsServers } from './NewsParts';
+import { Countdown, categoryLabel, useNewsServers } from './NewsParts';
 import { cardOf, hasGeneratedCover, PublicFeed } from './PublicFeed';
-import { CATEGORY_HEX, countByCategory, filterByCategory, isRubricFilter, orderFeed, relatedNews, visibleRubrics, type RubricFilter } from './newsLogic';
+import { CATEGORY_HEX, isRubricFilter, orderFeed, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
+/** how many news a page of the feed shows */
+const PAGE = 20;
+const ZERO_COUNTS: Record<RubricFilter, number> = { all: 0, announcement: 0, wipe: 0, update: 0, event: 0, maintenance: 0, other: 0 };
 const loadRubric = (): RubricFilter => {
   try {
     const v = localStorage.getItem(STORE);
@@ -90,27 +93,54 @@ export function NewsListPage() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [rubric, setRubricState] = useState<RubricFilter>(loadRubric);
+  // the feed comes in pages: one more than shown tells whether there is a next page
+  const [limit, setLimit] = useState(PAGE);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [counts, setCounts] = useState<Record<RubricFilter, number>>(ZERO_COUNTS);
   const wide = useMedia('(min-width: 1100px)');
   const servers = useNewsServers();
   const works = useWorks();
 
-  const load = () => api<PublicNews[]>('/news')
-    .then((n) => { setItems(Array.isArray(n) ? n : []); setError(''); })
+  const filter: RubricFilter = rubric;
+  const load = () => Promise.all([
+    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}`),
+    api<Record<RubricFilter, number>>('/news/counts').catch(() => null),
+  ])
+    .then(([n, c]) => {
+      const list = Array.isArray(n) ? n : [];
+      setItems(list.slice(0, limit));
+      setHasMore(list.length > limit);
+      if (c) setCounts({ ...ZERO_COUNTS, ...c });
+      setError('');
+    })
     .catch((e: Error) => setError(e.message))
-    .finally(() => setLoaded(true));
+    .finally(() => { setLoaded(true); setLoadingMore(false); });
   usePoll(load, 30_000);
+  // another rubric or a bigger page: load at once (the poll above only repeats it)
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [limit, filter]);
 
   const setRubric = (r: RubricFilter) => {
     setRubricState(r);
+    setLimit(PAGE);
     try { localStorage.setItem(STORE, r); } catch { /* not remembered */ }
   };
+  const showMore = () => { setLoadingMore(true); setLimit((l) => l + PAGE); };
 
   const ordered = useMemo(() => orderFeed(items), [items]);
-  const counts = useMemo(() => countByCategory(ordered), [ordered]);
-  const filter: RubricFilter = rubric;
-  const shown = useMemo(() => filterByCategory(ordered, filter), [ordered, filter]);
+  const shown = ordered;
   const pinned = ordered.filter((n) => (n.pinned ?? n.payload?.pinned)).slice(0, 5);
   const now = Date.now();
+  // the nearest event with a timer among the loaded news
+  const soon = ordered
+    .map((n) => ({ n, at: n.payload?.countdownAt }))
+    .filter((x): x is { n: PublicNews; at: number } => typeof x.at === 'number' && x.at > now)
+    .sort((a, b) => a.at - b.at)[0];
   const upcoming = works.filter((w) => w.endTs > now).sort((a, b) => a.startTs - b.startTs).slice(0, 3);
 
   const rubrics = visibleRubrics(counts, filter);
@@ -124,7 +154,7 @@ export function NewsListPage() {
     </button>
   );
 
-  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0;
+  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
 
   return (
     <div className="nw-page">
@@ -132,7 +162,7 @@ export function NewsListPage() {
       <div className={`nw-grid ${hasSide ? 'has-side' : ''}`}>
         <div className="nw-main">
           <PageHead icon={<IconNews />} title={t('nav.news')} subtitle={t('nw.subtitle')} />
-          {ordered.length > 0 && rubrics.length > 0 && (
+          {counts.all > 0 && rubrics.length > 0 && (
             <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
               {chip('all')}
               {rubrics.map((r) => chip(r))}
@@ -159,6 +189,13 @@ export function NewsListPage() {
             />
           )}
           {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} /></div>}
+          {hasMore && (
+            <div className="ne-more">
+              <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
+                {loadingMore ? t('nw.loadingMore') : t('nw.more')}
+              </button>
+            </div>
+          )}
         </div>
 
         {hasSide && (
@@ -189,6 +226,14 @@ export function NewsListPage() {
                 </ul>
               </AsideSection>
             )}
+            {soon && (
+              <AsideSection id="soon" title={t('nw.soon')} wide={wide}>
+                <a className="nw-soon" href={`/news/${soon.n.id}`}>
+                  <b>{soon.n.payload?.embed?.title || soon.n.title}</b>
+                  <Countdown at={soon.at} label={soon.n.payload?.countdownLabel} compact />
+                </a>
+              </AsideSection>
+            )}
             {upcoming.length > 0 && (
               <AsideSection id="works" title={t('nw.works')} wide={wide}>
                 <ul className="nw-side-list nw-works">
@@ -217,17 +262,11 @@ export function NewsArticlePage({ id }: { id: number }) {
   const [item, setItem] = useState<PublicNewsFull | null>(null);
   const [error, setError] = useState<{ status: number; text: string } | null>(null);
   const servers = useNewsServers(30_000, true);
-  const [all, setAll] = useState<PublicNews[]>([]);
 
   useEffect(() => { setItem(null); setError(null); }, [id]);
-  // the other news: «Читайте также» (the same rubric first)
-  useEffect(() => {
-    let alive = true;
-    api<PublicNews[]>('/news').then((n) => { if (alive && Array.isArray(n)) setAll(n); }).catch(() => undefined);
-    return () => { alive = false; };
-  }, [id]);
   const card = item ? cardOf(item) : null;
-  const related = card ? relatedNews(all, id, card.category, 3) : [];
+  // «Читайте также» comes in the answer for the item (the same rubric first)
+  const related = item?.related ?? [];
 
   const load = () => api<PublicNewsFull>(`/news/${id}`)
     .then((n) => { setItem((cur) => (cur && cur.id === n.id && cur.reactions && n.reactions === undefined ? { ...n, reactions: cur.reactions } : n)); setError(null); })

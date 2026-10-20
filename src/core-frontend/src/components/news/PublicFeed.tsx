@@ -82,7 +82,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
   const gen = hasGeneratedCover(c, servers);
   return (
     <div className={`nw-cover ${tall ? 'is-tall' : ''} ${gen ? 'is-gen' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ...(gen ? genVars(c) : {}) }}>
-      <div className={`nw-cover-bg ${gen ? 'nw-gen' : ''}`} style={gen ? undefined : coverStyle(c, servers)} aria-hidden>
+      <div className={`nw-cover-bg ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} style={gen ? undefined : coverStyle(c, servers)} aria-hidden>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
       </div>
       <div className="nw-cover-shade" aria-hidden />
@@ -121,9 +121,13 @@ function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undef
   const dp = dateParts(c.at, lang);
   return (
     <article className="ne" style={{ ['--nf-accent' as string]: c.accent }}>
-      <div className="ne-date" aria-label={c.at ? fmtDate(c.at) : undefined}>
-        {dp && <><b>{dp.day}</b><span>{dp.mon}</span><small>{dp.year}</small></>}
-      </div>
+      {/* the parts are for the eyes, the screen reader reads the whole date once */}
+      <time className="ne-date" dateTime={c.at ? new Date(c.at).toISOString() : undefined}>
+        {dp && <>
+          <span className="sr-only">{fmtDate(c.at as number)}</span>
+          <b aria-hidden>{dp.day}</b><span aria-hidden>{dp.mon}</span><small aria-hidden>{dp.year}</small>
+        </>}
+      </time>
       <div className="ne-body">
         <div className="nw-chips">
           {c.pinned && <PinChip />}
@@ -137,7 +141,7 @@ function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undef
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
-      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
       </a>
     </article>
@@ -149,7 +153,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
   const gen = hasGeneratedCover(c, servers);
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
-      <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+      <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
       </a>
       <div className="nf-item-in">
@@ -185,13 +189,13 @@ export function PublicFeed({ items, servers, flat = false }: { items: PublicNews
     <div className="nw-feed ne-list">
       {pinned.length > 0 && (
         <section className="nw-group">
-          <h3 className="ne-h">{t('nw.pinned')}</h3>
+          <h2 className="ne-h">{t('nw.pinned')}</h2>
           {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
-          {(g.label || pinned.length > 0) && <h3 className="ne-h">{g.label || t('nw.earlier')}</h3>}
+          {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
           {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       ))}
