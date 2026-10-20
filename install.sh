@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f6fd941f270c"
+COREGSM_BUILD="aa152c4ba8cb"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8982,7 +8982,7 @@ __COREGSM_EOF__
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { registerAlerts } from './alerts.js';
-import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
+import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, publicPanel, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
@@ -9075,6 +9075,9 @@ app.use(internalRouter);
 registerNews({
   app,
   publicBase,
+  publicPanel,
+  baseOf,
+  brand: () => ({ name: brand().name, color: brand().color }),
   staff: allow('news'),
   auth,
   viewer,
@@ -10263,6 +10266,12 @@ export function registerNews(deps: {
   statusEmbed: (serverId: number) => StatusEmbed | null;
   /** public https address of the panel (for the «read in full» link), or null when unknown */
   publicBase: () => string | null;
+  /** may guests look at the panel (the link preview page is public only then) */
+  publicPanel?: () => boolean;
+  /** the address the request came to, when the public one is not set */
+  baseOf?: (req: Request) => string;
+  /** name and colour of the site for the preview page */
+  brand?: () => { name: string; color: string };
 }) {
   const { app, staff, viewer, internal, channelInfo, isStaff: isAdmin, servers, statusEmbed } = deps;
   const authed = deps.auth ?? staff;
@@ -10590,12 +10599,38 @@ export function registerNews(deps: {
   /** the order of published items by time, newest first */
   const byTime = (a: NewsRow, b: NewsRow) => (b.sent_at ?? b.created_at) - (a.sent_at ?? a.created_at) || b.id - a.id;
 
+  /** ?limit=N&offset=M: a page of the list (without limit: everything, as before) */
+  const pageOf = <T,>(list: T[], req: Request): T[] => {
+    const limit = Number(req.query.limit);
+    if (!Number.isInteger(limit) || limit < 1) return list;
+    const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
+    return list.slice(offset, offset + Math.min(100, limit));
+  };
+  const PUBLISHED_SQL = "status IN ('sent','edit_queued')";
   app.get('/api/news', viewer, (req, res) => {
     const uid = uidOf(req);
-    const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
-    if (isAdmin(req)) return res.json(rows.map((r) => serialize(r, uid)));
-    const pub = rows.filter(isPublished).sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
-    res.json(pub.map((r) => publicNews(r, uid)));
+    if (isAdmin(req)) {
+      const rows = db.prepare('SELECT * FROM news WHERE test = 0 ORDER BY COALESCE(scheduled_at, sent_at, created_at) DESC, id DESC').all() as NewsRow[];
+      return res.json(pageOf(rows, req).map((r) => serialize(r, uid)));
+    }
+    // only the published rows are read, and only the requested page is turned into the public shape (reactions are a query each)
+    const cat = typeof req.query.category === 'string' && (NEWS_CATEGORIES as readonly string[]).includes(req.query.category) ? req.query.category : '';
+    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}`).all(...(cat ? [cat] : [])) as NewsRow[];
+    const pub = rows.sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
+    res.json(pageOf(pub, req).map((r) => publicNews(r, uid)));
+  });
+
+  /** how many published items every rubric has (the chips of the news page; a page of the list cannot tell) */
+  app.get('/api/news/counts', viewer, (_req, res) => {
+    const out: Record<string, number> = { all: 0 };
+    for (const c of NEWS_CATEGORIES) out[c] = 0;
+    const rows = db.prepare(`SELECT COALESCE(json_extract(payload, '$.category'), 'announcement') AS cat, COUNT(*) AS n FROM news WHERE test = 0 AND ${PUBLISHED_SQL} GROUP BY cat`).all() as { cat: string; n: number }[];
+    for (const r of rows) {
+      const k = (NEWS_CATEGORIES as readonly string[]).includes(r.cat) ? r.cat : 'announcement';
+      out[k] += r.n;
+      out.all += r.n;
+    }
+    res.json(out);
   });
 
   app.get('/api/news/:id', viewer, (req, res) => {
@@ -10603,11 +10638,89 @@ export function registerNews(deps: {
     const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
     if (!r || (!isAdmin(req) && !isPublished(r))) return res.status(404).json({ error: 'Новость не найдена' });
     const base = isAdmin(req) ? serialize(r, uid) : publicNews(r, uid);
-    // neighbours among published items: prev is the one before it in the list (newer), next the one after (older)
-    const pub = (db.prepare('SELECT * FROM news WHERE test = 0').all() as NewsRow[]).filter(isPublished).sort(byTime);
-    const i = pub.findIndex((x) => x.id === r.id);
-    const ref = (x: NewsRow | undefined) => (x ? { id: x.id, title: titleOf(JSON.parse(x.payload) as NewsPayload) } : null);
-    res.json({ ...base, prev: i > 0 ? ref(pub[i - 1]) : null, next: i >= 0 ? ref(pub[i + 1]) : null });
+    // neighbours among published items: prev is the one before it in the list (newer), next the one after (older).
+    // Only ids (and the rubric) are read for the whole list; the two neighbours and the suggestions are loaded by id.
+    const order = db
+      .prepare(`SELECT id, COALESCE(json_extract(payload, '$.category'), 'announcement') AS cat FROM news WHERE test = 0 AND ${PUBLISHED_SQL} ORDER BY COALESCE(sent_at, created_at) DESC, id DESC`)
+      .all() as { id: number; cat: string }[];
+    const i = order.findIndex((x) => x.id === r.id);
+    const byId = db.prepare('SELECT * FROM news WHERE id = ?');
+    const ref = (x: { id: number } | undefined) => {
+      const row = x ? (byId.get(x.id) as NewsRow | undefined) : undefined;
+      return row ? { id: row.id, title: titleOf(JSON.parse(row.payload) as NewsPayload) } : null;
+    };
+    // «Read next»: the same rubric first, then the newest ones, never this item
+    const mine = i >= 0 ? order[i].cat : 'announcement';
+    const others = order.filter((x) => x.id !== r.id);
+    const suggested = [...others.filter((x) => x.cat === mine), ...others.filter((x) => x.cat !== mine)].slice(0, 3);
+    const related = suggested.map((x) => byId.get(x.id) as NewsRow | undefined).filter((x): x is NewsRow => !!x).map((x) => publicNews(x, uid));
+    res.json({ ...base, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
+  });
+
+  // ---------- a link that looks good when pasted into Discord/Telegram: /n/<id> (redirects to the news page) ----------
+  const esc = (v: unknown) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  /** a plain teaser out of Discord markdown */
+  const teaser = (text: string, max = 200) => {
+    const t = text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/^[ \t]*[-*•]\s+/gm, '• ')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[*_~`>#|]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+  };
+  /** the picture of a news item for the preview: its image, else the first gallery picture, else the default one */
+  const previewImage = (p: NewsPayload, base: string): string => {
+    const e = p.embed;
+    if (e?.image?.upload) return `${base}/api/news/images/${e.image.upload}`;
+    if (e?.image?.url && /^https:\/\//i.test(e.image.url)) return e.image.url;
+    const g = p.gallery?.find((x) => x.upload || (x.url && /^https:\/\//i.test(x.url)));
+    if (g?.upload) return `${base}/api/news/images/${g.upload}`;
+    if (g?.url) return g.url;
+    return `${base}/og-default.png`;
+  };
+  app.get('/n/:id(\\d+)', (req, res) => {
+    res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
+    const gone = () => void res.status(404).type('html').send('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Не найдено</title></head><body><p>Новость не найдена.</p></body></html>');
+    if (deps.publicPanel && !deps.publicPanel()) return gone();
+    const r = db.prepare('SELECT * FROM news WHERE id = ? AND test = 0').get(Number(req.params.id)) as NewsRow | undefined;
+    if (!r || !isPublished(r)) return gone();
+    const p = JSON.parse(r.payload) as NewsPayload;
+    const base = deps.publicBase() ?? deps.baseOf?.(req) ?? `${req.protocol}://${req.get('host')}`;
+    const b = deps.brand?.() ?? { name: 'CoreGSM', color: '#4f46e5' };
+    const title = titleOf(p);
+    const desc = teaser(p.embed?.description || p.content || '') || b.name;
+    const target = `/news/${r.id}`;
+    const url = `${base}/n/${r.id}`;
+    const image = previewImage(p, base);
+    res.type('html').send(`<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · ${esc(b.name)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta name="theme-color" content="${esc(b.color)}">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="${esc(b.name)}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:url" content="${esc(url)}">
+<meta property="og:locale" content="ru_RU">
+${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sent_at).toISOString()}">` : ''}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(desc)}">
+<meta name="twitter:image" content="${esc(image)}">
+<meta http-equiv="refresh" content="0;url=${esc(target)}">
+<script>location.replace(${JSON.stringify(target).replace(/</g, '\\u003c')});</script>
+</head>
+<body>
+<p><a href="${esc(target)}">${esc(title)}</a></p>
+</body>
+</html>`);
   });
 
   // a signed-in user's single reaction on a published item
@@ -45562,6 +45675,8 @@ export interface NewsReaction { emoji: string; count: number; mine: boolean }
 export interface PublicNewsFull extends PublicNews {
   prev?: { id: number; title: string } | null;
   next?: { id: number; title: string } | null;
+  /** up to three other news to read next (the same rubric first) */
+  related?: PublicNews[];
 }
 
 /** who signs a news item (the Discord display name 1:1 and picture when linked, else the site login and picture) */
@@ -50203,7 +50318,7 @@ export function NewsArticle({
   };
   const share = async () => {
     try {
-      await navigator.share({ title: c.title, url: window.location.href.split('?')[0] });
+      await navigator.share({ title: c.title, url: `${window.location.origin}/n/${item.id}` });
     } catch {
       /* closed by the person */
     }
@@ -50211,7 +50326,8 @@ export function NewsArticle({
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(window.location.href.split('?')[0]);
+      // /n/<id> carries the meta tags of a link preview and sends people on to the page
+      await navigator.clipboard.writeText(`${window.location.origin}/n/${item.id}`);
       toast(t('nw.copied'));
     } catch {
       toast(t('nw.copyFail'), 'err');
@@ -50681,7 +50797,7 @@ export function Reactions({
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/NewsPublicPages.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
@@ -50690,11 +50806,14 @@ import type { OverviewData } from '../servers/overviewLogic';
 import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '../../ui';
 import { NewsArticle } from './NewsArticle';
 import { CategoryIcon, PinIcon } from './NewsIcons';
-import { categoryLabel, useNewsServers } from './NewsParts';
+import { Countdown, categoryLabel, useNewsServers } from './NewsParts';
 import { cardOf, hasGeneratedCover, PublicFeed } from './PublicFeed';
-import { CATEGORY_HEX, countByCategory, filterByCategory, isRubricFilter, orderFeed, relatedNews, visibleRubrics, type RubricFilter } from './newsLogic';
+import { CATEGORY_HEX, isRubricFilter, orderFeed, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
+/** how many news a page of the feed shows */
+const PAGE = 20;
+const ZERO_COUNTS: Record<RubricFilter, number> = { all: 0, announcement: 0, wipe: 0, update: 0, event: 0, maintenance: 0, other: 0 };
 const loadRubric = (): RubricFilter => {
   try {
     const v = localStorage.getItem(STORE);
@@ -50773,27 +50892,54 @@ export function NewsListPage() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [rubric, setRubricState] = useState<RubricFilter>(loadRubric);
+  // the feed comes in pages: one more than shown tells whether there is a next page
+  const [limit, setLimit] = useState(PAGE);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [counts, setCounts] = useState<Record<RubricFilter, number>>(ZERO_COUNTS);
   const wide = useMedia('(min-width: 1100px)');
   const servers = useNewsServers();
   const works = useWorks();
 
-  const load = () => api<PublicNews[]>('/news')
-    .then((n) => { setItems(Array.isArray(n) ? n : []); setError(''); })
+  const filter: RubricFilter = rubric;
+  const load = () => Promise.all([
+    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}`),
+    api<Record<RubricFilter, number>>('/news/counts').catch(() => null),
+  ])
+    .then(([n, c]) => {
+      const list = Array.isArray(n) ? n : [];
+      setItems(list.slice(0, limit));
+      setHasMore(list.length > limit);
+      if (c) setCounts({ ...ZERO_COUNTS, ...c });
+      setError('');
+    })
     .catch((e: Error) => setError(e.message))
-    .finally(() => setLoaded(true));
+    .finally(() => { setLoaded(true); setLoadingMore(false); });
   usePoll(load, 30_000);
+  // another rubric or a bigger page: load at once (the poll above only repeats it)
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [limit, filter]);
 
   const setRubric = (r: RubricFilter) => {
     setRubricState(r);
+    setLimit(PAGE);
     try { localStorage.setItem(STORE, r); } catch { /* not remembered */ }
   };
+  const showMore = () => { setLoadingMore(true); setLimit((l) => l + PAGE); };
 
   const ordered = useMemo(() => orderFeed(items), [items]);
-  const counts = useMemo(() => countByCategory(ordered), [ordered]);
-  const filter: RubricFilter = rubric;
-  const shown = useMemo(() => filterByCategory(ordered, filter), [ordered, filter]);
+  const shown = ordered;
   const pinned = ordered.filter((n) => (n.pinned ?? n.payload?.pinned)).slice(0, 5);
   const now = Date.now();
+  // the nearest event with a timer among the loaded news
+  const soon = ordered
+    .map((n) => ({ n, at: n.payload?.countdownAt }))
+    .filter((x): x is { n: PublicNews; at: number } => typeof x.at === 'number' && x.at > now)
+    .sort((a, b) => a.at - b.at)[0];
   const upcoming = works.filter((w) => w.endTs > now).sort((a, b) => a.startTs - b.startTs).slice(0, 3);
 
   const rubrics = visibleRubrics(counts, filter);
@@ -50807,7 +50953,7 @@ export function NewsListPage() {
     </button>
   );
 
-  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0;
+  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
 
   return (
     <div className="nw-page">
@@ -50815,7 +50961,7 @@ export function NewsListPage() {
       <div className={`nw-grid ${hasSide ? 'has-side' : ''}`}>
         <div className="nw-main">
           <PageHead icon={<IconNews />} title={t('nav.news')} subtitle={t('nw.subtitle')} />
-          {ordered.length > 0 && rubrics.length > 0 && (
+          {counts.all > 0 && rubrics.length > 0 && (
             <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
               {chip('all')}
               {rubrics.map((r) => chip(r))}
@@ -50842,6 +50988,13 @@ export function NewsListPage() {
             />
           )}
           {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} /></div>}
+          {hasMore && (
+            <div className="ne-more">
+              <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
+                {loadingMore ? t('nw.loadingMore') : t('nw.more')}
+              </button>
+            </div>
+          )}
         </div>
 
         {hasSide && (
@@ -50872,6 +51025,14 @@ export function NewsListPage() {
                 </ul>
               </AsideSection>
             )}
+            {soon && (
+              <AsideSection id="soon" title={t('nw.soon')} wide={wide}>
+                <a className="nw-soon" href={`/news/${soon.n.id}`}>
+                  <b>{soon.n.payload?.embed?.title || soon.n.title}</b>
+                  <Countdown at={soon.at} label={soon.n.payload?.countdownLabel} compact />
+                </a>
+              </AsideSection>
+            )}
             {upcoming.length > 0 && (
               <AsideSection id="works" title={t('nw.works')} wide={wide}>
                 <ul className="nw-side-list nw-works">
@@ -50900,17 +51061,11 @@ export function NewsArticlePage({ id }: { id: number }) {
   const [item, setItem] = useState<PublicNewsFull | null>(null);
   const [error, setError] = useState<{ status: number; text: string } | null>(null);
   const servers = useNewsServers(30_000, true);
-  const [all, setAll] = useState<PublicNews[]>([]);
 
   useEffect(() => { setItem(null); setError(null); }, [id]);
-  // the other news: «Читайте также» (the same rubric first)
-  useEffect(() => {
-    let alive = true;
-    api<PublicNews[]>('/news').then((n) => { if (alive && Array.isArray(n)) setAll(n); }).catch(() => undefined);
-    return () => { alive = false; };
-  }, [id]);
   const card = item ? cardOf(item) : null;
-  const related = card ? relatedNews(all, id, card.category, 3) : [];
+  // «Читайте также» comes in the answer for the item (the same rubric first)
+  const related = item?.related ?? [];
 
   const load = () => api<PublicNewsFull>(`/news/${id}`)
     .then((n) => { setItem((cur) => (cur && cur.id === n.id && cur.reactions && n.reactions === undefined ? { ...n, reactions: cur.reactions } : n)); setError(null); })
@@ -51165,7 +51320,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
   const gen = hasGeneratedCover(c, servers);
   return (
     <div className={`nw-cover ${tall ? 'is-tall' : ''} ${gen ? 'is-gen' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ...(gen ? genVars(c) : {}) }}>
-      <div className={`nw-cover-bg ${gen ? 'nw-gen' : ''}`} style={gen ? undefined : coverStyle(c, servers)} aria-hidden>
+      <div className={`nw-cover-bg ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} style={gen ? undefined : coverStyle(c, servers)} aria-hidden>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
       </div>
       <div className="nw-cover-shade" aria-hidden />
@@ -51204,9 +51359,13 @@ function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undef
   const dp = dateParts(c.at, lang);
   return (
     <article className="ne" style={{ ['--nf-accent' as string]: c.accent }}>
-      <div className="ne-date" aria-label={c.at ? fmtDate(c.at) : undefined}>
-        {dp && <><b>{dp.day}</b><span>{dp.mon}</span><small>{dp.year}</small></>}
-      </div>
+      {/* the parts are for the eyes, the screen reader reads the whole date once */}
+      <time className="ne-date" dateTime={c.at ? new Date(c.at).toISOString() : undefined}>
+        {dp && <>
+          <span className="sr-only">{fmtDate(c.at as number)}</span>
+          <b aria-hidden>{dp.day}</b><span aria-hidden>{dp.mon}</span><small aria-hidden>{dp.year}</small>
+        </>}
+      </time>
       <div className="ne-body">
         <div className="nw-chips">
           {c.pinned && <PinChip />}
@@ -51220,7 +51379,7 @@ function Entry({ c, servers, lang }: { c: Card; servers: Server[] | null | undef
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
-      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+      <a className={`ne-cover ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
       </a>
     </article>
@@ -51232,7 +51391,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
   const gen = hasGeneratedCover(c, servers);
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
-      <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
+      <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={64} /></span>}
       </a>
       <div className="nf-item-in">
@@ -51268,13 +51427,13 @@ export function PublicFeed({ items, servers, flat = false }: { items: PublicNews
     <div className="nw-feed ne-list">
       {pinned.length > 0 && (
         <section className="nw-group">
-          <h3 className="ne-h">{t('nw.pinned')}</h3>
+          <h2 className="ne-h">{t('nw.pinned')}</h2>
           {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
-          {(g.label || pinned.length > 0) && <h3 className="ne-h">{g.label || t('nw.earlier')}</h3>}
+          {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
           {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
         </section>
       ))}
@@ -60532,6 +60691,9 @@ const en: Record<keyof typeof ru, string> = {
   'nw.pinned': 'Pinned',
   'nw.pinnedList': 'Pinned',
   'nw.works': 'Upcoming maintenance',
+  'nw.soon': 'Coming up',
+  'nw.more': 'Show more',
+  'nw.loadingMore': 'Loading…',
   'nw.works.now': 'in progress',
   'nw.earlier': 'Earlier',
   'nw.read': 'Read in full',
@@ -61415,6 +61577,9 @@ const ru = {
   'nw.pinned': 'Закреплено',
   'nw.pinnedList': 'Закреплённое',
   'nw.works': 'Ближайшие работы',
+  'nw.soon': 'Ближайшее',
+  'nw.more': 'Показать ещё',
+  'nw.loadingMore': 'Загрузка…',
   'nw.works.now': 'идут сейчас',
   'nw.earlier': 'Ранее',
   'nw.read': 'Читать полностью',
@@ -71692,6 +71857,29 @@ __COREGSM_EOF__
   font-size: .9375rem; font-weight: 500; text-decoration-thickness: 1px; text-decoration-color: rgb(var(--field));
 }
 :is(.nw-hero, .nw-article) .nw-toolbar, :is(.nw-hero, .nw-article) .nw-actions-wrap, .nw-hero .nf-actions { gap: .25rem 1.5rem; }
+
+/* ---------- the generated covers differ: the rubric colour, but another pattern and light for every fourth news (data-v = id % 4) ---------- */
+.nw-gen[data-v='1'] { background:
+    radial-gradient(70% 100% at 92% 108%, color-mix(in srgb, var(--gen) 90%, #fff) 0%, transparent 60%),
+    radial-gradient(60% 90% at -6% -10%, color-mix(in srgb, var(--gen) 50%, #7c3aed) 0%, transparent 62%),
+    linear-gradient(200deg, color-mix(in srgb, var(--gen) 34%, #0b0c16), #0b0c16 85%); }
+.nw-gen[data-v='1']::before { background-image: radial-gradient(rgb(255 255 255 / .16) 1.2px, transparent 1.6px); background-size: 16px 16px;
+  -webkit-mask-image: radial-gradient(80% 90% at 18% 85%, #000, transparent 75%); mask-image: radial-gradient(80% 90% at 18% 85%, #000, transparent 75%); }
+.nw-gen[data-v='2'] { background:
+    radial-gradient(90% 120% at 50% -20%, color-mix(in srgb, var(--gen) 95%, #fff) 0%, transparent 64%),
+    radial-gradient(70% 90% at 100% 100%, color-mix(in srgb, var(--gen) 55%, #0ea5e9) 0%, transparent 60%),
+    linear-gradient(170deg, color-mix(in srgb, var(--gen) 36%, #0b0c16), #0b0c16 85%); }
+.nw-gen[data-v='2']::before { background-image: repeating-linear-gradient(135deg, rgb(255 255 255 / .1) 0 1px, transparent 1px 14px);
+  -webkit-mask-image: radial-gradient(90% 90% at 80% 10%, #000, transparent 80%); mask-image: radial-gradient(90% 90% at 80% 10%, #000, transparent 80%); }
+.nw-gen[data-v='3'] { background:
+    radial-gradient(80% 110% at 100% 0%, color-mix(in srgb, var(--gen) 90%, #fff) 0%, transparent 60%),
+    radial-gradient(70% 100% at 0% 100%, color-mix(in srgb, var(--gen) 55%, #ec4899) 0%, transparent 62%),
+    linear-gradient(120deg, color-mix(in srgb, var(--gen) 34%, #0b0c16), #0b0c16 85%); }
+.nw-gen[data-v='3']::before { background-image: repeating-radial-gradient(circle at 82% 22%, rgb(255 255 255 / .12) 0 1px, transparent 1px 18px);
+  background-size: auto; -webkit-mask-image: radial-gradient(90% 100% at 82% 22%, #000, transparent 78%); mask-image: radial-gradient(90% 100% at 82% 22%, #000, transparent 78%); }
+.nw-soon { display: grid; gap: .35rem; padding: .35rem 0 .6rem; color: inherit; text-decoration: none; }
+.nw-soon b { font-weight: 650; overflow-wrap: anywhere; }
+.nw-soon:hover b { text-decoration: underline; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'
@@ -71744,7 +71932,7 @@ __COREGSM_EOF__
 .ne-date { display: grid; justify-items: start; line-height: 1; color: rgb(var(--mute)); }
 .ne-date b { font-size: 1.9rem; font-weight: 650; letter-spacing: -.02em; color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
 .ne-date span { margin-top: .2rem; font-size: .9375rem; font-weight: 650; text-transform: lowercase; }
-.ne-date small { margin-top: .15rem; font-size: .75rem; font-weight: 500; opacity: .8; }
+.ne-date small { margin-top: .15rem; font-size: .75rem; font-weight: 600; }
 .ne-body { display: grid; gap: .5rem; min-width: 0; }
 .ne-title { margin: 0; font-family: 'Literata Variable', Literata, Georgia, 'Times New Roman', serif; font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 600; line-height: 1.16; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .ne-title a { color: inherit; text-decoration: none; }
@@ -71762,6 +71950,8 @@ __COREGSM_EOF__
   .ne-body { grid-column: 1; grid-row: 2; } .ne-cover { grid-column: 2; grid-row: 2; align-self: start; }
   .ne-text { -webkit-line-clamp: 2; }
 }
+
+.ne-more { display: flex; justify-content: center; padding: 1.25rem 0 .5rem; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
@@ -74614,8 +74804,8 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # shareable server page with link-preview meta tags (redirects to the SPA)
-    location ~ ^/s/\d+$ {
+    # shareable server (/s/) and news (/n/) pages with link-preview meta tags (redirect to the SPA)
+    location ~ ^/(s|n)/\d+$ {
         set $backend http://backend:3000;
         proxy_pass $backend;
         proxy_set_header Host $host;
