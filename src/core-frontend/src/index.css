@@ -47,7 +47,8 @@
   --horizon-a: rgb(var(--brand) / 0.14);
   --horizon-b: rgb(236 72 153 / 0.22);
   /* page background «Аврора»: strength of the four glows; glass: how much of the card colour stays, and the sheen on it */
-  --au1: .2; --au2: .16; --au3: .08; --au4: .16;
+  --au1: .18; --au2: .12;
+  --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='%23463c8c'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>"); --hex-a: .1;
   --glass-a: .84; --glass-sheen: none;
   --wash-a: rgb(var(--brand) / 0.15);
   --wash-b: rgb(70 190 235 / 0.14);
@@ -97,7 +98,8 @@
     --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
     --horizon-a: rgb(var(--brand) / 0.2);
     --horizon-b: rgb(236 72 153 / 0.2);
-    --au1: .5; --au2: .3; --au3: .12; --au4: .26;
+    --au1: .4; --au2: .14;
+    --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>"); --hex-a: .06;
     --glass-a: .68; --glass-sheen: linear-gradient(160deg, rgb(255 255 255 / .09), rgb(255 255 255 / .02) 55%);
     --wash-a: rgb(var(--brand) / 0.2);
     --wash-b: rgb(40 170 210 / 0.09);
@@ -137,7 +139,8 @@
   --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
   --horizon-a: rgb(var(--brand) / 0.2);
   --horizon-b: rgb(236 72 153 / 0.2);
-  --au1: .5; --au2: .3; --au3: .12; --au4: .26;
+  --au1: .4; --au2: .14;
+  --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>"); --hex-a: .06;
   --glass-a: .68; --glass-sheen: linear-gradient(160deg, rgb(255 255 255 / .09), rgb(255 255 255 / .02) 55%);
   --wash-a: rgb(var(--brand) / 0.2);
   --wash-b: rgb(40 170 210 / 0.09);
@@ -153,31 +156,34 @@
     @apply bg-page text-ink font-sans text-[15px] antialiased;
     -webkit-text-size-adjust: 100%;
   }
-  /* page background «Аврора»: four soft glows over the first screen (brand violet top left, teal top right, indigo in the
-     middle, pink along the lower edge) and a fine grain. Painted on the body itself and static: no fixed layer, no
-     animation (a fixed full-screen layer once showed as a black tile) */
+  /* page background «Соты»: a soft light from the top (brand colour, a hint of teal at the corner) and a fine honeycomb
+     that fades out downwards. The light is painted on the body itself; the honeycomb is a plain absolute layer over the
+     first screens (not fixed: a fixed full-screen layer once showed as a black tile). Static, no animation */
   body {
     background-image:
-      var(--noise),
-      radial-gradient(70% 50% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 100%),
-      radial-gradient(55% 44% at 96% 6%, rgb(45 212 191 / var(--au2)), transparent 100%),
-      radial-gradient(60% 34% at 50% 46%, rgb(79 70 229 / var(--au3)), transparent 100%),
-      radial-gradient(60% 30% at 72% 66%, rgb(236 72 153 / var(--au4)), transparent 100%);
-    background-size: 200px 200px, 100% 130vh, 100% 130vh, 100% 130vh, 100% 130vh;
-    background-repeat: repeat, no-repeat, no-repeat, no-repeat, no-repeat;
-    background-position: 0 0, top, top, top, top;
+      radial-gradient(60% 38% at 50% -4%, rgb(var(--brand) / var(--au1)), transparent 100%),
+      radial-gradient(40% 30% at 98% 2%, rgb(45 212 191 / var(--au2)), transparent 100%);
+    background-size: 100% 110vh, 100% 110vh;
+    background-repeat: no-repeat, no-repeat;
+    background-position: top, top;
+    position: relative;
+    /* its own stacking context: the layer below (z-index -1) is painted above the body background, under the content */
+    isolation: isolate;
+  }
+  body::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 110vh; z-index: -1; pointer-events: none;
+    background-image: var(--hex); opacity: var(--hex-a);
+    -webkit-mask-image: linear-gradient(#000 25%, transparent 88%); mask-image: linear-gradient(#000 25%, transparent 88%);
   }
   /* a game theme: the game's picture across the top of the page, dimmed into the page colour */
   html[data-game-art] body {
     background-image:
       linear-gradient(180deg, rgb(var(--page) / .78) 0, rgb(var(--page) / .93) 34vh, rgb(var(--page)) 62vh),
       var(--game-art),
-      var(--noise),
-      radial-gradient(70% 55% at 6% 0%, rgb(var(--brand) / var(--au1)), transparent 64%),
-      radial-gradient(70% 55% at 72% 100%, rgb(236 72 153 / var(--au4)), transparent 68%);
-    background-size: 100% 100vh, 100% auto, 200px 200px, 100% 130vh, 100% 130vh;
-    background-repeat: no-repeat, no-repeat, repeat, no-repeat, no-repeat;
-    background-position: top, top center, 0 0, top, top;
+      radial-gradient(60% 38% at 50% -4%, rgb(var(--brand) / var(--au1)), transparent 100%);
+    background-size: 100% 100vh, 100% auto, 100% 110vh;
+    background-repeat: no-repeat, no-repeat, no-repeat;
+    background-position: top, top center, top;
   }
 
   ::selection { @apply bg-brand/30; }
