@@ -1,0 +1,54 @@
+name: screenshots
+
+# Photographs the panel on demo data (real backend on a throwaway database, real login) and pushes the PNG files to
+# the branch `ci-screenshots`, so a change to the interface can be looked at without a server. Runs on a push to a
+# branch named `ui/**` or by hand.
+on:
+  push:
+    branches: ['ui/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  shoot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install the backend and the frontend
+        run: |
+          npm ci --no-audit --no-fund --prefix src/core-backend
+          npm ci --no-audit --no-fund --prefix src/core-frontend
+      - name: Install Playwright
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm install --no-audit --no-fund playwright
+          npx playwright install --with-deps chromium
+      - name: Start the backend and the panel
+        run: |
+          mkdir -p /tmp/shots-data
+          cd src/core-backend
+          PORT=3000 DB_PATH=/tmp/shots-data/coregsm.db DATA_DIR=/tmp/shots-data JWT_SECRET=$(head -c 48 /dev/zero | tr '\0' j) INTERNAL_TOKEN=$(head -c 48 /dev/zero | tr '\0' i) SETUP_TOKEN=shots-code POLL_INTERVAL_SEC=3600 NODE_ENV=test nohup node --import tsx src/index.ts > /tmp/backend.log 2>&1 &
+          cd ../core-frontend
+          nohup npx vite --port 5173 --host 127.0.0.1 > /tmp/vite.log 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:3000/api/setup/status >/dev/null && curl -fs http://127.0.0.1:5173/ >/dev/null && exit 0; sleep 1; done
+          cat /tmp/backend.log /tmp/vite.log; exit 1
+      - name: Take the screenshots
+        run: |
+          sleep 8   # the first poll of the (unreachable) demo servers must finish before the demo data is written
+          node tools/screenshots/shoot.mjs http://127.0.0.1:5173 http://127.0.0.1:3000 /tmp/shots-data/coregsm.db /tmp/pw /tmp/shots
+      - name: Push the pictures to ci-screenshots
+        run: |
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan shots-tmp
+          git rm -rf -q . || true
+          cp /tmp/shots/*.png .
+          printf 'Built from %s (%s)\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" > README.txt
+          git add -A
+          git commit -q -m "Screenshots of $GITHUB_REF_NAME $GITHUB_SHA"
+          git push --force origin HEAD:refs/heads/ci-screenshots
