@@ -7,6 +7,7 @@ import { db, EFFECTIVE_NAME } from './db.js';
 import { enqueueDelivery } from './deliveries.js';
 import { dmAvailable } from './subscriptions.js';
 import { distinctNames, similarNames, suggestNames } from './nickMatch.js';
+import { log } from './logger.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS nick_seen (
@@ -79,7 +80,7 @@ export function nickSuggestions(query: string, discordId: string, limit = 25): s
     const free = candidateNames().filter((n) => !taken.has(n.toLowerCase()));
     return suggestNames(query.slice(0, 100), free, limit);
   } catch (e) {
-    console.error('nick-suggest failed', (e as Error).message);
+    log.error('nick-suggest failed', (e as Error).message);
     return [];
   }
 }
@@ -124,7 +125,7 @@ export function onSessionsOpened(serverId: number, names: string[], now = Date.n
       if (id !== undefined) markSeen(id, serverId, now);
     }
   } catch (e) {
-    console.error('nick-seen failed', (e as Error).message);
+    log.error('nick-seen failed', (e as Error).message);
   }
 }
 
@@ -138,7 +139,7 @@ export function checkNickNow(userId: number, nick: string, now = Date.now()): vo
     const s = db.prepare('SELECT server_id FROM player_sessions WHERE left_at IS NULL AND ulower(name) = ulower(?) LIMIT 1').get(nick) as { server_id: number } | undefined;
     if (s) markSeen(userId, s.server_id, now);
   } catch (e) {
-    console.error('nick check failed', (e as Error).message);
+    log.error('nick check failed', (e as Error).message);
   }
 }
 

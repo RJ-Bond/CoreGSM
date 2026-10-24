@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
+import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const SAMPLE_EVERY_MS = 5 * 60_000;
@@ -186,7 +187,7 @@ export function currentFlags(now = Date.now()): Flag[] {
   try {
     return computeFlags(samplesSince(now - 7 * 24 * 3600_000), sampleNow(now), pollIntervalMs(), now);
   } catch (e) {
-    console.error('health flags failed', (e as Error).message);
+    log.error('health flags failed', (e as Error).message);
     return [];
   }
 }
@@ -216,7 +217,7 @@ export function registerHealth({ app, admin, bot }: { app: Express; admin: Reque
     try {
       recordSample();
     } catch (e) {
-      console.error('health sample failed', (e as Error).message);
+      log.error('health sample failed', (e as Error).message);
     }
   };
   setTimeout(tick, 20_000).unref();

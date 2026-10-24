@@ -4,6 +4,7 @@ import path from 'node:path';
 import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey, reencrypt, usesLegacyKey } from './secrets.js';
 import { runMigrations } from './migrations.js';
 import { addColumn } from './schema.js';
+import { log } from './logger.js';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 export const DATA_DIR = path.dirname(dbPath);
@@ -48,9 +49,9 @@ if (fs.existsSync(pendingDir)) {
       for (const f of fs.readdirSync(pendingDir)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.copyFileSync(path.join(pendingDir, f), path.join(DATA_DIR, f));
     }
     restoredNow = true;
-    console.log('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
+    log.info('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
   } catch (e) {
-    console.error('Restore failed:', (e as Error).message);
+    log.error('Restore failed:', (e as Error).message);
   }
   // never retry a half-done restore on every start
   fs.rmSync(pendingDir, { recursive: true, force: true });
@@ -251,7 +252,7 @@ export function getSetting(key: string): string | null {
   } catch (e) {
     if (!warnedSecrets.has(key)) {
       warnedSecrets.add(key);
-      console.error(`setting "${key}" cannot be decrypted (${(e as Error).message}); enter it again in the panel`);
+      log.error(`setting "${key}" cannot be decrypted (${(e as Error).message}); enter it again in the panel`);
     }
     return null;
   }
@@ -287,12 +288,12 @@ try {
   })();
 } catch (e) {
   // no key at all: config.ts stops with a clear message when it loads
-  console.error('secrets migration skipped:', (e as Error).message);
+  log.error('secrets migration skipped:', (e as Error).message);
 }
 if (restoredNow) {
   const lost = undecryptableSecrets();
   if (lost.length) {
-    console.error(`restored backup: these secrets were encrypted with another key and are unreadable: ${lost.join(', ')}`);
+    log.error(`restored backup: these secrets were encrypted with another key and are unreadable: ${lost.join(', ')}`);
     db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(
       Date.now(),
       'система',
