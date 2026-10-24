@@ -81,5 +81,5 @@ jobs:
         run: |
           set -e
           # no fixed full-screen wash layer and no outline restyling on :focus
-          if grep -n "body::before" src/core-frontend/src/index.css | grep -v '^\s*/\*'; then echo 'body::before wash layer is back'; exit 1; fi
+          if awk '/body::before[[:space:]]*\{/{b=1} b&&/position:[[:space:]]*fixed/{print FILENAME": "FNR": "$0; f=1} b&&/\}/{b=0} END{exit !f}' src/core-frontend/src/index.css; then echo 'body::before fixed wash layer is back'; exit 1; fi
           grep -q ':focus, :focus-visible { outline: 0 !important; }' src/core-frontend/src/index.css
