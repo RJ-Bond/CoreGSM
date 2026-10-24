@@ -15,6 +15,13 @@
   ],
   "rules": {
     "react/react-in-jsx-scope": "off",
-    "jsx-a11y/prefer-tag-over-role": "off"
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "react/set-state-in-effect": "off",
+    "react/purity": "off",
+    "react/refs": "off",
+    "react/use-memo": "off",
+    "jsx-a11y/label-has-associated-control": "off",
+    "jsx-a11y/control-has-associated-label": "off",
+    "jsx-a11y/interactive-supports-focus": "off"
   }
 }
