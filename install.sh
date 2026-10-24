@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c6e2300702c8"
+COREGSM_BUILD="54dcc5f94054"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -590,49 +590,15 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/audit.json" << '__COREGSM_EOF__'
 {
   "auditReportVersion": 2,
-  "vulnerabilities": {
-    "zod": {
-      "name": "zod",
-      "severity": "high",
-      "isDirect": true,
-      "via": [
-        {
-          "source": 1243066,
-          "name": "zod",
-          "dependency": "zod",
-          "title": "Zod can exhaust memory while validating oversized constrained collections",
-          "url": "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
-          "severity": "high",
-          "cwe": [
-            "CWE-770"
-          ],
-          "cvss": {
-            "score": 7.5,
-            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-          },
-          "range": "<4.6.6"
-        }
-      ],
-      "effects": [],
-      "range": "<4.6.6",
-      "nodes": [
-        "node_modules/zod"
-      ],
-      "fixAvailable": {
-        "name": "zod",
-        "version": "4.6.7",
-        "isSemVerMajor": true
-      }
-    }
-  },
+  "vulnerabilities": {},
   "metadata": {
     "vulnerabilities": {
       "info": 0,
       "low": 0,
       "moderate": 0,
-      "high": 1,
+      "high": 0,
       "critical": 0,
-      "total": 1
+      "total": 0
     },
     "dependencies": {
       "prod": 197,
@@ -667,7 +633,7 @@ __COREGSM_EOF__
         "skia-canvas": "^4.0.0",
         "tar": "^7.5.22",
         "undici": "^6.29.0",
-        "zod": "^3.23.8"
+        "zod": "^4.6.7"
       },
       "devDependencies": {
         "@types/bcryptjs": "^2.4.6",
@@ -3710,9 +3676,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/zod": {
-      "version": "3.25.76",
-      "resolved": "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz",
-      "integrity": "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==",
+      "version": "4.6.7",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.6.7.tgz",
+      "integrity": "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==",
       "license": "MIT",
       "funding": {
         "url": "https://github.com/sponsors/colinhacks"
@@ -3745,7 +3711,7 @@ __COREGSM_EOF__
     "skia-canvas": "^4.0.0",
     "tar": "^7.5.22",
     "undici": "^6.29.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -5608,7 +5574,7 @@ const fileSchema = z.object({
   restarts: z.array(z.object({ server: serverRef, enabled: z.boolean(), days: z.number().int().min(0).max(127), atMin: z.number().int().min(0).max(1439), durationMin: z.number().int().min(1).max(240), warnMin: z.number().int().min(0).max(120), channelId: z.string().regex(/^(\d{15,25})?$/), command: z.string().max(200), say: z.string().max(200) })).max(500).default([]),
   autoroles: z.array(z.object({ guildId: snow, roleId: snow, kind: z.enum(['online', 'week_top', 'hours']), threshold: z.number().int().min(0).max(10000), server: serverRef.nullable() })).max(100).default([]),
   counters: z.array(z.object({ channelId: snow, template: z.string().min(1).max(100), server: serverRef.nullable() })).max(50).default([]),
-  settings: z.record(z.string().max(5000)).default({}),
+  settings: z.record(z.string(), z.string().max(5000)).default({}),
 });
 export type ConfigFile = z.infer<typeof fileSchema>;
 

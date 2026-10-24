@@ -20,7 +20,7 @@
     "skia-canvas": "^4.0.0",
     "tar": "^7.5.22",
     "undici": "^6.29.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
