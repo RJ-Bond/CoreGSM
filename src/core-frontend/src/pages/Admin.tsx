@@ -92,7 +92,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
 
   return (
     <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
-      <nav className="tile flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
+      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
         {isAdmin ? (
           <>
             {link(START_SECTION)}
