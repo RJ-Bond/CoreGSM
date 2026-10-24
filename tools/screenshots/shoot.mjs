@@ -59,8 +59,9 @@ for (const theme of ['dark', 'light']) {
     await page.goto(panel + '/login', { waitUntil: 'networkidle' });
     await page.screenshot({ path: path.join(outDir, `${theme}-${sizeName}-login.png`) });
     await page.locator('input[autocomplete="username"], input[name="username"], input[type="text"]').first().fill(ADMIN.username);
-    await page.locator('input[type="password"]').first().fill(ADMIN.password);
-    await page.locator('button[type="submit"]').first().click();
+    const pw = page.locator('input[type="password"]').first();
+    await pw.fill(ADMIN.password);
+    await pw.press('Enter');
     await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15000 }).catch(() => undefined);
     for (const [name, p] of pages) {
       await page.goto(panel + p, { waitUntil: 'networkidle' }).catch(() => undefined);
