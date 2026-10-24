@@ -11,7 +11,7 @@ export default function CardsPage() {
   const [forced, setForced] = useState(0);
   const [copied, setCopied] = useState<number | null>(null);
   const [error, setError] = useState('');
-  const copyTimer = useRef<number>();
+  const copyTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   const load = () =>

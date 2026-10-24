@@ -205,7 +205,7 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
 export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
   const [done, setDone] = useState(false);
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = async () => {
     try {

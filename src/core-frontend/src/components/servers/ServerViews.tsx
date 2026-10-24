@@ -31,7 +31,7 @@ const fmtUp = (v: number) => `${num(v)}%`;
 /** copies the address; the button shows a check mark for a moment */
 function CopyAddress({ text, className = '' }: { text: string; className?: string }) {
   const [done, setDone] = useState(false);
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = async (e: React.MouseEvent) => {
     e.stopPropagation();
