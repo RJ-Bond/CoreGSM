@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
+import * as RDialog from '@radix-ui/react-dialog';
 import { IconInfo, IconWarn } from './icons';
 
 /**
@@ -149,7 +150,6 @@ export function ConfirmHost() {
 }
 
 function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
-  const box = useRef<HTMLFormElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(req.kind === 'prompt' ? (req.opts.value ?? '') : '');
   const [error, setError] = useState('');
@@ -166,15 +166,17 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
   };
 
   // prompt: the field; destructive confirm: the safe button (cancel); otherwise the OK button
-  useDialogFocus(box, () => finish(false), () => {
-    const el = box.current;
-    if (!el) return null;
+  const initialFocus = (e: Event) => {
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement | null;
+    if (!el) return;
     if (input.current) {
       if (readOnly) input.current.select();
-      return input.current;
+      input.current.focus();
+      return;
     }
-    return el.querySelector<HTMLElement>(o.danger ? '[data-cancel]' : '[data-ok]');
-  });
+    el.querySelector<HTMLElement>(o.danger ? '[data-cancel]' : '[data-ok]')?.focus();
+  };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -185,20 +187,17 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
     finish(true);
   };
 
-  const bd = useBackdropClose(() => finish(false));
-
   return (
-    <div
-      className="fixed inset-0 z-80 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4"
-      {...bd}
-    >
-      <form
-        ref={box}
-        tabIndex={-1}
-        role={req.kind === 'confirm' && o.danger ? 'alertdialog' : 'dialog'}
-        aria-modal="true"
-        aria-labelledby="cd-title"
+    <RDialog.Root open onOpenChange={(open) => { if (!open) finish(false); }}>
+      <RDialog.Portal>
+      <RDialog.Overlay className="fixed inset-0 z-80 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4">
+      <RDialog.Content
+        asChild
+        onOpenAutoFocus={initialFocus}
         aria-describedby={o.text ? 'cd-text' : undefined}
+      >
+      <form
+        role={req.kind === 'confirm' && o.danger ? 'alertdialog' : 'dialog'}
         onSubmit={submit}
         className="pop panel panel-raised max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6"
       >
@@ -207,7 +206,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
             {o.danger ? <IconWarn size={22} /> : <IconInfo size={22} />}
           </span>
           <div className="min-w-0 flex-1 space-y-1.5">
-            <h2 id="cd-title" className="text-xl font-black leading-tight">{o.title}</h2>
+            <RDialog.Title className="text-xl font-black leading-tight">{o.title}</RDialog.Title>
             {o.text && <p id="cd-text" className="whitespace-pre-line font-semibold text-mute">{o.text}</p>}
           </div>
         </div>
@@ -240,6 +239,9 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
           </button>
         </div>
       </form>
-    </div>
+      </RDialog.Content>
+      </RDialog.Overlay>
+      </RDialog.Portal>
+    </RDialog.Root>
   );
 }
