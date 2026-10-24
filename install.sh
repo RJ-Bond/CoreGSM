@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e4aef330d79f"
+COREGSM_BUILD="fd29dc97a6dc"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -44375,7 +44375,7 @@ export class RootBoundary extends Component<{ children: ReactNode }, { error: Er
           <p className="text-mute">{t('crash.hint')}</p>
           <pre className="max-h-40 overflow-auto rounded-xl bg-black/20 p-3 text-left text-xs whitespace-pre-wrap">{details}</pre>
           <div className="flex justify-center gap-2">
-            <button type="button" className="btn btn-solid" onClick={() => window.location.reload()}>{t('page.reload')}</button>
+            <button type="button" className="btn" onClick={() => window.location.reload()}>{t('page.reload')}</button>
             <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(details).catch(() => undefined)}>{t('crash.copy')}</button>
           </div>
         </div>
