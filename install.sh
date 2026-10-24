@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2d435049d22b"
+COREGSM_BUILD="93df53a4a390"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -68275,11 +68275,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-5" style={stagger(2)} title="Последние события">
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-5 lg:col-start-1 lg:self-start" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
+          </SectionCard>
+          {/* the reviews sit under the events: the left column fills the height of the player list */}
+          <SectionCard id="ov-reviews" state={sections} className="lg:col-span-5 lg:col-start-1 lg:self-start" style={stagger(4)} title="Отзывы игроков">
+            <ServerReviews serverId={id} />
           </SectionCard>
         </div>
         {probes && probes.probes.length > 0 && (
@@ -68287,9 +68291,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <ProbesView v={probes} />
           </SectionCard>
         )}
-        <SectionCard id="ov-reviews" state={sections} style={stagger(4)} title="Отзывы игроков">
-          <ServerReviews serverId={id} />
-        </SectionCard>
       </div>
     );
   }
