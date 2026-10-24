@@ -484,11 +484,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>{connectLabel}</a>
           <CopyButton text={s.address} label={s.address} tone="glass" className="srv-addr-btn" />
+          {/* hidden on phones by a wrapper: the glass button's own CSS would win over a hidden utility on the button itself */}
           {canSub && (
-            <button type="button" className="btn-glass max-sm:hidden" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
-              <IconBell size={18} />
-              {subLabel}
-            </button>
+            <span className="contents max-sm:hidden">
+              <button type="button" className="btn-glass" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+                <IconBell size={18} />
+                {subLabel}
+              </button>
+            </span>
           )}
           <MoreMenu items={moreItems} />
         </div>
