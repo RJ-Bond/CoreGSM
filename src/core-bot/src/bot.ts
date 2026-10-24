@@ -1,4 +1,5 @@
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleInteraction, registerCommands } from './commands.js';
@@ -9,8 +10,11 @@ import { buildNews, buildPayload, type Binding, type NewsPayload } from './messa
 import { parseProxy } from './proxy.js';
 import { syncDiscord } from './sync.js';
 import { updatePresence } from './presence.js';
+import { STUCK_MS, stuckFor } from './watchdog.js';
 
 const TICK_MS = 10_000;
+/** touched every TICK_MS from the timer; the container's health check reads its age (docker-compose.yml) */
+const HEARTBEAT_FILE = process.env.HEARTBEAT_FILE ?? '/tmp/coregsm-bot.beat';
 const LOGIN_RETRY_MS = 60_000;
 
 interface BotConfig {
@@ -384,10 +388,25 @@ async function updateBindings(): Promise<void> {
 let busy = false;
 let stopping = false;
 let timer: NodeJS.Timeout | undefined;
+let tickStartedAt = 0;
 
+function beat(): void {
+  try {
+    fs.writeFileSync(HEARTBEAT_FILE, String(Date.now()));
+  } catch {
+    /* not writable: the health check reports it */
+  }
+}
+
+// a tick that never returns keeps `busy` true for ever: see watchdog.ts
 async function tick(): Promise<void> {
+  if (!stopping && stuckFor(Date.now(), tickStartedAt, busy)) {
+    log(`a tick has been running for more than ${STUCK_MS / 60_000} minutes: restarting`);
+    process.exit(1);
+  }
   if (busy || stopping) return;
   busy = true;
+  tickStartedAt = Date.now();
   try {
     await applyConfig();
     await publishGuilds();
@@ -400,14 +419,19 @@ async function tick(): Promise<void> {
     log('tick failed:', (e as Error).message);
   } finally {
     busy = false;
+    tickStartedAt = 0;
     if (!stopping) await publishStatus();
   }
 }
 
 export function start(): void {
   log('CoreGSM bot started; waiting for configuration from the panel.');
+  beat();
   void tick();
-  timer = setInterval(() => void tick(), TICK_MS);
+  timer = setInterval(() => {
+    beat();
+    void tick();
+  }, TICK_MS);
 }
 
 /**

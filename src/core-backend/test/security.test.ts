@@ -43,10 +43,22 @@ describe('secrets at rest', () => {
     assert.equal(s.decryptSecret('legacy-plaintext'), 'legacy-plaintext');
     assert.ok(s.isSecretKey('discord_token') && s.isSecretKey('smtp_password') && s.isSecretKey('x_secret') && s.isSecretKey('y_token'));
     assert.ok(!s.isSecretKey('brand_name'));
+    // a separate SECRETS_KEY: values written with the JWT_SECRET-derived key stay readable and are marked for re-encryption
     process.env.SECRETS_KEY = 'b'.repeat(40);
+    assert.equal(s.decryptSecret(enc), 'hunter2-token');
+    assert.equal(s.usesLegacyKey(enc), true);
+    const moved = s.reencrypt(enc);
+    assert.equal(s.usesLegacyKey(moved), false);
+    assert.equal(s.decryptSecret(moved), 'hunter2-token');
+    // a new JWT_SECRET (to end every session) keeps what SECRETS_KEY protects and loses what was not moved yet
+    process.env.JWT_SECRET = 'c'.repeat(48);
+    assert.equal(s.decryptSecret(moved), 'hunter2-token');
     assert.throws(() => s.decryptSecret(enc));
     assert.equal(s.canDecrypt(enc), false);
+    // without SECRETS_KEY the key follows JWT_SECRET again
     delete process.env.SECRETS_KEY;
+    assert.throws(() => s.decryptSecret(moved));
+    process.env.JWT_SECRET = 'a'.repeat(48);
     assert.equal(s.decryptSecret(enc), 'hunter2-token');
   });
 
@@ -268,5 +280,44 @@ describe('e-mail: verification, password reset, new device', () => {
     assert.equal((await api.call('GET', '/api/me', { token: oldSession })).status, 401);
     assert.equal((await login(ADMIN.password)).status, 401);
     assert.equal((await login('Brand-new-pass1')).status, 200);
+  });
+});
+
+describe('secrets written with the old JWT_SECRET key move to SECRETS_KEY at boot', () => {
+  const TOKEN = 'MTIzNDU2Nzg5MDEyMzQ1Njc4.legacy.token';
+  let api: Api;
+  let dbFile = '';
+  let legacy = '';
+  before(async () => {
+    // the value as an older installation stored it: the key follows the JWT_SECRET the harness uses
+    const prevJwt = process.env.JWT_SECRET;
+    const prevKey = process.env.SECRETS_KEY;
+    process.env.JWT_SECRET = 'j'.repeat(48);
+    delete process.env.SECRETS_KEY;
+    const s = await import('../src/secrets.ts');
+    legacy = s.encryptSecret(TOKEN);
+    if (prevJwt === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = prevJwt;
+    if (prevKey !== undefined) process.env.SECRETS_KEY = prevKey;
+    const dir = tmp();
+    dbFile = path.join(dir, 'coregsm.db');
+    const old = new Database(dbFile);
+    old.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    old.prepare('INSERT INTO settings VALUES (?, ?)').run('discord_token', legacy);
+    old.close();
+    api = await startBackend({ DB_PATH: dbFile, DATA_DIR: dir, SECRETS_KEY: 'k'.repeat(48) });
+  });
+  after(async () => {
+    await api.stop();
+  });
+
+  it('writes the value again with the new key and the bot still gets the token', async () => {
+    const raw = new Database(dbFile, { readonly: true });
+    const row = raw.prepare("SELECT value FROM settings WHERE key = 'discord_token'").get() as { value: string };
+    raw.close();
+    assert.ok(row.value.startsWith('enc:v1:'));
+    assert.notEqual(row.value, legacy, 're-encrypted');
+    const cfg = await api.call('GET', '/internal/config', { headers: INTERNAL });
+    assert.equal(cfg.body.discordToken, TOKEN);
   });
 });

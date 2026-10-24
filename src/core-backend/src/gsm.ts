@@ -5,7 +5,7 @@ import { onSessionsOpened } from './nickOnboarding.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
 import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
-import { clampConcurrency, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, runPool } from './pollLogic.js';
+import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, pruneDue, RETENTION_DEFAULTS, runPool } from './pollLogic.js';
 
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
 import { queryServer, type QueryResult } from './query.js';
@@ -19,6 +19,14 @@ ON CONFLICT(server_id) DO UPDATE SET
   error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures
 `);
 const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?, ?, ?, ?, ?, ?, ?)');
+// compiled once: these run for every server on every poll
+const nowNames = db.prepare('SELECT name FROM player_now WHERE server_id = ?');
+const nowClear = db.prepare('DELETE FROM player_now WHERE server_id = ?');
+const nowDelete = db.prepare('DELETE FROM player_now WHERE server_id = ? AND name = ?');
+const nowInsert = db.prepare('INSERT OR IGNORE INTO player_now (server_id, name, since) VALUES (?, ?, ?)');
+const sessOpen = db.prepare('SELECT id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL');
+const sessClose = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
+const sessInsert = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at) VALUES (?, ?, ?)');
 
 /**
  * Keeps player_now in step with the latest poll: names that left are removed, new ones get since = now.
@@ -27,15 +35,13 @@ const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, playe
 export function syncPlayersNow(serverId: number, names: string[], online: boolean, now: number): void {
   db.transaction(() => {
     if (!online) {
-      db.prepare('DELETE FROM player_now WHERE server_id = ?').run(serverId);
+      nowClear.run(serverId);
       return;
     }
     const current = new Set(names.slice(0, 200));
-    const have = db.prepare('SELECT name FROM player_now WHERE server_id = ?').all(serverId) as { name: string }[];
-    const del = db.prepare('DELETE FROM player_now WHERE server_id = ? AND name = ?');
-    for (const h of have) if (!current.has(h.name)) del.run(serverId, h.name);
-    const ins = db.prepare('INSERT OR IGNORE INTO player_now (server_id, name, since) VALUES (?, ?, ?)');
-    for (const n of current) ins.run(serverId, n, now);
+    const have = nowNames.all(serverId) as { name: string }[];
+    for (const h of have) if (!current.has(h.name)) nowDelete.run(serverId, h.name);
+    for (const n of current) nowInsert.run(serverId, n, now);
   })();
 }
 
@@ -46,10 +52,9 @@ export function syncPlayersNow(serverId: number, names: string[], online: boolea
 export function syncPlayerSessions(serverId: number, names: string[], online: boolean, now: number): string[] {
   const opened: string[] = [];
   db.transaction(() => {
-    const open = db.prepare('SELECT id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL').all(serverId) as { id: number; name: string }[];
-    const close = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
+    const open = sessOpen.all(serverId) as { id: number; name: string }[];
     if (!online) {
-      for (const o of open) close.run(now, o.id);
+      for (const o of open) sessClose.run(now, o.id);
       return;
     }
     const current = new Map<string, string>();
@@ -61,13 +66,12 @@ export function syncPlayerSessions(serverId: number, names: string[], online: bo
     for (const o of open) {
       const k = o.name.toLowerCase();
       // gone from the list, or a duplicate row left over from an earlier run
-      if (!current.has(k) || stillOpen.has(k)) close.run(now, o.id);
+      if (!current.has(k) || stillOpen.has(k)) sessClose.run(now, o.id);
       else stillOpen.add(k);
     }
-    const ins = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at) VALUES (?, ?, ?)');
     for (const [k, n] of current) {
       if (stillOpen.has(k)) continue;
-      ins.run(serverId, n, now);
+      sessInsert.run(serverId, n, now);
       opened.push(n);
     }
   })();
@@ -197,6 +201,29 @@ let lastStats: PollStats = { at: null, durationMs: null, servers: 0, failures: 0
 /** the last finished poll cycle: when, how long, how many servers did not answer */
 export const lastPollStats = (): PollStats => ({ ...lastStats });
 
+/**
+ * Days to keep each kind of old rows. Set HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ACCOUNT_EVENTS_DAYS and UPTIME_DAYS in
+ * .env to change them (1..3650); the defaults are 30, 90, 180 and 90.
+ */
+export const retentionDays = () => ({
+  history: clampDays(process.env.HISTORY_DAYS, RETENTION_DEFAULTS.history),
+  playerSessions: clampDays(process.env.PLAYER_SESSIONS_DAYS, RETENTION_DEFAULTS.playerSessions),
+  accountEvents: clampDays(process.env.ACCOUNT_EVENTS_DAYS, RETENTION_DEFAULTS.accountEvents),
+  uptime: clampDays(process.env.UPTIME_DAYS, RETENTION_DEFAULTS.uptime),
+});
+
+const DAY = 24 * 3600 * 1000;
+/** deletes the rows older than their retention; exported for tests */
+export function pruneOld(now = Date.now()): void {
+  const r = retentionDays();
+  db.prepare('DELETE FROM history WHERE ts < ?').run(now - r.history * DAY);
+  db.prepare('DELETE FROM player_sessions WHERE left_at IS NOT NULL AND left_at < ?').run(now - r.playerSessions * DAY);
+  db.prepare('DELETE FROM account_events WHERE ts < ?').run(now - r.accountEvents * DAY);
+  db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(now - r.uptime * DAY).toISOString().slice(0, 10));
+  pruneMaintenance();
+}
+let lastPrune = 0;
+
 let running = false;
 let stopping = false;
 let pollTimer: NodeJS.Timeout | undefined;
@@ -232,11 +259,14 @@ export async function pollAll(): Promise<void> {
     if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
       console.log(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
     }
-    db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 30 * 24 * 3600 * 1000);
-    db.prepare('DELETE FROM player_sessions WHERE left_at IS NOT NULL AND left_at < ?').run(Date.now() - 90 * 24 * 3600 * 1000);
-    db.prepare('DELETE FROM account_events WHERE ts < ?').run(Date.now() - 180 * 24 * 3600 * 1000);
-    db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
-    pruneMaintenance();
+    // old rows are deleted once an hour, not after every 30-second cycle; set before the work so a failure is not retried at once
+    if (pruneDue(Date.now(), lastPrune)) {
+      lastPrune = Date.now();
+      pruneOld();
+    }
+  } catch (e) {
+    // a database or disk error must not become an unhandled rejection (the timer calls pollAll with `void`)
+    console.error('poll cycle failed', (e as Error).message);
   } finally {
     running = false;
   }

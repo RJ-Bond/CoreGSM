@@ -13,16 +13,14 @@ import { z } from 'zod';
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { db, setSetting } from './db.js';
 import { guardGet, guardSet } from './loginGuard.js';
+import { addColumn } from './schema.js';
+import { wrap } from './http.js';
 import { enqueueDelivery } from './deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
 
 // ---------- schema ----------
-try {
-  db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0');
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
 CREATE TABLE IF NOT EXISTS password_resets (
   token_hash TEXT PRIMARY KEY,
@@ -303,7 +301,7 @@ export function registerSecurity(d: SecurityDeps): void {
 
   // ----- e-mail verification -----
   const lastVerifyRequest = new Map<number, number>();
-  app.post('/api/me/email/verify-request', d.auth, async (req, res) => {
+  app.post('/api/me/email/verify-request', d.auth, wrap(async (req, res) => {
     const id = d.userId(req);
     const u = emailOf(id);
     if (!u?.email) return res.status(400).json({ error: 'Сначала укажите адрес электронной почты' });
@@ -333,7 +331,7 @@ export function registerSecurity(d: SecurityDeps): void {
       lastVerifyRequest.delete(id);
       res.status(502).json({ error: (e as Error).message });
     }
-  });
+  }));
 
   app.post('/api/auth/verify-email', verifyLimiter, (req, res) => {
     const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела' });
@@ -411,7 +409,7 @@ export function registerSecurity(d: SecurityDeps): void {
     });
   });
 
-  app.post('/api/auth/reset', resetLimiter, async (req, res) => {
+  app.post('/api/auth/reset', resetLimiter, wrap(async (req, res) => {
     const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела. Запросите сброс ещё раз.' });
     const b = z.object({ token: z.string().min(10).max(200), password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
@@ -445,7 +443,7 @@ export function registerSecurity(d: SecurityDeps): void {
       void sendMail({ to: u.email, subject: en ? 'Password changed' : 'Пароль изменён', ...body }).catch(() => undefined);
     }
     res.json({ ok: true });
-  });
+  }));
 
   // ----- cookie for a client that signed in the old way (Bearer token only) -----
   app.post('/api/auth/session', sessionLimiter, (req, res) => {

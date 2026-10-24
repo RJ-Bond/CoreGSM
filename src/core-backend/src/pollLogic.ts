@@ -21,6 +21,21 @@ export function clampConcurrency(v: unknown): number {
   return n === null ? DEFAULT_CONCURRENCY : Math.min(32, Math.max(1, n));
 }
 
+/** how long old rows are kept, in days (the defaults of the settings HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ...) */
+export const RETENTION_DEFAULTS = { history: 30, playerSessions: 90, accountEvents: 180, uptime: 90 } as const;
+
+/** days to keep a kind of old rows: 1..3650, `fallback` when unset or not a number */
+export function clampDays(v: unknown, fallback: number): number {
+  const n = toInt(v);
+  return n === null ? fallback : Math.min(3650, Math.max(1, n));
+}
+
+export const PRUNE_EVERY_MS = 3600_000;
+/** the cleanup of old rows runs on the first cycle and then at most once an hour (not on every 30-second poll) */
+export function pruneDue(now: number, last: number, every = PRUNE_EVERY_MS): boolean {
+  return last === 0 || now - last >= every;
+}
+
 export interface Decision {
   /** the state to store in `status` */
   online: boolean;

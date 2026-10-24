@@ -334,10 +334,10 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
 
 // ---------- scheduler ----------
 export async function runScheduledIfDue(now = Date.now()): Promise<BackupItem | null> {
-  const s = backupSettings();
-  const lastAuto = listBackups().find((i) => i.kind === 'auto')?.createdAt ?? null;
-  if (!backupDue(s.schedule, lastAuto, now)) return null;
   try {
+    const s = backupSettings();
+    const lastAuto = listBackups().find((i) => i.kind === 'auto')?.createdAt ?? null;
+    if (!backupDue(s.schedule, lastAuto, now)) return null;
     const it = await createStoredBackup('auto');
     console.log(`scheduled backup created: ${it.name}`);
     return it;

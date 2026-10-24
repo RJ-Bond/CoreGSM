@@ -11,6 +11,7 @@ import express from 'express';
 import { z } from 'zod';
 import { auth, type AuthedRequest, rateLimit } from './auth.js';
 import { db } from './db.js';
+import { wrap } from './http.js';
 import { publicBase } from './site.js';
 import { setPushHook } from './subscriptions.js';
 import { sendPush, vapidKeys } from './webpush.js';
@@ -83,7 +84,7 @@ router.delete('/api/push/subscribe', auth, (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
-router.post('/api/push/test', auth, rateLimit(10), async (req: AuthedRequest, res) => {
+router.post('/api/push/test', auth, rateLimit(10), wrap(async (req: AuthedRequest, res) => {
   const sent = await pushToUser(req.user!.id, { title: 'CoreGSM', body: 'Уведомления работают: сюда придут вести о ваших серверах.', url: '/profile', tag: 'test' });
   res.json({ sent });
-});
+}));
