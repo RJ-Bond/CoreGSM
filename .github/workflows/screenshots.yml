@@ -39,7 +39,13 @@ jobs:
       - name: Take the screenshots
         run: |
           sleep 8   # the first poll of the (unreachable) demo servers must finish before the demo data is written
-          node tools/screenshots/shoot.mjs http://127.0.0.1:5173 http://127.0.0.1:3000 /tmp/shots-data/coregsm.db /tmp/pw /tmp/shots
+          if ! node tools/screenshots/shoot.mjs http://127.0.0.1:5173 http://127.0.0.1:3000 /tmp/shots-data/coregsm.db /tmp/pw /tmp/shots > /tmp/shoot.log 2>&1; then
+            { cat /tmp/shoot.log; echo '--- backend'; tail -n 20 /tmp/backend.log; } > /tmp/err.txt
+            msg=$(tail -c 3500 /tmp/err.txt | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=screenshots::$msg"
+            exit 1
+          fi
+          cat /tmp/shoot.log
       - name: Push the pictures to ci-screenshots
         run: |
           set -e
