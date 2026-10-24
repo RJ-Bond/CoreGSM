@@ -1,5 +1,5 @@
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
-import { useId } from 'react';
+import { useId, type JSX } from 'react';
 import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';

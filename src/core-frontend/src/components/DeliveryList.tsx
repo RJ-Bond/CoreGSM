@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { api, ApiError } from '../api';
 import {
   KIND_LABEL, STATUS_LABEL, attemptsText, canRetry, countdownText,

@@ -105,7 +105,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
 /** returns a class to put on an element and a function that plays the shake once */
 export function useShake(): [string, () => void] {
   const [on, setOn] = useState(false);
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const shake = () => {
     setOn(false);

@@ -10,7 +10,7 @@ import {
 } from './NewsParts';
 
 /** a thin bar under the top edge that fills while the article is read */
-function ReadProgress({ target }: { target: React.RefObject<HTMLElement> }) {
+function ReadProgress({ target }: { target: React.RefObject<HTMLElement | null> }) {
   const [p, setP] = useState(0);
   useEffect(() => {
     let raf = 0;

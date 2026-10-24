@@ -58,7 +58,7 @@ let scrollLocks = 0;
  * Focus management for a modal dialog: moves focus inside, keeps Tab in the dialog, closes on Escape (only the topmost dialog),
  * locks page scroll and gives focus back to the element that opened the dialog.
  */
-export function useDialogFocus(box: RefObject<HTMLElement>, onEscape: () => void, initialFocus?: () => HTMLElement | null | undefined) {
+export function useDialogFocus(box: RefObject<HTMLElement | null>, onEscape: () => void, initialFocus?: () => HTMLElement | null | undefined) {
   const esc = useRef(onEscape);
   esc.current = onEscape;
   const init = useRef(initialFocus);
