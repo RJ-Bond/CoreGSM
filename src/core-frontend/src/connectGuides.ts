@@ -22,9 +22,6 @@ export function splitAddress(address: string): { host: string; port: string } {
 const SOURCE_CONSOLE = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
 const STEAM_LINK = new Set([...SOURCE_CONSOLE, 'rust', 'ase', 'dayz', 'unturned']);
 
-/** true when the game has a link that the browser can hand to the game / launcher */
-export const hasConnectLink = (game: string) => STEAM_LINK.has(game) || game === 'teamspeak3' || game === 'gta5f';
-
 export function connectGuide(game: string, address: string): ConnectGuide {
   const addr = address.trim();
   const { host, port } = splitAddress(addr);
