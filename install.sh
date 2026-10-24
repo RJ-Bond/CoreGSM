@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a7c82d86d9a1"
+COREGSM_BUILD="2a19929db243"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -62990,6 +62990,76 @@ const en: Record<keyof typeof ru, string> = {
   'nw.loading': 'Loading',
   'nw.role.admin': 'Administrator',
   'nw.role.moderator': 'Moderator',
+  'adm.s.start': 'Getting started',
+  'adm.d.start': 'Step-by-step list: what to set up first.',
+  'adm.s.servers': 'Servers',
+  'adm.d.servers': 'Game servers: add, change the address, delete.',
+  'adm.s.discord': 'Discord',
+  'adm.d.discord': 'The channel where the bot posts the server card.',
+  'adm.s.news': 'News',
+  'adm.d.news': 'Write an announcement and send it to Discord.',
+  'adm.s.alerts': 'Alerts',
+  'adm.d.alerts': 'A Discord message when a game server goes down or comes back.',
+  'adm.s.maintenance': 'Maintenance',
+  'adm.d.maintenance': 'Maintenance windows: a server going down during one is not counted as an outage.',
+  'adm.s.cards': 'Cards',
+  'adm.d.cards': 'Server status pictures with a link you can paste anywhere.',
+  'adm.s.community': 'Community',
+  'adm.d.community': 'Seasons and the hall of fame, server reviews, the players\' screenshot gallery.',
+  'adm.s.users': 'Users',
+  'adm.d.users': 'Accounts, roles, registration and community rules.',
+  'adm.s.journal': 'Journal',
+  'adm.d.journal': 'Who changed what in the panel, with date and time.',
+  'adm.s.system': 'System',
+  'adm.d.system': 'Panel health: version, disk, bot, certificate, diagnostics.',
+  'adm.s.settings': 'Settings',
+  'adm.d.settings': 'Bot token, appearance, password, updates and backups.',
+  'adm.g.main': 'Main',
+  'adm.g.mon': 'Monitoring',
+  'adm.g.people': 'People',
+  'adm.g.sys': 'System',
+  'adm.tab.bot': 'Bot and Discord',
+  'adm.tab.brand': 'Appearance',
+  'adm.tab.security': 'Security',
+  'adm.tab.updates': 'Updates and backups',
+  'adm.pinMax': 'You can pin at most {n} sections',
+  'adm.unpin': 'Unpin',
+  'adm.pin': 'Pin',
+  'adm.pinTop': 'Pin to the top',
+  'adm.updAvail': 'Update available',
+  'adm.navLabel': 'Admin sections',
+  'adm.pinned': 'Pinned',
+  'adm.recent': 'Recent',
+  'adm.upd.restarting': 'The panel is restarting…',
+  'adm.upd.running': 'Updating the panel',
+  'adm.upd.takes': 'This takes 1–3 minutes, the page will refresh by itself.',
+  'adm.upd.installing': 'Installing the new build…',
+  'adm.upd.failed': 'The update failed',
+  'adm.upd.failedHint': 'Details are on the updates page.',
+  'adm.upd.available': 'A panel update is available',
+  'adm.upd.build': 'The new build',
+  'adm.upd.ready': 'is ready to install.',
+  'adm.more': 'Details',
+  'adm.open': 'Open',
+  'adm.update': 'Update',
+  'adm.cert.expired': 'The HTTPS certificate has expired.',
+  'adm.cert.soon': 'The HTTPS certificate expires in {n} day|The HTTPS certificate expires in {n} days',
+  'adm.cert.hide': 'Hide the warning until the end of the session',
+  'adm.srv.deleteQ': 'Delete the server “{name}”?',
+  'adm.srv.deleteText': 'The server will be deleted together with its Discord bindings.',
+  'adm.srv.delete': 'Delete',
+  'adm.srv.deleted': 'Server deleted',
+  'adm.srv.polled': 'Servers polled: {n}',
+  'adm.srv.delPartial': 'Deleted: {ok}, failed: {bad}',
+  'adm.srv.delMany': 'Servers deleted: {n}',
+  'adm.srv.subtitle': 'Add and configure game servers',
+  'adm.srv.hint': 'The game servers the panel shows. Add a server and its online count, map and ping start updating by themselves.',
+  'adm.srv.help': 'Enter the game, address and port. If players should see a different address, fill in the “Show as” field. To make the bot post about a server in Discord, press “Bind to Discord” in its row.',
+  'adm.srv.add': '+ Add a server',
+  'adm.loading': 'Loading',
+  'adm.srv.emptyTitle': 'No servers yet',
+  'adm.srv.emptyText': 'Enter the game and address and the panel starts showing online count, map and ping.',
+  'adm.srv.saved': 'Server saved',
 };
 
 export default en;
@@ -63915,6 +63985,76 @@ const ru = {
   'nw.loading': 'Загрузка',
   'nw.role.admin': 'Администратор',
   'nw.role.moderator': 'Модератор',
+  'adm.s.start': 'Начало работы',
+  'adm.d.start': 'Пошаговый список: что настроить в первую очередь.',
+  'adm.s.servers': 'Серверы',
+  'adm.d.servers': 'Игровые серверы: добавить, изменить адрес, удалить.',
+  'adm.s.discord': 'Discord',
+  'adm.d.discord': 'В какой канал бот публикует карточку сервера.',
+  'adm.s.news': 'Новости',
+  'adm.d.news': 'Написать объявление и отправить его в Discord.',
+  'adm.s.alerts': 'Оповещения',
+  'adm.d.alerts': 'Сообщение в Discord, если игровой сервер упал или вернулся.',
+  'adm.s.maintenance': 'Обслуживание',
+  'adm.d.maintenance': 'Окна технических работ: во время них падение сервера не считается сбоем.',
+  'adm.s.cards': 'Карточки',
+  'adm.d.cards': 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.',
+  'adm.s.community': 'Сообщество',
+  'adm.d.community': 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов игроков.',
+  'adm.s.users': 'Пользователи',
+  'adm.d.users': 'Аккаунты, роли, регистрация и правила сообщества.',
+  'adm.s.journal': 'Журнал',
+  'adm.d.journal': 'Кто и что менял в панели, с датой и временем.',
+  'adm.s.system': 'Система',
+  'adm.d.system': 'Здоровье панели: версия, диск, бот, сертификат, диагностика.',
+  'adm.s.settings': 'Настройки',
+  'adm.d.settings': 'Токен бота, оформление, пароль, обновления и резервные копии.',
+  'adm.g.main': 'Основное',
+  'adm.g.mon': 'Мониторинг',
+  'adm.g.people': 'Люди',
+  'adm.g.sys': 'Система',
+  'adm.tab.bot': 'Бот и Discord',
+  'adm.tab.brand': 'Оформление',
+  'adm.tab.security': 'Безопасность',
+  'adm.tab.updates': 'Обновления и копии',
+  'adm.pinMax': 'Можно закрепить не больше {n} разделов',
+  'adm.unpin': 'Открепить',
+  'adm.pin': 'Закрепить',
+  'adm.pinTop': 'Закрепить вверху',
+  'adm.updAvail': 'Доступно обновление',
+  'adm.navLabel': 'Разделы админки',
+  'adm.pinned': 'Закреплённые',
+  'adm.recent': 'Недавние',
+  'adm.upd.restarting': 'Панель перезапускается…',
+  'adm.upd.running': 'Идёт обновление панели',
+  'adm.upd.takes': 'Это занимает 1-3 минуты, страница обновится сама.',
+  'adm.upd.installing': 'Устанавливаю новую сборку…',
+  'adm.upd.failed': 'Обновление не удалось',
+  'adm.upd.failedHint': 'Подробности на странице обновлений.',
+  'adm.upd.available': 'Доступно обновление панели',
+  'adm.upd.build': 'Новая сборка',
+  'adm.upd.ready': 'готова к установке.',
+  'adm.more': 'Подробнее',
+  'adm.open': 'Открыть',
+  'adm.update': 'Обновить',
+  'adm.cert.expired': 'Сертификат HTTPS истёк.',
+  'adm.cert.soon': 'Сертификат HTTPS истекает через {n} день|Сертификат HTTPS истекает через {n} дня|Сертификат HTTPS истекает через {n} дней',
+  'adm.cert.hide': 'Скрыть предупреждение до конца сессии',
+  'adm.srv.deleteQ': 'Удалить сервер «{name}»?',
+  'adm.srv.deleteText': 'Сервер будет удалён вместе с привязками к Discord.',
+  'adm.srv.delete': 'Удалить',
+  'adm.srv.deleted': 'Сервер удалён',
+  'adm.srv.polled': 'Опрошено серверов: {n}',
+  'adm.srv.delPartial': 'Удалено: {ok}, не удалось: {bad}',
+  'adm.srv.delMany': 'Удалено серверов: {n}',
+  'adm.srv.subtitle': 'Добавление и настройка игровых серверов',
+  'adm.srv.hint': 'Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами.',
+  'adm.srv.help': 'Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.',
+  'adm.srv.add': '+ Добавить сервер',
+  'adm.loading': 'Загрузка',
+  'adm.srv.emptyTitle': 'Серверов пока нет',
+  'adm.srv.emptyText': 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.',
+  'adm.srv.saved': 'Сервер сохранён',
 };
 
 export default ru;
@@ -64183,9 +64323,10 @@ __COREGSM_EOF__
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo } from '../api';
 import { useAuth } from '../auth';
+import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll, navigate } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, usePoll, navigate } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
@@ -64206,6 +64347,7 @@ import SystemPage from './System';
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+  useI18n();
   const { isAdmin, me } = useAuth();
   const [section, ...rest] = sub.split('/');
   // a moderator sees the sections of the permissions the administrator gave; everything else is for administrators
@@ -64231,7 +64373,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   }, [current, home, isAdmin]);
   const pin = (s: AdminSection) => {
     const r = togglePin(pins, s.id);
-    if (r.full) { toast(`Можно закрепить не больше ${PINS_MAX} разделов`, 'info'); return; }
+    if (r.full) { toast(t('adm.pinMax',{n:PINS_MAX}), 'info'); return; }
     setPins(r.pins);
     writeIds(PINS_KEY, r.pins);
   };
@@ -64249,8 +64391,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           type="button"
           className="adm-pin"
           aria-pressed={on}
-          aria-label={`${on ? 'Открепить' : 'Закрепить'}: ${s.label}`}
-          title={on ? 'Открепить' : 'Закрепить вверху'}
+          aria-label={`${on ? t('adm.unpin') : t('adm.pin')}: ${s.label}`}
+          title={on ? t('adm.unpin') : t('adm.pinTop')}
           onClick={() => pin(s)}
         >
           <span aria-hidden>{on ? '★' : '☆'}</span>
@@ -64267,14 +64409,14 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
-      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
+      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
     </a>
   );
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
     <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
-      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
+      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
         {isAdmin ? (
           <>
             {link(START_SECTION)}
@@ -64282,15 +64424,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             {pinned.length > 0 && (
               <div className="contents md:block">
                 {divider}
-                <div id="adm-g-pins" className="adm-group-title hidden md:block">Закреплённые</div>
-                <div role="group" aria-labelledby="adm-g-pins" aria-label="Закреплённые" className="flex gap-1 md:flex-col">
+                <div id="adm-g-pins" className="adm-group-title hidden md:block">{t('adm.pinned')}</div>
+                <div role="group" aria-labelledby="adm-g-pins" aria-label={t('adm.pinned')} className="flex gap-1 md:flex-col">
                   {pinned.map((s) => item(s, 'p-'))}
                 </div>
               </div>
             )}
             {recents.length > 0 && (
               <div className="hidden md:block">
-                <div id="adm-g-recent" className="adm-group-title">Недавние</div>
+                <div id="adm-g-recent" className="adm-group-title">{t('adm.recent')}</div>
                 <div role="group" aria-labelledby="adm-g-recent" className="flex flex-col gap-1">
                   {recents.map((s) => item(s, 'r-'))}
                 </div>
@@ -64308,7 +64450,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         ) : (
           <>
-            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-widest text-mute md:block">Админка</div>
+            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-widest text-mute md:block">{t('nav.admin')}</div>
             {sections.map((s) => link(s))}
           </>
         )}
@@ -64336,6 +64478,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
 
 /** A banner at the top of the admin area while a new version is waiting; it follows the running update. */
 function UpdateBanner() {
+  useI18n();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [offline, setOffline] = useState(false);
   const wasRunning = useRef(false);
@@ -64370,23 +64513,23 @@ function UpdateBanner() {
       <div className="relative min-w-0 flex-1">
         {running ? (
           <>
-            <div className="font-extrabold leading-tight">{offline ? "Панель перезапускается…" : "Идёт обновление панели"}{pct != null && !offline ? ` · ${pct}%` : ""}</div>
-            <div className="text-sm font-semibold text-white/90">{offline ? "Это занимает 1-3 минуты, страница обновится сама." : info?.job?.message || "Устанавливаю новую сборку…"}</div>
+            <div className="font-extrabold leading-tight">{offline ? t('adm.upd.restarting') : t('adm.upd.running')}{pct != null && !offline ? ` · ${pct}%` : ""}</div>
+            <div className="text-sm font-semibold text-white/90">{offline ? t('adm.upd.takes') : info?.job?.message || t('adm.upd.installing')}</div>
             {pct != null && !offline && <div className="update-progress det mt-1.5" style={{ ["--p" as string]: `${pct}%` }}><i /></div>}
           </>
         ) : failed ? (
           <>
-            <div className="font-extrabold leading-tight">Обновление не удалось</div>
-            <div className="text-sm font-semibold text-white/90">{info?.job?.message || "Подробности на странице обновлений."}</div>
+            <div className="font-extrabold leading-tight">{t('adm.upd.failed')}</div>
+            <div className="text-sm font-semibold text-white/90">{info?.job?.message || t('adm.upd.failedHint')}</div>
           </>
         ) : (
           <>
-            <div className="font-extrabold leading-tight">Доступно обновление панели</div>
-            <div className="text-sm font-semibold text-white/90">Новая сборка {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ""} готова к установке.</div>
+            <div className="font-extrabold leading-tight">{t('adm.upd.available')}</div>
+            <div className="text-sm font-semibold text-white/90">{t('adm.upd.build')} {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ""} {t('adm.upd.ready')}</div>
           </>
         )}
       </div>
-      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
+      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
     </div>
   );
 }
@@ -64398,6 +64541,7 @@ const certDismissed = () => {
 
 /** A slim banner for administrators when the HTTPS certificate is about to expire (or already has). */
 function CertWarning() {
+  useI18n();
   const [cert, setCert] = useState<CertInfo | null>(null);
   const [hidden, setHidden] = useState(certDismissed);
 
@@ -64410,15 +64554,15 @@ function CertWarning() {
   const d = cert.daysLeft;
   const expired = d <= 0;
   const text = expired
-    ? 'Сертификат HTTPS истёк.'
-    : `Сертификат HTTPS истекает через ${d} ${plural(d, ['день', 'дня', 'дней'])}.`;
+    ? t('adm.cert.expired')
+    : t('adm.cert.soon', { n: d });
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl px-4 py-2.5 text-sm font-bold ${expired ? 'bg-badbg text-bad' : 'bg-warnbg text-warn'}`} role={expired ? 'alert' : 'status'}>
-      <span className="min-w-0 flex-1">{text} <a href="/admin/system" className="underline">Подробнее</a></span>
+      <span className="min-w-0 flex-1">{text} <a href="/admin/system" className="underline">{t('adm.more')}</a></span>
       <button
         type="button"
         className="btn-icon-ghost btn-icon-sm btn-tone"
-        aria-label="Скрыть предупреждение до конца сессии"
+        aria-label={t('adm.cert.hide')}
         onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
       >
         <IconClose size={14} />
@@ -64429,6 +64573,7 @@ function CertWarning() {
 
 /** Add, edit, delete and re-query servers. */
 function ServersManage({ sub }: { sub: string }) {
+  useI18n();
   const { isAdmin } = useAuth();
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -64464,19 +64609,19 @@ function ServersManage({ sub }: { sub: string }) {
   };
 
   const remove = async (s: Server) => {
-    if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
-    await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e: Error) => setError(e.message));
+    if (!(await confirmDialog({ title: t('adm.srv.deleteQ', { name: s.name }), text: t('adm.srv.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
+    await api(`/servers/${s.id}`, 'DELETE').then(() => toast(t('adm.srv.deleted'))).catch((e: Error) => setError(e.message));
     void load();
   };
   const refreshMany = async (list: Server[]) => {
     await Promise.allSettled(list.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
-    toast(`Опрошено серверов: ${list.length}`);
+    toast(t('adm.srv.polled', { n: list.length }));
     await load();
   };
   const removeMany = async (list: Server[]) => {
     const res = await Promise.allSettled(list.map((s) => api(`/servers/${s.id}`, 'DELETE')));
     const failed = res.filter((r) => r.status === 'rejected').length;
-    toast(failed ? `Удалено: ${list.length - failed}, не удалось: ${failed}` : `Удалено серверов: ${list.length}`, failed ? 'err' : undefined);
+    toast(failed ? t('adm.srv.delPartial', { ok: list.length - failed, bad: failed }) : t('adm.srv.delMany', { n: list.length }), failed ? 'err' : undefined);
     await load();
   };
   const refresh = async (s: Server) => {
@@ -64490,27 +64635,27 @@ function ServersManage({ sub }: { sub: string }) {
     <PageStack
       head={(
         <PageHead
-          title="Серверы"
-          subtitle="Добавление и настройка игровых серверов"
+          title={t('adm.s.servers')}
+          subtitle={t('adm.srv.subtitle')}
           icon={<IconServers />}
-          hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
-          help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
+          hint={t('adm.srv.hint')}
+          help={<p>{t('adm.srv.help')}</p>}
         >
-          <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+          <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </PageHead>
       )}
     >
       {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!loaded && (
-        <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
+        <div className="space-y-3" aria-busy="true" aria-label={t('adm.loading')}>
           {[0, 1, 2].map((i) => <div key={i} className="skeleton tile h-[74px]" />)}
         </div>
       )}
 
       {loaded && !error && servers.length === 0 && (
-        <Empty title="Серверов пока нет" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.">
-          <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+        <Empty title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
+          <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </Empty>
       )}
 
@@ -64539,7 +64684,7 @@ function ServersManage({ sub }: { sub: string }) {
           coverUrl={editing.cover}
           onCoverChanged={() => void load()}
           onClose={closeForm}
-          onSaved={() => { closeForm(); toast('Сервер сохранён'); void load(); }}
+          onSaved={() => { closeForm(); toast(t('adm.srv.saved')); void load(); }}
         />
       )}
     </PageStack>
@@ -71742,6 +71887,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import type { Perm } from '../api';
+import { t } from '../i18n';
 import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
@@ -71757,24 +71903,24 @@ export interface AdminSection {
 
 export const START_SECTION: AdminSection = {
   id: 'start',
-  label: 'Начало работы',
+  get label() { return t('adm.s.start'); },
   icon: IconStart,
-  desc: 'Пошаговый список: что настроить в первую очередь.',
+  get desc() { return t('adm.d.start'); },
   keywords: 'старт начало первые шаги чек-лист помощь с чего начать новичок',
 };
 
 const S = {
-  servers: { id: 'servers', label: 'Серверы', icon: IconServers, desc: 'Игровые серверы: добавить, изменить адрес, удалить.', keywords: 'игра адрес порт добавить сервер опрос' },
-  discord: { id: 'discord', label: 'Discord', icon: IconDiscord, desc: 'В какой канал бот публикует карточку сервера.', keywords: 'привязка канал бот сообщение embed' },
-  news: { id: 'news', label: 'Новости', icon: IconNews, desc: 'Написать объявление и отправить его в Discord.', keywords: 'новость объявление публикация вайп шаблон запланировать' },
-  alerts: { id: 'alerts', label: 'Оповещения', icon: IconBell, desc: 'Сообщение в Discord, если игровой сервер упал или вернулся.', keywords: 'упал недоступен уведомление падение упоминание here everyone' },
-  maintenance: { id: 'maintenance', label: 'Обслуживание', icon: IconWrench, desc: 'Окна технических работ: во время них падение сервера не считается сбоем.', keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
-  cards: { id: 'cards', label: 'Карточки', icon: IconCards, desc: 'Картинки состояния серверов со ссылкой, которую можно вставить куда угодно.', keywords: 'картинка баннер ссылка png' },
-  community: { id: 'community', label: 'Сообщество', icon: IconTrophy, desc: 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов игроков.', keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
-  users: { id: 'users', label: 'Пользователи', icon: IconUsers, desc: 'Аккаунты, роли, регистрация и правила сообщества.', keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
-  journal: { id: 'journal', label: 'Журнал', icon: IconJournal, desc: 'Кто и что менял в панели, с датой и временем.', keywords: 'аудит история действия изменения кто менял лог' },
-  system: { id: 'system', label: 'Система', icon: IconSystem, desc: 'Здоровье панели: версия, диск, бот, сертификат, диагностика.', keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
-  settings: { id: 'settings', label: 'Настройки', icon: IconSettings, desc: 'Токен бота, оформление, пароль, обновления и резервные копии.', keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
+  servers: { id: 'servers', get label() { return t('adm.s.servers'); }, icon: IconServers, get desc() { return t('adm.d.servers'); }, keywords: 'игра адрес порт добавить сервер опрос' },
+  discord: { id: 'discord', get label() { return t('adm.s.discord'); }, icon: IconDiscord, get desc() { return t('adm.d.discord'); }, keywords: 'привязка канал бот сообщение embed' },
+  news: { id: 'news', get label() { return t('adm.s.news'); }, icon: IconNews, get desc() { return t('adm.d.news'); }, keywords: 'новость объявление публикация вайп шаблон запланировать' },
+  alerts: { id: 'alerts', get label() { return t('adm.s.alerts'); }, icon: IconBell, get desc() { return t('adm.d.alerts'); }, keywords: 'упал недоступен уведомление падение упоминание here everyone' },
+  maintenance: { id: 'maintenance', get label() { return t('adm.s.maintenance'); }, icon: IconWrench, get desc() { return t('adm.d.maintenance'); }, keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
+  cards: { id: 'cards', get label() { return t('adm.s.cards'); }, icon: IconCards, get desc() { return t('adm.d.cards'); }, keywords: 'картинка баннер ссылка png' },
+  community: { id: 'community', get label() { return t('adm.s.community'); }, icon: IconTrophy, get desc() { return t('adm.d.community'); }, keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
+  users: { id: 'users', get label() { return t('adm.s.users'); }, icon: IconUsers, get desc() { return t('adm.d.users'); }, keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
+  journal: { id: 'journal', get label() { return t('adm.s.journal'); }, icon: IconJournal, get desc() { return t('adm.d.journal'); }, keywords: 'аудит история действия изменения кто менял лог' },
+  system: { id: 'system', get label() { return t('adm.s.system'); }, icon: IconSystem, get desc() { return t('adm.d.system'); }, keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
+  settings: { id: 'settings', get label() { return t('adm.s.settings'); }, icon: IconSettings, get desc() { return t('adm.d.settings'); }, keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
 } satisfies Record<string, AdminSection>;
 
 /** the permission that opens a section to a moderator (sections not listed are for administrators only) */
@@ -71783,27 +71929,27 @@ export const SECTION_PERM: Partial<Record<string, Perm>> = { news: 'news', commu
 export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
-  { title: 'Основное', sections: [S.servers, S.discord, S.news] },
-  { title: 'Мониторинг', sections: [S.alerts, S.maintenance, S.cards] },
-  { title: 'Люди', sections: [S.community, S.users, S.journal] },
-  { title: 'Система', sections: [S.system, S.settings] },
+  { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news] },
+  { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.maintenance, S.cards] },
+  { get title() { return t('adm.g.people'); }, sections: [S.community, S.users, S.journal] },
+  { get title() { return t('adm.g.sys'); }, sections: [S.system, S.settings] },
 ];
 
 /** every section in the order of the sidebar, «Начало работы» first */
 export const ADMIN_SECTIONS: AdminSection[] = [START_SECTION, ...ADMIN_GROUPS.flatMap((g) => g.sections)];
 
 export const SETTINGS_TABS = [
-  { id: 'bot', label: 'Бот и Discord', keywords: 'токен бот прокси proxy вход через discord client secret redirect oauth пригласить' },
-  { id: 'brand', label: 'Оформление', keywords: 'название цвет логотип тема пресет брендинг внешний вид' },
-  { id: 'security', label: 'Безопасность', keywords: 'пароль сеансы сессии вход домен порты' },
-  { id: 'updates', label: 'Обновления и копии', keywords: 'обновление обновить версия откат резервная копия бэкап backup восстановить скачать расписание шифрование' },
+  { id: 'bot', get label() { return t('adm.tab.bot'); }, keywords: 'токен бот прокси proxy вход через discord client secret redirect oauth пригласить' },
+  { id: 'brand', get label() { return t('adm.tab.brand'); }, keywords: 'название цвет логотип тема пресет брендинг внешний вид' },
+  { id: 'security', get label() { return t('adm.tab.security'); }, keywords: 'пароль сеансы сессии вход домен порты' },
+  { id: 'updates', get label() { return t('adm.tab.updates'); }, keywords: 'обновление обновить версия откат резервная копия бэкап backup восстановить скачать расписание шифрование' },
 ] as const;
 
 export interface AdminLink { label: string; hint: string; href: string; keywords: string; icon: () => ReactNode }
 
 /** deeper places found only by searching (Ctrl+K) */
 export const ADMIN_LINKS: AdminLink[] = [
-  ...SETTINGS_TABS.map((t) => ({ label: `Настройки: ${t.label}`, hint: 'Настройки', href: `/admin/settings/${t.id}`, keywords: t.keywords, icon: IconSettings })),
+  ...SETTINGS_TABS.map((tab) => ({ label: `Настройки: ${tab.label}`, hint: 'Настройки', href: `/admin/settings/${tab.id}`, keywords: tab.keywords, icon: IconSettings })),
   { label: 'Резервные копии', hint: 'Настройки · Обновления и копии', href: '/admin/settings/updates', keywords: 'резервная копия бэкап backup восстановить скачать расписание', icon: IconSettings },
   { label: 'Откат обновления', hint: 'Настройки · Обновления и копии', href: '/admin/settings/updates', keywords: 'откатить вернуть предыдущую версию rollback', icon: IconSettings },
   { label: 'Токен Discord-бота', hint: 'Настройки · Бот и Discord', href: '/admin/settings/bot', keywords: 'токен прокси proxy бот developer portal', icon: IconSettings },
