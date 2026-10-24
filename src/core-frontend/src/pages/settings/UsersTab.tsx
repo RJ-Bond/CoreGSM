@@ -4,8 +4,8 @@ import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../ap
 import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
-import { confirmDialog, promptDialog } from '../../confirm';
-import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { promptDialog } from '../../confirm';
+import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, toast, undoable, useAutosave } from '../../ui';
 import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
@@ -20,6 +20,14 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
   );
 }
 
+/** ready sets of moderator permissions */
+const PERM_PRESETS: { label: string; perms: Perm[] }[] = [
+  { label: 'Редактор новостей', perms: ['news'] },
+  { label: 'Модератор сообщества', perms: ['news', 'moderation', 'journal'] },
+  { label: 'Админ серверов', perms: ['servers', 'maintenance'] },
+  { label: 'Снять все', perms: [] },
+];
+
 const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
 /** The users page: the rules text joins the common save bar. */
@@ -32,6 +40,11 @@ function UsersTabInner() {
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [q, setQ] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | UserRow['role']>('all');
+  const [picked, setPicked] = useState<number[]>([]);
+  const [hidden, setHidden] = useState<number[]>([]);
   const [rules, setRules] = useState('');
   const rulesInit = useRef(false);
 
@@ -41,7 +54,7 @@ function UsersTabInner() {
       // the text is taken from the server once: a later reload must not replace what is being typed
       if (!rulesInit.current) { rulesInit.current = true; setRules(a.rules ?? ''); }
     }).catch((e) => setError(e.message));
-    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
+    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message)).finally(() => setLoaded(true));
   };
   useEffect(load, []);
 
@@ -52,9 +65,28 @@ function UsersTabInner() {
     await api(`/users/${u.id}/approve`, 'POST').then(() => toast(`«${u.username}» одобрен`)).catch((e) => setError(e.message));
     load();
   };
-  const reject = async (u: UserRow) => {
-    if (!(await confirmDialog({ title: `Отклонить заявку «${u.username}»?`, confirmLabel: 'Отклонить', danger: true }))) return;
-    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
+  // an account that is deleted goes out of the list at once and can be taken back for 6 s; the request is sent after that
+  const dropUsers = (list: UserRow[], text: string) => {
+    const ids = list.map((u) => u.id);
+    setHidden((h) => [...h, ...ids]);
+    setPicked((p) => p.filter((x) => !ids.includes(x)));
+    undoable({
+      text,
+      restore: () => setHidden((h) => h.filter((x) => !ids.includes(x))),
+      commit: async () => {
+        const res = await Promise.allSettled(ids.map((id) => api(`/users/${id}`, 'DELETE')));
+        if (res.some((r) => r.status === 'rejected')) setError('Не всех удалось удалить');
+        setHidden((h) => h.filter((x) => !ids.includes(x)));
+        load();
+      },
+    });
+  };
+  const reject = (u: UserRow) => dropUsers([u], 'Заявка отклонена');
+  const approveMany = async (list: UserRow[]) => {
+    const res = await Promise.allSettled(list.map((u) => api(`/users/${u.id}/approve`, 'POST')));
+    const bad = res.filter((r) => r.status === 'rejected').length;
+    toast(bad ? `Одобрено: ${list.length - bad}, не удалось: ${bad}` : `Одобрено заявок: ${list.length}`, bad ? 'err' : undefined);
+    setPicked([]);
     load();
   };
   // the rules text is saved as you type (after a pause and on leaving the field); the text is never replaced under the cursor
@@ -92,13 +124,14 @@ function UsersTabInner() {
     if (!pw) return;
     await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
   };
-  const remove = async (u: UserRow) => {
-    if (!(await confirmDialog({ title: `Удалить пользователя «${u.username}»?`, confirmLabel: 'Удалить', danger: true }))) return;
-    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
-    load();
-  };
+  const remove = (u: UserRow) => dropUsers([u], 'Пользователь удалён');
 
-  const pendingUsers = users.filter((u) => u.status === 'pending');
+  const visible = users.filter((u) => !hidden.includes(u.id));
+  const pendingUsers = visible.filter((u) => u.status === 'pending');
+  const needle = q.trim().toLowerCase();
+  const listed = visible.filter((u) => (roleFilter === 'all' || u.role === roleFilter) && (!needle || `${u.username} ${u.discordName ?? ''}`.toLowerCase().includes(needle)));
+  const pickedPending = pendingUsers.filter((u) => picked.includes(u.id));
+  const togglePick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   return (
     <AdminPage
@@ -158,10 +191,27 @@ function UsersTabInner() {
       </Section>
 
       {pendingUsers.length > 0 && (
-        <Section title="Заявки на регистрацию">
+        <Section
+          title="Заявки на регистрацию"
+          actions={(
+            <>
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicked(pickedPending.length === pendingUsers.length ? [] : pendingUsers.map((u) => u.id))}>
+                {pickedPending.length === pendingUsers.length ? 'Снять выбор' : 'Выбрать все'}
+              </button>
+              {pickedPending.length > 0 && (
+                <>
+                  <button type="button" className="btn btn-sm" onClick={() => void approveMany(pickedPending)}>Одобрить ({pickedPending.length})</button>
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => dropUsers(pickedPending, `Отклонено заявок: ${pickedPending.length}`)}>Отклонить ({pickedPending.length})</button>
+                </>
+              )}
+            </>
+          )}
+        >
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={`Выбрать: ${u.username}`} />
+                <UserAvatar name={u.username} size={32} tone="brand" />
                 <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
                   <span className="truncate">{u.username}</span>
                   {u.discordName && <DiscordBadge name={u.discordName} />}
@@ -176,9 +226,20 @@ function UsersTabInner() {
 
       <Section title="Пользователи">
         <ErrorLine text={error} />
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="input max-w-xs" type="search" placeholder="Поиск по имени…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск пользователя" />
+          <div className="seg" role="group" aria-label="Роль">
+            {([['all', 'Все'], ['admin', 'Админы'], ['moderator', 'Модераторы'], ['player', 'Игроки']] as const).map(([id, label]) => (
+              <button key={id} type="button" className="seg-item" aria-pressed={roleFilter === id} onClick={() => setRoleFilter(id)}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {!loaded && <div className="space-y-2" aria-busy="true" aria-label="Загрузка">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-12 rounded-2xl" />)}</div>}
+        {loaded && listed.length === 0 && <p className="font-semibold text-mute">Никого не найдено.</p>}
         <ul className="divide-y divide-line">
-          {users.map((u) => (
+          {listed.map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+              <UserAvatar name={u.username} size={32} tone="brand" />
               <span className="min-w-0 flex-1 truncate font-bold">
                 {u.username}{u.username === me?.username ? ' (вы)' : ''}
                 {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
@@ -195,6 +256,12 @@ function UsersTabInner() {
               {u.role === 'moderator' && (
                 <fieldset className="us-perms basis-full">
                   <legend className="sr-only">Права модератора {u.username}</legend>
+                  <span className="basis-full flex flex-wrap items-center gap-1.5 pb-1">
+                    <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Набор:</span>
+                    {PERM_PRESETS.map((p) => (
+                      <button key={p.label} type="button" className="us-preset" onClick={() => void setPerms(u, p.perms)}>{p.label}</button>
+                    ))}
+                  </span>
                   {PERM_LABELS.map((p) => {
                     const on = (u.perms ?? []).includes(p.id);
                     return (

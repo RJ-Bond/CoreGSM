@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="699008e77249"
+COREGSM_BUILD="55890b8d2bdc"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -49133,6 +49133,23 @@ function Sparkle({ x, y, s = 1 }: { x: number; y: number; s?: number }) {
   );
 }
 
+/** A sheet with lines and a pen: the journal of actions. */
+export function JournalArt() {
+  return (
+    <Frame label="Журнал действий">
+      <ellipse cx="110" cy="132" rx="78" ry="9" className="fill-soft" />
+      <circle cx="110" cy="72" r="62" className="fill-soft" />
+      <rect x="72" y="26" width="78" height="100" rx="10" className="fill-card stroke-line" strokeWidth="2" />
+      {[46, 62, 78, 94].map((y, i) => <rect key={y} x="84" y={y} width={i === 3 ? 30 : 54} height="6" rx="3" className="fill-line" />)}
+      <g className="art-float">
+        <circle cx="156" cy="40" r="15" className="fill-brand" />
+        <path d="M150 46l2-6 9-9 4 4-9 9-6 2z" stroke="#fff" strokeWidth="2" strokeLinejoin="round" fill="none" />
+      </g>
+      <Sparkle x={52} y={40} /> <Sparkle x={178} y={104} s={0.8} />
+    </Frame>
+  );
+}
+
 /** A small rack of three servers with the three status lights. */
 export function ServersArt() {
   const rows = [34, 66, 98];
@@ -63538,6 +63555,23 @@ const en: Record<keyof typeof ru, string> = {
   'adm.crumb.aria': 'Breadcrumbs',
   'adm.pinMove': 'Drag to reorder (Alt + arrows)',
   'adm.stack.hide': 'Hide',
+  'adm.tbl.copied': 'Address copied',
+  'adm.tbl.copy': 'Copy the address',
+  'adm.tbl.details': 'Details',
+  'adm.tbl.maintOn': 'Maintenance for an hour',
+  'adm.tbl.maintOff': 'End the maintenance',
+  'adm.tbl.maintGlobal': 'The window covers all servers: end it in «Maintenance»',
+  'adm.tbl.maintEnded': 'Maintenance ended',
+  'adm.tbl.maintStarted': 'One hour of maintenance started',
+  'adm.tbl.maintName': 'Maintenance',
+  'adm.tbl.d.addr': 'Address',
+  'adm.tbl.d.query': 'Query port',
+  'adm.tbl.d.shown': 'Shown as',
+  'adm.tbl.d.game': 'Game',
+  'adm.tbl.d.channels': 'Bound channels',
+  'adm.tbl.d.updated': 'Polled',
+  'adm.tbl.d.maint': 'Maintenance',
+  'adm.density': 'Compact',
 };
 
 export default en;
@@ -64766,6 +64800,23 @@ const ru = {
   'adm.crumb.aria': 'Хлебные крошки',
   'adm.pinMove': 'Перетащите, чтобы изменить порядок (Alt + стрелки)',
   'adm.stack.hide': 'Скрыть',
+  'adm.tbl.copied': 'Адрес скопирован',
+  'adm.tbl.copy': 'Копировать адрес',
+  'adm.tbl.details': 'Подробности',
+  'adm.tbl.maintOn': 'Тех. работы на час',
+  'adm.tbl.maintOff': 'Завершить тех. работы',
+  'adm.tbl.maintGlobal': 'Работы заданы для всех серверов: завершите их в разделе «Обслуживание»',
+  'adm.tbl.maintEnded': 'Тех. работы завершены',
+  'adm.tbl.maintStarted': 'Тех. работы на час включены',
+  'adm.tbl.maintName': 'Технические работы',
+  'adm.tbl.d.addr': 'Адрес',
+  'adm.tbl.d.query': 'Query-порт',
+  'adm.tbl.d.shown': 'Показывается как',
+  'adm.tbl.d.game': 'Игра',
+  'adm.tbl.d.channels': 'Привязано каналов',
+  'adm.tbl.d.updated': 'Опрошен',
+  'adm.tbl.d.maint': 'Тех. работы',
+  'adm.density': 'Компактно',
 };
 
 export default ru;
@@ -65032,15 +65083,16 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
+import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
-import { confirmDialog } from '../confirm';
+import type { MaintenanceWindow } from '../maintenance';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, usePoll, navigate } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminOverview from './AdminOverview';
+import { ServersArt } from '../components/Illustrations';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
@@ -65112,6 +65164,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     writeIds(PINS_KEY, r.pins);
   };
   const badges = useNavBadges(isAdmin, me?.perms ?? []);
+  const [dense, setDense] = useState(() => { try { return localStorage.getItem('coregsm_admin_density') === 'compact'; } catch { return false; } });
+  const flipDense = () => setDense((v) => { try { localStorage.setItem('coregsm_admin_density', v ? 'cozy' : 'compact'); } catch { /* not remembered */ } return !v; });
   // the sidebar scrolls sideways on a phone: keep the current section in view
   useEffect(() => {
     if (!window.matchMedia('(max-width: 767px)').matches) return;
@@ -65181,7 +65235,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
+    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]" data-density={dense ? 'compact' : undefined}>
       <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
         {isAdmin ? (
           <>
@@ -65226,6 +65280,9 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             {sections.map((s) => link(s))}
           </>
         )}
+        <button type="button" className="adm-density max-md:hidden" aria-pressed={dense} onClick={flipDense}>
+          <span aria-hidden>{dense ? '▤' : '▦'}</span>{t('adm.density')}
+        </button>
       </nav>
       <div className="min-w-0 space-y-5">
         {isAdmin && (
@@ -65371,6 +65428,21 @@ function ServersManage({ sub }: { sub: string }) {
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
+  // removed servers are hidden at once and really deleted after the 6 s in which «Отменить» works
+  const [hidden, setHidden] = useState<number[]>([]);
+  const [bindings, setBindings] = useState<Map<number, number>>(new Map());
+  const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
+  usePoll(
+    () => Promise.allSettled([api<Binding[]>('/bindings'), api<MaintenanceWindow[]>('/maintenance')]).then(([b, w]) => {
+      if (b.status === 'fulfilled') {
+        const m = new Map<number, number>();
+        for (const x of b.value) for (const id of x.serverIds?.length ? x.serverIds : [x.serverId]) m.set(id, (m.get(id) ?? 0) + 1);
+        setBindings(m);
+      }
+      if (w.status === 'fulfilled') setWindows(w.value);
+    }),
+    30_000,
+  );
   // 30-day availability of every server (the public status endpoint); a column stays «–» without it
   const [uptime, setUptime] = useState<Map<number, number>>(new Map());
   usePoll(
@@ -65399,10 +65471,40 @@ function ServersManage({ sub }: { sub: string }) {
     if (sub === 'new') navigate('/admin/servers');
   };
 
-  const remove = async (s: Server) => {
-    if (!(await confirmDialog({ title: t('adm.srv.deleteQ', { name: s.name }), text: t('adm.srv.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
-    await api(`/servers/${s.id}`, 'DELETE').then(() => toast(t('adm.srv.deleted'))).catch((e: Error) => setError(e.message));
-    void load();
+  const removeSome = (list: Server[], text: string) => {
+    const ids = list.map((x) => x.id);
+    setHidden((h) => [...h, ...ids]);
+    undoable({
+      text,
+      restore: () => setHidden((h) => h.filter((x) => !ids.includes(x))),
+      commit: async () => {
+        const res = await Promise.allSettled(ids.map((id) => api(`/servers/${id}`, 'DELETE')));
+        const failed = res.filter((r) => r.status === 'rejected').length;
+        if (failed) toast(t('adm.srv.delPartial', { ok: ids.length - failed, bad: failed }), 'err');
+        setHidden((h) => h.filter((x) => !ids.includes(x)));
+        await load();
+      },
+    });
+  };
+  const remove = (s: Server) => removeSome([s], t('adm.srv.deleted'));
+  // a one-hour window for this server, or the end of the one that is running
+  const toggleMaintenance = async (s: Server) => {
+    try {
+      if (s.maintenance) {
+        const w = windows.find((x) => x.serverId === s.id && x.active);
+        if (!w) { toast(t('adm.tbl.maintGlobal'), 'info'); return; }
+        await api(`/maintenance/${w.id}`, 'DELETE');
+        toast(t('adm.tbl.maintEnded'));
+      } else {
+        const now = Date.now();
+        await api('/maintenance', 'POST', { serverId: s.id, name: t('adm.tbl.maintName'), startTs: now, endTs: now + 3_600_000, repeat: 'none' });
+        toast(t('adm.tbl.maintStarted'));
+      }
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    }
+    await load();
+    api<MaintenanceWindow[]>('/maintenance').then(setWindows).catch(() => undefined);
   };
   const refreshMany = async (list: Server[]) => {
     await Promise.allSettled(list.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
@@ -65410,10 +65512,7 @@ function ServersManage({ sub }: { sub: string }) {
     await load();
   };
   const removeMany = async (list: Server[]) => {
-    const res = await Promise.allSettled(list.map((s) => api(`/servers/${s.id}`, 'DELETE')));
-    const failed = res.filter((r) => r.status === 'rejected').length;
-    toast(failed ? t('adm.srv.delPartial', { ok: list.length - failed, bad: failed }) : t('adm.srv.delMany', { n: list.length }), failed ? 'err' : undefined);
-    await load();
+    removeSome(list, t('adm.srv.delMany', { n: list.length }));
   };
   const refresh = async (s: Server) => {
     setBusyId(s.id);
@@ -65445,7 +65544,7 @@ function ServersManage({ sub }: { sub: string }) {
       )}
 
       {loaded && !error && servers.length === 0 && (
-        <Empty title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
+        <Empty art={<ServersArt />} title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
           <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </Empty>
       )}
@@ -65453,11 +65552,13 @@ function ServersManage({ sub }: { sub: string }) {
       {servers.length > 0 && (
         <div className="fade-in">
           <AdminServersTable
-            servers={servers}
+            servers={servers.filter((x) => !hidden.includes(x.id))}
             a={{
               isAdmin,
               busyId,
               uptime,
+              bindings,
+              onMaintenance: (sv) => void toggleMaintenance(sv),
               onRefresh: (sv) => void refresh(sv),
               onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
               onRemove: (sv) => void remove(sv),
@@ -65861,18 +65962,21 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/AdminServersTable.tsx" << '__COREGSM_EOF__'
 // The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
 // server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { GameAvatar, IconEdit, IconRefresh, IconTrash, MiniSpark, StatusPill, ago, isLag } from '../ui';
+import { GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
 import { countServers, filterServers, type ServerFilter } from './adminServersLogic';
 
 export interface TableActions {
   isAdmin: boolean;
   busyId: number | null;
   uptime: Map<number, number>;
+  /** Discord channels bound to each server */
+  bindings: Map<number, number>;
+  onMaintenance: (s: Server) => void;
   onRefresh: (s: Server) => void;
   onEdit: (s: Server) => void;
   onRemove: (s: Server) => void;
@@ -65890,6 +65994,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<number[]>([]);
   const counts = useMemo(() => countServers(servers), [servers]);
   const rows = useMemo(() => filterServers(servers, filter, query), [servers, filter, query]);
   const shownIds = rows.map((s) => s.id);
@@ -65897,6 +66002,11 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const allOn = rows.length > 0 && shownIds.every((id) => sel.includes(id));
   const toggle = (id: number) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
   const toggleAll = () => setSel((l) => (allOn ? l.filter((id) => !shownIds.includes(id)) : [...new Set([...l, ...shownIds])]));
+
+  const flip = (id: number) => setOpen((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const copy = async (s: Server) => {
+    try { await navigator.clipboard.writeText(`${s.host}:${s.port}`); toast(t('adm.tbl.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
 
   const many = async (fn: (list: Server[]) => Promise<void>) => {
     setBusy(true);
@@ -65939,7 +66049,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       ) : (
         <>
           {/* wide screens: a table */}
-          <div className="tile hidden overflow-x-auto p-1.5 md:block">
+          <div className="tile adm-tablewrap hidden p-1.5 md:block">
             <table className="adm-table">
               <thead>
                 <tr>
@@ -65955,15 +66065,17 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
               </thead>
               <tbody>
                 {rows.map((s) => (
-                  <tr key={s.id} data-selected={sel.includes(s.id) ? 'true' : undefined} className="cursor-pointer" onClick={(e) => { if (!(e.target as HTMLElement).closest('a, button, input, label')) a.onEdit(s); }}>
+                  <Fragment key={s.id}>
+                  <tr data-state={s.maintenance ? 'maint' : !s.online && s.hasStatus ? 'off' : isLag(s) ? 'lag' : 'on'} data-selected={sel.includes(s.id) ? 'true' : undefined} className="cursor-pointer" onClick={(e) => { if (!(e.target as HTMLElement).closest('a, button, input, label')) a.onEdit(s); }}>
                     <td><input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`${t('adm.tbl.select')}: ${s.name}`} /></td>
                     <td>
                       <div className="flex min-w-0 items-center gap-3">
+                        <button type="button" className="adm-expand" aria-expanded={open.includes(s.id)} aria-label={`${t('adm.tbl.details')}: ${s.name}`} title={t('adm.tbl.details')} onClick={() => flip(s.id)}><span aria-hidden>{open.includes(s.id) ? '▾' : '▸'}</span></button>
                         <GameAvatar game={s.game} size={38} />
                         <div className="min-w-0">
                           <a href={`/servers/${s.id}`} className="block max-w-50 xl:max-w-60 truncate font-extrabold leading-tight hover:text-link" title={s.name}>{s.name}</a>
                           <div className="max-w-50 xl:max-w-60 truncate text-xs font-semibold text-mute" title={s.displayAddress ? t('adm.tbl.shownAs', { a: s.displayAddress }) : undefined}>
-                            {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
+                            {gameLabel(s.game)} · <button type="button" className="adm-copy font-mono" title={t('adm.tbl.copy')} onClick={() => void copy(s)}>{s.host}:{s.port}</button>
                           </div>
                         </div>
                       </div>
@@ -65981,11 +66093,28 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                         <button type="button" className="row-act" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
                           <IconRefresh spinning={a.busyId === s.id} />
                         </button>
+                        <button type="button" className={`row-act ${s.maintenance ? 'is-on' : ''}`} title={s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')} aria-label={`${s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')}: ${s.name}`} aria-pressed={!!s.maintenance} onClick={() => a.onMaintenance(s)}><IconWrench /></button>
                         <button type="button" className="row-act" title={t('adm.tbl.edit')} aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
                         {a.isAdmin && <button type="button" className="row-act row-act-danger" title={t('adm.srv.delete')} aria-label={`${t('adm.srv.delete')}: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
                       </div>
                     </td>
                   </tr>
+                  {open.includes(s.id) && (
+                    <tr className="adm-detail">
+                      <td colSpan={8}>
+                        <dl className="adm-detail-grid">
+                          <div><dt>{t('adm.tbl.d.addr')}</dt><dd className="font-mono">{s.host}:{s.port}</dd></div>
+                          <div><dt>{t('adm.tbl.d.query')}</dt><dd className="font-mono">{s.queryPort ?? '—'}</dd></div>
+                          <div><dt>{t('adm.tbl.d.shown')}</dt><dd>{s.displayAddress || '—'}</dd></div>
+                          <div><dt>{t('adm.tbl.d.game')}</dt><dd>{gameLabel(s.game)}</dd></div>
+                          <div><dt>{t('adm.tbl.d.channels')}</dt><dd><a href="/admin/discord" className="text-link hover:underline">{a.bindings.get(s.id) ?? 0}</a></dd></div>
+                          <div><dt>{t('adm.tbl.d.updated')}</dt><dd>{ago(s.updatedAt)}</dd></div>
+                          {s.maintenance && <div><dt>{t('adm.tbl.d.maint')}</dt><dd>{s.maintenance.name}</dd></div>}
+                        </dl>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -68136,22 +68265,80 @@ export default function GalleryPage() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
-import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, usePoll, SkeletonRows } from '../ui';
+import { Icon } from '../icons';
+import { JournalArt } from '../components/Illustrations';
+import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
+
+type Kind = 'add' | 'edit' | 'del' | 'sec';
+
+/** a rough class of an entry by the words of its action: creating, changing, removing, signing in / passwords */
+function kindOf(action: string): Kind {
+  const a = action.toLowerCase();
+  if (/удал|снят|отклон|delete|remove/.test(a)) return 'del';
+  if (/созд|добав|одобр|привяз|create|add/.test(a)) return 'add';
+  if (/вход|парол|сесс|токен|login|password|session|token/.test(a)) return 'sec';
+  return 'edit';
+}
+
+const ICON: Record<Kind, ReactNode> = {
+  add: <path d="M12 5v14M5 12h14" />,
+  edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>,
+  del: <><path d="M3 6h18" /><path d="M8 6V4h8v2M19 6l-1 14H6L5 6" /></>,
+  sec: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
+};
+
+const STEP = 200;
+const MAX = 2000;
+
+const dayLabel = (ts: number) => {
+  const d = new Date(ts);
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(new Date()) - day(d)) / 86_400_000);
+  if (diff === 0) return 'Сегодня';
+  if (diff === 1) return 'Вчера';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' });
+};
+
+const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
 /** Who changed what and when (the last 2000 actions). */
 export default function JournalPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
-  const load = () => api<Row[]>('/audit?limit=300').then((r) => { setRows(r); setError(''); }).catch((e: Error) => setError(e.message));
+  const [limit, setLimit] = useState(100);
+  const limitRef = useRef(limit);
+  limitRef.current = limit;
+  const load = () => api<Row[]>(`/audit?limit=${limitRef.current}`).then((r) => { setRows(r); setError(''); }).catch((e: Error) => setError(e.message));
   usePoll(load, 20_000);
+  useEffect(() => { void load(); }, [limit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const needle = q.trim().toLowerCase();
   const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
+  const groups = useMemo(() => {
+    const m = new Map<string, Row[]>();
+    for (const r of shown) {
+      const k = dayLabel(r.ts);
+      m.set(k, [...(m.get(k) ?? []), r]);
+    }
+    return [...m];
+  }, [shown]);
+
+  const exportCsv = () => {
+    const lines = ['время,кто,действие,подробности', ...shown.map((r) => [new Date(r.ts).toISOString(), r.actor, r.action, r.detail].map(csvCell).join(','))];
+    const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'coregsm-journal.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const more = !!rows && rows.length >= limit && limit < MAX;
 
   return (
     <AdminPage
@@ -68162,25 +68349,35 @@ export default function JournalPage() {
           subtitle="Кто и что менял в панели"
           hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
           help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
-        />
+        >
+          <button type="button" className="btn btn-soft" onClick={exportCsv} disabled={shown.length === 0}>Скачать CSV</button>
+        </PageHead>
       )}
     >
       {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
       {!rows && !error && <SkeletonRows n={6} h="h-12" />}
-      {rows && shown.length === 0 && <Empty title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
-      {shown.length > 0 && (
-        <ul className="panel divide-y divide-line overflow-hidden">
-          {shown.map((r) => (
-            <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-5 py-3">
-              <span className="w-40 shrink-0 text-sm font-semibold tabular-nums text-mute">{fmtDateTime(r.ts)}</span>
-              <span className="font-extrabold">{r.action}</span>
-              {r.detail && <span className="min-w-0 wrap-break-word font-semibold text-mute">{r.detail}</span>}
-              <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {rows && shown.length === 0 && <Empty art={<JournalArt />} title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
+      {groups.map(([day, list]) => (
+        <section key={day} className="space-y-2">
+          <h2 className="text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h2>
+          <ul className="panel divide-y divide-line overflow-hidden">
+            {list.map((r) => {
+              const k = kindOf(r.action);
+              return (
+                <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-5 py-3">
+                  <span className={`jr-ico is-${k}`} aria-hidden><Icon size={14}>{ICON[k]}</Icon></span>
+                  <span className="w-14 shrink-0 text-sm font-semibold tabular-nums text-mute" title={fmtDateTime(r.ts)}>{fmtTime(r.ts)}</span>
+                  <span className="font-extrabold">{r.action}</span>
+                  {r.detail && <span className="min-w-0 wrap-break-word font-semibold text-mute">{r.detail}</span>}
+                  <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+      {more && <button type="button" className="btn btn-soft" onClick={() => setLimit((l) => Math.min(MAX, l + STEP))}>Показать ещё</button>}
     </AdminPage>
   );
 }
@@ -71075,7 +71272,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerForm.tsx" << '__COREGSM_EOF__'
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { confirmDialog } from '../confirm';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import GamePicker from '../components/GamePicker';
@@ -71084,6 +71282,16 @@ import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
 import { errorText } from '../apiErrors';
+
+/** the first problem with the address field, or '' (an address only: no scheme, path, spaces or a port glued to it) */
+export function hostError(v: string): string {
+  const h = v.trim();
+  if (!h) return '';
+  if (/\s/.test(h)) return 'В адресе не должно быть пробелов';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(h) || h.includes('/')) return 'Укажите только адрес, без http:// и пути';
+  if ((h.match(/:/g) ?? []).length === 1) return 'Порт вводится в отдельном поле, уберите «:порт» из адреса';
+  return '';
+}
 
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
@@ -71162,7 +71370,21 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   const gameProfile = custom ? undefined : profiles?.[f.game];
   const fieldList = shownFields(gameProfile?.fields);
 
-  const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0;
+  const hostProblem = hostError(f.host);
+  const portProblem = f.port && (f.port < 1 || f.port > 65535 || !Number.isInteger(f.port)) ? 'Порт — число от 1 до 65535' : '';
+  const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0 && !hostProblem && !portProblem;
+  // closing with unsaved edits asks first; a reload or closing the tab is warned about by the browser
+  const dirty = JSON.stringify(f) !== JSON.stringify(initial);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+  const close = async () => {
+    if (dirty && !(await confirmDialog({ title: 'Закрыть без сохранения?', text: 'Изменения в форме будут потеряны.', confirmLabel: 'Закрыть', cancelLabel: 'Продолжить правку', danger: true }))) return;
+    onClose();
+  };
 
   const runTest = async () => {
     setTesting(true);
@@ -71191,7 +71413,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   };
 
   return (
-    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
+    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={() => void close()}>
       <form onSubmit={submit} className="space-y-3.5">
         <div>
           <span className="label">Игра</span>
@@ -71205,7 +71427,8 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
             <Field label="Адрес для опроса (IP или домен)">
-              <input id="srv-host" className="input" value={f.host} onChange={(e) => change({ host: e.target.value.trim() })} required placeholder="192.168.1.10" />
+              <input id="srv-host" className="input" value={f.host} onChange={(e) => change({ host: e.target.value.trim() })} required placeholder="192.168.1.10" aria-invalid={hostProblem ? true : undefined} aria-describedby={hostProblem ? 'srv-host-err' : undefined} />
+            {hostProblem && <p id="srv-host-err" className="mt-1 text-sm font-bold text-bad" role="alert">{hostProblem}</p>}
             </Field>
           </div>
           <Field label="Порт">
@@ -71277,8 +71500,9 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
         </details>
 
         <ErrorLine text={error} />
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+        {portProblem && <p className="text-sm font-bold text-bad" role="alert">{portProblem}</p>}
+        <div className="adm-sticky-foot flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-ghost" onClick={() => void close()}>Отмена</button>
           <button className="btn" disabled={busy || !canTest}>{busy ? 'Сохраняю…' : 'Сохранить'}</button>
         </div>
       </form>
@@ -73973,8 +74197,8 @@ import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../ap
 import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
-import { confirmDialog, promptDialog } from '../../confirm';
-import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { promptDialog } from '../../confirm';
+import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, toast, undoable, useAutosave } from '../../ui';
 import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
@@ -73989,6 +74213,14 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
   );
 }
 
+/** ready sets of moderator permissions */
+const PERM_PRESETS: { label: string; perms: Perm[] }[] = [
+  { label: 'Редактор новостей', perms: ['news'] },
+  { label: 'Модератор сообщества', perms: ['news', 'moderation', 'journal'] },
+  { label: 'Админ серверов', perms: ['servers', 'maintenance'] },
+  { label: 'Снять все', perms: [] },
+];
+
 const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
 /** The users page: the rules text joins the common save bar. */
@@ -74001,6 +74233,11 @@ function UsersTabInner() {
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [q, setQ] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | UserRow['role']>('all');
+  const [picked, setPicked] = useState<number[]>([]);
+  const [hidden, setHidden] = useState<number[]>([]);
   const [rules, setRules] = useState('');
   const rulesInit = useRef(false);
 
@@ -74010,7 +74247,7 @@ function UsersTabInner() {
       // the text is taken from the server once: a later reload must not replace what is being typed
       if (!rulesInit.current) { rulesInit.current = true; setRules(a.rules ?? ''); }
     }).catch((e) => setError(e.message));
-    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message));
+    api<UserRow[]>('/users').then(setUsers).catch((e) => setError(e.message)).finally(() => setLoaded(true));
   };
   useEffect(load, []);
 
@@ -74021,9 +74258,28 @@ function UsersTabInner() {
     await api(`/users/${u.id}/approve`, 'POST').then(() => toast(`«${u.username}» одобрен`)).catch((e) => setError(e.message));
     load();
   };
-  const reject = async (u: UserRow) => {
-    if (!(await confirmDialog({ title: `Отклонить заявку «${u.username}»?`, confirmLabel: 'Отклонить', danger: true }))) return;
-    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Заявка отклонена')).catch((e) => setError(e.message));
+  // an account that is deleted goes out of the list at once and can be taken back for 6 s; the request is sent after that
+  const dropUsers = (list: UserRow[], text: string) => {
+    const ids = list.map((u) => u.id);
+    setHidden((h) => [...h, ...ids]);
+    setPicked((p) => p.filter((x) => !ids.includes(x)));
+    undoable({
+      text,
+      restore: () => setHidden((h) => h.filter((x) => !ids.includes(x))),
+      commit: async () => {
+        const res = await Promise.allSettled(ids.map((id) => api(`/users/${id}`, 'DELETE')));
+        if (res.some((r) => r.status === 'rejected')) setError('Не всех удалось удалить');
+        setHidden((h) => h.filter((x) => !ids.includes(x)));
+        load();
+      },
+    });
+  };
+  const reject = (u: UserRow) => dropUsers([u], 'Заявка отклонена');
+  const approveMany = async (list: UserRow[]) => {
+    const res = await Promise.allSettled(list.map((u) => api(`/users/${u.id}/approve`, 'POST')));
+    const bad = res.filter((r) => r.status === 'rejected').length;
+    toast(bad ? `Одобрено: ${list.length - bad}, не удалось: ${bad}` : `Одобрено заявок: ${list.length}`, bad ? 'err' : undefined);
+    setPicked([]);
     load();
   };
   // the rules text is saved as you type (after a pause and on leaving the field); the text is never replaced under the cursor
@@ -74061,13 +74317,14 @@ function UsersTabInner() {
     if (!pw) return;
     await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
   };
-  const remove = async (u: UserRow) => {
-    if (!(await confirmDialog({ title: `Удалить пользователя «${u.username}»?`, confirmLabel: 'Удалить', danger: true }))) return;
-    await api(`/users/${u.id}`, 'DELETE').then(() => toast('Пользователь удалён')).catch((e) => setError(e.message));
-    load();
-  };
+  const remove = (u: UserRow) => dropUsers([u], 'Пользователь удалён');
 
-  const pendingUsers = users.filter((u) => u.status === 'pending');
+  const visible = users.filter((u) => !hidden.includes(u.id));
+  const pendingUsers = visible.filter((u) => u.status === 'pending');
+  const needle = q.trim().toLowerCase();
+  const listed = visible.filter((u) => (roleFilter === 'all' || u.role === roleFilter) && (!needle || `${u.username} ${u.discordName ?? ''}`.toLowerCase().includes(needle)));
+  const pickedPending = pendingUsers.filter((u) => picked.includes(u.id));
+  const togglePick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   return (
     <AdminPage
@@ -74127,10 +74384,27 @@ function UsersTabInner() {
       </Section>
 
       {pendingUsers.length > 0 && (
-        <Section title="Заявки на регистрацию">
+        <Section
+          title="Заявки на регистрацию"
+          actions={(
+            <>
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicked(pickedPending.length === pendingUsers.length ? [] : pendingUsers.map((u) => u.id))}>
+                {pickedPending.length === pendingUsers.length ? 'Снять выбор' : 'Выбрать все'}
+              </button>
+              {pickedPending.length > 0 && (
+                <>
+                  <button type="button" className="btn btn-sm" onClick={() => void approveMany(pickedPending)}>Одобрить ({pickedPending.length})</button>
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => dropUsers(pickedPending, `Отклонено заявок: ${pickedPending.length}`)}>Отклонить ({pickedPending.length})</button>
+                </>
+              )}
+            </>
+          )}
+        >
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={`Выбрать: ${u.username}`} />
+                <UserAvatar name={u.username} size={32} tone="brand" />
                 <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
                   <span className="truncate">{u.username}</span>
                   {u.discordName && <DiscordBadge name={u.discordName} />}
@@ -74145,9 +74419,20 @@ function UsersTabInner() {
 
       <Section title="Пользователи">
         <ErrorLine text={error} />
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="input max-w-xs" type="search" placeholder="Поиск по имени…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск пользователя" />
+          <div className="seg" role="group" aria-label="Роль">
+            {([['all', 'Все'], ['admin', 'Админы'], ['moderator', 'Модераторы'], ['player', 'Игроки']] as const).map(([id, label]) => (
+              <button key={id} type="button" className="seg-item" aria-pressed={roleFilter === id} onClick={() => setRoleFilter(id)}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {!loaded && <div className="space-y-2" aria-busy="true" aria-label="Загрузка">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-12 rounded-2xl" />)}</div>}
+        {loaded && listed.length === 0 && <p className="font-semibold text-mute">Никого не найдено.</p>}
         <ul className="divide-y divide-line">
-          {users.map((u) => (
+          {listed.map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+              <UserAvatar name={u.username} size={32} tone="brand" />
               <span className="min-w-0 flex-1 truncate font-bold">
                 {u.username}{u.username === me?.username ? ' (вы)' : ''}
                 {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
@@ -74164,6 +74449,12 @@ function UsersTabInner() {
               {u.role === 'moderator' && (
                 <fieldset className="us-perms basis-full">
                   <legend className="sr-only">Права модератора {u.username}</legend>
+                  <span className="basis-full flex flex-wrap items-center gap-1.5 pb-1">
+                    <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Набор:</span>
+                    {PERM_PRESETS.map((p) => (
+                      <button key={p.label} type="button" className="us-preset" onClick={() => void setPerms(u, p.perms)}>{p.label}</button>
+                    ))}
+                  </span>
                   {PERM_LABELS.map((p) => {
                     const on = (u.perms ?? []).includes(p.id);
                     return (
@@ -74517,6 +74808,41 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-crumbs a { color: rgb(var(--link)); }
 .adm-crumbs a:hover { text-decoration: underline; }
 .adm-item[draggable='true'] { cursor: grab; }
+
+/* ---------- servers table: sticky head, state stripe, details; journal; presets; density ---------- */
+.tile.adm-tablewrap { overflow: clip; }
+.adm-table thead th { position: sticky; top: 4.75rem; z-index: 2; background: rgb(var(--card)); box-shadow: 0 1px 0 rgb(var(--line)); }
+.adm-st:has(.adm-bulk) .adm-table thead th { top: 8.25rem; }
+.adm-bulk { position: sticky; top: 4.75rem; z-index: 25; box-shadow: var(--shadow-2); backdrop-filter: blur(8px); }
+.adm-table tbody tr[data-state] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--ok)); }
+.adm-table tbody tr[data-state='lag'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--warn)); }
+.adm-table tbody tr[data-state='off'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--bad)); }
+.adm-table tbody tr[data-state='maint'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--link)); }
+.adm-expand { display: inline-grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 6px; color: rgb(var(--mute)); font-size: 12px; }
+.adm-expand:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+.adm-copy { padding: 0; background: none; color: inherit; }
+.adm-copy:hover { color: rgb(var(--link)); text-decoration: underline; }
+.row-act.is-on { color: rgb(var(--link)); background: rgb(var(--brand) / .14); }
+.adm-detail td { background: rgb(var(--soft) / .5); white-space: normal; }
+.adm-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 8px 16px; padding: 4px 6px; }
+.adm-detail-grid dt { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.adm-detail-grid dd { font-weight: 650; overflow-wrap: anywhere; }
+.jr-ico { display: inline-grid; place-items: center; width: 24px; height: 24px; flex: none; align-self: center; border-radius: 50%; background: rgb(var(--soft)); color: rgb(var(--link)); }
+.jr-ico.is-add { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.jr-ico.is-del { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+.jr-ico.is-sec { background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
+.us-preset { padding: 3px 11px; border-radius: var(--r-pill); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.us-preset:hover { color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .5); }
+.adm-sticky-foot { position: sticky; bottom: 0; z-index: 5; margin-inline: -1px; padding-block: 12px; background: rgb(var(--card)); box-shadow: 0 -1px 0 rgb(var(--line)); }
+.adm-density { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 4px; padding: 7px 12px; border-radius: var(--r-md); font-size: 13px; font-weight: 650; color: rgb(var(--mute)); }
+.adm-density:hover { color: rgb(var(--ink)); background: rgb(var(--soft)); }
+.adm-density[aria-pressed='true'] { color: rgb(var(--link)); }
+[data-density='compact'] .adm-table td { padding-block: 3px; }
+[data-density='compact'] .adm-table td .row-act { --b-i: 1.75rem; }
+[data-density='compact'] section.panel { padding: .85rem 1rem; }
+[data-density='compact'] .divide-y > li { padding-block: .35rem; }
+[data-density='compact'] .adm-tile { padding: 9px 12px; }
+[data-density='compact'] .adm-tile-v { font-size: 20px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
