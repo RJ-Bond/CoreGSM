@@ -78,7 +78,7 @@ const fileSchema = z.object({
   restarts: z.array(z.object({ server: serverRef, enabled: z.boolean(), days: z.number().int().min(0).max(127), atMin: z.number().int().min(0).max(1439), durationMin: z.number().int().min(1).max(240), warnMin: z.number().int().min(0).max(120), channelId: z.string().regex(/^(\d{15,25})?$/), command: z.string().max(200), say: z.string().max(200) })).max(500).default([]),
   autoroles: z.array(z.object({ guildId: snow, roleId: snow, kind: z.enum(['online', 'week_top', 'hours']), threshold: z.number().int().min(0).max(10000), server: serverRef.nullable() })).max(100).default([]),
   counters: z.array(z.object({ channelId: snow, template: z.string().min(1).max(100), server: serverRef.nullable() })).max(50).default([]),
-  settings: z.record(z.string().max(5000)).default({}),
+  settings: z.record(z.string(), z.string().max(5000)).default({}),
 });
 export type ConfigFile = z.infer<typeof fileSchema>;
 
