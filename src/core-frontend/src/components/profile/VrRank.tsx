@@ -74,7 +74,7 @@ function RankBody({ d }: { d: MyRank }) {
       <div className="vr-rank">
         <RankEmblem rank={d.rank} size={96} />
         <div className="vr-rank-main">
-          <div className="break-words text-xl font-black leading-tight" style={{ color: d.rank.color }}>{rankName(d.rank)}</div>
+          <div className="wrap-break-word text-xl font-black leading-tight" style={{ color: d.rank.color }}>{rankName(d.rank)}</div>
           <div className="mt-0.5 text-sm font-semibold text-mute">
             {d.nick ? t('vr.rank.hours', { hours: fmtH(d.hours) }) : t('vr.rank.noNick')}
           </div>
@@ -121,7 +121,7 @@ function Card({ a }: { a: VrAchievement }) {
         {!failed && <img className="vr-ach-img" src={src} width={44} height={44} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="pf-ach-title break-words font-extrabold leading-tight">{title}</div>
+        <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{title}</div>
         <div className="mt-0.5 text-sm font-semibold text-mute">{vrAchText(a.id, 'd', a.description)}</div>
         {a.earned ? (
           <div className="mt-1.5 text-sm font-extrabold text-ok">

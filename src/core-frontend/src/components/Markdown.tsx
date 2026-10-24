@@ -14,7 +14,7 @@ function Spoiler({ children }: { children: ReactNode }) {
   return (
     <span
       onClick={() => setOpen(true)}
-      className="cursor-pointer rounded px-0.5"
+      className="cursor-pointer rounded-sm px-0.5"
       style={{ background: open ? 'rgba(255,255,255,0.1)' : '#1e1f22', color: open ? 'inherit' : 'transparent' }}
       title={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
     >
@@ -81,5 +81,5 @@ export function Markdown({ text }: { text: string }) {
     }
     out.push(line.trim() === '' ? <div key={i} className="h-2" /> : <div key={i}>{inlineMd(line)}</div>);
   }
-  return <div className="break-words leading-snug">{out}</div>;
+  return <div className="wrap-break-word leading-snug">{out}</div>;
 }

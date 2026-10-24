@@ -103,7 +103,7 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex md:left-4 md:right-auto w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-60 flex md:left-4 md:right-auto w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-black">Впервые в Админке?</div>
         <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>
@@ -194,7 +194,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[85]">
+    <div className="fixed inset-0 z-85">
       {/* swallows clicks: the tour moves between pages itself */}
       <div className="absolute inset-0" />
       {rect ? (
@@ -222,7 +222,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         aria-describedby="tour-text"
         tabIndex={-1}
         style={mobile ? undefined : { ...popStyle, width: POP_W }}
-        className={`panel absolute space-y-3 p-5 shadow-pop outline-none max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-b-none max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] ${mobile ? '' : 'max-w-[calc(100vw-1.5rem)]'}`}
+        className={`panel absolute space-y-3 p-5 shadow-pop outline-hidden max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-b-none max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] ${mobile ? '' : 'max-w-[calc(100vw-1.5rem)]'}`}
       >
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm font-extrabold text-mute" aria-live="polite">Шаг {i + 1} из {STEPS.length}</p>

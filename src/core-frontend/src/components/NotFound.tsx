@@ -8,11 +8,11 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
     <StateView
       kind="notfound"
       heading="h1"
-      className="mx-auto max-w-xl !gap-3 sm:!py-14"
+      className="mx-auto max-w-xl gap-3! sm:py-14!"
       art={(
         <>
           <NotFoundArt />
-          <p className="nf-code text-6xl font-black leading-none tracking-[-0.05em] sm:text-7xl" aria-hidden>404</p>
+          <p className="nf-code text-6xl font-black leading-none tracking-tighter sm:text-7xl" aria-hidden>404</p>
         </>
       )}
       title={kind === 'server' ? 'Сервер не найден' : 'Такой страницы нет'}

@@ -139,7 +139,7 @@ export default function SystemPage() {
                 <li key={r.k} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5">
                   <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full dot-${r.tone}`} />
                   <span className="font-extrabold">{r.k}</span>
-                  {r.sub && <span className="min-w-0 break-words text-sm font-semibold text-mute">{r.sub}</span>}
+                  {r.sub && <span className="min-w-0 wrap-break-word text-sm font-semibold text-mute">{r.sub}</span>}
                   <span className={`ml-auto font-black tabular-nums ${r.tone === 'bad' ? 'text-bad' : r.tone === 'warn' ? 'text-warn' : ''}`}>{r.v}</span>
                 </li>
               ))}
@@ -162,7 +162,7 @@ export default function SystemPage() {
                   <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? 'в порядке' : c.status === 'warn' ? 'внимание' : 'ошибка'} />
                   <div className="min-w-0">
                     <div className="font-extrabold">{c.label}</div>
-                    <div className="break-words text-sm font-semibold text-mute">{c.detail}</div>
+                    <div className="wrap-break-word text-sm font-semibold text-mute">{c.detail}</div>
                   </div>
                 </li>
               ))}

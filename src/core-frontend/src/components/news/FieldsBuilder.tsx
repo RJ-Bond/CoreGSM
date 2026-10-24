@@ -20,7 +20,7 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
         {rows.map((row, i) => (
           <div key={i} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
             {row.map((f) => (
-              <div key={f.k} className="h-4 truncate rounded bg-brand/25 px-1.5 text-xs font-bold leading-4 text-ink">{f.name || '…'}</div>
+              <div key={f.k} className="h-4 truncate rounded-sm bg-brand/25 px-1.5 text-xs font-bold leading-4 text-ink">{f.name || '…'}</div>
             ))}
           </div>
         ))}
@@ -80,7 +80,7 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
             <input
               id={`news-f${i}-name`}
               aria-label={`Название поля ${i + 1}`}
-              className={`input ${f.name.length > LIMITS.fieldName ? '!border-bad' : ''}`}
+              className={`input ${f.name.length > LIMITS.fieldName ? 'border-bad!' : ''}`}
               value={f.name}
               placeholder="Название"
               onChange={(e) => patch(i, { name: e.target.value })}
@@ -103,10 +103,10 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
           <div className="flex flex-wrap items-center gap-2">
             <div className="seg" role="group" aria-label={`Расположение поля ${i + 1}`}>
               <button type="button" className="seg-item" aria-pressed={!f.inline} onClick={() => patch(i, { inline: false })} title="Во всю ширину">
-                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-sm bg-current opacity-60" />Широкое
+                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-xs bg-current opacity-60" />Широкое
               </button>
               <button type="button" className="seg-item" aria-pressed={f.inline} onClick={() => patch(i, { inline: true })} title="В ряд с соседними">
-                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /></span>В ряд
+                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /></span>В ряд
               </button>
             </div>
             <span className="ml-auto flex items-center gap-1.5">

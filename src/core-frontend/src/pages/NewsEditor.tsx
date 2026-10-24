@@ -54,7 +54,7 @@ function ColorPicker({ value, onChange, games }: { value: number; onChange: (n: 
       <div className="flex flex-wrap items-center gap-2">
         {PALETTE.map(([n, c]) => dot(n, c))}
         <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm font-extrabold text-mute">
-          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded border-2 border-line bg-card" aria-label="Свой цвет" />
+          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded-sm border-2 border-line bg-card" aria-label="Свой цвет" />
           свой
         </label>
       </div>
@@ -518,7 +518,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
             <Field label="Цвет полосы"><ColorPicker value={e.color} onChange={(c) => setE({ color: c })} games={games} /></Field>
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label !mb-0">Заголовок</label><Counter value={e.title.length} max={LIMITS.title} /></div>
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label mb-0!">Заголовок</label><Counter value={e.title.length} max={LIMITS.title} /></div>
               <input id="news-title" className="input" value={e.title} onChange={(ev) => setE({ title: ev.target.value })} placeholder="📢 Заголовок новости" />
             </div>
             <Field label="Ссылка заголовка (необязательно)">
@@ -549,7 +549,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
           <Section title="Подпись">
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label !mb-0">Текст внизу</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label mb-0!">Текст внизу</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
               <input id="news-footer" className="input" value={e.footer} onChange={(ev) => setE({ footer: ev.target.value })} placeholder="Например: Администрация сервера" />
             </div>
             <label className="flex items-center gap-3 text-sm font-bold text-mute">
@@ -582,7 +582,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </label>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Отсчёт времени</span>
+              <span className="label mb-0!">Отсчёт времени</span>
               <div className="grid gap-2 sm:grid-cols-2">
                 <input id="news-cd-at" type="datetime-local" className="input" aria-label="Когда" value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
                 <input id="news-cd-label" className="input" aria-label="Подпись отсчёта" maxLength={LIMITS.countdownLabel} placeholder="Вайп" value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
@@ -591,7 +591,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </div>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
+              <span className="label mb-0!">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
               {d.gallery.map((g, i) => (
                 <ImageDrop
                   key={g.k}
@@ -609,7 +609,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </div>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
+              <span className="label mb-0!">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
               {d.changes.map((c, i) => (
                 <div key={c.k} className="nw-edit-row">
                   <select aria-label={'Тип изменения ' + (i + 1)} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
@@ -623,7 +623,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </div>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
+              <span className="label mb-0!">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
               {d.actions.map((a, i) => {
                 const bad = !!a.url.trim() && !isHttpsUrl(a.url);
                 return (

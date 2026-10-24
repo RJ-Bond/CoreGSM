@@ -102,7 +102,7 @@ function Spoiler({ children }: { children: ReactNode }) {
       aria-label={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
       onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
-      className="cursor-pointer rounded px-0.5"
+      className="cursor-pointer rounded-sm px-0.5"
       style={{ background: open ? t.spoilerShow : t.spoilerHide, color: open ? 'inherit' : 'transparent' }}
     >
       {children}
@@ -114,7 +114,7 @@ function Chip({ children, kind }: { children: ReactNode; kind: 'mention' | 'time
   const t = useContext(ThemeCtx);
   return (
     <span
-      className="whitespace-nowrap rounded px-[3px] font-medium"
+      className="whitespace-nowrap rounded-sm px-[3px] font-medium"
       style={kind === 'mention' ? { background: t.mentionBg, color: t.mentionFg } : { background: t.chipBg }}
     >
       {children}
@@ -233,7 +233,7 @@ export function DiscordMd({ text }: { text: string }) {
     }
     out.push(line.trim() === '' ? <div key={i} className="h-[0.6em]" /> : <div key={i}>{inlineMd(line)}</div>);
   }
-  return <div className="break-words leading-snug">{out}</div>;
+  return <div className="wrap-break-word leading-snug">{out}</div>;
 }
 
 function Quote({ children }: { children: ReactNode }) {

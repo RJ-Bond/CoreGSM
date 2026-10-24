@@ -98,7 +98,7 @@ export default function GamePicker({
           <div className="border-b border-line p-2">
             <input
               ref={search}
-              className="input !rounded-xl !py-2"
+              className="input rounded-xl! py-2!"
               type="search"
               placeholder="Найти игру…"
               value={q}

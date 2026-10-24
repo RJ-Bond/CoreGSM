@@ -57,7 +57,7 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
   return (
     <div className="space-y-2" role="region" aria-label={t('nd.title', { label: nd.label })}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-2xl bg-warnbg px-4 py-3 text-warn">
-        <span className="min-w-0 flex-1 basis-60 break-words text-sm font-bold">{t('nd.title', { label: nd.label })}</span>
+        <span className="min-w-0 flex-1 basis-60 wrap-break-word text-sm font-bold">{t('nd.title', { label: nd.label })}</span>
         <span className="flex shrink-0 flex-wrap gap-2">
           <button type="button" className="btn btn-soft btn-sm" onClick={itWasMe} disabled={busy}>{t('nd.me')}</button>
           <button type="button" className="btn btn-danger btn-sm" onClick={() => void notMe()} disabled={busy} aria-busy={busy || undefined}>{t('nd.no')}</button>

@@ -156,7 +156,7 @@ function Ring({ done, total }: { done: number; total: number }) {
           cx="38" cy="38" r={r} fill="none" stroke="rgb(var(--brand))" strokeWidth="8" strokeLinecap="round"
           strokeDasharray={c} strokeDashoffset={c * (1 - done / total)}
           style={{ transition: 'stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1)' }}
-          className="motion-reduce:!transition-none"
+          className="motion-reduce:transition-none!"
         />
       </svg>
       <span className="absolute text-lg font-black tabular-nums">{done}/{total}</span>
@@ -240,7 +240,7 @@ export default function AdminStart() {
                 <li key={st.id} className={`tile flex flex-wrap items-center gap-x-4 gap-y-3 p-4 sm:p-5 ${current ? 'ring-2 ring-brand/50' : ''}`}>
                   <span
                     className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-xl font-black ${
-                      st.state === 'done' ? 'bg-okbg text-ok' : st.state === 'unknown' || skipped ? 'bg-soft text-mute' : 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop'
+                      st.state === 'done' ? 'bg-okbg text-ok' : st.state === 'unknown' || skipped ? 'bg-soft text-mute' : 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop'
                     }`}
                     aria-hidden
                   >
@@ -307,7 +307,7 @@ export default function AdminStart() {
         <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
           {ADMIN_GROUPS.map((g, gi) => (
             <div key={g.title}>
-              <div className="adm-group-title !px-0">{g.title}</div>
+              <div className="adm-group-title px-0!">{g.title}</div>
               <ul className="space-y-1">
                 {gi === 0 && <MapRow id={START_SECTION.id} label={START_SECTION.label} desc={START_SECTION.desc} icon={START_SECTION.icon()} />}
                 {g.sections.map((sec) => <MapRow key={sec.id} id={sec.id} label={sec.label} desc={sec.desc} icon={sec.icon()} />)}

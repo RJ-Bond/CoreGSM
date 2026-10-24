@@ -37,7 +37,7 @@ export default function JournalPage() {
             <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-5 py-3">
               <span className="w-40 shrink-0 text-sm font-semibold tabular-nums text-mute">{fmtDateTime(r.ts)}</span>
               <span className="font-extrabold">{r.action}</span>
-              {r.detail && <span className="min-w-0 break-words font-semibold text-mute">{r.detail}</span>}
+              {r.detail && <span className="min-w-0 wrap-break-word font-semibold text-mute">{r.detail}</span>}
               <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
             </li>
           ))}
