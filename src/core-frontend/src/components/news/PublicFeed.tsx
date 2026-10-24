@@ -1,11 +1,12 @@
 import type { CSSProperties } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
-import { fmtDate } from '../../ui';
+import { fmtDate, fmtTime, toast } from '../../ui';
+import { useAuth } from '../../auth';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
-import { CategoryIcon } from './NewsIcons';
+import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
 import {
-  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt,
+  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
 } from './newsLogic';
 
 export { PANEL_THEME } from './NewsParts';
@@ -31,6 +32,17 @@ export interface Card {
   statusIds: number[];
   game: string;
   reactions: NewsReaction[];
+}
+
+/** «сегодня, 14:30» / «вчера, 09:05» for the last two days, the date otherwise */
+export function newsWhen(at: number): string {
+  const d = new Date(at);
+  const now = new Date();
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86_400_000);
+  if (diff === 0) return t('nw.today', { time: fmtTime(at) });
+  if (diff === 1) return t('nw.yesterday', { time: fmtTime(at) });
+  return fmtDate(at);
 }
 
 const hex = (n: number | undefined) => `#${(n ?? 0x5b4fe0).toString(16).padStart(6, '0')}`;
@@ -90,7 +102,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
         <div className="nw-cover-chips">
           {c.pinned && <PinChip />}
           <CategoryChip category={c.category} />
-          {c.at && <span className="nw-chip nw-chip-date">{fmtDate(c.at)}</span>}
+          {c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
         </div>
         <H className="nw-cover-title">{href ? <a href={href}>{c.title}</a> : c.title}</H>
       </div>
@@ -113,25 +125,37 @@ function monthFormatter(lang: 'ru' | 'en') {
 function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
+  const { me } = useAuth();
+  const canEdit = me?.role === 'admin' || !!me?.perms?.includes('news');
+  const minutes = readingMinutes(c.text);
+  const long = c.text.length > 700 || c.text.split('\n').length > 9;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(`${window.location.origin}/n/${c.id}`); toast(t('nw.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
   return (
-    <article className="nb" style={{ ['--nf-accent' as string]: c.accent }}>
+    <article className={`nb ${c.pinned ? 'is-pinned' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
       <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
-            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()}>{fmtDate(c.at)}</time>}
+            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
           </span>
           <h3 className="nb-title">{c.title}</h3>
         </span>
       </a>
       <div className="nb-body">
-        {(c.text || c.fields.length > 0) && <div className="nb-text"><NewsText text={c.text} fields={c.fields} /></div>}
+        {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
         {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
         <div className="nb-foot">
           {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
-          <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+          <span className="nb-tools">
+            {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
+            {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
+            <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+          </span>
         </div>
       </div>
     </article>
@@ -150,7 +174,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         <div className="nw-chips">
           {c.pinned && <PinChip />}
           <CategoryChip category={c.category} />
-          {c.at && <span className="nw-date">{fmtDate(c.at)}</span>}
+          {c.at && <span className="nw-date">{newsWhen(c.at)}</span>}
         </div>
         <h3 className="nf-item-title"><a href={href}>{c.title}</a></h3>
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
