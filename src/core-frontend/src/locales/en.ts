@@ -15,6 +15,7 @@ const en: Record<keyof typeof ru, string> = {
   'crash.hint': 'The panel hit an unexpected error. Reloading usually helps; if it keeps happening, report it with the details below.',
   'crash.copy': 'Copy details',
   'toast.close': 'Dismiss notification',
+  'ago.now': 'just now',
   'ago.s': '{n}s ago',
   'ago.m': '{n} min ago',
   'ago.h': '{n} h ago',

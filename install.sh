@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="100aa4a983a5"
+COREGSM_BUILD="774755fc260b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -55827,7 +55827,7 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
       <div className={`srv-tabbar sticky z-20 -mx-3 px-3 py-2 sm:-mx-6 sm:px-6 ${stuck ? 'is-stuck' : ''}`} style={{ top }}>
         <nav
           ref={seg}
-          className="srv-tabs seg no-scrollbar flex w-fit max-w-full overflow-x-auto"
+          className="srv-tabs seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto"
           role="tablist"
           aria-label="Разделы сервера"
           onKeyDown={onKey}
@@ -60346,6 +60346,13 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 .srv-tabbar { transition: background-color .2s ease, box-shadow .2s ease; }
 .srv-tabbar.is-stuck { background: rgb(var(--page) / 0.78); -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3); box-shadow: 0 1px 0 rgb(var(--line)); }
 .no-scrollbar { scrollbar-width: none; }
+/* a row that scrolls sideways fades out at the edge that still has content (browsers without scroll-driven animations show no fade) */
+@property --fl { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --fr { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@keyframes fade-x-edges { from { --fl: 0px; --fr: 26px; } to { --fl: 26px; --fr: 0px; } }
+.fade-x { -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%); }
+@supports (animation-timeline: scroll()) { .fade-x { animation: fade-x-edges linear both; animation-timeline: scroll(self inline); } }
+@media (min-width: 768px) { .fade-x-m { -webkit-mask-image: none; mask-image: none; animation: none; } }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .tab-count { margin-left: 6px; border-radius: var(--r-pill); padding: 0 6px; font-size: 12px; font-weight: 650; background: rgb(var(--ink) / 0.08); font-variant-numeric: tabular-nums; }
 
@@ -60757,6 +60764,7 @@ const en: Record<keyof typeof ru, string> = {
   'crash.hint': 'The panel hit an unexpected error. Reloading usually helps; if it keeps happening, report it with the details below.',
   'crash.copy': 'Copy details',
   'toast.close': 'Dismiss notification',
+  'ago.now': 'just now',
   'ago.s': '{n}s ago',
   'ago.m': '{n} min ago',
   'ago.h': '{n} h ago',
@@ -61680,6 +61688,7 @@ const ru = {
   'crash.hint': 'В панели произошла непредвиденная ошибка. Обычно помогает перезагрузка; если повторяется, сообщите об этом, приложив детали ниже.',
   'crash.copy': 'Скопировать детали',
   'toast.close': 'Закрыть уведомление',
+  'ago.now': 'только что',
   'ago.s': '{n} с назад',
   'ago.m': '{n} мин назад',
   'ago.h': '{n} ч назад',
@@ -62736,7 +62745,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
 
   return (
     <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
-      <nav className="tile flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
+      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
         {isAdmin ? (
           <>
             {link(START_SECTION)}
@@ -64378,7 +64387,7 @@ function GalleryStrip() {
   return (
     <section className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">📸 Галерея</h2>
+        <h2 className="text-lg font-extrabold">Галерея</h2>
         <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
       </div>
       {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <p className="cm-sub">Скриншотов пока нет: поделитесь первым.</p> : <ShotGrid list={list} onOpen={setOpen} />}
@@ -68777,7 +68786,7 @@ function ServerList() {
       {servers.length > 0 && (
         <div className="srv-bar">
           {servers.length > 1 ? (
-            <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+            <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
               {([
                 ['all', `Все · ${servers.length}`, servers.length],
                 ['online', `Онлайн · ${online.length}`, online.length],
@@ -72114,7 +72123,7 @@ __COREGSM_EOF__
 }
 .pp-i { min-width: 0; padding: 9px 12px; background: rgba(0, 0, 0, 0.26); }
 .pp-i.wide { grid-column: 1 / -1; }
-.pp-k { font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.72); }
+.pp-k { font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.88); }
 .pp-v { margin-top: 1px; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 650; color: #fff; }
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
@@ -72385,7 +72394,7 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
   .srv-hero > .srv-hero-free { grid-column: 1 / -1; }
 }
 .srv-addr-btn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; max-width: 100%; }
-@media (max-width: 639px) { .srv-addr-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; } }
+@media (max-width: 639px) { .srv-addr-btn { min-width: 0; max-width: 100%; } }
 /* reviews: an empty block is one line */
 .rv-none { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
 __COREGSM_EOF__
@@ -74098,7 +74107,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
         </svg>
         {done && <Burst />}
       </span>
-      <span aria-live="polite">{done ? 'Скопировано' : label}</span>
+      <span className="min-w-0 truncate" aria-live="polite">{done ? 'Скопировано' : label}</span>
     </button>
   );
 }
@@ -74458,6 +74467,7 @@ import { getPrefs, t } from '../i18n';
 export const ago = (ts: number | null) => {
   if (!ts) return '–';
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 10) return t('ago.now');
   if (s < 60) return t('ago.s', { n: s });
   if (s < 3600) return t('ago.m', { n: Math.floor(s / 60) });
   if (s < 86400) return t('ago.h', { n: Math.floor(s / 3600) });

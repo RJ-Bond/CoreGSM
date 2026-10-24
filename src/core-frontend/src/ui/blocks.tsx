@@ -226,7 +226,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
         </svg>
         {done && <Burst />}
       </span>
-      <span aria-live="polite">{done ? 'Скопировано' : label}</span>
+      <span className="min-w-0 truncate" aria-live="polite">{done ? 'Скопировано' : label}</span>
     </button>
   );
 }
