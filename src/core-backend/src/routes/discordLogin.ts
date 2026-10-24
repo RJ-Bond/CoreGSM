@@ -11,6 +11,7 @@ import { logAccount } from '../profile.js';
 import { discordFetch } from '../proxyFetch.js';
 import { noteLogin, setSessionCookie } from '../security.js';
 import { baseOf, brand, publicBase, registrationMode } from '../site.js';
+import { log } from '../logger.js';
 
 export const router = express.Router();
 
@@ -65,7 +66,7 @@ router.get(
       if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
       me = (await mr.json()) as typeof me;
     } catch (e) {
-      console.error('discord oauth request failed:', (e as Error).message);
+      log.error('discord oauth request failed:', (e as Error).message);
       return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
     }
     const dname = me.global_name || me.username;

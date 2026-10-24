@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
 import { wrap } from './http.js';
 import { currentFlags } from './health.js';
+import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const startedAt = Date.now();
@@ -94,7 +95,7 @@ export function installAudit(app: Express): void {
             const user = (req as Request & { user?: { username: string } }).user;
             insert.run(Date.now(), user?.username ?? '—', 'Скачана резервная копия', url === '/api/backup' ? '' : url.slice('/api/backups/'.length));
           } catch (e) {
-            console.error('audit failed', (e as Error).message);
+            log.error('audit failed', (e as Error).message);
           }
         });
       }
@@ -115,7 +116,7 @@ export function installAudit(app: Express): void {
         insert.run(Date.now(), actor || '—', rule.label, detail.trim());
         db.prepare('DELETE FROM audit WHERE id <= (SELECT MAX(id) - 2000 FROM audit)').run();
       } catch (e) {
-        console.error('audit failed', (e as Error).message);
+        log.error('audit failed', (e as Error).message);
       }
     });
     next();

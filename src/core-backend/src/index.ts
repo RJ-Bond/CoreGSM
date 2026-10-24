@@ -47,6 +47,7 @@ import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
+import { log } from './logger.js';
 
 // optional first-start defaults from .env (the panel settings take over afterwards)
 if (getSetting('discord_token') === null && process.env.DISCORD_TOKEN) setSetting('discord_token', process.env.DISCORD_TOKEN);
@@ -56,10 +57,10 @@ if (getSetting('proxy_url') === null && process.env.PROXY_URL) setSetting('proxy
 // because of one bad request). A synchronous exception that escaped everything means the state is unknown: stop
 // cleanly and let Docker start a fresh process (restart: unless-stopped).
 process.on('unhandledRejection', (reason) => {
-  console.error('unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason);
+  log.error('unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason);
 });
 process.on('uncaughtException', (err) => {
-  console.error('uncaught exception:', err.stack ?? err.message);
+  log.error('uncaught exception:', err.stack ?? err.message);
   void shutdownNow('uncaughtException');
 });
 
@@ -175,15 +176,15 @@ app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Re
   if (err.type === 'entity.parse.failed') return void res.status(400).json({ error: 'Некорректный JSON в запросе' });
   if (err.type === 'entity.too.large') return void res.status(413).json({ error: 'Слишком большой запрос' });
   if (err.type === 'request.aborted' || err.type === 'encoding.unsupported' || err.type === 'charset.unsupported') return void res.status(400).json({ error: 'Некорректный запрос' });
-  console.error(err);
+  log.error(err);
   res.status(500).json({ error: 'Внутренняя ошибка сервера' });
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`CoreGSM backend listening on :${PORT}`);
+  log.info(`CoreGSM backend listening on :${PORT}`);
   if (needsSetup()) {
-    console.log('First run: open the panel in a browser and create the administrator.');
-    if (!process.env.SETUP_TOKEN) console.log(`Setup code: ${SETUP_TOKEN}`);
+    log.info('First run: open the panel in a browser and create the administrator.');
+    if (!process.env.SETUP_TOKEN) log.info(`Setup code: ${SETUP_TOKEN}`);
   }
   startPoller(POLL_MS);
   startBackupTimer();
