@@ -1,0 +1,60 @@
+name: tailwind-upgrade
+
+# One-off: runs the official Tailwind 3 -> 4 upgrade tool on the frontend, checks the result and pushes it to
+# <branch>-result. Remove this file when the upgrade is done.
+on:
+  push:
+    branches: ['update-deps/tailwind']
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Run the upgrade tool
+        working-directory: src/core-frontend
+        run: |
+          set -e
+          npm ci --no-audit --no-fund
+          npx --yes @tailwindcss/upgrade --force 2>&1 | tee ../../upgrade.log
+      - name: Undo the tool's rename of the Button variant (outline is a variant name here, not a Tailwind class)
+        working-directory: src/core-frontend
+        run: |
+          grep -n "outline-solid" src/components/Button.tsx || true
+          sed -i "s/outline-solid/outline/g" src/components/Button.tsx
+      - name: Typecheck, tests and build
+        working-directory: src/core-frontend
+        run: |
+          note() { # $1 = title, $2 = file: the tail of the output as an annotation
+            msg=$(tail -c 3000 "$2" | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=$1::$msg"
+          }
+          fail=0
+          npm run typecheck > /tmp/tc.txt 2>&1 || { note typecheck /tmp/tc.txt; fail=1; }
+          npm test > /tmp/test.txt 2>&1 || { note tests /tmp/test.txt; fail=1; }
+          npx vite build > /tmp/build.txt 2>&1 || { note build /tmp/build.txt; fail=1; }
+          note 'upgrade log' ../../upgrade.log || true
+          tail -n 15 /tmp/build.txt
+          exit $fail
+      - name: Show what changed
+        run: |
+          git status --short | head -50
+          git diff --stat | tail -3
+      - name: Rebuild install.sh
+        run: bash tools/build-installer.sh
+      - name: Push result branch
+        run: |
+          set -e
+          rm -f upgrade.log
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "${GITHUB_REF_NAME}-result"
+          git add -A
+          git commit -m "Upgrade to Tailwind CSS 4 with the official upgrade tool"
+          git push --force -u origin "${GITHUB_REF_NAME}-result"

@@ -319,7 +319,7 @@ export default function App() {
 
   if (!boot.ready || authing) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center text-2xl" role="status" aria-label={t('hdr.loading')}>
+      <div className="grid min-h-dvh place-items-center text-2xl" role="status" aria-label={t('hdr.loading')}>
         <Wordmark />
       </div>
     );
@@ -327,7 +327,7 @@ export default function App() {
 
   if (boot.offline) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center p-6">
+      <div className="grid min-h-dvh place-items-center p-6">
         <div className="panel w-full max-w-sm space-y-4 p-6 text-center">
           <Wordmark className="text-2xl" />
           <p className="text-lg font-black" role="alert">{t('hdr.offlineTitle')}</p>
@@ -406,14 +406,14 @@ export default function App() {
       </a>
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
-          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-[15rem] md:shrink-0">
+          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
             <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
+              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {t(p.label)}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
@@ -439,16 +439,16 @@ export default function App() {
                 <a
                   href="/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
+                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-44 sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
                   title={t('hdr.profileOf', { name: me.username })}
                   aria-label={t('hdr.profileOf', { name: me.username })}
                 >
-                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="!rounded-full" />
+                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
                 <button
                   onClick={() => void logout()}
-                  className="btn-icon-ghost max-sm:!hidden"
+                  className="btn-icon-ghost max-sm:hidden!"
                   aria-label={t('hdr.logout')}
                   title={t('hdr.logout')}
                 >
@@ -464,7 +464,7 @@ export default function App() {
           </div>
         </header>
 
-        <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
+        <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-hidden">
           <PageFrame>
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}
@@ -502,7 +502,7 @@ export default function App() {
                     aria-current={active ? 'page' : undefined}
                     className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
-                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
+                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}
                     {p.id === 'admin' && updateAvailable && (
                       <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">{t('hdr.update')}</span></span>

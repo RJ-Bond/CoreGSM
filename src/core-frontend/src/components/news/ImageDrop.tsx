@@ -58,7 +58,7 @@ export function ImageDrop({
 
   return (
     <div className="flash-host space-y-2">
-      <span className="label !mb-0">{label}</span>
+      <span className="label mb-0!">{label}</span>
       {src ? (
         <div className="flex items-center gap-3 rounded-2xl bg-soft p-2">
           <img src={src} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />

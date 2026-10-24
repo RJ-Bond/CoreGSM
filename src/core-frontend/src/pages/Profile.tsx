@@ -85,7 +85,7 @@ function OverviewTab() {
         <div className="pf-hero-body">
           <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><AvatarEditor onChanged={reload} /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
-            <div className="line-clamp-2 break-words text-2xl font-black leading-tight">{me.username}</div>
+            <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
               {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}

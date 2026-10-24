@@ -173,7 +173,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
           <p className="text-sm font-semibold text-mute">Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.</p>
           {isAdmin && (
             <div className="flex flex-wrap items-end gap-2">
-              <div className="min-w-[10rem] flex-1"><Field label="Проверить команду"><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
+              <div className="min-w-40 flex-1"><Field label="Проверить команду"><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
               <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>Выполнить</Button>
             </div>
           )}

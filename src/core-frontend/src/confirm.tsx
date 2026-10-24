@@ -189,7 +189,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      className="fixed inset-0 z-80 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4"
       {...bd}
     >
       <form
@@ -200,7 +200,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
         aria-labelledby="cd-title"
         aria-describedby={o.text ? 'cd-text' : undefined}
         onSubmit={submit}
-        className="pop panel panel-raised max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
+        className="pop panel panel-raised max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6"
       >
         <div className="flex items-start gap-3.5">
           <span aria-hidden className={`grid h-11 w-11 shrink-0 place-items-center rounded-ui-md ${o.danger ? 'bg-badbg text-bad' : 'bg-soft text-link'}`}>

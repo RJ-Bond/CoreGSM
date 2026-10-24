@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5d5f535eff7e"
+COREGSM_BUILD="c8baf0f54a8a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19167,12 +19167,13 @@ __COREGSM_EOF__
         "react-dom": "^18.3.1"
       },
       "devDependencies": {
+        "@tailwindcss/postcss": "^4.3.3",
         "@types/react": "^18.3.12",
         "@types/react-dom": "^18.3.1",
         "@vitejs/plugin-react": "^4.3.3",
         "autoprefixer": "^10.4.20",
         "postcss": "^8.5.31",
-        "tailwindcss": "^3.4.14",
+        "tailwindcss": "^4.3.3",
         "typescript": "^5.6.3",
         "vite": "^5.4.10",
         "vitest": "^2.1.8"
@@ -19949,44 +19950,6 @@ __COREGSM_EOF__
         "node": "^22.20 || ^24.12 || >=25"
       }
     },
-    "node_modules/@nodelib/fs.scandir": {
-      "version": "2.1.5",
-      "resolved": "https://registry.npmjs.org/@nodelib/fs.scandir/-/fs.scandir-2.1.5.tgz",
-      "integrity": "sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "@nodelib/fs.stat": "2.0.5",
-        "run-parallel": "^1.1.9"
-      },
-      "engines": {
-        "node": ">= 8"
-      }
-    },
-    "node_modules/@nodelib/fs.stat": {
-      "version": "2.0.5",
-      "resolved": "https://registry.npmjs.org/@nodelib/fs.stat/-/fs.stat-2.0.5.tgz",
-      "integrity": "sha512-RkhPPp2zrqDAQA/2jNhnztcPAlv64XdhIp7a7454A5ovI7Bukxgt7MX7udwAu3zg1DcpPU0rz3VV1SeaqvY4+A==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">= 8"
-      }
-    },
-    "node_modules/@nodelib/fs.walk": {
-      "version": "1.2.8",
-      "resolved": "https://registry.npmjs.org/@nodelib/fs.walk/-/fs.walk-1.2.8.tgz",
-      "integrity": "sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "@nodelib/fs.scandir": "2.1.5",
-        "fastq": "^1.6.0"
-      },
-      "engines": {
-        "node": ">= 8"
-      }
-    },
     "node_modules/@rolldown/pluginutils": {
       "version": "1.0.0-beta.27",
       "resolved": "https://registry.npmjs.org/@rolldown/pluginutils/-/pluginutils-1.0.0-beta.27.tgz",
@@ -20344,6 +20307,289 @@ __COREGSM_EOF__
         "win32"
       ]
     },
+    "node_modules/@tailwindcss/node": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/node/-/node-4.3.3.tgz",
+      "integrity": "sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@jridgewell/remapping": "^2.3.5",
+        "enhanced-resolve": "^5.24.1",
+        "jiti": "^2.7.0",
+        "lightningcss": "1.32.0",
+        "magic-string": "^0.30.21",
+        "source-map-js": "^1.2.1",
+        "tailwindcss": "4.3.3"
+      }
+    },
+    "node_modules/@tailwindcss/oxide": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide/-/oxide-4.3.3.tgz",
+      "integrity": "sha512-krXjAikiaFSPaK/FkAQT5UTx3VormQaiZ5hBFlJZ9UFQGB/rwg1MZIhHAG9smMQRTdyJxP6Qt5MwMtdyU5FWrA==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">= 20"
+      },
+      "optionalDependencies": {
+        "@tailwindcss/oxide-android-arm64": "4.3.3",
+        "@tailwindcss/oxide-darwin-arm64": "4.3.3",
+        "@tailwindcss/oxide-darwin-x64": "4.3.3",
+        "@tailwindcss/oxide-freebsd-x64": "4.3.3",
+        "@tailwindcss/oxide-linux-arm-gnueabihf": "4.3.3",
+        "@tailwindcss/oxide-linux-arm64-gnu": "4.3.3",
+        "@tailwindcss/oxide-linux-arm64-musl": "4.3.3",
+        "@tailwindcss/oxide-linux-x64-gnu": "4.3.3",
+        "@tailwindcss/oxide-linux-x64-musl": "4.3.3",
+        "@tailwindcss/oxide-wasm32-wasi": "4.3.3",
+        "@tailwindcss/oxide-win32-arm64-msvc": "4.3.3",
+        "@tailwindcss/oxide-win32-x64-msvc": "4.3.3"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-android-arm64": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-android-arm64/-/oxide-android-arm64-4.3.3.tgz",
+      "integrity": "sha512-Y85A2gmPSkl5Ve5qR86GL4HT509cFqQh1aes9p3sSkyTPwt0Pppf3GkwGe4JPACcRYjgJIEhQgM6dBClnr0NYw==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-darwin-arm64": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-darwin-arm64/-/oxide-darwin-arm64-4.3.3.tgz",
+      "integrity": "sha512-BiaWatpBcERQFDlOjRDpIVXuFK5PJez5SA4JMg6VYZdBYU+qKfV/vqjcIs+IYmtitf1xYQZTwXvU/8y4lfZUGw==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-darwin-x64": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-darwin-x64/-/oxide-darwin-x64-4.3.3.tgz",
+      "integrity": "sha512-fAeUqfV5ndhxRwai8cXGzdLvul9utWOmeTkv69unv4ZXixjn61Z+p9lCWdwOwA3TYboG3BwdVuN/RDjhBRl0mw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-freebsd-x64": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-freebsd-x64/-/oxide-freebsd-x64-4.3.3.tgz",
+      "integrity": "sha512-iyf5bV6+wnAlflVeEy7R25dupxTNECZN5QMI0qNT6eT+EgaGdZcKhGkr5SdoaWiLJ3spLqIY9VCeSGrwmtg4kw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-linux-arm-gnueabihf": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-linux-arm-gnueabihf/-/oxide-linux-arm-gnueabihf-4.3.3.tgz",
+      "integrity": "sha512-aAYUprJAJQWWbRrPvtjdroZ56Md+JM8pMiopS6xGEwDfLhqj+2ver2p4nU4Mb3CRqcMmNBjo8KkUgcxhkzVQGQ==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-linux-arm64-gnu": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-linux-arm64-gnu/-/oxide-linux-arm64-gnu-4.3.3.tgz",
+      "integrity": "sha512-nDxldcEENOxZRzC2uu9jrutZdAAQtb+8WWDCSnWL1zvBk1+FN+x6MtDViPB5AJMfttVCUhehGWus3XBPgatM/w==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "libc": [
+        "glibc"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-linux-arm64-musl": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-linux-arm64-musl/-/oxide-linux-arm64-musl-4.3.3.tgz",
+      "integrity": "sha512-Md44bD6veX/PC5iyF8cDVnw4HBIANZepRZZ7a8DQOvkfo5WUBwcp6iAuCUz23u+4SUkhJlD3eL7hNdW8ezd/kA==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "libc": [
+        "musl"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-linux-x64-gnu": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-linux-x64-gnu/-/oxide-linux-x64-gnu-4.3.3.tgz",
+      "integrity": "sha512-tx7us1muwOKAKWao2v/GaafFeQboE6aj88vC6ziN2NCGcRm8gWUhwjzg+YdVB1e4boAtdtma4L43onunI6NS4w==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "libc": [
+        "glibc"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-linux-x64-musl": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-linux-x64-musl/-/oxide-linux-x64-musl-4.3.3.tgz",
+      "integrity": "sha512-SJxX60smvHgasZoBy11dX6YRjXJFovwWBoedhbQPOBzgFWBHGB+TVPWB9BxzR7TTxU8FQZAI2AyiNCMzFm8Img==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "libc": [
+        "musl"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-wasm32-wasi": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-wasm32-wasi/-/oxide-wasm32-wasi-4.3.3.tgz",
+      "integrity": "sha512-jx1+rPhY/5Ympkktd656HBWEBLxP7dH06losBLjjf5vgCODXvi9KhtftWcMIwTFIDqBr7cRnQkdLnAG+IOlGvQ==",
+      "bundleDependencies": [
+        "@napi-rs/wasm-runtime",
+        "@emnapi/core",
+        "@emnapi/runtime",
+        "@tybys/wasm-util",
+        "@emnapi/wasi-threads",
+        "tslib"
+      ],
+      "cpu": [
+        "wasm32"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "dependencies": {
+        "@emnapi/core": "^1.11.1",
+        "@emnapi/runtime": "^1.11.1",
+        "@emnapi/wasi-threads": "^1.2.2",
+        "@napi-rs/wasm-runtime": "^1.1.4",
+        "@tybys/wasm-util": "^0.10.2",
+        "tslib": "^2.8.1"
+      },
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-win32-arm64-msvc": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-win32-arm64-msvc/-/oxide-win32-arm64-msvc-4.3.3.tgz",
+      "integrity": "sha512-3rc292Ca2ceK6Ulcc/bAVnTs/3nDtoPhyEKlgPv+yQJQi/JS/AMJlqzxvlDacL1nekbrcf6bTqp/jV4qgnPxNQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-win32-x64-msvc": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-win32-x64-msvc/-/oxide-win32-x64-msvc-4.3.3.tgz",
+      "integrity": "sha512-yJ0pwIVc/nYeGoV02WtsN8KYyLQv7kyI2wDnkezyJlGGjkd4QLwDGAwl47YpPJeuI0M0ObaXGSPjvWDPeTPggw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">= 20"
+      }
+    },
+    "node_modules/@tailwindcss/postcss": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@tailwindcss/postcss/-/postcss-4.3.3.tgz",
+      "integrity": "sha512-JTSZZGQi1AyKirbLN3azmjVzef92tcX7h+iSqPdaeStyFpGpDlKvvpxeOE8njhbUanbRwr3z8DyzhICWnMtQeg==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@alloc/quick-lru": "^5.2.0",
+        "@tailwindcss/node": "4.3.3",
+        "@tailwindcss/oxide": "4.3.3",
+        "postcss": "^8.5.16",
+        "tailwindcss": "4.3.3"
+      }
+    },
     "node_modules/@types/babel__core": {
       "version": "7.20.5",
       "resolved": "https://registry.npmjs.org/@types/babel__core/-/babel__core-7.20.5.tgz",
@@ -20558,34 +20804,6 @@ __COREGSM_EOF__
         "url": "https://opencollective.com/vitest"
       }
     },
-    "node_modules/any-promise": {
-      "version": "1.3.0",
-      "resolved": "https://registry.npmjs.org/any-promise/-/any-promise-1.3.0.tgz",
-      "integrity": "sha512-7UvmKalWRt1wgjL1RrGxoSJW/0QZFIegpeGvZG9kjp8vrRu55XTHbwnqq2GpXm9uLbcuhxm3IqX9OB4MZR1b2A==",
-      "dev": true,
-      "license": "MIT"
-    },
-    "node_modules/anymatch": {
-      "version": "3.1.3",
-      "resolved": "https://registry.npmjs.org/anymatch/-/anymatch-3.1.3.tgz",
-      "integrity": "sha512-KMReFUr0B4t+D+OBkjR3KYqvocp2XaSzO55UcB6mgQMd3KbcE+mWTyvVV7D/zsdEbNnV6acZUutkiHQXvTr1Rw==",
-      "dev": true,
-      "license": "ISC",
-      "dependencies": {
-        "normalize-path": "^3.0.0",
-        "picomatch": "^2.0.4"
-      },
-      "engines": {
-        "node": ">= 8"
-      }
-    },
-    "node_modules/arg": {
-      "version": "5.0.2",
-      "resolved": "https://registry.npmjs.org/arg/-/arg-5.0.2.tgz",
-      "integrity": "sha512-PYjyFOLKQ9y57JvQ6QLo8dAgNqswh8M1RMJYdQduT6xbWSgK36P/Z/v+p888pM69jMMfS8Xd8F6I1kQ/I9HUGg==",
-      "dev": true,
-      "license": "MIT"
-    },
     "node_modules/assertion-error": {
       "version": "2.0.1",
       "resolved": "https://registry.npmjs.org/assertion-error/-/assertion-error-2.0.1.tgz",
@@ -20646,32 +20864,6 @@ __COREGSM_EOF__
         "node": ">=6.0.0"
       }
     },
-    "node_modules/binary-extensions": {
-      "version": "2.3.0",
-      "resolved": "https://registry.npmjs.org/binary-extensions/-/binary-extensions-2.3.0.tgz",
-      "integrity": "sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=8"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/sindresorhus"
-      }
-    },
-    "node_modules/braces": {
-      "version": "3.0.3",
-      "resolved": "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz",
-      "integrity": "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "fill-range": "^7.1.1"
-      },
-      "engines": {
-        "node": ">=8"
-      }
-    },
     "node_modules/browserslist": {
       "version": "4.29.3",
       "resolved": "https://registry.npmjs.org/browserslist/-/browserslist-4.29.3.tgz",
@@ -20714,16 +20906,6 @@ __COREGSM_EOF__
       "license": "MIT",
       "engines": {
         "node": ">=8"
-      }
-    },
-    "node_modules/camelcase-css": {
-      "version": "2.0.1",
-      "resolved": "https://registry.npmjs.org/camelcase-css/-/camelcase-css-2.0.1.tgz",
-      "integrity": "sha512-QOSvevhslijgYwRx6Rv7zKdMF8lbRmx+uQGx2+vDc+KI/eBnsy9kit5aj23AgGu3pa4t9AgwbnXWqS+iOY+2aA==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">= 6"
       }
     },
     "node_modules/caniuse-lite": {
@@ -20774,73 +20956,12 @@ __COREGSM_EOF__
         "node": ">= 16"
       }
     },
-    "node_modules/chokidar": {
-      "version": "3.6.0",
-      "resolved": "https://registry.npmjs.org/chokidar/-/chokidar-3.6.0.tgz",
-      "integrity": "sha512-7VT13fmjotKpGipCW9JEQAusEPE+Ei8nl6/g4FBAmIm0GOOLMua9NDDo/DWp0ZAxCr3cPq5ZpBqmPAQgDda2Pw==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "anymatch": "~3.1.2",
-        "braces": "~3.0.2",
-        "glob-parent": "~5.1.2",
-        "is-binary-path": "~2.1.0",
-        "is-glob": "~4.0.1",
-        "normalize-path": "~3.0.0",
-        "readdirp": "~3.6.0"
-      },
-      "engines": {
-        "node": ">= 8.10.0"
-      },
-      "funding": {
-        "url": "https://paulmillr.com/funding/"
-      },
-      "optionalDependencies": {
-        "fsevents": "~2.3.2"
-      }
-    },
-    "node_modules/chokidar/node_modules/glob-parent": {
-      "version": "5.1.2",
-      "resolved": "https://registry.npmjs.org/glob-parent/-/glob-parent-5.1.2.tgz",
-      "integrity": "sha512-AOIgSQCepiJYwP3ARnGx+5VnTu2HBYdzbGP45eLw1vr3zB3vZLeyed1sC9hnbcOc9/SrMyM5RPQrkGz4aS9Zow==",
-      "dev": true,
-      "license": "ISC",
-      "dependencies": {
-        "is-glob": "^4.0.1"
-      },
-      "engines": {
-        "node": ">= 6"
-      }
-    },
-    "node_modules/commander": {
-      "version": "4.1.1",
-      "resolved": "https://registry.npmjs.org/commander/-/commander-4.1.1.tgz",
-      "integrity": "sha512-NOKm8xhkzAjzFx8B2v5OAHT+u5pRQc2UCa2Vq9jYL/31o2wi9mxBA7LIFs3sV5VSC49z6pEhfbMULvShKj26WA==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">= 6"
-      }
-    },
     "node_modules/convert-source-map": {
       "version": "2.0.0",
       "resolved": "https://registry.npmjs.org/convert-source-map/-/convert-source-map-2.0.0.tgz",
       "integrity": "sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==",
       "dev": true,
       "license": "MIT"
-    },
-    "node_modules/cssesc": {
-      "version": "3.0.0",
-      "resolved": "https://registry.npmjs.org/cssesc/-/cssesc-3.0.0.tgz",
-      "integrity": "sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg==",
-      "dev": true,
-      "license": "MIT",
-      "bin": {
-        "cssesc": "bin/cssesc"
-      },
-      "engines": {
-        "node": ">=4"
-      }
     },
     "node_modules/csstype": {
       "version": "3.2.3",
@@ -20877,19 +20998,15 @@ __COREGSM_EOF__
         "node": ">=6"
       }
     },
-    "node_modules/didyoumean": {
-      "version": "1.2.2",
-      "resolved": "https://registry.npmjs.org/didyoumean/-/didyoumean-1.2.2.tgz",
-      "integrity": "sha512-gxtyfqMg7GKyhQmb056K7M3xszy/myH8w+B4RT+QXBQsvAOdc3XymqDDPHx1BgPgsdAA5SIifona89YtRATDzw==",
+    "node_modules/detect-libc": {
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
+      "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
       "dev": true,
-      "license": "Apache-2.0"
-    },
-    "node_modules/dlv": {
-      "version": "1.1.3",
-      "resolved": "https://registry.npmjs.org/dlv/-/dlv-1.1.3.tgz",
-      "integrity": "sha512-+HlytyjlPKnIG8XuRG8WvmBP8xs8P71y+SKKS6ZXWoEgLuePxtDoUEiH7WkdePWrQ5JBpE6aoVqfZfJUQkjXwA==",
-      "dev": true,
-      "license": "MIT"
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=8"
+      }
     },
     "node_modules/electron-to-chromium": {
       "version": "1.5.456",
@@ -20898,14 +21015,18 @@ __COREGSM_EOF__
       "dev": true,
       "license": "ISC"
     },
-    "node_modules/es-errors": {
-      "version": "1.3.0",
-      "resolved": "https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz",
-      "integrity": "sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==",
+    "node_modules/enhanced-resolve": {
+      "version": "5.26.0",
+      "resolved": "https://registry.npmjs.org/enhanced-resolve/-/enhanced-resolve-5.26.0.tgz",
+      "integrity": "sha512-9vhedylFonb2YGogzUKX6+Ja72gOJbN1QHAqdrvqLwhdl/QWbKopzoUC9EbQNVsAns/bx/4uyqalrQAoy1IByw==",
       "dev": true,
       "license": "MIT",
+      "dependencies": {
+        "graceful-fs": "^4.2.4",
+        "tapable": "^2.3.3"
+      },
       "engines": {
-        "node": ">= 0.4"
+        "node": ">=10.13.0"
       }
     },
     "node_modules/es-module-lexer": {
@@ -20984,59 +21105,6 @@ __COREGSM_EOF__
         "node": ">=12.0.0"
       }
     },
-    "node_modules/fast-glob": {
-      "version": "3.3.3",
-      "resolved": "https://registry.npmjs.org/fast-glob/-/fast-glob-3.3.3.tgz",
-      "integrity": "sha512-7MptL8U0cqcFdzIzwOTHoilX9x5BrNqye7Z/LuC7kCMRio1EMSyqRK3BEAUD7sXRq4iT4AzTVuZdhgQ2TCvYLg==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "@nodelib/fs.stat": "^2.0.2",
-        "@nodelib/fs.walk": "^1.2.3",
-        "glob-parent": "^5.1.2",
-        "merge2": "^1.3.0",
-        "micromatch": "^4.0.8"
-      },
-      "engines": {
-        "node": ">=8.6.0"
-      }
-    },
-    "node_modules/fast-glob/node_modules/glob-parent": {
-      "version": "5.1.2",
-      "resolved": "https://registry.npmjs.org/glob-parent/-/glob-parent-5.1.2.tgz",
-      "integrity": "sha512-AOIgSQCepiJYwP3ARnGx+5VnTu2HBYdzbGP45eLw1vr3zB3vZLeyed1sC9hnbcOc9/SrMyM5RPQrkGz4aS9Zow==",
-      "dev": true,
-      "license": "ISC",
-      "dependencies": {
-        "is-glob": "^4.0.1"
-      },
-      "engines": {
-        "node": ">= 6"
-      }
-    },
-    "node_modules/fastq": {
-      "version": "1.20.3",
-      "resolved": "https://registry.npmjs.org/fastq/-/fastq-1.20.3.tgz",
-      "integrity": "sha512-XKv5nnLs6nLF71NgiKJLIZFLkPyIEuOselLG7ujZnGrRfQK8HpvY+WqKhAJUAdLomwVHErVS4LfxFlPq0/FTAw==",
-      "dev": true,
-      "license": "ISC",
-      "dependencies": {
-        "reusify": "^1.0.4"
-      }
-    },
-    "node_modules/fill-range": {
-      "version": "7.1.1",
-      "resolved": "https://registry.npmjs.org/fill-range/-/fill-range-7.1.1.tgz",
-      "integrity": "sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "to-regex-range": "^5.0.1"
-      },
-      "engines": {
-        "node": ">=8"
-      }
-    },
     "node_modules/fraction.js": {
       "version": "5.3.4",
       "resolved": "https://registry.npmjs.org/fraction.js/-/fraction.js-5.3.4.tgz",
@@ -21066,16 +21134,6 @@ __COREGSM_EOF__
         "node": "^8.16.0 || ^10.6.0 || >=11.0.0"
       }
     },
-    "node_modules/function-bind": {
-      "version": "1.1.2",
-      "resolved": "https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz",
-      "integrity": "sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==",
-      "dev": true,
-      "license": "MIT",
-      "funding": {
-        "url": "https://github.com/sponsors/ljharb"
-      }
-    },
     "node_modules/gensync": {
       "version": "1.0.0-beta.2",
       "resolved": "https://registry.npmjs.org/gensync/-/gensync-1.0.0-beta.2.tgz",
@@ -21086,102 +21144,21 @@ __COREGSM_EOF__
         "node": ">=6.9.0"
       }
     },
-    "node_modules/glob-parent": {
-      "version": "6.0.2",
-      "resolved": "https://registry.npmjs.org/glob-parent/-/glob-parent-6.0.2.tgz",
-      "integrity": "sha512-XxwI8EOhVQgWp6iDL+3b0r86f4d6AX6zSU55HfB4ydCEuXLXc5FcYeOu+nnGftS4TEju/11rt4KJPTMgbfmv4A==",
+    "node_modules/graceful-fs": {
+      "version": "4.2.11",
+      "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
+      "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
       "dev": true,
-      "license": "ISC",
-      "dependencies": {
-        "is-glob": "^4.0.3"
-      },
-      "engines": {
-        "node": ">=10.13.0"
-      }
-    },
-    "node_modules/hasown": {
-      "version": "2.0.4",
-      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
-      "integrity": "sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "function-bind": "^1.1.2"
-      },
-      "engines": {
-        "node": ">= 0.4"
-      }
-    },
-    "node_modules/is-binary-path": {
-      "version": "2.1.0",
-      "resolved": "https://registry.npmjs.org/is-binary-path/-/is-binary-path-2.1.0.tgz",
-      "integrity": "sha512-ZMERYes6pDydyuGidse7OsHxtbI7WVeUEozgR/g7rd0xUimYNlvZRE/K2MgZTjWy725IfelLeVcEM97mmtRGXw==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "binary-extensions": "^2.0.0"
-      },
-      "engines": {
-        "node": ">=8"
-      }
-    },
-    "node_modules/is-core-module": {
-      "version": "2.17.0",
-      "resolved": "https://registry.npmjs.org/is-core-module/-/is-core-module-2.17.0.tgz",
-      "integrity": "sha512-J/vG0zBCbIKOQFfufSwyXdMrsohyJIUNkrnmo6WZGzoM7tr/lsbfW5b2BvisL6zsyMzK9UxV9L6c7AoFbyXHOA==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "hasown": "^2.0.4"
-      },
-      "engines": {
-        "node": ">= 0.4"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/ljharb"
-      }
-    },
-    "node_modules/is-extglob": {
-      "version": "2.1.1",
-      "resolved": "https://registry.npmjs.org/is-extglob/-/is-extglob-2.1.1.tgz",
-      "integrity": "sha512-SbKbANkN603Vi4jEZv49LeVJMn4yGwsbzZworEoyEiutsN3nJYdbO36zfhGJ6QEDpOZIFkDtnq5JRxmvl3jsoQ==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=0.10.0"
-      }
-    },
-    "node_modules/is-glob": {
-      "version": "4.0.3",
-      "resolved": "https://registry.npmjs.org/is-glob/-/is-glob-4.0.3.tgz",
-      "integrity": "sha512-xelSayHH36ZgE7ZWhli7pW34hNbNl8Ojv5KVmkJD4hBdD3th8Tfk9vYasLM+mXWOZhFkgZfxhLSnrwRr4elSSg==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "is-extglob": "^2.1.1"
-      },
-      "engines": {
-        "node": ">=0.10.0"
-      }
-    },
-    "node_modules/is-number": {
-      "version": "7.0.0",
-      "resolved": "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
-      "integrity": "sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=0.12.0"
-      }
+      "license": "ISC"
     },
     "node_modules/jiti": {
-      "version": "1.21.7",
-      "resolved": "https://registry.npmjs.org/jiti/-/jiti-1.21.7.tgz",
-      "integrity": "sha512-/imKNG4EbWNrVjoNC/1H5/9GFy+tqjGBHCaSsN+P2RnPqjsLmv6UD3Ej+Kj8nBWaRAwyk7kK5ZUc+OEatnTR3A==",
+      "version": "2.7.0",
+      "resolved": "https://registry.npmjs.org/jiti/-/jiti-2.7.0.tgz",
+      "integrity": "sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==",
       "dev": true,
       "license": "MIT",
       "bin": {
-        "jiti": "bin/jiti.js"
+        "jiti": "lib/jiti-cli.mjs"
       }
     },
     "node_modules/js-tokens": {
@@ -21216,25 +21193,278 @@ __COREGSM_EOF__
         "node": ">=6"
       }
     },
-    "node_modules/lilconfig": {
-      "version": "3.1.3",
-      "resolved": "https://registry.npmjs.org/lilconfig/-/lilconfig-3.1.3.tgz",
-      "integrity": "sha512-/vlFKAoH5Cgt3Ie+JLhRbwOsCQePABiU3tJ1egGvyQ+33R/vcwM2Zl2QR/LzjsBeItPt3oSVXapn+m4nQDvpzw==",
+    "node_modules/lightningcss": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss/-/lightningcss-1.32.0.tgz",
+      "integrity": "sha512-NXYBzinNrblfraPGyrbPoD19C1h9lfI/1mzgWYvXUTe414Gz/X1FD2XBZSZM7rRTrMA8JL3OtAaGifrIKhQ5yQ==",
       "dev": true,
-      "license": "MIT",
+      "license": "MPL-2.0",
+      "dependencies": {
+        "detect-libc": "^2.0.3"
+      },
       "engines": {
-        "node": ">=14"
+        "node": ">= 12.0.0"
       },
       "funding": {
-        "url": "https://github.com/sponsors/antonk52"
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      },
+      "optionalDependencies": {
+        "lightningcss-android-arm64": "1.32.0",
+        "lightningcss-darwin-arm64": "1.32.0",
+        "lightningcss-darwin-x64": "1.32.0",
+        "lightningcss-freebsd-x64": "1.32.0",
+        "lightningcss-linux-arm-gnueabihf": "1.32.0",
+        "lightningcss-linux-arm64-gnu": "1.32.0",
+        "lightningcss-linux-arm64-musl": "1.32.0",
+        "lightningcss-linux-x64-gnu": "1.32.0",
+        "lightningcss-linux-x64-musl": "1.32.0",
+        "lightningcss-win32-arm64-msvc": "1.32.0",
+        "lightningcss-win32-x64-msvc": "1.32.0"
       }
     },
-    "node_modules/lines-and-columns": {
-      "version": "1.2.4",
-      "resolved": "https://registry.npmjs.org/lines-and-columns/-/lines-and-columns-1.2.4.tgz",
-      "integrity": "sha512-7ylylesZQ/PV29jhEDl3Ufjo6ZX7gCqJr5F7PKrqc93v7fzSymt1BpwEU8nAUXs8qzzvqhbjhK5QZg6Mt/HkBg==",
+    "node_modules/lightningcss-android-arm64": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-android-arm64/-/lightningcss-android-arm64-1.32.0.tgz",
+      "integrity": "sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==",
+      "cpu": [
+        "arm64"
+      ],
       "dev": true,
-      "license": "MIT"
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-darwin-arm64": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-darwin-arm64/-/lightningcss-darwin-arm64-1.32.0.tgz",
+      "integrity": "sha512-RzeG9Ju5bag2Bv1/lwlVJvBE3q6TtXskdZLLCyfg5pt+HLz9BqlICO7LZM7VHNTTn/5PRhHFBSjk5lc4cmscPQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-darwin-x64": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-darwin-x64/-/lightningcss-darwin-x64-1.32.0.tgz",
+      "integrity": "sha512-U+QsBp2m/s2wqpUYT/6wnlagdZbtZdndSmut/NJqlCcMLTWp5muCrID+K5UJ6jqD2BFshejCYXniPDbNh73V8w==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-freebsd-x64": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-freebsd-x64/-/lightningcss-freebsd-x64-1.32.0.tgz",
+      "integrity": "sha512-JCTigedEksZk3tHTTthnMdVfGf61Fky8Ji2E4YjUTEQX14xiy/lTzXnu1vwiZe3bYe0q+SpsSH/CTeDXK6WHig==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-linux-arm-gnueabihf": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-linux-arm-gnueabihf/-/lightningcss-linux-arm-gnueabihf-1.32.0.tgz",
+      "integrity": "sha512-x6rnnpRa2GL0zQOkt6rts3YDPzduLpWvwAF6EMhXFVZXD4tPrBkEFqzGowzCsIWsPjqSK+tyNEODUBXeeVHSkw==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-linux-arm64-gnu": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-linux-arm64-gnu/-/lightningcss-linux-arm64-gnu-1.32.0.tgz",
+      "integrity": "sha512-0nnMyoyOLRJXfbMOilaSRcLH3Jw5z9HDNGfT/gwCPgaDjnx0i8w7vBzFLFR1f6CMLKF8gVbebmkUN3fa/kQJpQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "libc": [
+        "glibc"
+      ],
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-linux-arm64-musl": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-linux-arm64-musl/-/lightningcss-linux-arm64-musl-1.32.0.tgz",
+      "integrity": "sha512-UpQkoenr4UJEzgVIYpI80lDFvRmPVg6oqboNHfoH4CQIfNA+HOrZ7Mo7KZP02dC6LjghPQJeBsvXhJod/wnIBg==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "libc": [
+        "musl"
+      ],
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-linux-x64-gnu": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-linux-x64-gnu/-/lightningcss-linux-x64-gnu-1.32.0.tgz",
+      "integrity": "sha512-V7Qr52IhZmdKPVr+Vtw8o+WLsQJYCTd8loIfpDaMRWGUZfBOYEJeyJIkqGIDMZPwPx24pUMfwSxxI8phr/MbOA==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "libc": [
+        "glibc"
+      ],
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-linux-x64-musl": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-linux-x64-musl/-/lightningcss-linux-x64-musl-1.32.0.tgz",
+      "integrity": "sha512-bYcLp+Vb0awsiXg/80uCRezCYHNg1/l3mt0gzHnWV9XP1W5sKa5/TCdGWaR/zBM2PeF/HbsQv/j2URNOiVuxWg==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "libc": [
+        "musl"
+      ],
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-win32-arm64-msvc": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-win32-arm64-msvc/-/lightningcss-win32-arm64-msvc-1.32.0.tgz",
+      "integrity": "sha512-8SbC8BR40pS6baCM8sbtYDSwEVQd4JlFTOlaD3gWGHfThTcABnNDBda6eTZeqbofalIJhFx0qKzgHJmcPTnGdw==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
+    },
+    "node_modules/lightningcss-win32-x64-msvc": {
+      "version": "1.32.0",
+      "resolved": "https://registry.npmjs.org/lightningcss-win32-x64-msvc/-/lightningcss-win32-x64-msvc-1.32.0.tgz",
+      "integrity": "sha512-Amq9B/SoZYdDi1kFrojnoqPLxYhQ4Wo5XiL8EVJrVsB8ARoC1PWW6VGtT0WKCemjy8aC+louJnjS7U18x3b06Q==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MPL-2.0",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">= 12.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/parcel"
+      }
     },
     "node_modules/loose-envify": {
       "version": "1.4.0",
@@ -21275,48 +21505,12 @@ __COREGSM_EOF__
         "@jridgewell/sourcemap-codec": "^1.5.5"
       }
     },
-    "node_modules/merge2": {
-      "version": "1.4.1",
-      "resolved": "https://registry.npmjs.org/merge2/-/merge2-1.4.1.tgz",
-      "integrity": "sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">= 8"
-      }
-    },
-    "node_modules/micromatch": {
-      "version": "4.0.8",
-      "resolved": "https://registry.npmjs.org/micromatch/-/micromatch-4.0.8.tgz",
-      "integrity": "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "braces": "^3.0.3",
-        "picomatch": "^2.3.1"
-      },
-      "engines": {
-        "node": ">=8.6"
-      }
-    },
     "node_modules/ms": {
       "version": "2.1.3",
       "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
       "dev": true,
       "license": "MIT"
-    },
-    "node_modules/mz": {
-      "version": "2.7.0",
-      "resolved": "https://registry.npmjs.org/mz/-/mz-2.7.0.tgz",
-      "integrity": "sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "any-promise": "^1.0.0",
-        "object-assign": "^4.0.1",
-        "thenify-all": "^1.0.0"
-      }
     },
     "node_modules/nanoid": {
       "version": "3.3.20",
@@ -21347,43 +21541,6 @@ __COREGSM_EOF__
         "node": ">=18"
       }
     },
-    "node_modules/normalize-path": {
-      "version": "3.0.0",
-      "resolved": "https://registry.npmjs.org/normalize-path/-/normalize-path-3.0.0.tgz",
-      "integrity": "sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=0.10.0"
-      }
-    },
-    "node_modules/object-assign": {
-      "version": "4.1.1",
-      "resolved": "https://registry.npmjs.org/object-assign/-/object-assign-4.1.1.tgz",
-      "integrity": "sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=0.10.0"
-      }
-    },
-    "node_modules/object-hash": {
-      "version": "3.0.0",
-      "resolved": "https://registry.npmjs.org/object-hash/-/object-hash-3.0.0.tgz",
-      "integrity": "sha512-RSn9F68PjH9HqtltsSnqYC1XXoWe9Bju5+213R98cNGttag9q9yAOTzdbsqvIa7aNm5WffBZFpWYr2aWrklWAw==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">= 6"
-      }
-    },
-    "node_modules/path-parse": {
-      "version": "1.0.7",
-      "resolved": "https://registry.npmjs.org/path-parse/-/path-parse-1.0.7.tgz",
-      "integrity": "sha512-LDJzPVEEEPR+y48z93A0Ed0yXb8pAByGWo/k5YYdYgpY2/2EsOsksJrq7lOHxryrVOn1ejG6oAp8ahvOIQD8sw==",
-      "dev": true,
-      "license": "MIT"
-    },
     "node_modules/pathe": {
       "version": "1.1.2",
       "resolved": "https://registry.npmjs.org/pathe/-/pathe-1.1.2.tgz",
@@ -21407,29 +21564,6 @@ __COREGSM_EOF__
       "integrity": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==",
       "dev": true,
       "license": "ISC"
-    },
-    "node_modules/picomatch": {
-      "version": "2.3.2",
-      "resolved": "https://registry.npmjs.org/picomatch/-/picomatch-2.3.2.tgz",
-      "integrity": "sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=8.6"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/jonschlinkert"
-      }
-    },
-    "node_modules/pirates": {
-      "version": "4.0.7",
-      "resolved": "https://registry.npmjs.org/pirates/-/pirates-4.0.7.tgz",
-      "integrity": "sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">= 6"
-      }
     },
     "node_modules/postcss": {
       "version": "8.5.31",
@@ -21460,133 +21594,6 @@ __COREGSM_EOF__
         "node": "^10 || ^12 || >=14"
       }
     },
-    "node_modules/postcss-import": {
-      "version": "15.1.0",
-      "resolved": "https://registry.npmjs.org/postcss-import/-/postcss-import-15.1.0.tgz",
-      "integrity": "sha512-hpr+J05B2FVYUAXHeK1YyI267J/dDDhMU6B6civm8hSY1jYJnBXxzKDKDswzJmtLHryrjhnDjqqp/49t8FALew==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "postcss-value-parser": "^4.0.0",
-        "read-cache": "^1.0.0",
-        "resolve": "^1.1.7"
-      },
-      "engines": {
-        "node": ">=14.0.0"
-      },
-      "peerDependencies": {
-        "postcss": "^8.0.0"
-      }
-    },
-    "node_modules/postcss-js": {
-      "version": "4.1.0",
-      "resolved": "https://registry.npmjs.org/postcss-js/-/postcss-js-4.1.0.tgz",
-      "integrity": "sha512-oIAOTqgIo7q2EOwbhb8UalYePMvYoIeRY2YKntdpFQXNosSu3vLrniGgmH9OKs/qAkfoj5oB3le/7mINW1LCfw==",
-      "dev": true,
-      "funding": [
-        {
-          "type": "opencollective",
-          "url": "https://opencollective.com/postcss/"
-        },
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/ai"
-        }
-      ],
-      "license": "MIT",
-      "dependencies": {
-        "camelcase-css": "^2.0.1"
-      },
-      "engines": {
-        "node": "^12 || ^14 || >= 16"
-      },
-      "peerDependencies": {
-        "postcss": "^8.4.21"
-      }
-    },
-    "node_modules/postcss-load-config": {
-      "version": "6.0.1",
-      "resolved": "https://registry.npmjs.org/postcss-load-config/-/postcss-load-config-6.0.1.tgz",
-      "integrity": "sha512-oPtTM4oerL+UXmx+93ytZVN82RrlY/wPUV8IeDxFrzIjXOLF1pN+EmKPLbubvKHT2HC20xXsCAH2Z+CKV6Oz/g==",
-      "dev": true,
-      "funding": [
-        {
-          "type": "opencollective",
-          "url": "https://opencollective.com/postcss/"
-        },
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/ai"
-        }
-      ],
-      "license": "MIT",
-      "dependencies": {
-        "lilconfig": "^3.1.1"
-      },
-      "engines": {
-        "node": ">= 18"
-      },
-      "peerDependencies": {
-        "jiti": ">=1.21.0",
-        "postcss": ">=8.0.9",
-        "tsx": "^4.8.1",
-        "yaml": "^2.4.2"
-      },
-      "peerDependenciesMeta": {
-        "jiti": {
-          "optional": true
-        },
-        "postcss": {
-          "optional": true
-        },
-        "tsx": {
-          "optional": true
-        },
-        "yaml": {
-          "optional": true
-        }
-      }
-    },
-    "node_modules/postcss-nested": {
-      "version": "6.2.0",
-      "resolved": "https://registry.npmjs.org/postcss-nested/-/postcss-nested-6.2.0.tgz",
-      "integrity": "sha512-HQbt28KulC5AJzG+cZtj9kvKB93CFCdLvog1WFLf1D+xmMvPGlBstkpTEZfK5+AN9hfJocyBFCNiqyS48bpgzQ==",
-      "dev": true,
-      "funding": [
-        {
-          "type": "opencollective",
-          "url": "https://opencollective.com/postcss/"
-        },
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/ai"
-        }
-      ],
-      "license": "MIT",
-      "dependencies": {
-        "postcss-selector-parser": "^6.1.1"
-      },
-      "engines": {
-        "node": ">=12.0"
-      },
-      "peerDependencies": {
-        "postcss": "^8.2.14"
-      }
-    },
-    "node_modules/postcss-selector-parser": {
-      "version": "6.1.4",
-      "resolved": "https://registry.npmjs.org/postcss-selector-parser/-/postcss-selector-parser-6.1.4.tgz",
-      "integrity": "sha512-bIoJLOmjCO1S9XdY/DcnR5hJxvrDir1PbGChrzXG3vw0/FOliy/fA3dmdhQ441kah4gKv+TwckGzex6wNS5cnQ==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "cssesc": "^3.0.0",
-        "util-deprecate": "^1.0.2"
-      },
-      "engines": {
-        "node": ">=4"
-      }
-    },
     "node_modules/postcss-value-parser": {
       "version": "4.2.0",
       "resolved": "https://registry.npmjs.org/postcss-value-parser/-/postcss-value-parser-4.2.0.tgz",
@@ -21598,27 +21605,6 @@ __COREGSM_EOF__
       "version": "2.0.4",
       "resolved": "https://registry.npmjs.org/qrcode-generator/-/qrcode-generator-2.0.4.tgz",
       "integrity": "sha512-mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g==",
-      "license": "MIT"
-    },
-    "node_modules/queue-microtask": {
-      "version": "1.2.3",
-      "resolved": "https://registry.npmjs.org/queue-microtask/-/queue-microtask-1.2.3.tgz",
-      "integrity": "sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==",
-      "dev": true,
-      "funding": [
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/feross"
-        },
-        {
-          "type": "patreon",
-          "url": "https://www.patreon.com/feross"
-        },
-        {
-          "type": "consulting",
-          "url": "https://feross.org/support"
-        }
-      ],
       "license": "MIT"
     },
     "node_modules/react": {
@@ -21653,59 +21639,6 @@ __COREGSM_EOF__
       "dev": true,
       "license": "MIT",
       "engines": {
-        "node": ">=0.10.0"
-      }
-    },
-    "node_modules/read-cache": {
-      "version": "1.0.2",
-      "resolved": "https://registry.npmjs.org/read-cache/-/read-cache-1.0.2.tgz",
-      "integrity": "sha512-/peqiBB/n07gQGLsWaHho3WfvUyRscw0gYTsEFMhrIe/nWLkYaf5SbKYjGYqtRV3aPwykJgF2VEMo1ac4bnsGA==",
-      "dev": true,
-      "license": "MIT"
-    },
-    "node_modules/readdirp": {
-      "version": "3.6.0",
-      "resolved": "https://registry.npmjs.org/readdirp/-/readdirp-3.6.0.tgz",
-      "integrity": "sha512-hOS089on8RduqdbhvQ5Z37A0ESjsqz6qnRcffsMU3495FuTdqSm+7bhJ29JvIOsBDEEnan5DPu9t3To9VRlMzA==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "picomatch": "^2.2.1"
-      },
-      "engines": {
-        "node": ">=8.10.0"
-      }
-    },
-    "node_modules/resolve": {
-      "version": "1.22.13",
-      "resolved": "https://registry.npmjs.org/resolve/-/resolve-1.22.13.tgz",
-      "integrity": "sha512-Dj/cW9zBV2aRj6XzCxuGIs3ESZKv02jixne3q6jFZYZ3/Tg09gHHviSMDL4kObh9pqSahdRHEnDoaP2gn8YLhA==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "es-errors": "^1.3.0",
-        "is-core-module": "^2.17.0",
-        "path-parse": "^1.0.7",
-        "supports-preserve-symlinks-flag": "^1.0.0"
-      },
-      "bin": {
-        "resolve": "bin/resolve"
-      },
-      "engines": {
-        "node": ">= 0.4"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/ljharb"
-      }
-    },
-    "node_modules/reusify": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/reusify/-/reusify-1.1.0.tgz",
-      "integrity": "sha512-g6QUff04oZpHs0eG5p83rFLhHeV00ug/Yf9nZM6fLeUrPguBTkTQOdpAWWspMh55TZfVQDPaN3NQJfbVRAxdIw==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "iojs": ">=1.0.0",
         "node": ">=0.10.0"
       }
     },
@@ -21753,30 +21686,6 @@ __COREGSM_EOF__
         "@rollup/rollup-win32-x64-gnu": "4.64.7",
         "@rollup/rollup-win32-x64-msvc": "4.64.7",
         "fsevents": "~2.3.2"
-      }
-    },
-    "node_modules/run-parallel": {
-      "version": "1.2.0",
-      "resolved": "https://registry.npmjs.org/run-parallel/-/run-parallel-1.2.0.tgz",
-      "integrity": "sha512-5l4VyZR86LZ/lDxZTR6jqL8AFE2S0IFLMP26AbjsLVADxHdhB/c0GUsH+y39UfCi3dzz8OlQuPmnaJOMoDHQBA==",
-      "dev": true,
-      "funding": [
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/feross"
-        },
-        {
-          "type": "patreon",
-          "url": "https://www.patreon.com/feross"
-        },
-        {
-          "type": "consulting",
-          "url": "https://feross.org/support"
-        }
-      ],
-      "license": "MIT",
-      "dependencies": {
-        "queue-microtask": "^1.2.2"
       }
     },
     "node_modules/scheduler": {
@@ -21829,101 +21738,25 @@ __COREGSM_EOF__
       "dev": true,
       "license": "MIT"
     },
-    "node_modules/sucrase": {
-      "version": "3.35.1",
-      "resolved": "https://registry.npmjs.org/sucrase/-/sucrase-3.35.1.tgz",
-      "integrity": "sha512-DhuTmvZWux4H1UOnWMB3sk0sbaCVOoQZjv8u1rDoTV0HTdGem9hkAZtl4JZy8P2z4Bg0nT+YMeOFyVr4zcG5Tw==",
+    "node_modules/tailwindcss": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/tailwindcss/-/tailwindcss-4.3.3.tgz",
+      "integrity": "sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==",
       "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "@jridgewell/gen-mapping": "^0.3.2",
-        "commander": "^4.0.0",
-        "lines-and-columns": "^1.1.6",
-        "mz": "^2.7.0",
-        "pirates": "^4.0.1",
-        "tinyglobby": "^0.2.11",
-        "ts-interface-checker": "^0.1.9"
-      },
-      "bin": {
-        "sucrase": "bin/sucrase",
-        "sucrase-node": "bin/sucrase-node"
-      },
-      "engines": {
-        "node": ">=16 || 14 >=14.17"
-      }
+      "license": "MIT"
     },
-    "node_modules/supports-preserve-symlinks-flag": {
-      "version": "1.0.0",
-      "resolved": "https://registry.npmjs.org/supports-preserve-symlinks-flag/-/supports-preserve-symlinks-flag-1.0.0.tgz",
-      "integrity": "sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==",
+    "node_modules/tapable": {
+      "version": "2.3.3",
+      "resolved": "https://registry.npmjs.org/tapable/-/tapable-2.3.3.tgz",
+      "integrity": "sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==",
       "dev": true,
       "license": "MIT",
       "engines": {
-        "node": ">= 0.4"
+        "node": ">=6"
       },
       "funding": {
-        "url": "https://github.com/sponsors/ljharb"
-      }
-    },
-    "node_modules/tailwindcss": {
-      "version": "3.4.19",
-      "resolved": "https://registry.npmjs.org/tailwindcss/-/tailwindcss-3.4.19.tgz",
-      "integrity": "sha512-3ofp+LL8E+pK/JuPLPggVAIaEuhvIz4qNcf3nA1Xn2o/7fb7s/TYpHhwGDv1ZU3PkBluUVaF8PyCHcm48cKLWQ==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "@alloc/quick-lru": "^5.2.0",
-        "arg": "^5.0.2",
-        "chokidar": "^3.6.0",
-        "didyoumean": "^1.2.2",
-        "dlv": "^1.1.3",
-        "fast-glob": "^3.3.2",
-        "glob-parent": "^6.0.2",
-        "is-glob": "^4.0.3",
-        "jiti": "^1.21.7",
-        "lilconfig": "^3.1.3",
-        "micromatch": "^4.0.8",
-        "normalize-path": "^3.0.0",
-        "object-hash": "^3.0.0",
-        "picocolors": "^1.1.1",
-        "postcss": "^8.4.47",
-        "postcss-import": "^15.1.0",
-        "postcss-js": "^4.0.1",
-        "postcss-load-config": "^4.0.2 || ^5.0 || ^6.0",
-        "postcss-nested": "^6.2.0",
-        "postcss-selector-parser": "^6.1.2",
-        "resolve": "^1.22.8",
-        "sucrase": "^3.35.0"
-      },
-      "bin": {
-        "tailwind": "lib/cli.js",
-        "tailwindcss": "lib/cli.js"
-      },
-      "engines": {
-        "node": ">=14.0.0"
-      }
-    },
-    "node_modules/thenify": {
-      "version": "3.3.1",
-      "resolved": "https://registry.npmjs.org/thenify/-/thenify-3.3.1.tgz",
-      "integrity": "sha512-RVZSIV5IG10Hk3enotrhvz0T9em6cyHBLkH/YAZuKqd8hRkKhSfCGIcP2KUY0EPxndzANBmNllzWPwak+bheSw==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "any-promise": "^1.0.0"
-      }
-    },
-    "node_modules/thenify-all": {
-      "version": "1.6.0",
-      "resolved": "https://registry.npmjs.org/thenify-all/-/thenify-all-1.6.0.tgz",
-      "integrity": "sha512-RNxQH/qI8/t3thXJDwcstUO4zeqo64+Uy/+sNVRBx4Xn2OX+OZ9oP+iJnNFqplFra2ZUVeKCSa2oVWi3T4uVmA==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "thenify": ">= 3.1.0 < 4"
-      },
-      "engines": {
-        "node": ">=0.8"
+        "type": "opencollective",
+        "url": "https://opencollective.com/webpack"
       }
     },
     "node_modules/tinybench": {
@@ -21939,54 +21772,6 @@ __COREGSM_EOF__
       "integrity": "sha512-KQQR9yN7R5+OSwaK0XQoj22pwHoTlgYqmUscPYoknOoWCWfj/5/ABTMRi69FrKU5ffPVh5QcFikpWJI/P1ocHA==",
       "dev": true,
       "license": "MIT"
-    },
-    "node_modules/tinyglobby": {
-      "version": "0.2.17",
-      "resolved": "https://registry.npmjs.org/tinyglobby/-/tinyglobby-0.2.17.tgz",
-      "integrity": "sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "fdir": "^6.5.0",
-        "picomatch": "^4.0.4"
-      },
-      "engines": {
-        "node": ">=12.0.0"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/SuperchupuDev"
-      }
-    },
-    "node_modules/tinyglobby/node_modules/fdir": {
-      "version": "6.5.0",
-      "resolved": "https://registry.npmjs.org/fdir/-/fdir-6.5.0.tgz",
-      "integrity": "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=12.0.0"
-      },
-      "peerDependencies": {
-        "picomatch": "^3 || ^4"
-      },
-      "peerDependenciesMeta": {
-        "picomatch": {
-          "optional": true
-        }
-      }
-    },
-    "node_modules/tinyglobby/node_modules/picomatch": {
-      "version": "4.0.7",
-      "resolved": "https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz",
-      "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
-      "dev": true,
-      "license": "MIT",
-      "engines": {
-        "node": ">=12"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/jonschlinkert"
-      }
     },
     "node_modules/tinypool": {
       "version": "1.1.1",
@@ -22017,26 +21802,6 @@ __COREGSM_EOF__
       "engines": {
         "node": ">=14.0.0"
       }
-    },
-    "node_modules/to-regex-range": {
-      "version": "5.0.1",
-      "resolved": "https://registry.npmjs.org/to-regex-range/-/to-regex-range-5.0.1.tgz",
-      "integrity": "sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==",
-      "dev": true,
-      "license": "MIT",
-      "dependencies": {
-        "is-number": "^7.0.0"
-      },
-      "engines": {
-        "node": ">=8.0"
-      }
-    },
-    "node_modules/ts-interface-checker": {
-      "version": "0.1.13",
-      "resolved": "https://registry.npmjs.org/ts-interface-checker/-/ts-interface-checker-0.1.13.tgz",
-      "integrity": "sha512-Y/arvbn+rrz3JCKl9C4kVNfTfSm2/mEp5FSz5EsZSANGPSlQrpRI5M4PKF+mJnE52jOO90PnPSc3Ur3bTQw0gA==",
-      "dev": true,
-      "license": "Apache-2.0"
     },
     "node_modules/typescript": {
       "version": "5.9.3",
@@ -22082,13 +21847,6 @@ __COREGSM_EOF__
       "peerDependencies": {
         "browserslist": ">= 4.21.0"
       }
-    },
-    "node_modules/util-deprecate": {
-      "version": "1.0.2",
-      "resolved": "https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz",
-      "integrity": "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==",
-      "dev": true,
-      "license": "MIT"
     },
     "node_modules/vite": {
       "version": "5.4.21",
@@ -22287,12 +22045,13 @@ __COREGSM_EOF__
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.5.31",
-    "tailwindcss": "^3.4.14",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vitest": "^2.1.8"
@@ -22301,7 +22060,7 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/postcss.config.js" << '__COREGSM_EOF__'
-export default { plugins: { tailwindcss: {}, autoprefixer: {} } };
+export default { plugins: { '@tailwindcss/postcss': {}, autoprefixer: {} } };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public/achievements"
   base64 -d > "$APP_DIR/core-frontend/public/achievements/early-bird-locked.png" << '__COREGSM_EOF__'
@@ -44073,7 +43832,7 @@ export default function App() {
 
   if (!boot.ready || authing) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center text-2xl" role="status" aria-label={t('hdr.loading')}>
+      <div className="grid min-h-dvh place-items-center text-2xl" role="status" aria-label={t('hdr.loading')}>
         <Wordmark />
       </div>
     );
@@ -44081,7 +43840,7 @@ export default function App() {
 
   if (boot.offline) {
     return (
-      <div className="grid min-h-[100dvh] place-items-center p-6">
+      <div className="grid min-h-dvh place-items-center p-6">
         <div className="panel w-full max-w-sm space-y-4 p-6 text-center">
           <Wordmark className="text-2xl" />
           <p className="text-lg font-black" role="alert">{t('hdr.offlineTitle')}</p>
@@ -44160,14 +43919,14 @@ export default function App() {
       </a>
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
-          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-[15rem] md:shrink-0">
+          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
             <Wordmark className="min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item !py-1.5">
+              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {t(p.label)}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
@@ -44193,16 +43952,16 @@ export default function App() {
                 <a
                   href="/profile"
                   aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-[11rem] sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
+                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-44 sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
                   title={t('hdr.profileOf', { name: me.username })}
                   aria-label={t('hdr.profileOf', { name: me.username })}
                 >
-                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="!rounded-full" />
+                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
                   <span className="hidden truncate sm:inline">{me.username}</span>
                 </a>
                 <button
                   onClick={() => void logout()}
-                  className="btn-icon-ghost max-sm:!hidden"
+                  className="btn-icon-ghost max-sm:hidden!"
                   aria-label={t('hdr.logout')}
                   title={t('hdr.logout')}
                 >
@@ -44218,7 +43977,7 @@ export default function App() {
           </div>
         </header>
 
-        <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-none">
+        <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-hidden">
           <PageFrame>
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}
@@ -44256,7 +44015,7 @@ export default function App() {
                     aria-current={active ? 'page' : undefined}
                     className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
-                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
+                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}
                     {p.id === 'admin' && updateAvailable && (
                       <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">{t('hdr.update')}</span></span>
@@ -45948,14 +45707,14 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-3 pt-[8dvh] backdrop-blur-sm sm:pt-[12dvh]" {...bd}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-3 pt-[8dvh] backdrop-blur-xs sm:pt-[12dvh]" {...bd}>
       <div
         ref={box}
         role="dialog"
         aria-modal="true"
         aria-label="Поиск по панели"
         tabIndex={-1}
-        className="pop panel w-full max-w-xl overflow-hidden outline-none"
+        className="pop panel w-full max-w-xl overflow-hidden outline-hidden"
       >
         <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0 text-mute">
@@ -45976,7 +45735,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             placeholder="Найти сервер или раздел…"
             autoComplete="off"
             spellCheck={false}
-            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-[16px] focus-visible:ring-0 font-bold text-ink outline-none placeholder:font-semibold placeholder:text-mute"
+            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-[16px] focus-visible:ring-0 font-bold text-ink outline-hidden placeholder:font-semibold placeholder:text-mute"
           />
           <button
             type="button"
@@ -46207,7 +45966,7 @@ export default function DeliveryList() {
       title="Доставка"
       description="Очередь сообщений в Discord: новости, оповещения и карточки статуса. Неудачные попытки повторяются сами, до 8 раз."
       actions={(
-        <select className="input !w-auto" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label="Тип сообщений">
+        <select className="input w-auto!" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label="Тип сообщений">
           <option value="">Все типы</option>
           {(Object.keys(KIND_LABEL) as DeliveryKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
         </select>
@@ -46238,14 +45997,14 @@ export default function DeliveryList() {
                 {KIND_ICON[it.kind]()}
               </span>
               <div className="min-w-0 flex-1 basis-56">
-                <div className="break-words font-extrabold">{it.summary || KIND_LABEL[it.kind]}</div>
+                <div className="wrap-break-word font-extrabold">{it.summary || KIND_LABEL[it.kind]}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-mute">
                   <span className={STATUS_PILL[it.status]}>{STATUS_LABEL[it.status]}</span>
                   <span>попытки {attemptsText(it.attempts)}</span>
                   {it.status === 'sent' && it.sentAt ? <span>{ago(it.sentAt)}</span> : <span>создано {ago(it.createdAt)}</span>}
                   {it.nextTryAt != null && it.status !== 'sent' && it.status !== 'dead' && <span>следующая попытка {countdownText(it.nextTryAt, now)}</span>}
                 </div>
-                {it.lastError && it.status !== 'sent' && <p className="mt-1 break-words rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad">{it.lastError}</p>}
+                {it.lastError && it.status !== 'sent' && <p className="mt-1 wrap-break-word rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad">{it.lastError}</p>}
               </div>
               {canRetry(it.status) && (
                 <button type="button" className="btn btn-soft btn-sm" disabled={busy.includes(it.id)} onClick={() => void retry(it.id)}>
@@ -46839,7 +46598,7 @@ export default function GamePicker({
           <div className="border-b border-line p-2">
             <input
               ref={search}
-              className="input !rounded-xl !py-2"
+              className="input rounded-xl! py-2!"
               type="search"
               placeholder="Найти игру…"
               value={q}
@@ -46908,7 +46667,7 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
   const v = value == null ? 0 : Math.max(0, Math.min(1, value));
   const t = tone ?? usageTone(value);
   return (
-    <div className={`gauge-${t} mx-auto w-full max-w-[9.5rem]`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
+    <div className={`gauge-${t} mx-auto w-full max-w-38`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
       <div className="gauge">
       <svg viewBox="0 0 120 120" aria-hidden>
         <g transform="rotate(135 60 60)" fill="none" strokeWidth="11" strokeLinecap="round">
@@ -47234,7 +46993,7 @@ function Spoiler({ children }: { children: ReactNode }) {
   return (
     <span
       onClick={() => setOpen(true)}
-      className="cursor-pointer rounded px-0.5"
+      className="cursor-pointer rounded-sm px-0.5"
       style={{ background: open ? 'rgba(255,255,255,0.1)' : '#1e1f22', color: open ? 'inherit' : 'transparent' }}
       title={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
     >
@@ -47301,7 +47060,7 @@ export function Markdown({ text }: { text: string }) {
     }
     out.push(line.trim() === '' ? <div key={i} className="h-2" /> : <div key={i}>{inlineMd(line)}</div>);
   }
-  return <div className="break-words leading-snug">{out}</div>;
+  return <div className="wrap-break-word leading-snug">{out}</div>;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -47316,11 +47075,11 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
     <StateView
       kind="notfound"
       heading="h1"
-      className="mx-auto max-w-xl !gap-3 sm:!py-14"
+      className="mx-auto max-w-xl gap-3! sm:py-14!"
       art={(
         <>
           <NotFoundArt />
-          <p className="nf-code text-6xl font-black leading-none tracking-[-0.05em] sm:text-7xl" aria-hidden>404</p>
+          <p className="nf-code text-6xl font-black leading-none tracking-tighter sm:text-7xl" aria-hidden>404</p>
         </>
       )}
       title={kind === 'server' ? 'Сервер не найден' : 'Такой страницы нет'}
@@ -47483,7 +47242,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
                     <>
                       <span aria-hidden className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-transparent' : 'bg-brand'}`} />
                       <span className="min-w-0 flex-1">
-                        <span className={`block break-words text-sm leading-snug ${n.read ? 'font-semibold text-mute' : 'font-extrabold'}`}>
+                        <span className={`block wrap-break-word text-sm leading-snug ${n.read ? 'font-semibold text-mute' : 'font-extrabold'}`}>
                           {!n.read && <span className="sr-only">{t('bell.unreadMark')} </span>}
                           {n.text}
                         </span>
@@ -47687,7 +47446,7 @@ function Copyable({ label, text }: { label: string; text: string }) {
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="label !mb-0">{label}</span>
+        <span className="label mb-0!">{label}</span>
         <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast('Скопировано'))}><IconCopy size={14} /> Копировать</button>
       </div>
       <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-soft px-3 py-2 font-mono text-[12.5px] font-semibold">{text}</pre>
@@ -47955,7 +47714,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
           <p className="text-sm font-semibold text-mute">Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.</p>
           {isAdmin && (
             <div className="flex flex-wrap items-end gap-2">
-              <div className="min-w-[10rem] flex-1"><Field label="Проверить команду"><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
+              <div className="min-w-40 flex-1"><Field label="Проверить команду"><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
               <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>Выполнить</Button>
             </div>
           )}
@@ -48470,7 +48229,7 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-[60] flex md:left-4 md:right-auto w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-60 flex md:left-4 md:right-auto w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-black">Впервые в Админке?</div>
         <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>
@@ -48561,7 +48320,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[85]">
+    <div className="fixed inset-0 z-85">
       {/* swallows clicks: the tour moves between pages itself */}
       <div className="absolute inset-0" />
       {rect ? (
@@ -48589,7 +48348,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         aria-describedby="tour-text"
         tabIndex={-1}
         style={mobile ? undefined : { ...popStyle, width: POP_W }}
-        className={`panel absolute space-y-3 p-5 shadow-pop outline-none max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-b-none max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] ${mobile ? '' : 'max-w-[calc(100vw-1.5rem)]'}`}
+        className={`panel absolute space-y-3 p-5 shadow-pop outline-hidden max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-b-none max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] ${mobile ? '' : 'max-w-[calc(100vw-1.5rem)]'}`}
       >
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm font-extrabold text-mute" aria-live="polite">Шаг {i + 1} из {STEPS.length}</p>
@@ -48870,7 +48629,7 @@ function Spoiler({ children }: { children: ReactNode }) {
       aria-label={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
       onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
-      className="cursor-pointer rounded px-0.5"
+      className="cursor-pointer rounded-sm px-0.5"
       style={{ background: open ? t.spoilerShow : t.spoilerHide, color: open ? 'inherit' : 'transparent' }}
     >
       {children}
@@ -48882,7 +48641,7 @@ function Chip({ children, kind }: { children: ReactNode; kind: 'mention' | 'time
   const t = useContext(ThemeCtx);
   return (
     <span
-      className="whitespace-nowrap rounded px-[3px] font-medium"
+      className="whitespace-nowrap rounded-sm px-[3px] font-medium"
       style={kind === 'mention' ? { background: t.mentionBg, color: t.mentionFg } : { background: t.chipBg }}
     >
       {children}
@@ -49001,7 +48760,7 @@ export function DiscordMd({ text }: { text: string }) {
     }
     out.push(line.trim() === '' ? <div key={i} className="h-[0.6em]" /> : <div key={i}>{inlineMd(line)}</div>);
   }
-  return <div className="break-words leading-snug">{out}</div>;
+  return <div className="wrap-break-word leading-snug">{out}</div>;
 }
 
 function Quote({ children }: { children: ReactNode }) {
@@ -49033,7 +48792,7 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
         {rows.map((row, i) => (
           <div key={i} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
             {row.map((f) => (
-              <div key={f.k} className="h-4 truncate rounded bg-brand/25 px-1.5 text-xs font-bold leading-4 text-ink">{f.name || '…'}</div>
+              <div key={f.k} className="h-4 truncate rounded-sm bg-brand/25 px-1.5 text-xs font-bold leading-4 text-ink">{f.name || '…'}</div>
             ))}
           </div>
         ))}
@@ -49093,7 +48852,7 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
             <input
               id={`news-f${i}-name`}
               aria-label={`Название поля ${i + 1}`}
-              className={`input ${f.name.length > LIMITS.fieldName ? '!border-bad' : ''}`}
+              className={`input ${f.name.length > LIMITS.fieldName ? 'border-bad!' : ''}`}
               value={f.name}
               placeholder="Название"
               onChange={(e) => patch(i, { name: e.target.value })}
@@ -49116,10 +48875,10 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
           <div className="flex flex-wrap items-center gap-2">
             <div className="seg" role="group" aria-label={`Расположение поля ${i + 1}`}>
               <button type="button" className="seg-item" aria-pressed={!f.inline} onClick={() => patch(i, { inline: false })} title="Во всю ширину">
-                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-sm bg-current opacity-60" />Широкое
+                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-xs bg-current opacity-60" />Широкое
               </button>
               <button type="button" className="seg-item" aria-pressed={f.inline} onClick={() => patch(i, { inline: true })} title="В ряд с соседними">
-                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-sm bg-current opacity-60" /></span>В ряд
+                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /></span>В ряд
               </button>
             </div>
             <span className="ml-auto flex items-center gap-1.5">
@@ -49317,7 +49076,7 @@ export function ImageDrop({
 
   return (
     <div className="flash-host space-y-2">
-      <span className="label !mb-0">{label}</span>
+      <span className="label mb-0!">{label}</span>
       {src ? (
         <div className="flex items-center gap-3 rounded-2xl bg-soft p-2">
           <img src={src} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
@@ -49595,7 +49354,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
   return (
     <div>
       <div className={`mb-1.5 flex items-center justify-between ${hideLabel ? 'sr-only' : ''}`}>
-        <label htmlFor={id} className="label !mb-0">{label}</label>
+        <label htmlFor={id} className="label mb-0!">{label}</label>
         <Counter value={value.length} max={max} />
       </div>
       <div className="flash-host relative rounded-2xl border-2 border-line focus-within:border-brand">
@@ -49655,7 +49414,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
           placeholder={placeholder}
           aria-autocomplete={sug ? 'list' : undefined}
           aria-controls={sug ? `${id}-sug` : undefined}
-          className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-none"
+          className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-hidden"
         />
         {sug && (
           <ul id={`${id}-sug`} role="listbox" aria-label="Подсказки эмодзи" className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
@@ -51623,7 +51382,7 @@ export function AchievementCard({ a }: { a: Achievement }) {
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
       <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /></span>
       <div className="min-w-0 flex-1">
-        <div className="pf-ach-title break-words font-extrabold leading-tight">{a.title}</div>
+        <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{a.title}</div>
         {a.description && <div className="mt-0.5 text-sm font-semibold text-mute">{a.description}</div>}
         {a.earned ? (
           <div className="mt-1.5 text-sm font-extrabold text-ok">
@@ -51711,7 +51470,7 @@ export function ActivityFeed({ limit = 30 }: { limit?: number }) {
             <li key={`${a.ts}-${i}`}>
               <span className="pf-dot" aria-hidden>{a.kind === 'session' ? <IconClock size={16} /> : <IconUsers size={16} />}</span>
               <div className="min-w-0 flex-1 pt-1">
-                <div className="break-words font-bold">{a.text}</div>
+                <div className="wrap-break-word font-bold">{a.text}</div>
                 <div className="text-sm font-semibold text-mute" title={fmtDateTime(a.ts)}>{ago(a.ts)}</div>
               </div>
             </li>
@@ -51805,7 +51564,7 @@ export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) 
         aria-label={t('pf.avatar.upload')}
         className={`group relative rounded-3xl ${drop.over ? 'pf-drop-on' : ''}`}
       >
-        <UserAvatar name={me.username} url={me.avatarUrl} size={80} tone="brand" className="!rounded-3xl" />
+        <UserAvatar name={me.username} url={me.avatarUrl} size={80} tone="brand" className="rounded-3xl!" />
         <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
@@ -51815,8 +51574,8 @@ export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) 
         <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>
         {me.avatarSource === 'custom' && <button type="button" className="btn-link-danger" onClick={() => void remove()} disabled={busy}>{me.discordName ? t('pf.avatar.fromDiscord') : t('common.remove')}</button>}
       </div>
-      <p className="max-w-[12rem] text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>
-      {error && <p className="max-w-[12rem] text-center text-xs font-bold text-bad" role="alert">{error}</p>}
+      <p className="max-w-48 text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>
+      {error && <p className="max-w-48 text-center text-xs font-bold text-bad" role="alert">{error}</p>}
     </div>
   );
 }
@@ -52057,13 +51816,13 @@ export function JournalCard({ onRevoked }: { onRevoked?: () => void }) {
                   <li key={String(r.id)}>
                     <span className={`pf-dot ${bad ? 'is-bad' : ''}`} aria-hidden><JournalIcon kind={r.kind} /></span>
                     <div className="min-w-0 flex-1 pt-0.5">
-                      <div className="break-words font-extrabold">{label ? t(label) : r.kind}</div>
-                      <div className="break-words text-sm font-semibold text-mute">
+                      <div className="wrap-break-word font-extrabold">{label ? t(label) : r.kind}</div>
+                      <div className="wrap-break-word text-sm font-semibold text-mute">
                         {[device, r.ip].filter(Boolean).join(' · ') || t('pf.journal.noDevice')}
                         {' · '}
                         <span title={fmtDateTime(r.ts)}>{ago(r.ts)}</span>
                       </div>
-                      {r.detail && <div className="mt-0.5 break-words text-sm font-semibold text-mute">{r.detail}</div>}
+                      {r.detail && <div className="mt-0.5 wrap-break-word text-sm font-semibold text-mute">{r.detail}</div>}
                     </div>
                   </li>
                 );
@@ -52287,7 +52046,7 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
   return (
     <div className="space-y-2" role="region" aria-label={t('nd.title', { label: nd.label })}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-2xl bg-warnbg px-4 py-3 text-warn">
-        <span className="min-w-0 flex-1 basis-60 break-words text-sm font-bold">{t('nd.title', { label: nd.label })}</span>
+        <span className="min-w-0 flex-1 basis-60 wrap-break-word text-sm font-bold">{t('nd.title', { label: nd.label })}</span>
         <span className="flex shrink-0 flex-wrap gap-2">
           <button type="button" className="btn btn-soft btn-sm" onClick={itWasMe} disabled={busy}>{t('nd.me')}</button>
           <button type="button" className="btn btn-danger btn-sm" onClick={() => void notMe()} disabled={busy} aria-busy={busy || undefined}>{t('nd.no')}</button>
@@ -52777,7 +52536,7 @@ function RankBody({ d }: { d: MyRank }) {
       <div className="vr-rank">
         <RankEmblem rank={d.rank} size={96} />
         <div className="vr-rank-main">
-          <div className="break-words text-xl font-black leading-tight" style={{ color: d.rank.color }}>{rankName(d.rank)}</div>
+          <div className="wrap-break-word text-xl font-black leading-tight" style={{ color: d.rank.color }}>{rankName(d.rank)}</div>
           <div className="mt-0.5 text-sm font-semibold text-mute">
             {d.nick ? t('vr.rank.hours', { hours: fmtH(d.hours) }) : t('vr.rank.noNick')}
           </div>
@@ -52824,7 +52583,7 @@ function Card({ a }: { a: VrAchievement }) {
         {!failed && <img className="vr-ach-img" src={src} width={44} height={44} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="pf-ach-title break-words font-extrabold leading-tight">{title}</div>
+        <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{title}</div>
         <div className="mt-0.5 text-sm font-semibold text-mute">{vrAchText(a.id, 'd', a.description)}</div>
         {a.earned ? (
           <div className="mt-1.5 text-sm font-extrabold text-ok">
@@ -53496,7 +53255,7 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
                   const ic = ICON[e.type];
                   return (
                     <li key={`${e.type}-${e.ts}`} className="relative flex min-w-0 items-center gap-3 rounded-xl py-1.5">
-                      <span className={`relative z-[1] grid h-9 w-9 shrink-0 place-items-center rounded-full ${ic.cls}`} aria-hidden>
+                      <span className={`relative z-1 grid h-9 w-9 shrink-0 place-items-center rounded-full ${ic.cls}`} aria-hidden>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d={ic.path} /></svg>
                       </span>
                       <span className="min-w-0 flex-1">
@@ -53945,7 +53704,7 @@ export default function HistoryChart({
     <div className={`transition-opacity duration-300 ${loading ? 'opacity-60' : ''}`}>
       {(sparse || late) && points.length > 0 && (
         <p className="mb-2 flex items-center gap-2 rounded-xl bg-soft px-3 py-1.5 text-sm font-bold text-mute">
-          <span aria-hidden className="live-dot !bg-warn" />
+          <span aria-hidden className="live-dot bg-warn!" />
           {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}
@@ -54581,7 +54340,7 @@ export default function PlayersList({
               {showSearch && (
                 <input
                   type="search"
-                  className="input !h-10 min-w-0 flex-1 basis-40"
+                  className="input h-10! min-w-0 flex-1 basis-40"
                   placeholder={t('srv.pl.search')}
                   aria-label={t('srv.pl.searchLabel')}
                   value={query}
@@ -54619,14 +54378,14 @@ export default function PlayersList({
                   {(dur != null || rank) && (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
-                      {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok !px-2 !py-0 text-xs">новичок</span>}
+                      {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok px-2! py-0! text-xs">новичок</span>}
                       {rank && (
                         <span className="inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
                           <RankEmblem rank={rank} size={20} />
                           {rankName(rank)}
                         </span>
                       )}
-                      {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn !px-2 !py-0 text-xs">ветеран</span>}
+                      {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn px-2! py-0! text-xs">ветеран</span>}
                     </span>
                   )}
                 </span>
@@ -54895,7 +54654,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
             <span className="font-extrabold">{r.mine ? 'Изменить отзыв' : 'Как вам сервер?'}</span>
             <StarPicker value={stars} onChange={setStars} />
           </div>
-          <textarea className="input min-h-[5rem]" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
+          <textarea className="input min-h-20" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
           <ErrorLine text={error} />
           <div className="flex justify-end gap-2">
             {editing && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>}
@@ -55213,7 +54972,7 @@ export function BannerSkeleton() {
 }
 
 export function TabBarSkeleton() {
-  return <div className="skeleton h-[44px] w-full max-w-[26rem] rounded-full sm:h-[38px]" />;
+  return <div className="skeleton h-[44px] w-full max-w-104 rounded-full sm:h-[38px]" />;
 }
 
 /** the same blocks as the loaded tab, so nothing jumps when the data arrives */
@@ -55221,12 +54980,12 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
   if (tab === 'players') {
     return (
       <div className={`${sk} p-5`}>
-        <div className="skeleton skel-line mb-4 !h-6 w-40" />
+        <div className="skeleton skel-line mb-4 h-6! w-40" />
         {Array.from({ length: 6 }, (_, i) => (
           <div key={i} className="flex items-center gap-3 py-2">
             <div className="skeleton h-9 w-9 rounded-xl" />
-            <div className="skeleton skel-line !h-4 flex-1" />
-            <div className="skeleton skel-line !h-4 w-16" />
+            <div className="skeleton skel-line h-4! flex-1" />
+            <div className="skeleton skel-line h-4! w-16" />
           </div>
         ))}
       </div>
@@ -56247,12 +56006,12 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
           </svg>
         )}
         {hover != null && data && (
-          <div className="pointer-events-none absolute top-1 z-10 min-w-[11rem] -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-[13px] font-bold text-page shadow-pop" style={{ left: Math.min(W - 100, Math.max(100, x(hover))) }}>
+          <div className="pointer-events-none absolute top-1 z-10 min-w-44 -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-[13px] font-bold text-page shadow-pop" style={{ left: Math.min(W - 100, Math.max(100, x(hover))) }}>
             <div className="mb-1 text-[12px] font-semibold opacity-80">{new Date(tsOf(hover)).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
             {[...shown].sort((a, b) => (b.values[hover] ?? -1) - (a.values[hover] ?? -1)).map((s) => (
               <div key={s.s.id} className="flex items-center gap-2 whitespace-nowrap">
                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
-                <span className="max-w-[10rem] truncate opacity-90">{s.s.name}</span>
+                <span className="max-w-40 truncate opacity-90">{s.s.name}</span>
                 <span className="ml-auto font-extrabold">{s.values[hover] == null ? '—' : fmt(s.values[hover])}</span>
               </div>
             ))}
@@ -57127,7 +56886,7 @@ function SkeletonHero() {
         <div className="flex-1 space-y-2 pt-1"><Bar w="62%" h={18} /><Bar w="38%" /></div>
         <Bar w={84} h={26} />
       </div>
-      <div className="flex items-end gap-3 pt-4"><Bar w={130} h={64} className="!rounded-2xl" /><Bar w={90} h={18} className="mb-2" /></div>
+      <div className="flex items-end gap-3 pt-4"><Bar w={130} h={64} className="rounded-2xl!" /><Bar w={90} h={18} className="mb-2" /></div>
       <div className="skeleton mt-auto h-20 w-full rounded-2xl" />
       <div className="flex justify-between"><Bar w={70} /><Bar w={90} /><Bar w={80} /></div>
     </div>
@@ -57149,7 +56908,7 @@ function SkeletonSmall() {
     <div className="tile flex min-h-[270px] flex-col gap-2 p-3 pb-4">
       <div className="skeleton h-[88px] rounded-[18px]" />
       <div className="space-y-2 px-1.5 pt-1"><Bar w="75%" h={15} /><Bar w="40%" /></div>
-      <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="!rounded-lg" /><Bar w={34} /></div>
+      <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="rounded-lg!" /><Bar w={34} /></div>
       <div className="px-1.5"><Bar w="100%" h={6} /></div>
       <div className="mt-auto flex justify-between px-1.5"><Bar w="45%" /><Bar w="20%" /></div>
     </div>
@@ -57374,7 +57133,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      className="fixed inset-0 z-80 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4"
       {...bd}
     >
       <form
@@ -57385,7 +57144,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
         aria-labelledby="cd-title"
         aria-describedby={o.text ? 'cd-text' : undefined}
         onSubmit={submit}
-        className="pop panel panel-raised max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6"
+        className="pop panel panel-raised max-h-[92dvh] w-full max-w-md space-y-4 overflow-auto rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6"
       >
         <div className="flex items-start gap-3.5">
           <span aria-hidden className={`grid h-11 w-11 shrink-0 place-items-center rounded-ui-md ${o.danger ? 'bg-badbg text-bad' : 'bg-soft text-link'}`}>
@@ -58347,74 +58106,394 @@ export const IconTrophy = make(<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/index.css" << '__COREGSM_EOF__'
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
 
-/* "Bento 2.0": soft washes on the page, white 26px tiles, gradient accents derived from --brand.
+@theme {
+  --color-page: rgb(var(--page));
+  --color-card: rgb(var(--card));
+  --color-raised: rgb(var(--raised));
+  --color-ink: rgb(var(--ink));
+  --color-mute: rgb(var(--mute));
+  --color-line: rgb(var(--line));
+  --color-field: rgb(var(--field));
+  --color-soft: rgb(var(--soft));
+
+  --color-brand-2: rgb(var(--brand-2));
+  --color-brand: rgb(var(--brand));
+  --color-brand-hover: rgb(var(--brand-hover));
+
+  --color-link: rgb(var(--link));
+  --color-ok: rgb(var(--ok));
+  --color-okbg: rgb(var(--okbg));
+  --color-warn: rgb(var(--warn));
+  --color-warnbg: rgb(var(--warnbg));
+  --color-bad: rgb(var(--bad));
+  --color-badsolid: rgb(var(--badsolid));
+  --color-badbg: rgb(var(--badbg));
+
+  --font-sans:
+    'Golos Text Variable', 'Golos Text', ui-sans-serif, system-ui,
+    -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --font-weight-bold: 600;
+  --font-weight-extrabold: 650;
+  --font-weight-black: 800;
+
+  --radius-4xl: 2rem;
+  --radius-tile: var(--r-xl);
+  --radius-ui-sm: var(--r-sm);
+  --radius-ui-md: var(--r-md);
+  --radius-ui-lg: var(--r-lg);
+  --radius-ui-xl: var(--r-xl);
+  --radius-ui-pill: var(--r-pill);
+
+  --shadow-1: var(--shadow-1);
+  --shadow-2: var(--shadow-2);
+  --shadow-3: var(--shadow-3);
+  --shadow-soft: var(--shadow-soft);
+  --shadow-pop: var(--shadow-pop);
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+@utility input {
+  /* buttons (.btn, .btn-soft, .btn-icon ...): styles/buttons.css */
+  @apply w-full rounded-ui-lg border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-hidden disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px];
+}
+
+@utility label {
+  @apply mb-1.5 block text-sm font-extrabold text-mute;
+}
+
+@utility panel {
+  /* the tile: white card, 26px radius, layered soft shadow */
+  /* glass: the card colour is a little translucent (the aurora of the page shows through) with a faint sheen; no backdrop-filter */
+  @apply rounded-ui-xl;
+  background-color: rgb(var(--card) / var(--glass-a));
+  background-image: var(--glass-sheen);
+  border: 1px solid var(--tile-border);
+  box-shadow: var(--shadow-2);
+}
+
+@utility tile {
+  @apply rounded-ui-xl;
+  background-color: rgb(var(--card) / var(--glass-a));
+  background-image: var(--glass-sheen);
+  border: 1px solid var(--tile-border);
+  box-shadow: var(--shadow-2);
+}
+
+@utility panel-raised {
+  /* floating surfaces (dialogs, menus, popovers): one step above the card in the dark theme, identical in the light one */
+  background-color: rgb(var(--raised));
+  box-shadow: var(--shadow-3);
+}
+
+@utility pill {
+  @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold;
+  &::before {
+    content: '';
+    @apply h-1.5 w-1.5 rounded-full bg-current;
+  }
+}
+
+@utility pill-ok {
+  @apply bg-okbg text-ok;
+}
+
+@utility pill-warn {
+  @apply bg-warnbg text-warn;
+}
+
+@utility pill-bad {
+  @apply bg-badbg text-bad;
+}
+
+@utility pill-mute {
+  @apply bg-soft text-mute;
+}
+
+@utility seg {
+  /* segmented control: soft capsule with a white (lifted) active pill. Works for links and buttons. */
+  @apply relative inline-flex gap-0.5 rounded-full bg-soft p-[3px];
+}
+
+@utility seg-item {
+  @apply relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px];
+  &[aria-pressed='true'] {
+    color: rgb(var(--ink));
+    background: rgb(var(--seg-on));
+    box-shadow: var(--shadow-1);
+  }
+  &[aria-current='page'] {
+    color: rgb(var(--ink));
+    background: rgb(var(--seg-on));
+    box-shadow: var(--shadow-1);
+  }
+  &.on {
+    color: rgb(var(--ink));
+    background: rgb(var(--seg-on));
+    box-shadow: var(--shadow-1);
+  }
+}
+
+@utility on {
+  & .seg-item {
+    color: rgb(var(--ink));
+    background: rgb(var(--seg-on));
+    box-shadow: var(--shadow-1);
+  }
+}
+
+@utility glass {
+  /* the sticky glass header and the floating bottom bar */
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+
+@utility cover-grad {
+  /* tiles with a game gradient (--c1 -> --c2, set inline); white text on top, gradients are kept dark enough */
+  background: linear-gradient(135deg, var(--c1), var(--c2));
+  color: #fff;
+}
+
+@utility stat-k {
+  @apply text-[13px] font-extrabold text-mute;
+}
+
+@utility stat-v {
+  @apply text-[34px] font-extrabold leading-[1.05] tabular-nums sm:text-[40px];
+  letter-spacing: -0.03em;
+  & small {
+    @apply text-lg font-bold text-mute;
+    letter-spacing: 0;
+  }
+}
+
+@utility stat-s {
+  @apply text-[13px] font-bold text-mute;
+}
+
+@utility chip-on-grad {
+  /* translucent chip on a gradient tile */
+  @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold text-white;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+@utility tile-hover {
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-3);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    &:hover {
+      transform: none;
+    }
+  }
+}
+
+@utility switch {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+  width: 2.75rem;
+  height: 1.625rem;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  margin: 0;
+  background-color: rgb(var(--field));
+  transition:
+    background-color 0.25s ease,
+    box-shadow 0.25s ease;
+  &::before {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--r-pill);
+    background: #fff;
+    box-shadow:
+      0 1px 3px rgb(0 0 0 / 0.35),
+      0 0 0 0.5px rgb(0 0 0 / 0.08);
+    transition:
+      transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1),
+      width 0.18s ease;
+  }
+  &:checked {
+    background-image: linear-gradient(
+      135deg,
+      rgb(var(--brand)),
+      rgb(var(--brand-2))
+    );
+    box-shadow: 0 4px 12px -4px rgb(var(--brand) / 0.55);
+  }
+  &:checked::before {
+    transform: translateX(18px);
+  }
+  &:active:not(:disabled)::before {
+    width: 25px;
+  }
+  &:checked:active:not(:disabled)::before {
+    transform: translateX(13px);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+@layer utilities {
+  /* "Bento 2.0": soft washes on the page, white 26px tiles, gradient accents derived from --brand.
    Palette as space-separated RGB so Tailwind can apply opacity (bg-brand/20).
    Light is the default; dark applies with the system setting unless a theme is chosen explicitly.
    Contrast (WCAG 2.1, checked for both themes): text tokens (mute, link, ok, warn, bad on page/card/soft and on their pill
    backgrounds) >= 4.5:1; white on brand / brand-2 / badsolid >= 4.5:1; --field (input borders) >= 3:1 on card, soft and page.
    --line is decorative only (tile borders, dividers).
    --brand-2 (the darker end of every brand gradient) is set by useBrand() from the chosen brand colour. */
-:root {
-  --noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .07 0'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
-  --page: 243 244 248;
-  --card: 255 255 255;
-  --raised: 255 255 255;
-  --ink: 18 20 26;
-  --mute: 92 99 114;
-  --line: 231 233 240;
-  --field: 122 129 143;
-  --soft: 236 238 246;
-  --brand: 79 70 229;
-  --brand-hover: 67 56 202;
-  --brand-2: 61 51 190;
-  --link: 79 70 229;
-  --ok: 18 120 66;
-  --okbg: 220 247 232;
-  --warn: 146 94 0;
-  --warnbg: 255 241 205;
-  --bad: 185 40 40;
-  --badbg: 254 226 226;
-  --badsolid: 185 40 40;
-  --oksolid: 21 128 61;
-  /* fills (bars, dots, meters): bright in both themes; the text colours above stay dark in the light theme for contrast */
-  --ok-fill: 34 197 94;
-  --warn-fill: 245 158 11;
-  --bad-fill: 239 68 68;
-  --seg-on: 255 255 255;
-  --tile-border: rgb(231 233 240);
-  --glass: rgb(255 255 255 / 0.74);
-  --glass-border: rgb(255 255 255 / 0.9);
-  --glass-shadow: 0 8px 30px rgba(40, 50, 110, 0.08);
-  /* shadow scale: 1 = small controls and chips, 2 = cards and tiles at rest, 3 = floating (menus, dialogs, hovered cards) */
-  --shadow-1: 0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
-  --shadow-2: 0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
-  --shadow-3: 0 1px 2px rgba(20, 24, 40, 0.06), 0 18px 38px rgba(40, 50, 110, 0.13);
-  --horizon-a: rgb(var(--brand) / 0.14);
-  --horizon-b: rgb(236 72 153 / 0.22);
-  /* page background «Аврора»: strength of the four glows; glass: how much of the card colour stays, and the sheen on it */
-  --au1: .18; --au2: .12;
-  --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='%23463c8c'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>"); --hex-a: .1;
-  --glass-a: .84; --glass-sheen: none;
-  --wash-a: rgb(var(--brand) / 0.15);
-  --wash-b: rgb(70 190 235 / 0.14);
-  color-scheme: light;
-}
-/* radius scale (sm / md / lg / xl / pill) and the old shadow names as aliases of the shadow scale */
-:root {
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
-  --r-xl: 26px;
-  --r-pill: 9999px;
-  --shadow-pop: var(--shadow-1);
-  --shadow-soft: var(--shadow-2);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
+  :root {
+    --noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .07 0'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
+    --page: 243 244 248;
+    --card: 255 255 255;
+    --raised: 255 255 255;
+    --ink: 18 20 26;
+    --mute: 92 99 114;
+    --line: 231 233 240;
+    --field: 122 129 143;
+    --soft: 236 238 246;
+    --brand: 79 70 229;
+    --brand-hover: 67 56 202;
+    --brand-2: 61 51 190;
+    --link: 79 70 229;
+    --ok: 18 120 66;
+    --okbg: 220 247 232;
+    --warn: 146 94 0;
+    --warnbg: 255 241 205;
+    --bad: 185 40 40;
+    --badbg: 254 226 226;
+    --badsolid: 185 40 40;
+    --oksolid: 21 128 61;
+    /* fills (bars, dots, meters): bright in both themes; the text colours above stay dark in the light theme for contrast */
+    --ok-fill: 34 197 94;
+    --warn-fill: 245 158 11;
+    --bad-fill: 239 68 68;
+    --seg-on: 255 255 255;
+    --tile-border: rgb(231 233 240);
+    --glass: rgb(255 255 255 / 0.74);
+    --glass-border: rgb(255 255 255 / 0.9);
+    --glass-shadow: 0 8px 30px rgba(40, 50, 110, 0.08);
+    /* shadow scale: 1 = small controls and chips, 2 = cards and tiles at rest, 3 = floating (menus, dialogs, hovered cards) */
+    --shadow-1:
+      0 1px 2px rgba(20, 24, 40, 0.08), 0 2px 8px rgba(40, 50, 110, 0.06);
+    --shadow-2:
+      0 1px 2px rgba(20, 24, 40, 0.04), 0 12px 30px rgba(40, 50, 110, 0.06);
+    --shadow-3:
+      0 1px 2px rgba(20, 24, 40, 0.06), 0 18px 38px rgba(40, 50, 110, 0.13);
+    --horizon-a: rgb(var(--brand) / 0.14);
+    --horizon-b: rgb(236 72 153 / 0.22);
+    /* page background «Аврора»: strength of the four glows; glass: how much of the card colour stays, and the sheen on it */
+    --au1: 0.18;
+    --au2: 0.12;
+    --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='%23463c8c'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
+    --hex-a: 0.1;
+    --glass-a: 0.84;
+    --glass-sheen: none;
+    --wash-a: rgb(var(--brand) / 0.15);
+    --wash-b: rgb(70 190 235 / 0.14);
+    color-scheme: light;
+  }
+  /* radius scale (sm / md / lg / xl / pill) and the old shadow names as aliases of the shadow scale */
+  :root {
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 26px;
+    --r-pill: 9999px;
+    --shadow-pop: var(--shadow-1);
+    --shadow-soft: var(--shadow-2);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --page: 9 10 14;
+      --card: 18 20 27;
+      --raised: 27 30 40;
+      --ink: 226 228 236;
+      --mute: 160 166 182;
+      --line: 38 41 53;
+      --field: 112 118 136;
+      --soft: 30 33 44;
+      --brand: 88 91 235;
+      --brand-hover: 76 79 214;
+      --brand-2: 66 58 196;
+      --link: 165 170 255;
+      --ok: 74 222 128;
+      --okbg: 18 52 36;
+      --warn: 251 191 36;
+      --warnbg: 54 43 14;
+      --bad: 248 113 113;
+      --badbg: 58 25 30;
+      --badsolid: 214 48 48;
+      --ok-fill: 74 222 128;
+      --warn-fill: 251 191 36;
+      --bad-fill: 248 113 113;
+      --seg-on: 44 48 64;
+      --tile-border: rgb(255 255 255 / 0.07);
+      --glass: rgb(20 22 30 / 0.72);
+      --glass-border: rgb(255 255 255 / 0.08);
+      --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+      --shadow-1:
+        0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
+      --shadow-2:
+        0 1px 0 rgb(255 255 255 / 0.05) inset,
+        0 16px 34px -18px rgba(0, 0, 0, 0.8);
+      --shadow-3:
+        0 1px 0 rgb(255 255 255 / 0.07) inset,
+        0 24px 48px -16px rgba(0, 0, 0, 0.9);
+      --horizon-a: rgb(var(--brand) / 0.2);
+      --horizon-b: rgb(236 72 153 / 0.2);
+      --au1: 0.4;
+      --au2: 0.14;
+      --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
+      --hex-a: 0.06;
+      --glass-a: 0.68;
+      --glass-sheen: linear-gradient(
+        160deg,
+        rgb(255 255 255 / 0.09),
+        rgb(255 255 255 / 0.02) 55%
+      );
+      --wash-a: rgb(var(--brand) / 0.2);
+      --wash-b: rgb(40 170 210 / 0.09);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme='dark'] {
     --page: 9 10 14;
     --card: 18 20 27;
     --raised: 27 30 40;
@@ -58442,58 +58521,30 @@ __COREGSM_EOF__
     --glass: rgb(20 22 30 / 0.72);
     --glass-border: rgb(255 255 255 / 0.08);
     --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
-    --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
-    --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
-    --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
+    --shadow-1:
+      0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
+    --shadow-2:
+      0 1px 0 rgb(255 255 255 / 0.05) inset,
+      0 16px 34px -18px rgba(0, 0, 0, 0.8);
+    --shadow-3:
+      0 1px 0 rgb(255 255 255 / 0.07) inset,
+      0 24px 48px -16px rgba(0, 0, 0, 0.9);
     --horizon-a: rgb(var(--brand) / 0.2);
     --horizon-b: rgb(236 72 153 / 0.2);
-    --au1: .4; --au2: .14;
-    --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>"); --hex-a: .06;
-    --glass-a: .68; --glass-sheen: linear-gradient(160deg, rgb(255 255 255 / .09), rgb(255 255 255 / .02) 55%);
+    --au1: 0.4;
+    --au2: 0.14;
+    --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
+    --hex-a: 0.06;
+    --glass-a: 0.68;
+    --glass-sheen: linear-gradient(
+      160deg,
+      rgb(255 255 255 / 0.09),
+      rgb(255 255 255 / 0.02) 55%
+    );
     --wash-a: rgb(var(--brand) / 0.2);
     --wash-b: rgb(40 170 210 / 0.09);
     color-scheme: dark;
   }
-}
-:root[data-theme='dark'] {
-  --page: 9 10 14;
-  --card: 18 20 27;
-  --raised: 27 30 40;
-  --ink: 226 228 236;
-  --mute: 160 166 182;
-  --line: 38 41 53;
-  --field: 112 118 136;
-  --soft: 30 33 44;
-  --brand: 88 91 235;
-  --brand-hover: 76 79 214;
-  --brand-2: 66 58 196;
-  --link: 165 170 255;
-  --ok: 74 222 128;
-  --okbg: 18 52 36;
-  --warn: 251 191 36;
-  --warnbg: 54 43 14;
-  --bad: 248 113 113;
-  --badbg: 58 25 30;
-  --badsolid: 214 48 48;
-    --ok-fill: 74 222 128;
-    --warn-fill: 251 191 36;
-    --bad-fill: 248 113 113;
-  --seg-on: 44 48 64;
-  --tile-border: rgb(255 255 255 / 0.07);
-  --glass: rgb(20 22 30 / 0.72);
-  --glass-border: rgb(255 255 255 / 0.08);
-  --glass-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
-  --shadow-1: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 2px 8px rgba(0, 0, 0, 0.5);
-  --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 16px 34px -18px rgba(0, 0, 0, 0.8);
-  --shadow-3: 0 1px 0 rgb(255 255 255 / 0.07) inset, 0 24px 48px -16px rgba(0, 0, 0, 0.9);
-  --horizon-a: rgb(var(--brand) / 0.2);
-  --horizon-b: rgb(236 72 153 / 0.2);
-  --au1: .4; --au2: .14;
-  --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>"); --hex-a: .06;
-  --glass-a: .68; --glass-sheen: linear-gradient(160deg, rgb(255 255 255 / .09), rgb(255 255 255 / .02) 55%);
-  --wash-a: rgb(var(--brand) / 0.2);
-  --wash-b: rgb(40 170 210 / 0.09);
-  color-scheme: dark;
 }
 
 @layer base {
@@ -58536,280 +58587,602 @@ __COREGSM_EOF__
   }
 
   ::selection { @apply bg-brand/30; }
-  :focus-visible { @apply outline-none ring-2 ring-link; }
+  :focus-visible { @apply outline-hidden ring-2 ring-link; }
   /* long words (usernames, addresses) must not stretch the layout. break-word, not anywhere: anywhere also lowers the
      minimum width, and a heading in a flex row then shrank to a couple of letters per line («Показате / ли») */
   h1, h2, h3 { overflow-wrap: break-word; }
 }
 
-@layer components {
-  /* buttons (.btn, .btn-soft, .btn-icon ...): styles/buttons.css */
-  .input { @apply w-full rounded-ui-lg border-2 border-field bg-card px-3.5 py-2 font-semibold text-ink placeholder:font-normal placeholder:text-mute focus:border-link focus:outline-none disabled:opacity-60 max-sm:min-h-[44px] max-sm:text-[16px]; }
-  .label { @apply mb-1.5 block text-sm font-extrabold text-mute; }
-  /* the tile: white card, 26px radius, layered soft shadow */
-  /* glass: the card colour is a little translucent (the aurora of the page shows through) with a faint sheen; no backdrop-filter */
-  .panel { @apply rounded-ui-xl; background-color: rgb(var(--card) / var(--glass-a)); background-image: var(--glass-sheen); border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
-  .tile { @apply rounded-ui-xl; background-color: rgb(var(--card) / var(--glass-a)); background-image: var(--glass-sheen); border: 1px solid var(--tile-border); box-shadow: var(--shadow-2); }
-  /* floating surfaces (dialogs, menus, popovers): one step above the card in the dark theme, identical in the light one */
-  .panel-raised { background-color: rgb(var(--raised)); box-shadow: var(--shadow-3); }
-  .pill { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold; }
-  .pill::before { content: ''; @apply h-1.5 w-1.5 rounded-full bg-current; }
-  .pill-ok { @apply bg-okbg text-ok; }
-  .pill-warn { @apply bg-warnbg text-warn; }
-  .pill-bad { @apply bg-badbg text-bad; }
-  .pill-mute { @apply bg-soft text-mute; }
-
-  /* segmented control: soft capsule with a white (lifted) active pill. Works for links and buttons. */
-  .seg { @apply relative inline-flex gap-0.5 rounded-full bg-soft p-[3px]; }
-  .seg-item {
-    @apply relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-extrabold text-mute transition hover:text-ink max-sm:min-h-[44px];
+@layer utilities {
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
   }
-  .seg-item[aria-pressed='true'], .seg-item[aria-current='page'], .seg-item.on {
-    color: rgb(var(--ink));
-    background: rgb(var(--seg-on));
-    box-shadow: var(--shadow-1);
+  .pop {
+    animation: pop 0.25s ease-out both;
+  }
+  /* a drawer slides in from the right */
+  @keyframes drawer-in {
+    from {
+      opacity: 0;
+      transform: translateX(28px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .drawer-in {
+    animation: drawer-in 0.22s ease-out both;
+  }
+  @keyframes shimmer {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  .skeleton {
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pop,
+    .drawer-in,
+    .skeleton {
+      animation: none;
+    }
   }
 
-  /* the sticky glass header and the floating bottom bar */
-  .glass {
-    background: var(--glass);
-    border: 1px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    -webkit-backdrop-filter: blur(18px) saturate(1.4);
-    backdrop-filter: blur(18px) saturate(1.4);
+  /* a gently pulsing ring on the ONLINE pill */
+  @keyframes live-ring {
+    0% {
+      box-shadow: 0 0 0 0 rgb(var(--ok) / 0.45);
+    }
+    70% {
+      box-shadow: 0 0 0 7px rgb(var(--ok) / 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgb(var(--ok) / 0);
+    }
+  }
+  .pill.live::before {
+    animation: live-ring 2.2s ease-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pill.live::before {
+      animation: none;
+    }
   }
 
-  /* tiles with a game gradient (--c1 -> --c2, set inline); white text on top, gradients are kept dark enough */
-  .cover-grad { background: linear-gradient(135deg, var(--c1), var(--c2)); color: #fff; }
-  .stat-k { @apply text-[13px] font-extrabold text-mute; }
-  .stat-v { @apply text-[34px] font-extrabold leading-[1.05] tabular-nums sm:text-[40px]; letter-spacing: -0.03em; }
-  .stat-v small { @apply text-lg font-bold text-mute; letter-spacing: 0; }
-  .stat-s { @apply text-[13px] font-bold text-mute; }
-  /* translucent chip on a gradient tile */
-  .chip-on-grad { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] font-extrabold text-white; background: rgba(255, 255, 255, 0.22); }
-  .tile-hover { transition: transform .18s ease, box-shadow .18s ease; }
-  .tile-hover:hover { transform: translateY(-2px); box-shadow: var(--shadow-3); }
-  @media (prefers-reduced-motion: reduce) { .tile-hover:hover { transform: none; } }
-}
-
-@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
-.pop { animation: pop .25s ease-out both; }
-/* a drawer slides in from the right */
-@keyframes drawer-in { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
-.drawer-in { animation: drawer-in .22s ease-out both; }
-@keyframes shimmer { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-.skeleton { animation: shimmer 1.4s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .pop, .drawer-in, .skeleton { animation: none; } }
-
-/* a gently pulsing ring on the ONLINE pill */
-@keyframes live-ring {
-  0% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0.45); }
-  70% { box-shadow: 0 0 0 7px rgb(var(--ok) / 0); }
-  100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
-}
-.pill.live::before { animation: live-ring 2.2s ease-out infinite; }
-@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
-
-.input[aria-invalid='true'] { border-color: rgb(var(--bad)); }
-
-/* ---------- sign-in screens ---------- */
-:root { --auth-glow: 0.14; }
-:root[data-theme='dark'] { --auth-glow: 0.28; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --auth-glow: 0.28; } }
-
-/* soft brand-coloured light behind the card */
-.auth-glow {
-  position: absolute; inset: 0; pointer-events: none;
-  background:
-    radial-gradient(42rem 32rem at 50% 42%, rgb(var(--brand) / var(--auth-glow)), transparent 70%),
-    radial-gradient(26rem 22rem at 12% 8%, rgb(var(--brand) / calc(var(--auth-glow) * 0.55)), transparent 70%),
-    radial-gradient(28rem 24rem at 92% 96%, rgb(var(--brand) / calc(var(--auth-glow) * 0.55)), transparent 70%);
-  animation: auth-glow 9s ease-in-out infinite alternate;
-}
-@keyframes auth-glow { from { opacity: .75; } to { opacity: 1; } }
-
-.auth-float {
-  position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s);
-  color: rgb(var(--brand)); opacity: .12; pointer-events: none;
-  transform: rotate(var(--r));
-  animation: auth-float var(--d) ease-in-out infinite alternate;
-}
-:root[data-theme='dark'] .auth-float { opacity: .16; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .auth-float { opacity: .16; } }
-@keyframes auth-float {
-  from { transform: translate3d(0, 0, 0) rotate(var(--r)); }
-  to { transform: translate3d(16px, -30px, 0) rotate(calc(var(--r) + 14deg)); }
-}
-
-.auth-card {
-  border-color: rgb(var(--brand) / calc(var(--auth-glow) * 1.1));
-  box-shadow: 0 28px 60px -28px rgb(var(--brand) / calc(var(--auth-glow) * 2.2)), 0 2px 8px rgb(0 0 0 / 0.06);
-  animation: auth-card-in .45s cubic-bezier(.2, .8, .2, 1) both;
-}
-:root[data-theme='dark'] .auth-card { box-shadow: 0 28px 70px -24px rgb(var(--brand) / 0.5), 0 2px 10px rgb(0 0 0 / 0.5); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .auth-card { box-shadow: 0 28px 70px -24px rgb(var(--brand) / 0.5), 0 2px 10px rgb(0 0 0 / 0.5); } }
-@keyframes auth-card-in { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
-
-.auth-swap { animation: auth-swap .3s ease-out both; }
-@keyframes auth-swap { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-
-.shake { animation: auth-shake .42s cubic-bezier(.36, .07, .19, .97) both; }
-@keyframes auth-shake {
-  10%, 90% { transform: translateX(-1px); }
-  20%, 80% { transform: translateX(3px); }
-  30%, 50%, 70% { transform: translateX(-6px); }
-  40%, 60% { transform: translateX(6px); }
-}
-
-/* ---------- shared helpers ---------- */
-/* "skip to content" link: visible only while focused */
-.skip-link {
-  position: fixed; left: 1rem; top: 0.75rem; z-index: 100;
-  transform: translateY(-200%);
-  border-radius: var(--r-pill); padding: 0.6rem 1.1rem; font-weight: 650;
-  background: rgb(var(--brand)); color: #fff; box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
-}
-.skip-link:focus { transform: none; }
-/* <main> gets focus programmatically on every route change: no ring around the whole page */
-main:focus,
-main:focus-visible { outline: none; box-shadow: none; --tw-ring-shadow: 0 0 #0000; }
-
-/* a value that just changed: short glow */
-@keyframes num-bump {
-  0% { text-shadow: 0 0 0 rgb(var(--ok) / 0); }
-  30% { text-shadow: 0 0 16px rgb(var(--ok) / 0.55); color: rgb(var(--ok)); }
-  100% { text-shadow: 0 0 0 rgb(var(--ok) / 0); }
-}
-.num-bump { animation: num-bump .9s ease-out; }
-
-/* touch devices: bigger hit areas for small controls without changing the desktop look */
-@media (max-width: 639px) {
-  input[type='checkbox']:not(.switch), input[type='radio'] { width: 1.25rem !important; height: 1.25rem !important; }
-  label:has(> input[type='checkbox']), label:has(> input[type='radio']) { min-height: 44px; }
-  /* text-style buttons ("Обновить список", "Показать правила") */
-  button.text-link { min-height: 44px; display: inline-flex; align-items: center; }
-  /* section navigation of the admin area and of the settings (their pages are not ours: target them by label) */
-  nav[aria-label='Разделы админки'] a, nav[aria-label='Разделы настроек'] a { min-height: 44px; display: flex; align-items: center; justify-content: center; }
-  nav[aria-label='Разделы админки'] { scroll-snap-type: x proximity; }
-  nav[aria-label='Разделы админки'] a { scroll-snap-align: center; justify-content: flex-start; }
-  select, textarea, input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='color']) { font-size: 16px; }
-}
-
-/* ---------- reduced motion: no animations, no transitions ---------- */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    animation-delay: 0s !important;
-    transition-duration: 0.01ms !important;
-    transition-delay: 0s !important;
-    scroll-behavior: auto !important;
+  .input[aria-invalid='true'] {
+    border-color: rgb(var(--bad));
   }
-  .auth-glow, .auth-float, .skeleton, .pill.live::before { animation: none !important; }
-  /* a spinner must still say "busy": keep a slow rotation */
-  .animate-spin { animation: spin 2s linear infinite !important; }
-  .active\:scale-\[\.98\]:active, .hover\:-translate-y-0\.5:hover, .hover\:scale-110:hover { transform: none !important; }
-}
 
-/* decorative tiles next to the sign-in card */
-.showcase-tile { animation: showcase-in .6s cubic-bezier(.2, .8, .2, 1) both; }
-@keyframes showcase-in { from { opacity: 0; transform: translateY(20px) scale(.96) rotate(0deg); } }
-@media (prefers-reduced-motion: reduce) { .showcase-tile { animation: none; } }
+  /* ---------- sign-in screens ---------- */
+  :root {
+    --auth-glow: 0.14;
+  }
+  :root[data-theme='dark'] {
+    --auth-glow: 0.28;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --auth-glow: 0.28;
+    }
+  }
 
-/* ---------- motion: staggered tiles, chart reveal, meters, live dot, skeleton sweep ---------- */
-.tile-in { animation: tile-in .55s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 55ms); }
-@keyframes tile-in { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
+  /* soft brand-coloured light behind the card */
+  .auth-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        42rem 32rem at 50% 42%,
+        rgb(var(--brand) / var(--auth-glow)),
+        transparent 70%
+      ),
+      radial-gradient(
+        26rem 22rem at 12% 8%,
+        rgb(var(--brand) / calc(var(--auth-glow) * 0.55)),
+        transparent 70%
+      ),
+      radial-gradient(
+        28rem 24rem at 92% 96%,
+        rgb(var(--brand) / calc(var(--auth-glow) * 0.55)),
+        transparent 70%
+      );
+    animation: auth-glow 9s ease-in-out infinite alternate;
+  }
+  @keyframes auth-glow {
+    from {
+      opacity: 0.75;
+    }
+    to {
+      opacity: 1;
+    }
+  }
 
-.chart-reveal { animation: chart-reveal 1.1s cubic-bezier(.3, .7, .2, 1) .25s both; }
-@keyframes chart-reveal { from { clip-path: inset(-20% 100% -20% 0); } to { clip-path: inset(-20% -3% -20% 0); } }
+  .auth-float {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    width: var(--s);
+    height: var(--s);
+    color: rgb(var(--brand));
+    opacity: 0.12;
+    pointer-events: none;
+    transform: rotate(var(--r));
+    animation: auth-float var(--d) ease-in-out infinite alternate;
+  }
+  :root[data-theme='dark'] .auth-float {
+    opacity: 0.16;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) .auth-float {
+      opacity: 0.16;
+    }
+  }
+  @keyframes auth-float {
+    from {
+      transform: translate3d(0, 0, 0) rotate(var(--r));
+    }
+    to {
+      transform: translate3d(16px, -30px, 0) rotate(calc(var(--r) + 14deg));
+    }
+  }
 
-.meter { height: 6px; border-radius: var(--r-pill); background: rgb(var(--soft)); overflow: hidden; }
-.meter > i { display: block; height: 100%; border-radius: var(--r-pill); background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--brand-2, var(--brand)))); transition: width 1.1s cubic-bezier(.2, .8, .2, 1); animation: meter-in 1.1s cubic-bezier(.2, .8, .2, 1) both; }
-@keyframes meter-in { from { width: 0; } }
+  .auth-card {
+    border-color: rgb(var(--brand) / calc(var(--auth-glow) * 1.1));
+    box-shadow:
+      0 28px 60px -28px rgb(var(--brand) / calc(var(--auth-glow) * 2.2)),
+      0 2px 8px rgb(0 0 0 / 0.06);
+    animation: auth-card-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  :root[data-theme='dark'] .auth-card {
+    box-shadow:
+      0 28px 70px -24px rgb(var(--brand) / 0.5),
+      0 2px 10px rgb(0 0 0 / 0.5);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) .auth-card {
+      box-shadow:
+        0 28px 70px -24px rgb(var(--brand) / 0.5),
+        0 2px 10px rgb(0 0 0 / 0.5);
+    }
+  }
+  @keyframes auth-card-in {
+    from {
+      opacity: 0;
+      transform: translateY(18px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
 
-.live-dot { position: relative; width: 8px; height: 8px; border-radius: var(--r-pill); background: rgb(var(--ok-fill)); }
-.live-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: rgb(var(--ok-fill)); animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
-@keyframes live-ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
+  .auth-swap {
+    animation: auth-swap 0.3s ease-out both;
+  }
+  @keyframes auth-swap {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
 
-.offline-cover { opacity: .78; }
+  .shake {
+    animation: auth-shake 0.42s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  }
+  @keyframes auth-shake {
+    10%,
+    90% {
+      transform: translateX(-1px);
+    }
+    20%,
+    80% {
+      transform: translateX(3px);
+    }
+    30%,
+    50%,
+    70% {
+      transform: translateX(-6px);
+    }
+    40%,
+    60% {
+      transform: translateX(6px);
+    }
+  }
 
-.skeleton { background-image: linear-gradient(100deg, rgb(var(--soft)) 30%, rgb(var(--card)) 50%, rgb(var(--soft)) 70%); background-size: 220% 100%; animation: skeleton-sweep 1.5s ease-in-out infinite; }
-@keyframes skeleton-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+  /* ---------- shared helpers ---------- */
+  /* "skip to content" link: visible only while focused */
+  .skip-link {
+    position: fixed;
+    left: 1rem;
+    top: 0.75rem;
+    z-index: 100;
+    transform: translateY(-200%);
+    border-radius: var(--r-pill);
+    padding: 0.6rem 1.1rem;
+    font-weight: 650;
+    background: rgb(var(--brand));
+    color: #fff;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
+  }
+  .skip-link:focus {
+    transform: none;
+  }
+  /* <main> gets focus programmatically on every route change: no ring around the whole page */
+  main:focus,
+  main:focus-visible {
+    outline: none;
+    box-shadow: none;
+    --tw-ring-shadow: 0 0 #0000;
+  }
 
-.tile-hover:active { transform: scale(.992); }
+  /* a value that just changed: short glow */
+  @keyframes num-bump {
+    0% {
+      text-shadow: 0 0 0 rgb(var(--ok) / 0);
+    }
+    30% {
+      text-shadow: 0 0 16px rgb(var(--ok) / 0.55);
+      color: rgb(var(--ok));
+    }
+    100% {
+      text-shadow: 0 0 0 rgb(var(--ok) / 0);
+    }
+  }
+  .num-bump {
+    animation: num-bump 0.9s ease-out;
+  }
 
-@media (prefers-reduced-motion: reduce) {
-  .tile-in, .chart-reveal, .meter > i, .live-dot::after, .skeleton { animation: none !important; }
-  .meter > i { transition: none; }
-}
+  /* touch devices: bigger hit areas for small controls without changing the desktop look */
+  @media (max-width: 639px) {
+    input[type='checkbox']:not(.switch),
+    input[type='radio'] {
+      width: 1.25rem !important;
+      height: 1.25rem !important;
+    }
+    label:has(> input[type='checkbox']),
+    label:has(> input[type='radio']) {
+      min-height: 44px;
+    }
+    /* text-style buttons ("Обновить список", "Показать правила") */
+    button.text-link {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+    }
+    /* section navigation of the admin area and of the settings (their pages are not ours: target them by label) */
+    nav[aria-label='Разделы админки'] a,
+    nav[aria-label='Разделы настроек'] a {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    nav[aria-label='Разделы админки'] {
+      scroll-snap-type: x proximity;
+    }
+    nav[aria-label='Разделы админки'] a {
+      scroll-snap-align: center;
+      justify-content: flex-start;
+    }
+    select,
+    textarea,
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not(
+        [type='file']
+      ):not([type='color']) {
+      font-size: 16px;
+    }
+  }
 
-/* every other grid of tiles (server page, admin, status ...) enters with a short cascade too */
-main .grid > .tile:not(.tile-in),
-main .grid > .panel:not(.tile-in) { animation: tile-in .5s cubic-bezier(.2, .8, .2, 1) both; }
-main .grid > :nth-child(2) { animation-delay: 50ms; }
-main .grid > :nth-child(3) { animation-delay: 100ms; }
-main .grid > :nth-child(4) { animation-delay: 150ms; }
-main .grid > :nth-child(5) { animation-delay: 200ms; }
-main .grid > :nth-child(6) { animation-delay: 250ms; }
-main .grid > :nth-child(n+7) { animation-delay: 300ms; }
-@media (prefers-reduced-motion: reduce) {
-  main .grid > .tile, main .grid > .panel { animation: none !important; }
-}
+  /* ---------- reduced motion: no animations, no transitions ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      animation-delay: 0s !important;
+      transition-duration: 0.01ms !important;
+      transition-delay: 0s !important;
+      scroll-behavior: auto !important;
+    }
+    .auth-glow,
+    .auth-float,
+    .skeleton,
+    .pill.live::before {
+      animation: none !important;
+    }
+    /* a spinner must still say "busy": keep a slow rotation */
+    .animate-spin {
+      animation: spin 2s linear infinite !important;
+    }
+    .active\:scale-\[\.98\]:active,
+    .hover\:-translate-y-0\.5:hover,
+    .hover\:scale-110:hover {
+      transform: none !important;
+    }
+  }
 
-/* =====================================================================================================
+  /* decorative tiles next to the sign-in card */
+  .showcase-tile {
+    animation: showcase-in 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  @keyframes showcase-in {
+    from {
+      opacity: 0;
+      transform: translateY(20px) scale(0.96) rotate(0deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .showcase-tile {
+      animation: none;
+    }
+  }
+
+  /* ---------- motion: staggered tiles, chart reveal, meters, live dot, skeleton sweep ---------- */
+  .tile-in {
+    animation: tile-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: calc(var(--i, 0) * 55ms);
+  }
+  @keyframes tile-in {
+    from {
+      opacity: 0;
+      transform: translateY(18px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .chart-reveal {
+    animation: chart-reveal 1.1s cubic-bezier(0.3, 0.7, 0.2, 1) 0.25s both;
+  }
+  @keyframes chart-reveal {
+    from {
+      clip-path: inset(-20% 100% -20% 0);
+    }
+    to {
+      clip-path: inset(-20% -3% -20% 0);
+    }
+  }
+
+  .meter {
+    height: 6px;
+    border-radius: var(--r-pill);
+    background: rgb(var(--soft));
+    overflow: hidden;
+  }
+  .meter > i {
+    display: block;
+    height: 100%;
+    border-radius: var(--r-pill);
+    background: linear-gradient(
+      90deg,
+      rgb(var(--brand)),
+      rgb(var(--brand-2, var(--brand)))
+    );
+    transition: width 1.1s cubic-bezier(0.2, 0.8, 0.2, 1);
+    animation: meter-in 1.1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  @keyframes meter-in {
+    from {
+      width: 0;
+    }
+  }
+
+  .live-dot {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--r-pill);
+    background: rgb(var(--ok-fill));
+  }
+  .live-dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: rgb(var(--ok-fill));
+    animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  @keyframes live-ping {
+    75%,
+    100% {
+      transform: scale(2.6);
+      opacity: 0;
+    }
+  }
+
+  .offline-cover {
+    opacity: 0.78;
+  }
+
+  .skeleton {
+    background-image: linear-gradient(
+      100deg,
+      rgb(var(--soft)) 30%,
+      rgb(var(--card)) 50%,
+      rgb(var(--soft)) 70%
+    );
+    background-size: 220% 100%;
+    animation: skeleton-sweep 1.5s ease-in-out infinite;
+  }
+  @keyframes skeleton-sweep {
+    from {
+      background-position: 120% 0;
+    }
+    to {
+      background-position: -120% 0;
+    }
+  }
+
+  .tile-hover:active {
+    transform: scale(0.992);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tile-in,
+    .chart-reveal,
+    .meter > i,
+    .live-dot::after,
+    .skeleton {
+      animation: none !important;
+    }
+    .meter > i {
+      transition: none;
+    }
+  }
+
+  /* every other grid of tiles (server page, admin, status ...) enters with a short cascade too */
+  main .grid > .tile:not(.tile-in),
+  main .grid > .panel:not(.tile-in) {
+    animation: tile-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  main .grid > :nth-child(2) {
+    animation-delay: 50ms;
+  }
+  main .grid > :nth-child(3) {
+    animation-delay: 100ms;
+  }
+  main .grid > :nth-child(4) {
+    animation-delay: 150ms;
+  }
+  main .grid > :nth-child(5) {
+    animation-delay: 200ms;
+  }
+  main .grid > :nth-child(6) {
+    animation-delay: 250ms;
+  }
+  main .grid > :nth-child(n + 7) {
+    animation-delay: 300ms;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    main .grid > .tile,
+    main .grid > .panel {
+      animation: none !important;
+    }
+  }
+
+  /* =====================================================================================================
    Visual language pass: buttons, magnetic CTAs, split button, switches, copy burst, view transitions,
    hero depth, status breathing, roll digits, skeleton swap, micro-interactions, density.
    Everything moving is switched off for prefers-reduced-motion (see the block at the end of the file).
    ===================================================================================================== */
 
-/* the page colour also paints the canvas, so a view-transition slide never shows a white edge */
-html { background-color: rgb(var(--page)); }
-
-/* animated glyphs inside buttons: styles/buttons.css */
-
-/* copy -> check with a small burst */
-.copy-ico { position: relative; display: inline-grid; width: 16px; height: 16px; place-items: center; flex-shrink: 0; }
-.copy-ico > .ico-copy, .copy-ico > .ico-check { grid-area: 1 / 1; transition: transform .28s cubic-bezier(.34, 1.56, .64, 1), opacity .18s ease; }
-.copy-ico > .ico-check { transform: scale(0) rotate(-40deg); opacity: 0; color: rgb(var(--ok)); }
-.copy-ico[data-done='true'] > .ico-copy { transform: scale(0) rotate(40deg); opacity: 0; }
-.copy-ico[data-done='true'] > .ico-check { transform: none; opacity: 1; }
-.ico-check path { stroke-dasharray: 24; stroke-dashoffset: 24; }
-.copy-ico[data-done='true'] .ico-check path { animation: check-draw .32s ease-out .05s forwards; }
-@keyframes check-draw { to { stroke-dashoffset: 0; } }
-
-.burst { position: absolute; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
-.burst i {
-  position: absolute; left: -2.5px; top: -2.5px; width: 5px; height: 5px; border-radius: var(--r-pill);
-  background: rgb(var(--ok)); opacity: 0;
-  animation: burst .9s cubic-bezier(.15, .7, .3, 1) forwards;
-}
-.burst i:nth-child(3n+1) { background: rgb(var(--brand)); width: 4px; height: 4px; }
-.burst i:nth-child(3n+2) { background: #f0b232; }
-.burst i:nth-child(4n) { background: #ec4899; height: 4px; }
-@keyframes burst {
-  0% { opacity: 1; transform: rotate(var(--a)) translateY(-3px) scale(.4); }
-  25% { opacity: 1; }
-  100% { opacity: 0; transform: rotate(var(--a)) translateY(calc(var(--r, 17px) * -1)) scale(.9); }
-}
-
-/* ---------- iOS-style switch (input type=checkbox role=switch) ---------- */
-@layer components {
-  .switch {
-    -webkit-appearance: none; appearance: none; position: relative; flex-shrink: 0; display: inline-block; vertical-align: middle;
-    width: 2.75rem; height: 1.625rem; border-radius: var(--r-pill); cursor: pointer; margin: 0;
-    background-color: rgb(var(--field));
-    transition: background-color .25s ease, box-shadow .25s ease;
+  /* the page colour also paints the canvas, so a view-transition slide never shows a white edge */
+  html {
+    background-color: rgb(var(--page));
   }
-  .switch::before {
-    content: ''; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: var(--r-pill); background: #fff;
-    box-shadow: 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 .5px rgb(0 0 0 / 0.08);
-    transition: transform .42s cubic-bezier(.34, 1.56, .64, 1), width .18s ease;
+
+  /* animated glyphs inside buttons: styles/buttons.css */
+
+  /* copy -> check with a small burst */
+  .copy-ico {
+    position: relative;
+    display: inline-grid;
+    width: 16px;
+    height: 16px;
+    place-items: center;
+    flex-shrink: 0;
   }
-  .switch:checked { background-image: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: 0 4px 12px -4px rgb(var(--brand) / 0.55); }
-  .switch:checked::before { transform: translateX(18px); }
-  .switch:active:not(:disabled)::before { width: 25px; }
-  .switch:checked:active:not(:disabled)::before { transform: translateX(13px); }
-  .switch:disabled { opacity: .5; cursor: not-allowed; }
+  .copy-ico > .ico-copy,
+  .copy-ico > .ico-check {
+    grid-area: 1 / 1;
+    transition:
+      transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1),
+      opacity 0.18s ease;
+  }
+  .copy-ico > .ico-check {
+    transform: scale(0) rotate(-40deg);
+    opacity: 0;
+    color: rgb(var(--ok));
+  }
+  .copy-ico[data-done='true'] > .ico-copy {
+    transform: scale(0) rotate(40deg);
+    opacity: 0;
+  }
+  .copy-ico[data-done='true'] > .ico-check {
+    transform: none;
+    opacity: 1;
+  }
+  .ico-check path {
+    stroke-dasharray: 24;
+    stroke-dashoffset: 24;
+  }
+  .copy-ico[data-done='true'] .ico-check path {
+    animation: check-draw 0.32s ease-out 0.05s forwards;
+  }
+  @keyframes check-draw {
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+
+  .burst {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+  .burst i {
+    position: absolute;
+    left: -2.5px;
+    top: -2.5px;
+    width: 5px;
+    height: 5px;
+    border-radius: var(--r-pill);
+    background: rgb(var(--ok));
+    opacity: 0;
+    animation: burst 0.9s cubic-bezier(0.15, 0.7, 0.3, 1) forwards;
+  }
+  .burst i:nth-child(3n + 1) {
+    background: rgb(var(--brand));
+    width: 4px;
+    height: 4px;
+  }
+  .burst i:nth-child(3n + 2) {
+    background: #f0b232;
+  }
+  .burst i:nth-child(4n) {
+    background: #ec4899;
+    height: 4px;
+  }
+  @keyframes burst {
+    0% {
+      opacity: 1;
+      transform: rotate(var(--a)) translateY(-3px) scale(0.4);
+    }
+    25% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      transform: rotate(var(--a)) translateY(calc(var(--r, 17px) * -1))
+        scale(0.9);
+    }
+  }
+
+  /* ---------- iOS-style switch (input type=checkbox role=switch) ---------- */
 }
 
 /* ---------- checkbox whose tick is drawn ---------- */
@@ -61369,7 +61742,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       key={s.id}
       href={`/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
-      className={`adm-link flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] py-1.5 pl-1.5 pr-3.5 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'is-on bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+      className={`adm-link flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] py-1.5 pl-1.5 pr-3.5 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'is-on bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
@@ -61414,7 +61787,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         ) : (
           <>
-            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
+            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-widest text-mute md:block">Админка</div>
             {sections.map((s) => link(s))}
           </>
         )}
@@ -61728,8 +62101,8 @@ function SeasonsAdmin() {
     <>
       <Section title="Новый сезон" description="Начните сезон, например, в день вайпа. Таблица сезона на странице «Сообщество» считает часы с его начала, а когда начнётся следующий, тройка лучших попадёт в зал славы и получит достижения.">
         <form onSubmit={create} className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[12rem] flex-1"><Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={`Сезон ${count + 1}`} /></Field></div>
-          <div className="min-w-[12rem]"><Field label="Начало"><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
+          <div className="min-w-48 flex-1"><Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={`Сезон ${count + 1}`} /></Field></div>
+          <div className="min-w-48"><Field label="Начало"><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
           <Button loading={busy}>Начать сезон</Button>
         </form>
         <ErrorLine text={error} />
@@ -61937,8 +62310,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                       <div className="flex min-w-0 items-center gap-3">
                         <GameAvatar game={s.game} size={38} />
                         <div className="min-w-0">
-                          <a href={`/servers/${s.id}`} className="block max-w-[12.5rem] xl:max-w-[15rem] truncate font-extrabold leading-tight hover:text-link" title={s.name}>{s.name}</a>
-                          <div className="max-w-[12.5rem] xl:max-w-[15rem] truncate text-xs font-semibold text-mute" title={s.displayAddress ? `Показывается как ${s.displayAddress}` : undefined}>
+                          <a href={`/servers/${s.id}`} className="block max-w-50 xl:max-w-60 truncate font-extrabold leading-tight hover:text-link" title={s.name}>{s.name}</a>
+                          <div className="max-w-50 xl:max-w-60 truncate text-xs font-semibold text-mute" title={s.displayAddress ? `Показывается как ${s.displayAddress}` : undefined}>
                             {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
                           </div>
                         </div>
@@ -61974,7 +62347,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                 <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`Выбрать: ${s.name}`} />
                 <GameAvatar game={s.game} size={40} />
                 <div className="min-w-0 flex-1 basis-40">
-                  <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight">{s.name}</a>
+                  <a href={`/servers/${s.id}`} className="block wrap-break-word font-extrabold leading-tight">{s.name}</a>
                   <div className="truncate text-xs font-semibold text-mute">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
                 </div>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
@@ -62157,7 +62530,7 @@ function Ring({ done, total }: { done: number; total: number }) {
           cx="38" cy="38" r={r} fill="none" stroke="rgb(var(--brand))" strokeWidth="8" strokeLinecap="round"
           strokeDasharray={c} strokeDashoffset={c * (1 - done / total)}
           style={{ transition: 'stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1)' }}
-          className="motion-reduce:!transition-none"
+          className="motion-reduce:transition-none!"
         />
       </svg>
       <span className="absolute text-lg font-black tabular-nums">{done}/{total}</span>
@@ -62241,7 +62614,7 @@ export default function AdminStart() {
                 <li key={st.id} className={`tile flex flex-wrap items-center gap-x-4 gap-y-3 p-4 sm:p-5 ${current ? 'ring-2 ring-brand/50' : ''}`}>
                   <span
                     className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-xl font-black ${
-                      st.state === 'done' ? 'bg-okbg text-ok' : st.state === 'unknown' || skipped ? 'bg-soft text-mute' : 'bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop'
+                      st.state === 'done' ? 'bg-okbg text-ok' : st.state === 'unknown' || skipped ? 'bg-soft text-mute' : 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop'
                     }`}
                     aria-hidden
                   >
@@ -62308,7 +62681,7 @@ export default function AdminStart() {
         <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
           {ADMIN_GROUPS.map((g, gi) => (
             <div key={g.title}>
-              <div className="adm-group-title !px-0">{g.title}</div>
+              <div className="adm-group-title px-0!">{g.title}</div>
               <ul className="space-y-1">
                 {gi === 0 && <MapRow id={START_SECTION.id} label={START_SECTION.label} desc={START_SECTION.desc} icon={START_SECTION.icon()} />}
                 {g.sections.map((sec) => <MapRow key={sec.id} id={sec.id} label={sec.label} desc={sec.desc} icon={sec.icon()} />)}
@@ -62904,7 +63277,7 @@ export default function CardsPage() {
           <div key={s.id} className="panel space-y-3 p-5">
             <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="min-w-0 break-words font-black">{s.name}</span>
+              <span className="min-w-0 wrap-break-word font-black">{s.name}</span>
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(s)}>
                   <span className="copy-ico" data-done={copied === s.id} aria-hidden>
@@ -63369,7 +63742,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                   {shown.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
-                    <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
+                    <div className="line-clamp-2 wrap-break-word font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
                     <div className="truncate text-sm font-bold text-mute" title={`ID канала ${b.channelId}`}>
                       {b.channelName ? `# ${b.channelName}${b.guildName ? ` · ${b.guildName}` : ''}` : `Канал ${b.channelId}`}
                     </div>
@@ -63400,7 +63773,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                   src={`/api/card/${b.serverId}.png?v=${s?.updatedAt ?? 0}`}
                   alt={`Карточка: ${s?.name ?? ''}`}
                   loading="lazy"
-                  className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
+                  className="aspect-5/2 w-full rounded-2xl bg-soft object-cover"
                 />
               )}
 
@@ -63705,7 +64078,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
             </Part>
           )}
           {e.title && (
-            <Part part="title" embed={index} onPick={onPick} bad={bad('title')} className="mb-1 break-words text-base font-bold">
+            <Part part="title" embed={index} onPick={onPick} bad={bad('title')} className="mb-1 wrap-break-word text-base font-bold">
               {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: theme.link }}>{e.title}</a> : <span style={{ color: theme.title }}>{e.title}</span>}
             </Part>
           )}
@@ -63788,7 +64161,7 @@ export function EmbedView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 text-[15px] leading-tight">
                   <span className="font-bold" style={{ color: t.title }}>{botName}</span>
-                  <span className="rounded px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
+                  <span className="rounded-sm px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
                   <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
                 </div>
                 {content && (
@@ -64135,7 +64508,7 @@ export default function JournalPage() {
             <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-5 py-3">
               <span className="w-40 shrink-0 text-sm font-semibold tabular-nums text-mute">{fmtDateTime(r.ts)}</span>
               <span className="font-extrabold">{r.action}</span>
-              {r.detail && <span className="min-w-0 break-words font-semibold text-mute">{r.detail}</span>}
+              {r.detail && <span className="min-w-0 wrap-break-word font-semibold text-mute">{r.detail}</span>}
               <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
             </li>
           ))}
@@ -64417,11 +64790,11 @@ export default function MaintenancePage() {
             <li key={w.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
               <div className="min-w-0 flex-1 basis-60">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="min-w-0 break-words font-extrabold">{w.name}</span>
+                  <span className="min-w-0 wrap-break-word font-extrabold">{w.name}</span>
                   <span className={CHIP[st].cls}>{CHIP[st].text}</span>
                   {w.repeat !== 'none' && st !== 'repeat' && <span className="pill pill-mute">{REPEAT_LABEL[w.repeat]}</span>}
                 </div>
-                <div className="mt-0.5 break-words text-sm font-semibold text-mute">
+                <div className="mt-0.5 wrap-break-word text-sm font-semibold text-mute">
                   {w.serverId == null ? 'Все серверы' : w.serverName ?? `Сервер №${w.serverId}`}
                   {' · '}
                   {rangeLabel(w.startTs, w.endTs)}
@@ -64659,7 +65032,7 @@ function NewsList() {
     >
       {error && list.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
-      <Strip className="!justify-start">
+      <Strip className="justify-start!">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
         {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${t.id}`}>{t.label}</a>)}
       </Strip>
@@ -64729,8 +65102,8 @@ function NewsList() {
                 </div>
                 <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
               </div>
-              <h3 className="line-clamp-2 break-words text-lg font-black leading-tight">{n.title}</h3>
-              {excerpt(n) && <p className="line-clamp-3 break-words text-sm font-semibold text-mute">{excerpt(n)}</p>}
+              <h3 className="line-clamp-2 wrap-break-word text-lg font-black leading-tight">{n.title}</h3>
+              {excerpt(n) && <p className="line-clamp-3 wrap-break-word text-sm font-semibold text-mute">{excerpt(n)}</p>}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>Изменить</a>
@@ -64815,7 +65188,7 @@ function ColorPicker({ value, onChange, games }: { value: number; onChange: (n: 
       <div className="flex flex-wrap items-center gap-2">
         {PALETTE.map(([n, c]) => dot(n, c))}
         <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm font-extrabold text-mute">
-          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded border-2 border-line bg-card" aria-label="Свой цвет" />
+          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded-sm border-2 border-line bg-card" aria-label="Свой цвет" />
           свой
         </label>
       </div>
@@ -65279,7 +65652,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
             <Field label="Цвет полосы"><ColorPicker value={e.color} onChange={(c) => setE({ color: c })} games={games} /></Field>
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label !mb-0">Заголовок</label><Counter value={e.title.length} max={LIMITS.title} /></div>
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label mb-0!">Заголовок</label><Counter value={e.title.length} max={LIMITS.title} /></div>
               <input id="news-title" className="input" value={e.title} onChange={(ev) => setE({ title: ev.target.value })} placeholder="📢 Заголовок новости" />
             </div>
             <Field label="Ссылка заголовка (необязательно)">
@@ -65310,7 +65683,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
           <Section title="Подпись">
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label !mb-0">Текст внизу</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label mb-0!">Текст внизу</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
               <input id="news-footer" className="input" value={e.footer} onChange={(ev) => setE({ footer: ev.target.value })} placeholder="Например: Администрация сервера" />
             </div>
             <label className="flex items-center gap-3 text-sm font-bold text-mute">
@@ -65343,7 +65716,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </label>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Отсчёт времени</span>
+              <span className="label mb-0!">Отсчёт времени</span>
               <div className="grid gap-2 sm:grid-cols-2">
                 <input id="news-cd-at" type="datetime-local" className="input" aria-label="Когда" value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
                 <input id="news-cd-label" className="input" aria-label="Подпись отсчёта" maxLength={LIMITS.countdownLabel} placeholder="Вайп" value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
@@ -65352,7 +65725,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </div>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
+              <span className="label mb-0!">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
               {d.gallery.map((g, i) => (
                 <ImageDrop
                   key={g.k}
@@ -65370,7 +65743,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </div>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
+              <span className="label mb-0!">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
               {d.changes.map((c, i) => (
                 <div key={c.k} className="nw-edit-row">
                   <select aria-label={'Тип изменения ' + (i + 1)} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
@@ -65384,7 +65757,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             </div>
 
             <div className="space-y-2">
-              <span className="label !mb-0">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
+              <span className="label mb-0!">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
               {d.actions.map((a, i) => {
                 const bad = !!a.url.trim() && !isHttpsUrl(a.url);
                 return (
@@ -65684,7 +66057,7 @@ function OverviewTab() {
         <div className="pf-hero-body">
           <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><AvatarEditor onChanged={reload} /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
-            <div className="line-clamp-2 break-words text-2xl font-black leading-tight">{me.username}</div>
+            <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
               {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}
@@ -66048,9 +66421,9 @@ export default function PublicProfilePage({ username }: { username: string }) {
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(p.bannerUrl, p.bannerPreset)} />
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><UserAvatar name={p.username} url={p.avatarUrl} size={88} tone="brand" className="!rounded-3xl" /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><UserAvatar name={p.username} url={p.avatarUrl} size={88} tone="brand" className="rounded-3xl!" /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
-            <h1 className="line-clamp-2 break-words text-2xl font-black leading-tight">{p.username}</h1>
+            <h1 className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{p.username}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${p.role === 'admin' ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
               {p.rank && (
@@ -66725,7 +67098,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
-        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
     </SectionCard>
   );
@@ -66845,7 +67218,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="relative flex items-start gap-3.5 sm:gap-4">
           <GameAvatar game={s.game} size={64} glass vtId={s.id} />
           <div className="min-w-0 flex-1">
-            <h1 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
+            <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
               <span className="chip-glass">{gameLabel(s.game)}</span>
@@ -67519,7 +67892,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       <div className="sh-head relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
-          <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
+          <h2 className="line-clamp-2 wrap-break-word text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
             <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
@@ -67594,7 +67967,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       </div>
 
       <div className="px-1.5">
-        <h3 className="line-clamp-2 break-words text-[16.5px] font-extrabold leading-tight" title={s.name}>
+        <h3 className="line-clamp-2 wrap-break-word text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
@@ -67787,7 +68160,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
   return (
     <AuthShell>
-      <div className={`auth-card w-full max-w-md rounded-3xl border bg-card/90 p-6 backdrop-blur sm:p-7 ${shakeCls}`}>
+      <div className={`auth-card w-full max-w-md rounded-3xl border bg-card/90 p-6 backdrop-blur-sm sm:p-7 ${shakeCls}`}>
         <AuthBrand subtitle="Первоначальная настройка панели" />
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
@@ -67797,7 +68170,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 {i < step ? '✓' : i + 1}
               </span>
               <span className={`text-sm font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{s}</span>
-              {i < STEPS.length - 1 && <span className="h-0.5 flex-1 rounded bg-soft" />}
+              {i < STEPS.length - 1 && <span className="h-0.5 flex-1 rounded-sm bg-soft" />}
             </li>
           ))}
         </ol>
@@ -67933,7 +68306,7 @@ function ServerRow({ s }: { s: StatusServer }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <GameAvatar game={s.game} size={44} />
         <div className="min-w-0 flex-1 basis-40">
-          <a href={`/servers/${s.id}`} className="block break-words text-[17px] font-extrabold leading-tight hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} className="block wrap-break-word text-[17px] font-extrabold leading-tight hover:text-link">{s.name}</a>
           <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
         </div>
         {s.online && <span className="text-sm font-bold tabular-nums text-mute">{s.players}/{s.maxPlayers} игроков</span>}
@@ -68243,7 +68616,7 @@ export default function SystemPage() {
                 <li key={r.k} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5">
                   <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full dot-${r.tone}`} />
                   <span className="font-extrabold">{r.k}</span>
-                  {r.sub && <span className="min-w-0 break-words text-sm font-semibold text-mute">{r.sub}</span>}
+                  {r.sub && <span className="min-w-0 wrap-break-word text-sm font-semibold text-mute">{r.sub}</span>}
                   <span className={`ml-auto font-black tabular-nums ${r.tone === 'bad' ? 'text-bad' : r.tone === 'warn' ? 'text-warn' : ''}`}>{r.v}</span>
                 </li>
               ))}
@@ -68266,7 +68639,7 @@ export default function SystemPage() {
                   <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? 'в порядке' : c.status === 'warn' ? 'внимание' : 'ошибка'} />
                   <div className="min-w-0">
                     <div className="font-extrabold">{c.label}</div>
-                    <div className="break-words text-sm font-semibold text-mute">{c.detail}</div>
+                    <div className="wrap-break-word text-sm font-semibold text-mute">{c.detail}</div>
                   </div>
                 </li>
               ))}
@@ -69290,7 +69663,7 @@ export function BrandCard() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
-            <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-gradient-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
+            <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-linear-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
               <IconCheck size={18} />
             </span>
           </div>
@@ -69629,7 +70002,7 @@ export function UpdateCard() {
           <ul className="divide-y divide-line">
             {log.items.map((c) => (
               <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
-                <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 break-words font-bold hover:text-link">{c.title}</a>
+                <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 wrap-break-word font-bold hover:text-link">{c.title}</a>
                 <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
                 <span className="text-sm font-semibold text-mute">{ago(typeof c.date === 'number' ? c.date : Date.parse(String(c.date)) || null)}</span>
               </li>
@@ -69766,7 +70139,7 @@ function UsersTabInner() {
             <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
             <div className="pl-8">
               <label htmlFor="reg-mode" className="label">Режим регистрации</label>
-              <select id="reg-mode" className="input !w-auto max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
+              <select id="reg-mode" className="input w-auto! max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
                 <option value="open">Открытая: сразу</option>
                 <option value="approval">По заявке: после одобрения администратором</option>
               </select>
@@ -69830,7 +70203,7 @@ function UsersTabInner() {
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
-              <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
+              <select className="input w-auto! py-1.5!" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
                 <option value="player">Игрок</option>
                 <option value="moderator">Модератор</option>
                 <option value="admin">Администратор</option>
@@ -72124,7 +72497,7 @@ export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?
       </span>
     );
   }
-  return <span className="min-h-[1.25rem] text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
+  return <span className="min-h-5 text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
 }
 
 /**
@@ -72214,10 +72587,10 @@ function AuthDecor() {
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden p-4 pt-20 sm:p-8">
+    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden p-4 pt-20 sm:p-8">
       <AuthDecor />
       <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
-      <div className="relative z-[1] grid w-full max-w-6xl items-center justify-items-center gap-10 xl:grid-cols-[minmax(0,1fr)_24rem_minmax(0,1fr)]">
+      <div className="relative z-1 grid w-full max-w-6xl items-center justify-items-center gap-10 xl:grid-cols-[minmax(0,1fr)_24rem_minmax(0,1fr)]">
         <AuthShowcase side="left" />
         {children}
         <AuthShowcase side="right" />
@@ -72231,7 +72604,7 @@ export function AuthBrand({ subtitle }: { subtitle?: string }) {
   return (
     <div className="mb-5 flex flex-col items-center text-center">
       <Logo size={64} alt="" />
-      <Wordmark className="mt-2 max-w-full break-words text-3xl" />
+      <Wordmark className="mt-2 max-w-full wrap-break-word text-3xl" />
       {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
     </div>
   );
@@ -72245,7 +72618,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
     { id: 'register', label: t('auth.register') },
   ] as const;
   return (
-    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur sm:p-7">
+    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur-sm sm:p-7">
       <AuthBrand subtitle={mode === 'login' ? t('auth.subLogin') : t('auth.subRegister')} />
       {access.registration && (
         <nav className="seg mb-5 flex w-full" aria-label={t('auth.switchAria')}>
@@ -72331,7 +72704,7 @@ export const PasswordField = forwardRef<
         <input
           id={id}
           ref={ref}
-          className="input !pr-12 max-sm:!pr-14"
+          className="input pr-12! max-sm:pr-14!"
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -72412,7 +72785,7 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   return (
     <span
       aria-hidden
-      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-gradient-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
+      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-linear-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
       style={{ width: size, height: size, fontSize: size * 0.48 }}
     >
       {name.slice(0, 1).toUpperCase()}
@@ -72430,7 +72803,7 @@ export const IconDiscordLogo = ({ size = 20 }: { size?: number }) => (
 export function DiscordBadge({ name }: { name: string }) {
   return (
     <span
-      className="inline-flex max-w-[11rem] items-center gap-1.5 rounded-full bg-[#5865f2]/15 py-0.5 pl-1.5 pr-2.5 text-xs font-bold text-[#7983f5]"
+      className="inline-flex max-w-44 items-center gap-1.5 rounded-full bg-[#5865f2]/15 py-0.5 pl-1.5 pr-2.5 text-xs font-bold text-[#7983f5]"
       title={`Привязан аккаунт Discord: ${name}`}
     >
       <IconDiscordLogo size={14} />
@@ -72491,7 +72864,7 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
       : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
   const bd = useBackdropClose(onClose);
   return (
-    <div className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4'} {...bd}>
+    <div className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'} {...bd}>
       <div
         ref={box}
         role="dialog"
@@ -72499,8 +72872,8 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
         aria-labelledby={titleId}
         tabIndex={-1}
         className={side
-          ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-l-ui-xl sm:p-6'
-          : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6'}
+          ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-l-ui-xl sm:p-6'
+          : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6'}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
@@ -72601,9 +72974,9 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3.5">
-          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-linear-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
+            <h1 className="text-2xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
             {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
           </div>
         </div>
@@ -72738,7 +73111,7 @@ export function ProxyField({
       <div className="flex gap-2">
         <select
           aria-label="Тип прокси"
-          className="input !w-auto shrink-0"
+          className="input w-auto! shrink-0"
           value={type}
           disabled={disabled}
           onChange={(e) => onType(e.target.value as ProxyType)}
@@ -73596,7 +73969,7 @@ export function Toaster() {
       className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
     >
       <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
-      <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
+      <span className="min-w-0 flex-1 wrap-break-word py-1">{t.text}</span>
       {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="btn-ghost btn-tone btn-xs shrink-0">{t.action.label}</a>}
       {t.action?.onClick && (
         <button
@@ -73618,7 +73991,7 @@ export function Toaster() {
     </div>
   );
   return (
-    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-[90] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-90 flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
       <div aria-live="polite" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind !== 'err').map(item)}</div>
       <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
     </div>
@@ -73937,69 +74310,6 @@ export function rankProgress(hours: number): number {
 export function rankById(id: string | null | undefined): VrRank | undefined {
   return VR_RANKS.find((x) => x.id === id);
 }
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-frontend"
-  cat > "$APP_DIR/core-frontend/tailwind.config.js" << '__COREGSM_EOF__'
-/** @type {import('tailwindcss').Config} */
-// Colours come from CSS variables (see index.css), so one set of classes serves both the light and the dark theme.
-const c = (name) => `rgb(var(--${name}) / <alpha-value>)`;
-
-export default {
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
-  theme: {
-    extend: {
-      colors: {
-        page: c('page'),
-        card: c('card'),
-        // floating surfaces (dialogs, menus): one step above the card in the dark theme, equal to it in the light one
-        raised: c('raised'),
-        ink: c('ink'),
-        mute: c('mute'),
-        line: c('line'),
-        // input borders: >= 3:1 against the card (line is decorative only)
-        field: c('field'),
-        soft: c('soft'),
-        // brand: fills and buttons; brand-2: the darker end of brand gradients; link: brand-coloured text (lighter in the dark theme for contrast)
-        brand: { DEFAULT: c('brand'), hover: c('brand-hover'), 2: c('brand-2') },
-        link: c('link'),
-        ok: c('ok'),
-        okbg: c('okbg'),
-        warn: c('warn'),
-        warnbg: c('warnbg'),
-        bad: c('bad'),
-        // filled red buttons: white text >= 4.5:1 in both themes
-        badsolid: c('badsolid'),
-        badbg: c('badbg'),
-      },
-      fontFamily: {
-        sans: ['"Golos Text Variable"', '"Golos Text"', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
-      },
-      // radius scale: rounded-ui-sm / -md / -lg / -xl / -pill (values in index.css); the stock rounded-* names stay as they were
-      // Golos Text is lighter in the eye than the old font at the same weight: the heavy steps are pulled down so
-      // that headings and labels get a hierarchy (body 400, labels 600, headings 800)
-      fontWeight: { bold: '600', extrabold: '650', black: '800' },
-      borderRadius: {
-        '4xl': '2rem',
-        tile: 'var(--r-xl)',
-        'ui-sm': 'var(--r-sm)',
-        'ui-md': 'var(--r-md)',
-        'ui-lg': 'var(--r-lg)',
-        'ui-xl': 'var(--r-xl)',
-        'ui-pill': 'var(--r-pill)',
-      },
-      // shadow scale: shadow-1 (small controls), shadow-2 (cards at rest), shadow-3 (floating); soft / pop are the old names
-      boxShadow: {
-        1: 'var(--shadow-1)',
-        2: 'var(--shadow-2)',
-        3: 'var(--shadow-3)',
-        soft: 'var(--shadow-soft)',
-        pop: 'var(--shadow-pop)',
-      },
-    },
-  },
-  plugins: [],
-};
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/tsconfig.json" << '__COREGSM_EOF__'

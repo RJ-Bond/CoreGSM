@@ -67,9 +67,9 @@ export default function PublicProfilePage({ username }: { username: string }) {
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(p.bannerUrl, p.bannerPreset)} />
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><UserAvatar name={p.username} url={p.avatarUrl} size={88} tone="brand" className="!rounded-3xl" /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><UserAvatar name={p.username} url={p.avatarUrl} size={88} tone="brand" className="rounded-3xl!" /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
-            <h1 className="line-clamp-2 break-words text-2xl font-black leading-tight">{p.username}</h1>
+            <h1 className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{p.username}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${p.role === 'admin' ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
               {p.rank && (

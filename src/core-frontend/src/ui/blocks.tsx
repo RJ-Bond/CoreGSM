@@ -25,7 +25,7 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
       : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
   const bd = useBackdropClose(onClose);
   return (
-    <div className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4'} {...bd}>
+    <div className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'} {...bd}>
       <div
         ref={box}
         role="dialog"
@@ -33,8 +33,8 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
         aria-labelledby={titleId}
         tabIndex={-1}
         className={side
-          ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-l-ui-xl sm:p-6'
-          : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-none sm:rounded-b-ui-xl sm:p-6'}
+          ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-l-ui-xl sm:p-6'
+          : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6'}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
@@ -135,9 +135,9 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3.5">
-          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-linear-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold tracking-[-0.025em] sm:text-[30px]">{title}</h1>
+            <h1 className="text-2xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
             {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
           </div>
         </div>
@@ -272,7 +272,7 @@ export function ProxyField({
       <div className="flex gap-2">
         <select
           aria-label="Тип прокси"
-          className="input !w-auto shrink-0"
+          className="input w-auto! shrink-0"
           value={type}
           disabled={disabled}
           onChange={(e) => onType(e.target.value as ProxyType)}

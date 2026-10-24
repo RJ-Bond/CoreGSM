@@ -17,7 +17,7 @@ export function ActivityFeed({ limit = 30 }: { limit?: number }) {
             <li key={`${a.ts}-${i}`}>
               <span className="pf-dot" aria-hidden>{a.kind === 'session' ? <IconClock size={16} /> : <IconUsers size={16} />}</span>
               <div className="min-w-0 flex-1 pt-1">
-                <div className="break-words font-bold">{a.text}</div>
+                <div className="wrap-break-word font-bold">{a.text}</div>
                 <div className="text-sm font-semibold text-mute" title={fmtDateTime(a.ts)}>{ago(a.ts)}</div>
               </div>
             </li>

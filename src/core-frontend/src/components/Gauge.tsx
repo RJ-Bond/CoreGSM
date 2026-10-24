@@ -20,7 +20,7 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
   const v = value == null ? 0 : Math.max(0, Math.min(1, value));
   const t = tone ?? usageTone(value);
   return (
-    <div className={`gauge-${t} mx-auto w-full max-w-[9.5rem]`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
+    <div className={`gauge-${t} mx-auto w-full max-w-38`} role="img" aria-label={`${label}: ${value == null ? 'нет данных' : `${Math.round(v * 100)} %`}`}>
       <div className="gauge">
       <svg viewBox="0 0 120 120" aria-hidden>
         <g transform="rotate(135 60 60)" fill="none" strokeWidth="11" strokeLinecap="round">

@@ -52,7 +52,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
   return (
     <AuthShell>
-      <div className={`auth-card w-full max-w-md rounded-3xl border bg-card/90 p-6 backdrop-blur sm:p-7 ${shakeCls}`}>
+      <div className={`auth-card w-full max-w-md rounded-3xl border bg-card/90 p-6 backdrop-blur-sm sm:p-7 ${shakeCls}`}>
         <AuthBrand subtitle="Первоначальная настройка панели" />
 
         <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
@@ -62,7 +62,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
                 {i < step ? '✓' : i + 1}
               </span>
               <span className={`text-sm font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{s}</span>
-              {i < STEPS.length - 1 && <span className="h-0.5 flex-1 rounded bg-soft" />}
+              {i < STEPS.length - 1 && <span className="h-0.5 flex-1 rounded-sm bg-soft" />}
             </li>
           ))}
         </ol>

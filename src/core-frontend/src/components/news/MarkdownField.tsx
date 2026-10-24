@@ -182,7 +182,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
   return (
     <div>
       <div className={`mb-1.5 flex items-center justify-between ${hideLabel ? 'sr-only' : ''}`}>
-        <label htmlFor={id} className="label !mb-0">{label}</label>
+        <label htmlFor={id} className="label mb-0!">{label}</label>
         <Counter value={value.length} max={max} />
       </div>
       <div className="flash-host relative rounded-2xl border-2 border-line focus-within:border-brand">
@@ -242,7 +242,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
           placeholder={placeholder}
           aria-autocomplete={sug ? 'list' : undefined}
           aria-controls={sug ? `${id}-sug` : undefined}
-          className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-none"
+          className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-hidden"
         />
         {sug && (
           <ul id={`${id}-sug`} role="listbox" aria-label="Подсказки эмодзи" className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">

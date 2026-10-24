@@ -64,7 +64,7 @@ export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?
       </span>
     );
   }
-  return <span className="min-h-[1.25rem] text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
+  return <span className="min-h-5 text-sm font-bold" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">{body}</span>;
 }
 
 /**
