@@ -14,6 +14,7 @@ import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/pro
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
+import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
@@ -159,6 +160,7 @@ function SecurityTab() {
       <div className="grid items-start gap-5 md:grid-cols-2">
         <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
+        <TwoFactorCard />
         <DiscordCard onChanged={reload} />
         <PushCard />
         <SessionsCard key={rev} />

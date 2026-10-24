@@ -2,6 +2,8 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { decryptSecret, encryptSecret } from '../secrets.js';
+import { newRecoveryCodes, newSecret, otpauthUri, useRecoveryCode, verifyCode } from '../totp.js';
 import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
@@ -19,7 +21,7 @@ router.post(
   '/api/auth/login',
   loginLimiter,
   wrap(async (req, res) => {
-    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
+    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256), code: z.string().trim().max(32).optional() }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
     // progressive lockout of the whole address after failures across several logins
     const ipWait = ipLockRemaining(req.ip);
@@ -34,7 +36,7 @@ router.post(
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
-      | { id: number; username: string; password_hash: string; role: Role; status: string }
+      | { id: number; username: string; password_hash: string; role: Role; status: string; totp_enabled: number; totp_secret: string | null; totp_recovery: string | null; totp_step: number }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
@@ -43,8 +45,38 @@ router.post(
       if (u) logAccount(req, u.id, 'login_failed');
       return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft });
     }
+    if (u.status !== 'active') {
+      accountLoginOk(req.ip, body.data.username);
+      return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
+    }
+    // second factor: without a code the panel is told to ask for one (no token yet); a wrong code counts like a wrong password
+    if (u.totp_enabled && u.totp_secret) {
+      if (!body.data.code) return res.json({ twoFactor: true });
+      let passed = false;
+      try {
+        const step = verifyCode(decryptSecret(u.totp_secret), body.data.code, Date.now(), u.totp_step);
+        if (step !== null) {
+          db.prepare('UPDATE users SET totp_step = ? WHERE id = ?').run(step, u.id);
+          passed = true;
+        } else {
+          const left = useRecoveryCode(JSON.parse(u.totp_recovery || '[]') as string[], body.data.code);
+          if (left) {
+            db.prepare('UPDATE users SET totp_recovery = ? WHERE id = ?').run(JSON.stringify(left), u.id);
+            logAccount(req, u.id, 'profile_changed', '2fa_recovery_used');
+            passed = true;
+          }
+        }
+      } catch {
+        /* the secret cannot be decrypted (SECRETS_KEY changed): nobody gets in on a guess */
+      }
+      if (!passed) {
+        const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
+        ipLoginFailed(req.ip, body.data.username);
+        logAccount(req, u.id, 'login_failed', '2fa');
+        return res.status(401).json({ error: 'Неверный код подтверждения', attemptsLeft, twoFactor: true });
+      }
+    }
     accountLoginOk(req.ip, body.data.username);
-    if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
     resetAttempts(req.ip);
     logAccount(req, u.id, 'login');
     noteLogin(req, u.id, brand().name);
@@ -250,6 +282,71 @@ router.post(
     // other devices have to sign in again with the new password
     db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
     logAccount(req, req.user!.id, 'password_changed');
+    res.json({ ok: true });
+  }),
+);
+
+// ---------- two-factor sign-in (TOTP) ----------
+const twoFactorRow = (id: number) =>
+  db.prepare('SELECT username, password_hash, no_password, totp_secret, totp_enabled, totp_recovery, totp_step FROM users WHERE id = ?').get(id) as {
+    username: string; password_hash: string; no_password: number; totp_secret: string | null; totp_enabled: number; totp_recovery: string | null; totp_step: number;
+  };
+
+router.get('/api/auth/2fa', auth, (req: AuthedRequest, res) => {
+  const u = twoFactorRow(req.user!.id);
+  res.json({ enabled: !!u.totp_enabled, recoveryLeft: u.totp_enabled ? (JSON.parse(u.totp_recovery || '[]') as string[]).length : 0, hasPassword: !u.no_password });
+});
+
+// step 1: a fresh secret is stored (encrypted, not active yet) and shown once for the authenticator app
+router.post('/api/auth/2fa/setup', auth, windowLimiter(20, 3600_000, 'Слишком много попыток. Попробуйте позже.'), (req: AuthedRequest, res) => {
+  const u = twoFactorRow(req.user!.id);
+  if (u.totp_enabled) return res.status(409).json({ error: 'Двухфакторная защита уже включена' });
+  const secret = newSecret();
+  db.prepare('UPDATE users SET totp_secret = ?, totp_step = 0 WHERE id = ?').run(encryptSecret(secret), req.user!.id);
+  res.json({ secret, uri: otpauthUri(secret, u.username, brand().name || 'CoreGSM') });
+});
+
+// step 2: the first valid code turns it on and hands out the recovery codes (shown once)
+router.post('/api/auth/2fa/enable', auth, windowLimiter(30, 3600_000, 'Слишком много попыток. Попробуйте позже.'), (req: AuthedRequest, res) => {
+  const b = z.object({ code: z.string().max(32) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Введите код из приложения' });
+  const u = twoFactorRow(req.user!.id);
+  if (u.totp_enabled) return res.status(409).json({ error: 'Двухфакторная защита уже включена' });
+  if (!u.totp_secret) return res.status(400).json({ error: 'Сначала начните настройку' });
+  let step: number | null = null;
+  try {
+    step = verifyCode(decryptSecret(u.totp_secret), b.data.code);
+  } catch {
+    /* unreadable secret: start again */
+  }
+  if (step === null) return res.status(400).json({ error: 'Код не подошёл. Проверьте время на телефоне и попробуйте ещё раз' });
+  const rec = newRecoveryCodes();
+  db.prepare('UPDATE users SET totp_enabled = 1, totp_step = ?, totp_recovery = ? WHERE id = ?').run(step, JSON.stringify(rec.hashes), req.user!.id);
+  logAccount(req, req.user!.id, 'profile_changed', '2fa_on');
+  res.json({ ok: true, recoveryCodes: rec.plain });
+});
+
+// turning it off needs the password (when there is one) and a current code or a recovery code
+router.post(
+  '/api/auth/2fa/disable',
+  auth,
+  windowLimiter(20, 3600_000, 'Слишком много попыток. Попробуйте позже.'),
+  wrap(async (req: AuthedRequest, res) => {
+    const b = z.object({ password: z.string().max(256).optional(), code: z.string().max(32) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Введите код из приложения' });
+    const u = twoFactorRow(req.user!.id);
+    if (!u.totp_enabled) return res.status(409).json({ error: 'Двухфакторная защита не включена' });
+    if (!u.no_password && !(await bcrypt.compare(b.data.password ?? '', u.password_hash))) return res.status(403).json({ error: 'Пароль неверен' });
+    let ok = false;
+    try {
+      ok = verifyCode(decryptSecret(u.totp_secret ?? ''), b.data.code, Date.now(), u.totp_step) !== null || useRecoveryCode(JSON.parse(u.totp_recovery || '[]') as string[], b.data.code) !== null;
+    } catch {
+      /* unreadable secret: only a recovery code can still pass */
+      ok = useRecoveryCode(JSON.parse(u.totp_recovery || '[]') as string[], b.data.code) !== null;
+    }
+    if (!ok) return res.status(400).json({ error: 'Код не подошёл' });
+    db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_recovery = NULL, totp_step = 0 WHERE id = ?').run(req.user!.id);
+    logAccount(req, req.user!.id, 'profile_changed', '2fa_off');
     res.json({ ok: true });
   }),
 );

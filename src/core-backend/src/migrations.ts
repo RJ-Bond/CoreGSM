@@ -106,6 +106,17 @@ CREATE TABLE IF NOT EXISTS smart_state (
     // what a moderator may do (JSON array of permission names); NULL = the default set
     up: (db) => addColumn(db, 'users', 'perms', 'TEXT'),
   },
+  {
+    version: 9,
+    name: 'users.two_factor',
+    // totp_secret is encrypted (secrets.ts); totp_recovery is a JSON array of sha256 hashes; totp_step guards against replaying a code
+    up: (db) => {
+      addColumn(db, 'users', 'totp_secret', 'TEXT');
+      addColumn(db, 'users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'users', 'totp_recovery', 'TEXT');
+      addColumn(db, 'users', 'totp_step', 'INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
