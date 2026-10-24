@@ -51,6 +51,12 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
+      - name: Lint (oxlint)
+        # reported but not blocking until the first findings are cleaned up
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee /tmp/lint.log || { echo "::warning title=oxlint::$(head -c 1500 /tmp/lint.log | tr '\n' ' ')"; exit 1; }
       - name: Build
         run: npx vite build
 
