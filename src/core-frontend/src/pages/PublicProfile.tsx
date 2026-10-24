@@ -54,7 +54,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
         <div className="panel pf-hero">
           <div className="pf-banner skeleton" />
           <div className="pf-hero-body">
-            <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><div className="skeleton h-24 w-24 rounded-3xl bg-soft" /></div></div>
+            <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><div className="skeleton h-20 w-20 rounded-3xl bg-soft" /></div></div>
             <div className="min-w-0 flex-1 basis-56 space-y-2 pt-3">
               <div className="skeleton h-7 w-48 rounded-full bg-soft" />
               <div className="skeleton h-5 w-64 max-w-full rounded-full bg-soft" />
@@ -86,7 +86,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(p.bannerUrl, p.bannerPreset)} />
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={p.rank ? { ['--ring' as string]: p.rank.color } : undefined}><UserAvatar name={p.username} url={p.avatarUrl} size={96} tone="brand" className="rounded-3xl!" /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={p.rank ? { ['--ring' as string]: p.rank.color } : undefined}><UserAvatar name={p.username} url={p.avatarUrl} size={80} tone="brand" className="rounded-3xl!" /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <h1 className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{p.username}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2">
