@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo } from '../api';
 import { useAuth } from '../auth';
+import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, plural, toast, usePoll, navigate } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, usePoll, navigate } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminStart, { AdminHome } from './AdminStart';
@@ -24,6 +25,7 @@ import SystemPage from './System';
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+  useI18n();
   const { isAdmin, me } = useAuth();
   const [section, ...rest] = sub.split('/');
   // a moderator sees the sections of the permissions the administrator gave; everything else is for administrators
@@ -49,7 +51,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   }, [current, home, isAdmin]);
   const pin = (s: AdminSection) => {
     const r = togglePin(pins, s.id);
-    if (r.full) { toast(`Можно закрепить не больше ${PINS_MAX} разделов`, 'info'); return; }
+    if (r.full) { toast(t('adm.pinMax',{n:PINS_MAX}), 'info'); return; }
     setPins(r.pins);
     writeIds(PINS_KEY, r.pins);
   };
@@ -67,8 +69,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           type="button"
           className="adm-pin"
           aria-pressed={on}
-          aria-label={`${on ? 'Открепить' : 'Закрепить'}: ${s.label}`}
-          title={on ? 'Открепить' : 'Закрепить вверху'}
+          aria-label={`${on ? t('adm.unpin') : t('adm.pin')}: ${s.label}`}
+          title={on ? t('adm.unpin') : t('adm.pinTop')}
           onClick={() => pin(s)}
         >
           <span aria-hidden>{on ? '★' : '☆'}</span>
@@ -85,14 +87,14 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
-      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title="Доступно обновление" />}
+      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
     </a>
   );
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
     <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
-      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label="Разделы админки">
+      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
         {isAdmin ? (
           <>
             {link(START_SECTION)}
@@ -100,15 +102,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             {pinned.length > 0 && (
               <div className="contents md:block">
                 {divider}
-                <div id="adm-g-pins" className="adm-group-title hidden md:block">Закреплённые</div>
-                <div role="group" aria-labelledby="adm-g-pins" aria-label="Закреплённые" className="flex gap-1 md:flex-col">
+                <div id="adm-g-pins" className="adm-group-title hidden md:block">{t('adm.pinned')}</div>
+                <div role="group" aria-labelledby="adm-g-pins" aria-label={t('adm.pinned')} className="flex gap-1 md:flex-col">
                   {pinned.map((s) => item(s, 'p-'))}
                 </div>
               </div>
             )}
             {recents.length > 0 && (
               <div className="hidden md:block">
-                <div id="adm-g-recent" className="adm-group-title">Недавние</div>
+                <div id="adm-g-recent" className="adm-group-title">{t('adm.recent')}</div>
                 <div role="group" aria-labelledby="adm-g-recent" className="flex flex-col gap-1">
                   {recents.map((s) => item(s, 'r-'))}
                 </div>
@@ -126,7 +128,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         ) : (
           <>
-            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-widest text-mute md:block">Админка</div>
+            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-widest text-mute md:block">{t('nav.admin')}</div>
             {sections.map((s) => link(s))}
           </>
         )}
@@ -154,6 +156,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
 
 /** A banner at the top of the admin area while a new version is waiting; it follows the running update. */
 function UpdateBanner() {
+  useI18n();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [offline, setOffline] = useState(false);
   const wasRunning = useRef(false);
@@ -188,23 +191,23 @@ function UpdateBanner() {
       <div className="relative min-w-0 flex-1">
         {running ? (
           <>
-            <div className="font-extrabold leading-tight">{offline ? "Панель перезапускается…" : "Идёт обновление панели"}{pct != null && !offline ? ` · ${pct}%` : ""}</div>
-            <div className="text-sm font-semibold text-white/90">{offline ? "Это занимает 1-3 минуты, страница обновится сама." : info?.job?.message || "Устанавливаю новую сборку…"}</div>
+            <div className="font-extrabold leading-tight">{offline ? t('adm.upd.restarting') : t('adm.upd.running')}{pct != null && !offline ? ` · ${pct}%` : ""}</div>
+            <div className="text-sm font-semibold text-white/90">{offline ? t('adm.upd.takes') : info?.job?.message || t('adm.upd.installing')}</div>
             {pct != null && !offline && <div className="update-progress det mt-1.5" style={{ ["--p" as string]: `${pct}%` }}><i /></div>}
           </>
         ) : failed ? (
           <>
-            <div className="font-extrabold leading-tight">Обновление не удалось</div>
-            <div className="text-sm font-semibold text-white/90">{info?.job?.message || "Подробности на странице обновлений."}</div>
+            <div className="font-extrabold leading-tight">{t('adm.upd.failed')}</div>
+            <div className="text-sm font-semibold text-white/90">{info?.job?.message || t('adm.upd.failedHint')}</div>
           </>
         ) : (
           <>
-            <div className="font-extrabold leading-tight">Доступно обновление панели</div>
-            <div className="text-sm font-semibold text-white/90">Новая сборка {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ""} готова к установке.</div>
+            <div className="font-extrabold leading-tight">{t('adm.upd.available')}</div>
+            <div className="text-sm font-semibold text-white/90">{t('adm.upd.build')} {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ""} {t('adm.upd.ready')}</div>
           </>
         )}
       </div>
-      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? "Подробнее" : failed ? "Открыть" : "Обновить"}</a>
+      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
     </div>
   );
 }
@@ -216,6 +219,7 @@ const certDismissed = () => {
 
 /** A slim banner for administrators when the HTTPS certificate is about to expire (or already has). */
 function CertWarning() {
+  useI18n();
   const [cert, setCert] = useState<CertInfo | null>(null);
   const [hidden, setHidden] = useState(certDismissed);
 
@@ -228,15 +232,15 @@ function CertWarning() {
   const d = cert.daysLeft;
   const expired = d <= 0;
   const text = expired
-    ? 'Сертификат HTTPS истёк.'
-    : `Сертификат HTTPS истекает через ${d} ${plural(d, ['день', 'дня', 'дней'])}.`;
+    ? t('adm.cert.expired')
+    : t('adm.cert.soon', { n: d });
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl px-4 py-2.5 text-sm font-bold ${expired ? 'bg-badbg text-bad' : 'bg-warnbg text-warn'}`} role={expired ? 'alert' : 'status'}>
-      <span className="min-w-0 flex-1">{text} <a href="/admin/system" className="underline">Подробнее</a></span>
+      <span className="min-w-0 flex-1">{text} <a href="/admin/system" className="underline">{t('adm.more')}</a></span>
       <button
         type="button"
         className="btn-icon-ghost btn-icon-sm btn-tone"
-        aria-label="Скрыть предупреждение до конца сессии"
+        aria-label={t('adm.cert.hide')}
         onClick={() => { try { sessionStorage.setItem(CERT_DISMISSED, '1'); } catch { /* not remembered */ } setHidden(true); }}
       >
         <IconClose size={14} />
@@ -247,6 +251,7 @@ function CertWarning() {
 
 /** Add, edit, delete and re-query servers. */
 function ServersManage({ sub }: { sub: string }) {
+  useI18n();
   const { isAdmin } = useAuth();
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -282,19 +287,19 @@ function ServersManage({ sub }: { sub: string }) {
   };
 
   const remove = async (s: Server) => {
-    if (!(await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true }))) return;
-    await api(`/servers/${s.id}`, 'DELETE').then(() => toast('Сервер удалён')).catch((e: Error) => setError(e.message));
+    if (!(await confirmDialog({ title: t('adm.srv.deleteQ', { name: s.name }), text: t('adm.srv.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
+    await api(`/servers/${s.id}`, 'DELETE').then(() => toast(t('adm.srv.deleted'))).catch((e: Error) => setError(e.message));
     void load();
   };
   const refreshMany = async (list: Server[]) => {
     await Promise.allSettled(list.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
-    toast(`Опрошено серверов: ${list.length}`);
+    toast(t('adm.srv.polled', { n: list.length }));
     await load();
   };
   const removeMany = async (list: Server[]) => {
     const res = await Promise.allSettled(list.map((s) => api(`/servers/${s.id}`, 'DELETE')));
     const failed = res.filter((r) => r.status === 'rejected').length;
-    toast(failed ? `Удалено: ${list.length - failed}, не удалось: ${failed}` : `Удалено серверов: ${list.length}`, failed ? 'err' : undefined);
+    toast(failed ? t('adm.srv.delPartial', { ok: list.length - failed, bad: failed }) : t('adm.srv.delMany', { n: list.length }), failed ? 'err' : undefined);
     await load();
   };
   const refresh = async (s: Server) => {
@@ -308,27 +313,27 @@ function ServersManage({ sub }: { sub: string }) {
     <PageStack
       head={(
         <PageHead
-          title="Серверы"
-          subtitle="Добавление и настройка игровых серверов"
+          title={t('adm.s.servers')}
+          subtitle={t('adm.srv.subtitle')}
           icon={<IconServers />}
-          hint="Список игровых серверов, которые показывает панель. Добавьте сервер, и онлайн, карта и пинг начнут обновляться сами."
-          help={<p>Укажите игру, адрес и порт. Если игрокам нужно показывать другой адрес, заполните поле «Показывать как». Чтобы бот писал о сервере в Discord, нажмите «Привязать к Discord» в его строке.</p>}
+          hint={t('adm.srv.hint')}
+          help={<p>{t('adm.srv.help')}</p>}
         >
-          <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+          <button className="btn" data-magnetic data-tour="add-server" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </PageHead>
       )}
     >
       {error && servers.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!loaded && (
-        <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
+        <div className="space-y-3" aria-busy="true" aria-label={t('adm.loading')}>
           {[0, 1, 2].map((i) => <div key={i} className="skeleton tile h-[74px]" />)}
         </div>
       )}
 
       {loaded && !error && servers.length === 0 && (
-        <Empty title="Серверов пока нет" text="Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг.">
-          <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>+ Добавить сервер</button>
+        <Empty title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
+          <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </Empty>
       )}
 
@@ -357,7 +362,7 @@ function ServersManage({ sub }: { sub: string }) {
           coverUrl={editing.cover}
           onCoverChanged={() => void load()}
           onClose={closeForm}
-          onSaved={() => { closeForm(); toast('Сервер сохранён'); void load(); }}
+          onSaved={() => { closeForm(); toast(t('adm.srv.saved')); void load(); }}
         />
       )}
     </PageStack>
