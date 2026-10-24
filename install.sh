@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="481eeae2a311"
+COREGSM_BUILD="100aa4a983a5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6111,6 +6111,51 @@ export interface BindingRow {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/dbMaintenance.ts" << '__COREGSM_EOF__'
+/**
+ * Keeps the SQLite file healthy without anybody looking at it:
+ *  - every 15 minutes the write-ahead log is folded back into the database and truncated, so the -wal file does not grow
+ *    for weeks next to a busy poller (it is only checkpointed automatically while no reader holds it back);
+ *  - every 6 hours (and once shortly after the start) `PRAGMA optimize` refreshes the planner statistics.
+ * Both are cheap and never lock readers for long. A full VACUUM is left out on purpose: it rewrites the file under an
+ * exclusive lock; `coregsm backup` and the migrations already make consistent copies with VACUUM INTO.
+ */
+import { db } from './db.js';
+
+export interface MaintenanceResult {
+  /** frames the checkpoint wrote; null when the checkpoint could not run */
+  checkpointed: number | null;
+  /** the checkpoint did not finish because a reader was still using the log */
+  busy: boolean;
+}
+
+export function checkpointWal(): MaintenanceResult {
+  try {
+    const r = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number; checkpointed: number }[];
+    return { checkpointed: r[0]?.checkpointed ?? 0, busy: !!r[0]?.busy };
+  } catch (e) {
+    console.error('wal checkpoint failed', (e as Error).message);
+    return { checkpointed: null, busy: false };
+  }
+}
+
+export function optimizeDb(): boolean {
+  try {
+    db.pragma('optimize');
+    return true;
+  } catch (e) {
+    console.error('db optimize failed', (e as Error).message);
+    return false;
+  }
+}
+
+export function startDbMaintenance(): void {
+  setInterval(checkpointWal, 15 * 60_000).unref();
+  setInterval(optimizeDb, 6 * 3600_000).unref();
+  setTimeout(optimizeDb, 60_000).unref();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/deliveries.ts" << '__COREGSM_EOF__'
 /**
  * Delivery ledger and queue for everything the Discord bot has to send.
@@ -8619,6 +8664,7 @@ import { registerDigest, startDigestTimer } from './digest.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
+import { startDbMaintenance } from './dbMaintenance.js';
 import { registerMetrics } from './metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
@@ -8769,6 +8815,7 @@ registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
+startDbMaintenance();
 registerOverview({ app, viewer });
 
 // ---------- errors ----------
