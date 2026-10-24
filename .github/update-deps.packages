@@ -1,2 +1,1 @@
-core-backend @types/node@24
-core-bot @types/node@24
+core-frontend vite@8 @vitejs/plugin-react@6 vitest@5
