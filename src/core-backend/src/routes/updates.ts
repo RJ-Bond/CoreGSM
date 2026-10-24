@@ -5,6 +5,7 @@ import path from 'node:path';
 import { admin } from '../auth.js';
 import { APP_VERSION } from '../config.js';
 import { wrap } from '../http.js';
+import { log } from '../logger.js';
 
 export const router = express.Router();
 
@@ -168,7 +169,7 @@ router.post('/api/update/apply', admin, (_req, res) => {
   } catch {
     return res.status(500).json({ error: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)' });
   }
-  console.log('update requested from the panel');
+  log.info('update requested from the panel');
   res.status(202).json(updatePayload());
 });
 
@@ -184,6 +185,6 @@ router.post('/api/update/rollback', admin, (_req, res) => {
   } catch {
     return res.status(500).json({ error: 'Не удалось создать запрос на откат (нет прав на папку /app/update)' });
   }
-  console.log('rollback requested from the panel');
+  log.info('rollback requested from the panel');
   res.status(202).json(updatePayload());
 });

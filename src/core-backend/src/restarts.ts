@@ -22,6 +22,7 @@ import { defaultSay, nextRun } from './restartLogic.js';
 import { rconCommand } from './rcon.js';
 import { decryptSecret, encryptSecret, reencrypt, usesLegacyKey } from './secrets.js';
 import { analyticsFor } from './routes/analytics.js';
+import { log } from './logger.js';
 
 export const router = express.Router();
 
@@ -55,7 +56,7 @@ try {
     if (usesLegacyKey(r.password)) upd.run(reencrypt(r.password), r.server_id);
   }
 } catch (e) {
-  console.error('rcon secrets migration skipped:', (e as Error).message);
+  log.error('rcon secrets migration skipped:', (e as Error).message);
 }
 
 export interface Plan {
@@ -165,7 +166,7 @@ export function startRestartTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    void tickRestarts().catch((e) => console.error('restart timer failed', (e as Error).message)).finally(() => { busy = false; });
+    void tickRestarts().catch((e) => log.error('restart timer failed', (e as Error).message)).finally(() => { busy = false; });
   }, 30_000);
   timer.unref();
 }

@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ecb62e9d9b55"
+COREGSM_BUILD="ff91fece9720"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -630,6 +630,7 @@ __COREGSM_EOF__
         "gamedig": "^5.1.0",
         "jsonwebtoken": "^9.0.2",
         "nodemailer": "^10.2.1",
+        "pino": "^10.4.0",
         "skia-canvas": "^4.0.0",
         "tar": "^7.5.22",
         "undici": "^6.29.0",
@@ -1110,6 +1111,12 @@ __COREGSM_EOF__
           "url": "https://github.com/sponsors/nodable"
         }
       ],
+      "license": "MIT"
+    },
+    "node_modules/@pinojs/redact": {
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@pinojs/redact/-/redact-0.4.0.tgz",
+      "integrity": "sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==",
       "license": "MIT"
     },
     "node_modules/@sindresorhus/is": {
@@ -1768,6 +1775,15 @@ __COREGSM_EOF__
         }
       ],
       "license": "MIT"
+    },
+    "node_modules/atomic-sleep": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/atomic-sleep/-/atomic-sleep-1.0.0.tgz",
+      "integrity": "sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=8.0.0"
+      }
     },
     "node_modules/barse": {
       "version": "0.4.3",
@@ -2938,6 +2954,15 @@ __COREGSM_EOF__
         "url": "https://github.com/sponsors/ljharb"
       }
     },
+    "node_modules/on-exit-leak-free": {
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/on-exit-leak-free/-/on-exit-leak-free-2.1.2.tgz",
+      "integrity": "sha512-0eJJY6hXLGf1udHwfNftBqH+g73EU4B504nZeKpz1sYRKafAghwxEJunB2O7rDZkL4PGfsMVnTXZ2EjibbqcsA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
     "node_modules/on-finished": {
       "version": "2.4.2",
       "resolved": "https://registry.npmjs.org/on-finished/-/on-finished-2.4.2.tgz",
@@ -3006,10 +3031,63 @@ __COREGSM_EOF__
         "url": "https://opencollective.com/express"
       }
     },
+    "node_modules/pino": {
+      "version": "10.4.0",
+      "resolved": "https://registry.npmjs.org/pino/-/pino-10.4.0.tgz",
+      "integrity": "sha512-bk1ZMTwG/Vymx+zPoa28MhNzucFvXJWp3csrSuxuHPSMeUettaCoQ5Jvg07mtC4JGNpcfTwz41oVCnNgBK9+vA==",
+      "license": "MIT",
+      "dependencies": {
+        "@pinojs/redact": "^0.4.0",
+        "atomic-sleep": "^1.0.0",
+        "on-exit-leak-free": "^2.1.0",
+        "pino-abstract-transport": "^3.0.0",
+        "pino-std-serializers": "^7.0.0",
+        "process-warning": "^5.0.0",
+        "quick-format-unescaped": "^4.0.3",
+        "real-require": "^1.0.0",
+        "safe-stable-stringify": "^2.3.1",
+        "sonic-boom": "^4.0.1",
+        "thread-stream": "^4.0.0"
+      },
+      "bin": {
+        "pino": "bin.js"
+      }
+    },
+    "node_modules/pino-abstract-transport": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/pino-abstract-transport/-/pino-abstract-transport-3.0.0.tgz",
+      "integrity": "sha512-wlfUczU+n7Hy/Ha5j9a/gZNy7We5+cXp8YL+X+PG8S0KXxw7n/JXA3c46Y0zQznIJ83URJiwy7Lh56WLokNuxg==",
+      "license": "MIT",
+      "dependencies": {
+        "split2": "^4.0.0"
+      }
+    },
+    "node_modules/pino-std-serializers": {
+      "version": "7.1.0",
+      "resolved": "https://registry.npmjs.org/pino-std-serializers/-/pino-std-serializers-7.1.0.tgz",
+      "integrity": "sha512-BndPH67/JxGExRgiX1dX0w1FvZck5Wa4aal9198SrRhZjH3GxKQUKIBnYJTdj2HDN3UQAS06HlfcSbQj2OHmaw==",
+      "license": "MIT"
+    },
     "node_modules/process-nextick-args": {
       "version": "2.0.1",
       "resolved": "https://registry.npmjs.org/process-nextick-args/-/process-nextick-args-2.0.1.tgz",
       "integrity": "sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==",
+      "license": "MIT"
+    },
+    "node_modules/process-warning": {
+      "version": "5.1.1",
+      "resolved": "https://registry.npmjs.org/process-warning/-/process-warning-5.1.1.tgz",
+      "integrity": "sha512-oCkNVj4OKnKEcocVBcDfiIugN1/cE6rgfT3nCtzeqZPA8+rIxMaQ0xXzIkGP8Gj2qUaP1UR7uhJ1VD8lUCpzCg==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/fastify"
+        },
+        {
+          "type": "opencollective",
+          "url": "https://opencollective.com/fastify"
+        }
+      ],
       "license": "MIT"
     },
     "node_modules/proxy-addr": {
@@ -3062,6 +3140,12 @@ __COREGSM_EOF__
         "url": "https://github.com/sponsors/ljharb"
       }
     },
+    "node_modules/quick-format-unescaped": {
+      "version": "4.0.4",
+      "resolved": "https://registry.npmjs.org/quick-format-unescaped/-/quick-format-unescaped-4.0.4.tgz",
+      "integrity": "sha512-tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg==",
+      "license": "MIT"
+    },
     "node_modules/quick-lru": {
       "version": "5.1.1",
       "resolved": "https://registry.npmjs.org/quick-lru/-/quick-lru-5.1.1.tgz",
@@ -3113,6 +3197,12 @@ __COREGSM_EOF__
         "isarray": "0.0.1",
         "string_decoder": "~0.10.x"
       }
+    },
+    "node_modules/real-require": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/real-require/-/real-require-1.0.0.tgz",
+      "integrity": "sha512-P4nbQYQfePJxRSmY+v/KINxVucm4NF3p3s7pJveMTtom52FR4YGltUQLB8idDXwDDWW+eYrWDFbuzUnjoWHF7g==",
+      "license": "MIT"
     },
     "node_modules/resolve-alpn": {
       "version": "1.2.1",
@@ -3170,6 +3260,15 @@ __COREGSM_EOF__
         }
       ],
       "license": "MIT"
+    },
+    "node_modules/safe-stable-stringify": {
+      "version": "2.5.0",
+      "resolved": "https://registry.npmjs.org/safe-stable-stringify/-/safe-stable-stringify-2.5.0.tgz",
+      "integrity": "sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=10"
+      }
     },
     "node_modules/safer-buffer": {
       "version": "2.1.2",
@@ -3379,6 +3478,24 @@ __COREGSM_EOF__
         "npm": ">= 3.0.0"
       }
     },
+    "node_modules/sonic-boom": {
+      "version": "4.2.1",
+      "resolved": "https://registry.npmjs.org/sonic-boom/-/sonic-boom-4.2.1.tgz",
+      "integrity": "sha512-w6AxtubXa2wTXAUsZMMWERrsIRAdrK0Sc+FUytWvYAhBJLyuI4llrMIC1DtlNSdI99EI86KZum2MMq3EAZlF9Q==",
+      "license": "MIT",
+      "dependencies": {
+        "atomic-sleep": "^1.0.0"
+      }
+    },
+    "node_modules/split2": {
+      "version": "4.2.0",
+      "resolved": "https://registry.npmjs.org/split2/-/split2-4.2.0.tgz",
+      "integrity": "sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==",
+      "license": "ISC",
+      "engines": {
+        "node": ">= 10.x"
+      }
+    },
     "node_modules/statuses": {
       "version": "2.0.2",
       "resolved": "https://registry.npmjs.org/statuses/-/statuses-2.0.2.tgz",
@@ -3492,6 +3609,18 @@ __COREGSM_EOF__
       "funding": {
         "type": "paypal",
         "url": "https://paypal.me/kozjak"
+      }
+    },
+    "node_modules/thread-stream": {
+      "version": "4.2.0",
+      "resolved": "https://registry.npmjs.org/thread-stream/-/thread-stream-4.2.0.tgz",
+      "integrity": "sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ==",
+      "license": "MIT",
+      "dependencies": {
+        "real-require": "^1.0.0"
+      },
+      "engines": {
+        "node": ">=20"
       }
     },
     "node_modules/toidentifier": {
@@ -3707,6 +3836,7 @@ __COREGSM_EOF__
     "gamedig": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^10.2.1",
+    "pino": "^10.4.0",
     "skia-canvas": "^4.0.0",
     "tar": "^7.5.22",
     "undici": "^6.29.0",
@@ -4283,6 +4413,7 @@ import * as tar from 'tar';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { canDecrypt, isEncrypted, isSecretKey } from './secrets.js';
+import { log } from './logger.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
@@ -4573,7 +4704,7 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
   } catch (e) {
     const err = e as Error & { cause?: { message?: string } };
     result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
-    console.error('backup upload failed:', result.error);
+    log.error('backup upload failed:', result.error);
   }
   try {
     setSetting('backup_last_remote', JSON.stringify(result));
@@ -4590,10 +4721,10 @@ export async function runScheduledIfDue(now = Date.now()): Promise<BackupItem | 
     const lastAuto = listBackups().find((i) => i.kind === 'auto')?.createdAt ?? null;
     if (!backupDue(s.schedule, lastAuto, now)) return null;
     const it = await createStoredBackup('auto');
-    console.log(`scheduled backup created: ${it.name}`);
+    log.info(`scheduled backup created: ${it.name}`);
     return it;
   } catch (e) {
-    console.error('scheduled backup failed:', (e as Error).message);
+    log.error('scheduled backup failed:', (e as Error).message);
     return null;
   }
 }
@@ -4788,7 +4919,7 @@ function restartSoon(): void {
 export function registerBackups({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const fail = (res: Response, e: unknown) => {
     if (e instanceof BackupError) return void res.status(e.status).json({ error: e.message });
-    console.error('backup error', e);
+    log.error('backup error', e);
     res.status(500).json({ error: `Не удалось выполнить операцию: ${(e as Error).message}` });
   };
   const guard =
@@ -5473,6 +5604,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/config.ts" << '__COREGSM_EOF__'
 /** Settings from the environment, checked at start: the process stops when a required secret is missing. */
 import crypto from 'node:crypto';
+import { log } from './logger.js';
 
 export const PORT = Number(process.env.PORT ?? 3000);
 export const JWT_SECRET = process.env.JWT_SECRET ?? '';
@@ -5482,11 +5614,11 @@ export const POLL_MS = Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000;
 export const SETUP_TOKEN = process.env.SETUP_TOKEN || crypto.randomBytes(8).toString('hex');
 
 if (JWT_SECRET.length < 32) {
-  console.error('JWT_SECRET must be set and at least 32 characters long (generate one with: openssl rand -hex 32)');
+  log.error('JWT_SECRET must be set and at least 32 characters long (generate one with: openssl rand -hex 32)');
   process.exit(1);
 }
 if (INTERNAL_TOKEN.length < 16) {
-  console.error('INTERNAL_TOKEN must be set (min 16 chars)');
+  log.error('INTERNAL_TOKEN must be set (min 16 chars)');
   process.exit(1);
 }
 export const APP_VERSION = process.env.APP_VERSION ?? '';
@@ -5769,6 +5901,7 @@ import path from 'node:path';
 import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey, reencrypt, usesLegacyKey } from './secrets.js';
 import { runMigrations } from './migrations.js';
 import { addColumn } from './schema.js';
+import { log } from './logger.js';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 export const DATA_DIR = path.dirname(dbPath);
@@ -5813,9 +5946,9 @@ if (fs.existsSync(pendingDir)) {
       for (const f of fs.readdirSync(pendingDir)) if (/^brand-logo\.(png|jpg|webp)$/.test(f)) fs.copyFileSync(path.join(pendingDir, f), path.join(DATA_DIR, f));
     }
     restoredNow = true;
-    console.log('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
+    log.info('Database restored from the uploaded backup (the previous one is kept as .before-restore)');
   } catch (e) {
-    console.error('Restore failed:', (e as Error).message);
+    log.error('Restore failed:', (e as Error).message);
   }
   // never retry a half-done restore on every start
   fs.rmSync(pendingDir, { recursive: true, force: true });
@@ -6016,7 +6149,7 @@ export function getSetting(key: string): string | null {
   } catch (e) {
     if (!warnedSecrets.has(key)) {
       warnedSecrets.add(key);
-      console.error(`setting "${key}" cannot be decrypted (${(e as Error).message}); enter it again in the panel`);
+      log.error(`setting "${key}" cannot be decrypted (${(e as Error).message}); enter it again in the panel`);
     }
     return null;
   }
@@ -6052,12 +6185,12 @@ try {
   })();
 } catch (e) {
   // no key at all: config.ts stops with a clear message when it loads
-  console.error('secrets migration skipped:', (e as Error).message);
+  log.error('secrets migration skipped:', (e as Error).message);
 }
 if (restoredNow) {
   const lost = undecryptableSecrets();
   if (lost.length) {
-    console.error(`restored backup: these secrets were encrypted with another key and are unreadable: ${lost.join(', ')}`);
+    log.error(`restored backup: these secrets were encrypted with another key and are unreadable: ${lost.join(', ')}`);
     db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(
       Date.now(),
       'система',
@@ -6121,6 +6254,7 @@ __COREGSM_EOF__
  * exclusive lock; `coregsm backup` and the migrations already make consistent copies with VACUUM INTO.
  */
 import { db } from './db.js';
+import { log } from './logger.js';
 
 export interface MaintenanceResult {
   /** frames the checkpoint wrote; null when the checkpoint could not run */
@@ -6134,7 +6268,7 @@ export function checkpointWal(): MaintenanceResult {
     const r = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number; checkpointed: number }[];
     return { checkpointed: r[0]?.checkpointed ?? 0, busy: !!r[0]?.busy };
   } catch (e) {
-    console.error('wal checkpoint failed', (e as Error).message);
+    log.error('wal checkpoint failed', (e as Error).message);
     return { checkpointed: null, busy: false };
   }
 }
@@ -6144,7 +6278,7 @@ export function optimizeDb(): boolean {
     db.pragma('optimize');
     return true;
   } catch (e) {
-    console.error('db optimize failed', (e as Error).message);
+    log.error('db optimize failed', (e as Error).message);
     return false;
   }
 }
@@ -6464,6 +6598,7 @@ import { incidentsSince } from './incidents.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
+import { log } from './logger.js';
 
 const { Canvas } = skia;
 const DAY = 86_400_000;
@@ -6739,7 +6874,7 @@ export function startDigestTimer(): void {
     try {
       if (digestDue()) sendDigest();
     } catch (e) {
-      console.error('weekly digest failed:', (e as Error).message);
+      log.error('weekly digest failed:', (e as Error).message);
     }
   }, 10 * 60_000);
   timer.unref();
@@ -8019,6 +8154,7 @@ import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONC
 
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
 import { queryServer, type QueryResult } from './query.js';
+import { log } from './logger.js';
 
 const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
@@ -8172,20 +8308,20 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
     if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
     else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {
-    console.error('player/uptime bookkeeping failed', (e as Error).message);
+    log.error('player/uptime bookkeeping failed', (e as Error).message);
   }
   try {
     trackAlerts(s.id, d.online, r.error);
     // smart alerts measure a working server; planned work is not a symptom
     if (!maint) trackSmart(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers, ping: r.ping }, ts);
   } catch (e) {
-    console.error('alerts failed', (e as Error).message);
+    log.error('alerts failed', (e as Error).message);
   }
   try {
     // planned work: nobody is told that the server went down (free-slot notices still make sense, back_online follows the window)
     if (!(!d.online && maintenanceNow(s.id))) onPollResult(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers });
   } catch (e) {
-    console.error('subscriptions failed', (e as Error).message);
+    log.error('subscriptions failed', (e as Error).message);
   }
   return outcome;
 }
@@ -8259,7 +8395,7 @@ export async function pollAll(): Promise<void> {
         if (o && !o.polledOnline) failures++;
       } catch (e) {
         failures++;
-        console.error(`poll of server ${s.id} failed`, (e as Error).message);
+        log.error(`poll of server ${s.id} failed`, (e as Error).message);
       }
     });
     const durationMs = Date.now() - t0;
@@ -8267,7 +8403,7 @@ export async function pollAll(): Promise<void> {
     pollCount++;
     // quiet when all is well: the first poll, slow polls, polls with failures and every 20th
     if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
-      console.log(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
+      log.info(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
     }
     // old rows are deleted once an hour, not after every 30-second cycle; set before the work so a failure is not retried at once
     if (pruneDue(Date.now(), lastPrune)) {
@@ -8276,7 +8412,7 @@ export async function pollAll(): Promise<void> {
     }
   } catch (e) {
     // a database or disk error must not become an unhandled rejection (the timer calls pollAll with `void`)
-    console.error('poll cycle failed', (e as Error).message);
+    log.error('poll cycle failed', (e as Error).message);
   } finally {
     running = false;
   }
@@ -8307,6 +8443,7 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
+import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const SAMPLE_EVERY_MS = 5 * 60_000;
@@ -8486,7 +8623,7 @@ export function currentFlags(now = Date.now()): Flag[] {
   try {
     return computeFlags(samplesSince(now - 7 * 24 * 3600_000), sampleNow(now), pollIntervalMs(), now);
   } catch (e) {
-    console.error('health flags failed', (e as Error).message);
+    log.error('health flags failed', (e as Error).message);
     return [];
   }
 }
@@ -8516,7 +8653,7 @@ export function registerHealth({ app, admin, bot }: { app: Express; admin: Reque
     try {
       recordSample();
     } catch (e) {
-      console.error('health sample failed', (e as Error).message);
+      log.error('health sample failed', (e as Error).message);
     }
   };
   setTimeout(tick, 20_000).unref();
@@ -8696,6 +8833,7 @@ import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
 import { router as bindingsRouter } from './routes/bindings.js';
 import { router as internalRouter } from './routes/internal.js';
+import { log } from './logger.js';
 
 // optional first-start defaults from .env (the panel settings take over afterwards)
 if (getSetting('discord_token') === null && process.env.DISCORD_TOKEN) setSetting('discord_token', process.env.DISCORD_TOKEN);
@@ -8705,10 +8843,10 @@ if (getSetting('proxy_url') === null && process.env.PROXY_URL) setSetting('proxy
 // because of one bad request). A synchronous exception that escaped everything means the state is unknown: stop
 // cleanly and let Docker start a fresh process (restart: unless-stopped).
 process.on('unhandledRejection', (reason) => {
-  console.error('unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason);
+  log.error('unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason);
 });
 process.on('uncaughtException', (err) => {
-  console.error('uncaught exception:', err.stack ?? err.message);
+  log.error('uncaught exception:', err.stack ?? err.message);
   void shutdownNow('uncaughtException');
 });
 
@@ -8824,15 +8962,15 @@ app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Re
   if (err.type === 'entity.parse.failed') return void res.status(400).json({ error: 'Некорректный JSON в запросе' });
   if (err.type === 'entity.too.large') return void res.status(413).json({ error: 'Слишком большой запрос' });
   if (err.type === 'request.aborted' || err.type === 'encoding.unsupported' || err.type === 'charset.unsupported') return void res.status(400).json({ error: 'Некорректный запрос' });
-  console.error(err);
+  log.error(err);
   res.status(500).json({ error: 'Внутренняя ошибка сервера' });
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`CoreGSM backend listening on :${PORT}`);
+  log.info(`CoreGSM backend listening on :${PORT}`);
   if (needsSetup()) {
-    console.log('First run: open the panel in a browser and create the administrator.');
-    if (!process.env.SETUP_TOKEN) console.log(`Setup code: ${SETUP_TOKEN}`);
+    log.info('First run: open the panel in a browser and create the administrator.');
+    if (!process.env.SETUP_TOKEN) log.info(`Setup code: ${SETUP_TOKEN}`);
   }
   startPoller(POLL_MS);
   startBackupTimer();
@@ -8887,6 +9025,40 @@ export function zonedTime(day: string, minutes: number, tz: string): number {
   const naive = Date.UTC(y, m - 1, d, 0, minutes);
   return naive - offsetAt(naive - offsetAt(naive, tz), tz);
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/logger.ts" << '__COREGSM_EOF__'
+import pino from 'pino';
+
+/**
+ * Structured logging (JSON lines on stdout). Level via LOG_LEVEL (default info,
+ * "silent" under tests). Call sites keep the console-like shape:
+ *   log.error('poll failed', err)   → {"level":50,"msg":"poll failed","detail":"..."}
+ */
+const base = pino({
+  level: process.env.LOG_LEVEL || (process.env.VITEST || process.env.NODE_ENV === 'test' ? 'silent' : 'info'),
+  base: undefined,
+  timestamp: pino.stdTimeFunctions.isoTime,
+  formatters: { level: (label) => ({ level: label }) },
+});
+
+function detail(rest: unknown[]): Record<string, unknown> | undefined {
+  if (!rest.length) return undefined;
+  const err = rest.find((x) => x instanceof Error) as Error | undefined;
+  const text = rest.map((x) => (x instanceof Error ? x.message : typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+  return err ? { err, detail: text } : { detail: text };
+}
+
+function make(level: 'info' | 'warn' | 'error') {
+  return (msg: unknown, ...rest: unknown[]): void => {
+    if (msg instanceof Error) return void base[level]({ err: msg }, msg.message);
+    const d = detail(rest);
+    if (d) base[level](d, String(msg));
+    else base[level](String(msg));
+  };
+}
+
+export const log = { info: make('info'), warn: make('warn'), error: make('error') };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/loginGuard.ts" << '__COREGSM_EOF__'
@@ -9522,6 +9694,7 @@ import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addColumn, hasTable } from './schema.js';
+import { log } from './logger.js';
 
 type Db = InstanceType<typeof Database>;
 
@@ -9656,7 +9829,7 @@ export function prunePreMigrate(dir: string, keep = 5): void {
  */
 export function runMigrations(db: Db, opts: { dataDir: string; existing: boolean; list?: Migration[]; log?: (m: string) => void }): MigrationResult {
   const list = opts.list ?? MIGRATIONS;
-  const log = opts.log ?? ((m: string) => console.log(m));
+  const log = opts.log ?? ((m: string) => log.info(m));
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)');
   const done = new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map((r) => r.version));
   const pending = list.filter((m) => !done.has(m.version)).sort((a, b) => a.version - b.version);
@@ -10879,6 +11052,7 @@ import { db, EFFECTIVE_NAME } from './db.js';
 import { enqueueDelivery } from './deliveries.js';
 import { dmAvailable } from './subscriptions.js';
 import { distinctNames, similarNames, suggestNames } from './nickMatch.js';
+import { log } from './logger.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS nick_seen (
@@ -10951,7 +11125,7 @@ export function nickSuggestions(query: string, discordId: string, limit = 25): s
     const free = candidateNames().filter((n) => !taken.has(n.toLowerCase()));
     return suggestNames(query.slice(0, 100), free, limit);
   } catch (e) {
-    console.error('nick-suggest failed', (e as Error).message);
+    log.error('nick-suggest failed', (e as Error).message);
     return [];
   }
 }
@@ -10996,7 +11170,7 @@ export function onSessionsOpened(serverId: number, names: string[], now = Date.n
       if (id !== undefined) markSeen(id, serverId, now);
     }
   } catch (e) {
-    console.error('nick-seen failed', (e as Error).message);
+    log.error('nick-seen failed', (e as Error).message);
   }
 }
 
@@ -11010,7 +11184,7 @@ export function checkNickNow(userId: number, nick: string, now = Date.now()): vo
     const s = db.prepare('SELECT server_id FROM player_sessions WHERE left_at IS NULL AND ulower(name) = ulower(?) LIMIT 1').get(nick) as { server_id: number } | undefined;
     if (s) markSeen(userId, s.server_id, now);
   } catch (e) {
-    console.error('nick check failed', (e as Error).message);
+    log.error('nick check failed', (e as Error).message);
   }
 }
 
@@ -11044,6 +11218,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
 import { wrap } from './http.js';
 import { currentFlags } from './health.js';
+import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const startedAt = Date.now();
@@ -11128,7 +11303,7 @@ export function installAudit(app: Express): void {
             const user = (req as Request & { user?: { username: string } }).user;
             insert.run(Date.now(), user?.username ?? '—', 'Скачана резервная копия', url === '/api/backup' ? '' : url.slice('/api/backups/'.length));
           } catch (e) {
-            console.error('audit failed', (e as Error).message);
+            log.error('audit failed', (e as Error).message);
           }
         });
       }
@@ -11149,7 +11324,7 @@ export function installAudit(app: Express): void {
         insert.run(Date.now(), actor || '—', rule.label, detail.trim());
         db.prepare('DELETE FROM audit WHERE id <= (SELECT MAX(id) - 2000 FROM audit)').run();
       } catch (e) {
-        console.error('audit failed', (e as Error).message);
+        log.error('audit failed', (e as Error).message);
       }
     });
     next();
@@ -11916,6 +12091,7 @@ export function uaLabel(ua: string | undefined): string {
 }
 
 import { checkNickNow } from './nickOnboarding.js';
+import { log } from './logger.js';
 
 export type AccountEventKind =
   | 'login'
@@ -11945,7 +12121,7 @@ export function logAccount(req: Request, userId: number, kind: AccountEventKind,
       detail.slice(0, 200),
     );
   } catch (e) {
-    console.error('account journal failed', (e as Error).message);
+    log.error('account journal failed', (e as Error).message);
   }
 }
 
@@ -13183,6 +13359,7 @@ import { defaultSay, nextRun } from './restartLogic.js';
 import { rconCommand } from './rcon.js';
 import { decryptSecret, encryptSecret, reencrypt, usesLegacyKey } from './secrets.js';
 import { analyticsFor } from './routes/analytics.js';
+import { log } from './logger.js';
 
 export const router = express.Router();
 
@@ -13216,7 +13393,7 @@ try {
     if (usesLegacyKey(r.password)) upd.run(reencrypt(r.password), r.server_id);
   }
 } catch (e) {
-  console.error('rcon secrets migration skipped:', (e as Error).message);
+  log.error('rcon secrets migration skipped:', (e as Error).message);
 }
 
 export interface Plan {
@@ -13326,7 +13503,7 @@ export function startRestartTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    void tickRestarts().catch((e) => console.error('restart timer failed', (e as Error).message)).finally(() => { busy = false; });
+    void tickRestarts().catch((e) => log.error('restart timer failed', (e as Error).message)).finally(() => { busy = false; });
   }, 30_000);
   timer.unref();
 }
@@ -13556,6 +13733,7 @@ import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '
 import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security.js';
 import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../site.js';
 import { unreadNotifications } from '../subscriptions.js';
+import { log } from '../logger.js';
 
 export const router = express.Router();
 
@@ -13672,7 +13850,7 @@ router.post(
       return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
     }
     resetAttempts(req.ip);
-    console.log(`setup completed, admin "${b.data.username}" created`);
+    log.info(`setup completed, admin "${b.data.username}" created`);
     const token = issueToken({ id: userId, username: b.data.username }, req);
     setSessionCookie(req, res, token);
     noteLogin(req, userId, brand().name);
@@ -14649,6 +14827,7 @@ import { logAccount } from '../profile.js';
 import { discordFetch } from '../proxyFetch.js';
 import { noteLogin, setSessionCookie } from '../security.js';
 import { baseOf, brand, publicBase, registrationMode } from '../site.js';
+import { log } from '../logger.js';
 
 export const router = express.Router();
 
@@ -14703,7 +14882,7 @@ router.get(
       if (!mr.ok) return failTo(res, 'Не удалось получить профиль из Discord');
       me = (await mr.json()) as typeof me;
     } catch (e) {
-      console.error('discord oauth request failed:', (e as Error).message);
+      log.error('discord oauth request failed:', (e as Error).message);
       return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
     }
     const dname = me.global_name || me.username;
@@ -15455,6 +15634,7 @@ import path from 'node:path';
 import { admin } from '../auth.js';
 import { APP_VERSION } from '../config.js';
 import { wrap } from '../http.js';
+import { log } from '../logger.js';
 
 export const router = express.Router();
 
@@ -15618,7 +15798,7 @@ router.post('/api/update/apply', admin, (_req, res) => {
   } catch {
     return res.status(500).json({ error: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)' });
   }
-  console.log('update requested from the panel');
+  log.info('update requested from the panel');
   res.status(202).json(updatePayload());
 });
 
@@ -15634,7 +15814,7 @@ router.post('/api/update/rollback', admin, (_req, res) => {
   } catch {
     return res.status(500).json({ error: 'Не удалось создать запрос на откат (нет прав на папку /app/update)' });
   }
-  console.log('rollback requested from the panel');
+  log.info('rollback requested from the panel');
   res.status(202).json(updatePayload());
 });
 __COREGSM_EOF__
@@ -16004,6 +16184,7 @@ import { wrap } from './http.js';
 import { enqueueDelivery } from './deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
+import { log } from './logger.js';
 
 // ---------- schema ----------
 addColumn(db, 'users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
@@ -16188,10 +16369,10 @@ export function noteLogin(req: Request, userId: number, brandName: string): void
           ? [`A new sign-in to your account "${u.username}" from a device we have not seen before.`, `Device: ${label}`, `Address: ${ip}`, 'If this was not you, change your password and end other sessions in the profile.']
           : [`Новый вход в аккаунт «${u.username}» с устройства, которого мы раньше не видели.`, `Устройство: ${label}`, `Адрес: ${ip}`, 'Если это были не вы, смените пароль и завершите чужие сеансы в профиле.'],
       );
-      void sendMail({ to: u.email, subject: en ? 'New sign-in to your account' : 'Новый вход в аккаунт', ...body }).catch((e) => console.error('new-device mail failed:', (e as Error).message));
+      void sendMail({ to: u.email, subject: en ? 'New sign-in to your account' : 'Новый вход в аккаунт', ...body }).catch((e) => log.error('new-device mail failed:', (e as Error).message));
     }
   } catch (e) {
-    console.error('noteLogin failed', (e as Error).message);
+    log.error('noteLogin failed', (e as Error).message);
   }
 }
 
@@ -16359,7 +16540,7 @@ export function registerSecurity(d: SecurityDeps): void {
           if (!viaMail && !viaDiscord) return;
           const base = d.publicBase();
           if (!base) {
-            console.error('password reset letter not sent: the public address of the panel is unknown (set PUBLIC_URL or DOMAIN)');
+            log.error('password reset letter not sent: the public address of the panel is unknown (set PUBLIC_URL or DOMAIN)');
             return;
           }
           // at most 3 letters per account per hour
@@ -16389,7 +16570,7 @@ export function registerSecurity(d: SecurityDeps): void {
             await sendMail({ to: u.email!, subject: en ? 'Password reset' : 'Сброс пароля', ...body });
           }
         } catch (e) {
-          console.error('password reset letter failed:', (e as Error).message);
+          log.error('password reset letter failed:', (e as Error).message);
         }
       })();
     });
@@ -16583,6 +16764,7 @@ __COREGSM_EOF__
  */
 import type { Server } from 'node:http';
 import { db } from './db.js';
+import { log } from './logger.js';
 
 const FORCE_AFTER_MS = 8000;
 
@@ -16601,9 +16783,9 @@ export async function shutdown(server: Server, signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   const t0 = Date.now();
-  console.log(`${signal}: shutting down`);
+  log.info(`${signal}: shutting down`);
   const force = setTimeout(() => {
-    console.error(`shutdown took longer than ${FORCE_AFTER_MS} ms, exiting anyway`);
+    log.error(`shutdown took longer than ${FORCE_AFTER_MS} ms, exiting anyway`);
     process.exit(1);
   }, FORCE_AFTER_MS);
   force.unref();
@@ -16619,17 +16801,17 @@ export async function shutdown(server: Server, signal: string): Promise<void> {
       try {
         await s.run();
       } catch (e) {
-        console.error(`shutdown step "${s.name}" failed:`, (e as Error).message);
+        log.error(`shutdown step "${s.name}" failed:`, (e as Error).message);
       }
     }),
   ]);
   try {
     db.close();
   } catch (e) {
-    console.error('closing the database failed:', (e as Error).message);
+    log.error('closing the database failed:', (e as Error).message);
   }
   clearTimeout(force);
-  console.log(`stopped in ${Date.now() - t0} ms`);
+  log.info(`stopped in ${Date.now() - t0} ms`);
   process.exit(signal === 'uncaughtException' ? 1 : 0);
 }
 
