@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import tls from 'node:tls';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
+import { wrap } from './http.js';
 import { currentFlags } from './health.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
@@ -220,7 +221,7 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
   };
   const count = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
 
-  app.get('/api/system', admin, async (_req, res) => {
+  app.get('/api/system', admin, wrap(async (_req, res) => {
     const cert = await checkCert().catch(() => NO_CERT);
     const space = freeSpace();
     const dbBytes = (() => {
@@ -252,7 +253,7 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
       // problems found in the health history (bot_offline, poll_slow, disk_low, db_growing)
       flags: currentFlags(),
     });
-  });
+  }));
 
   type Check = { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string };
   const probe = async (url: string): Promise<boolean> => {

@@ -24,7 +24,7 @@ import { registerOverview } from './overview.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverData.js';
-import { installShutdown, onShutdown } from './shutdown.js';
+import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from './shutdown.js';
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
 import { router as accountRouter } from './routes/account.js';
@@ -49,6 +49,17 @@ import { router as internalRouter } from './routes/internal.js';
 // optional first-start defaults from .env (the panel settings take over afterwards)
 if (getSetting('discord_token') === null && process.env.DISCORD_TOKEN) setSetting('discord_token', process.env.DISCORD_TOKEN);
 if (getSetting('proxy_url') === null && process.env.PROXY_URL) setSetting('proxy_url', process.env.PROXY_URL);
+
+// A rejected promise nobody awaits is logged and the process keeps running (the poller and the bot should not stop
+// because of one bad request). A synchronous exception that escaped everything means the state is unknown: stop
+// cleanly and let Docker start a fresh process (restart: unless-stopped).
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('uncaught exception:', err.stack ?? err.message);
+  void shutdownNow('uncaughtException');
+});
 
 const app = express();
 // One trusted proxy hop (the nginx container): req.ip / req.secure come from the X-Forwarded-For / X-Forwarded-Proto it
@@ -176,4 +187,5 @@ onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 onShutdown('restarts', stopRestartTimer);
 installShutdown(server);
+registerShutdownServer(server);
 

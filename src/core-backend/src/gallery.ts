@@ -22,6 +22,7 @@ import { allow, auth, type AuthedRequest, can, loadUser, permsOf, rateLimit, vie
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
+import { wrap } from './http.js';
 
 const { Canvas, loadImage } = skia;
 
@@ -95,7 +96,7 @@ router.get('/api/gallery/mine', auth, (req: AuthedRequest, res) => {
   res.json((db.prepare(`${SELECT} WHERE g.user_id = ? ORDER BY g.created_at DESC LIMIT 100`).all(req.user!.id) as Row[]).map(out));
 });
 
-router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limit: '8mb' }), async (req: AuthedRequest, res) => {
+router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limit: '8mb' }), wrap(async (req: AuthedRequest, res) => {
   const q = z.object({ serverId: z.coerce.number().int().positive().optional(), caption: z.string().trim().max(140).default('') }).safeParse(req.query);
   if (!q.success) return res.status(400).json({ error: 'Неверные данные' });
   if (q.data.serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(q.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
@@ -119,10 +120,17 @@ router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limi
       .prepare('INSERT INTO gallery (user_id, server_id, caption, status, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(req.user!.id, q.data.serverId ?? null, q.data.caption, trusted ? 'approved' : 'pending', big.w, big.h, Date.now()).lastInsertRowid,
   );
-  fs.writeFileSync(fileOf(id), big.buf, { mode: 0o644 });
-  fs.writeFileSync(fileOf(id, true), small.buf, { mode: 0o644 });
+  try {
+    fs.writeFileSync(fileOf(id), big.buf, { mode: 0o644 });
+    fs.writeFileSync(fileOf(id, true), small.buf, { mode: 0o644 });
+  } catch (e) {
+    // a full disk must not leave a picture row without files
+    db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
+    fs.rmSync(fileOf(id), { force: true });
+    throw e;
+  }
   res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
-});
+}));
 
 router.get('/api/gallery/queue', staff, (_req, res) => {
   const rows = db.prepare(`${SELECT} ORDER BY g.status = 'pending' DESC, g.created_at DESC LIMIT 200`).all() as Row[];

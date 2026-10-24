@@ -52,7 +52,19 @@ export async function shutdown(server: Server, signal: string): Promise<void> {
   }
   clearTimeout(force);
   console.log(`stopped in ${Date.now() - t0} ms`);
-  process.exit(0);
+  process.exit(signal === 'uncaughtException' ? 1 : 0);
+}
+
+let mainServer: Server | null = null;
+/** The HTTP server that shutdownNow() closes (set once at start). */
+export function registerShutdownServer(server: Server): void {
+  mainServer = server;
+}
+
+/** Starts the same graceful shutdown from code (an uncaught exception); a no-op until the server is registered. */
+export async function shutdownNow(signal: string): Promise<void> {
+  if (!mainServer) return void process.exit(1);
+  await shutdown(mainServer, signal);
 }
 
 export function installShutdown(server: Server): void {

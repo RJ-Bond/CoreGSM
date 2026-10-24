@@ -8,5 +8,6 @@ RUN npm run build
 FROM nginx:stable-bookworm
 RUN rm -f /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY security-headers.conf csp.conf /etc/nginx/snippets/
 COPY --from=build /build/dist /usr/share/nginx/html
 EXPOSE 80
