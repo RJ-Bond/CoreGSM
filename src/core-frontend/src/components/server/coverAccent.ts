@@ -68,3 +68,28 @@ export function useCoverAccent(url: string | null | undefined, fallback: string)
   }, [url]);
   return c ?? fallback;
 }
+
+/** the hue (0-360) of an `hsl(...)` or `#rrggbb` colour, null for anything else */
+export function hueOf(color: string): number | null {
+  const m = /^hsl\(\s*([\d.]+)/i.exec(color.trim());
+  if (m) return Number(m[1]) % 360;
+  const h = /^#([0-9a-f]{6})$/i.exec(color.trim());
+  if (!h) return null;
+  const r = parseInt(h[1].slice(0, 2), 16) / 255;
+  const g = parseInt(h[1].slice(2, 4), 16) / 255;
+  const b = parseInt(h[1].slice(4, 6), 16) / 255;
+  const mx = Math.max(r, g, b);
+  const d = mx - Math.min(r, g, b);
+  if (d < 0.05) return null;
+  const x = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (x * 60 + 360) % 360;
+}
+
+/**
+ * The line colour of the players chart: the server's accent, except red. Red on a healthy server reads as an alarm
+ * (red is the colour of outages in these charts), so a red accent gives way to the panel's link colour.
+ */
+export function calmSeriesColor(accent: string, fallback = 'rgb(var(--link))'): string {
+  const h = hueOf(accent);
+  return h != null && (h >= 345 || h <= 22) ? fallback : accent;
+}

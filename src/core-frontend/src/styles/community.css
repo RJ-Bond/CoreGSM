@@ -26,6 +26,8 @@
 .cm-heat.is-big { gap: 3px; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); }
 .cm-heat-d { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
 .cm-heat-h { font-size: 12px; font-weight: 600; color: rgb(var(--mute)); }
+.cm-heat-scale { margin-top: 10px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; color: rgb(var(--mute)); }
+.cm-heat-scale i { width: 14px; height: 14px; border-radius: 4px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
 .cm-heat-c { height: 15px; border-radius: 3px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
 .cm-heat.is-big .cm-heat-c { height: clamp(14px, 2.4vw, 26px); border-radius: 5px; }
 
