@@ -167,11 +167,10 @@
 .srv-more { position: relative; display: inline-block; }
 .srv-more > .btn-glass { width: 100%; }
 .srv-more-pop {
-  position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; min-width: 230px; max-width: min(320px, calc(100vw - 32px)); padding: 6px;
+  z-index: 40; min-width: 230px; max-width: min(320px, calc(100vw - 32px)); padding: 6px;
   border-radius: var(--r-lg); background: rgb(var(--card)); color: rgb(var(--ink)); border: 1px solid var(--tile-border);
   box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.45); animation: dt-in .15s ease-out backwards;
 }
-.srv-more-pop.is-flip { right: auto; left: 0; }
 .srv-more-item {
   position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px; border-radius: var(--r-md);
   font-size: 14.5px; font-weight: 650; text-align: left; background: transparent; color: inherit; transition: background-color .12s ease;

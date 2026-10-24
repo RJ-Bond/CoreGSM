@@ -2,7 +2,8 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { StateView } from '../components/StateView';
-import { promptDialog, useBackdropClose, useDialogFocus } from '../confirm';
+import * as Dialog from '@radix-ui/react-dialog';
+import { promptDialog } from '../confirm';
 import { gameIconPath } from '../gameIcons';
 import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
 import { t } from '../i18n';
@@ -16,35 +17,38 @@ import { noAutofill } from './noAutofill';
  * Focus moves inside and is trapped, Escape closes, focus returns to the opener, only a real click on the backdrop closes it.
  */
 export function Modal({ title, onClose, children, side = false }: { title: string; onClose: () => void; children: ReactNode; /** a drawer from the right edge (full height) instead of a centred dialog: the list stays visible behind it */ side?: boolean }) {
-  const box = useRef<HTMLDivElement>(null);
-  const titleId = useId();
   // keyboards: first field; touch screens: the dialog itself (no on-screen keyboard popping up)
-  useDialogFocus(box, onClose, () =>
-    window.matchMedia?.('(pointer: coarse)').matches
-      ? box.current
-      : box.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box.current);
-  const bd = useBackdropClose(onClose);
+  const focusFirst = (e: Event) => {
+    e.preventDefault();
+    const box = (e.currentTarget as HTMLElement | null);
+    if (!box) return;
+    const target = window.matchMedia?.('(pointer: coarse)').matches
+      ? box
+      : box.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box;
+    target.focus();
+  };
   return (
-    <div className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'} {...bd}>
-      <div
-        ref={box}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className={side
-          ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-l-ui-xl sm:p-6'
-          : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6'}
-      >
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 id={titleId} className="min-w-0 text-xl font-black">{title}</h2>
-          <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
-            <IconClose />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
+    <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'}>
+          <Dialog.Content
+            aria-describedby={undefined}
+            onOpenAutoFocus={focusFirst}
+            className={side
+              ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-l-ui-xl sm:p-6'
+              : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6'}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <Dialog.Title className="min-w-0 text-xl font-black">{title}</Dialog.Title>
+              <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
+                <IconClose />
+              </button>
+            </div>
+            {children}
+          </Dialog.Content>
+        </Dialog.Overlay>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
