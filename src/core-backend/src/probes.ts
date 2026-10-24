@@ -19,6 +19,7 @@ import { admin, viewer } from './auth.js';
 import { db } from './db.js';
 import { AGENT_SOURCE, GAMEDIG_VERSION } from './probeAgent.js';
 import { publicBase } from './site.js';
+import { param } from './http.js';
 
 export const router = express.Router();
 
@@ -96,14 +97,14 @@ router.post('/api/probes', admin, (req, res) => {
   res.json({ id, token, commands: commands(token) });
 });
 
-router.post('/api/probes/:id(\\d+)/token', admin, (req, res) => {
+router.post('/api/probes/:id/token', param('id'), admin, (req, res) => {
   const token = newToken();
   const r = db.prepare('UPDATE probes SET token_hash = ? WHERE id = ?').run(hash(token), Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
   res.json({ token, commands: commands(token) });
 });
 
-router.delete('/api/probes/:id(\\d+)', admin, (req, res) => {
+router.delete('/api/probes/:id', param('id'), admin, (req, res) => {
   db.prepare('DELETE FROM probes WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });
@@ -170,7 +171,7 @@ export function probeView(serverId: number, now = Date.now()) {
   };
 }
 
-router.get('/api/servers/:id(\\d+)/probes', viewer, (req, res) => {
+router.get('/api/servers/:id/probes', param('id'), viewer, (req, res) => {
   const id = Number(req.params.id);
   if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
   res.json(probeView(id));

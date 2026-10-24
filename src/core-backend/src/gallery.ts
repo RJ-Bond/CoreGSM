@@ -22,7 +22,7 @@ import { allow, auth, type AuthedRequest, can, loadUser, permsOf, rateLimit, vie
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
-import { wrap } from './http.js';
+import { param, wrap } from './http.js';
 
 const { Canvas, loadImage } = skia;
 
@@ -137,7 +137,7 @@ router.get('/api/gallery/queue', staff, (_req, res) => {
   res.json(rows.map(out));
 });
 
-router.patch('/api/gallery/:id(\\d+)', staff, (req, res) => {
+router.patch('/api/gallery/:id', param('id'), staff, (req, res) => {
   const b = z.object({ status: z.enum(['approved', 'rejected', 'pending']).optional(), featured: z.boolean().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   const id = Number(req.params.id);
@@ -149,7 +149,7 @@ router.patch('/api/gallery/:id(\\d+)', staff, (req, res) => {
   res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
 });
 
-router.delete('/api/gallery/:id(\\d+)', auth, (req: AuthedRequest, res) => {
+router.delete('/api/gallery/:id', param('id'), auth, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT user_id FROM gallery WHERE id = ?').get(id) as { user_id: number | null } | undefined;
   if (!row) return res.status(404).json({ error: 'Не найдено' });

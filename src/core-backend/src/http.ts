@@ -22,3 +22,14 @@ export const wrap =
       next(e);
     }
   };
+
+/**
+ * Route-level check of a path parameter (Express 5 dropped `:id(\\d+)` in paths). A value that does not match falls
+ * through to the next route, which ends in the 404 handler, exactly as a non-matching path did before.
+ */
+export const param =
+  (name: string, re: RegExp = /^\d+$/) =>
+  (req: Request, _res: Response, next: NextFunction) => {
+    if (re.test(String(req.params[name]))) next();
+    else next('route');
+  };

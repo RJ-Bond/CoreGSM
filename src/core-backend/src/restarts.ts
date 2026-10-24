@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { admin, allow, type AuthedRequest } from './auth.js';
 import { enqueueAlert } from './alerts.js';
 import { db, EFFECTIVE_NAME, getSetting } from './db.js';
-import { wrap } from './http.js';
+import { param, wrap } from './http.js';
 import { defaultSay, nextRun } from './restartLogic.js';
 import { rconCommand } from './rcon.js';
 import { decryptSecret, encryptSecret, reencrypt, usesLegacyKey } from './secrets.js';
@@ -205,13 +205,13 @@ function view(serverId: number, game: string) {
   };
 }
 
-router.get('/api/servers/:id(\\d+)/restart', allow('maintenance'), (req, res) => {
+router.get('/api/servers/:id/restart', param('id'), allow('maintenance'), (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
   res.json(view(s.id, s.game));
 });
 
-router.put('/api/servers/:id(\\d+)/restart', allow('maintenance'), (req, res) => {
+router.put('/api/servers/:id/restart', param('id'), allow('maintenance'), (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
   const b = z
@@ -236,7 +236,7 @@ router.put('/api/servers/:id(\\d+)/restart', allow('maintenance'), (req, res) =>
   res.json(view(s.id, s.game));
 });
 
-router.put('/api/servers/:id(\\d+)/rcon', admin, (req, res) => {
+router.put('/api/servers/:id/rcon', param('id'), admin, (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
   const b = z.object({ port: z.number().int().min(1).max(65535).nullable(), password: z.string().max(200).optional() }).safeParse(req.body);
@@ -253,7 +253,7 @@ router.put('/api/servers/:id(\\d+)/rcon', admin, (req, res) => {
   res.json(view(s.id, s.game));
 });
 
-router.post('/api/servers/:id(\\d+)/rcon/test', admin, wrap(async (req, res) => {
+router.post('/api/servers/:id/rcon/test', param('id'), admin, wrap(async (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
   const b = z.object({ command: z.string().trim().min(1).max(200) }).safeParse(req.body);
@@ -267,7 +267,7 @@ router.post('/api/servers/:id(\\d+)/rcon/test', admin, wrap(async (req, res) => 
   }
 }));
 
-router.post('/api/servers/:id(\\d+)/restart/now', allow('maintenance'), wrap(async (req, res) => {
+router.post('/api/servers/:id/restart/now', param('id'), allow('maintenance'), wrap(async (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
   const result = await run(s.id, planOf(s.id), Date.now(), (req as AuthedRequest).user?.username ?? 'админка');
