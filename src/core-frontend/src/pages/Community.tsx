@@ -94,7 +94,7 @@ function GalleryStrip() {
   return (
     <section className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">📸 Галерея</h2>
+        <h2 className="text-lg font-extrabold">Галерея</h2>
         <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
       </div>
       {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <p className="cm-sub">Скриншотов пока нет: поделитесь первым.</p> : <ShotGrid list={list} onOpen={setOpen} />}

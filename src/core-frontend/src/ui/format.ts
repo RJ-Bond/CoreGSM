@@ -6,6 +6,7 @@ import { getPrefs, t } from '../i18n';
 export const ago = (ts: number | null) => {
   if (!ts) return '–';
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 10) return t('ago.now');
   if (s < 60) return t('ago.s', { n: s });
   if (s < 3600) return t('ago.m', { n: Math.floor(s / 60) });
   if (s < 86400) return t('ago.h', { n: Math.floor(s / 3600) });

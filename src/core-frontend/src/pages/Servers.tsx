@@ -220,7 +220,7 @@ function ServerList() {
       {servers.length > 0 && (
         <div className="srv-bar">
           {servers.length > 1 ? (
-            <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+            <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
               {([
                 ['all', `Все · ${servers.length}`, servers.length],
                 ['online', `Онлайн · ${online.length}`, online.length],

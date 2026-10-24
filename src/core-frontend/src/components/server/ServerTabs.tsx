@@ -76,7 +76,7 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
       <div className={`srv-tabbar sticky z-20 -mx-3 px-3 py-2 sm:-mx-6 sm:px-6 ${stuck ? 'is-stuck' : ''}`} style={{ top }}>
         <nav
           ref={seg}
-          className="srv-tabs seg no-scrollbar flex w-fit max-w-full overflow-x-auto"
+          className="srv-tabs seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto"
           role="tablist"
           aria-label="Разделы сервера"
           onKeyDown={onKey}
