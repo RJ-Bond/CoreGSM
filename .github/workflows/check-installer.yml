@@ -11,7 +11,7 @@ jobs:
   up-to-date:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rebuild installer
         run: bash tools/build-installer.sh
       - name: install.sh and version.txt must match the committed files
