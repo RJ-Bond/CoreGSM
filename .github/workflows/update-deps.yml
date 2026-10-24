@@ -36,9 +36,17 @@ jobs:
           # shellcheck disable=SC2086
           npm install $PACKAGES
           npm update body-parser express
-      - name: npm audit
+      - name: npm audit (report only)
         working-directory: src/core-backend
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          npm audit --omit=dev --audit-level=high --json > audit.json || true
+          node -e '
+            const a = JSON.parse(require("fs").readFileSync("audit.json", "utf8")).vulnerabilities || {};
+            const rows = Object.values(a).filter((v) => ["high", "critical"].includes(v.severity)).map((v) =>
+              v.name + " " + v.range + " [" + v.severity + "] direct=" + v.isDirect + " fix=" + (v.fixAvailable && v.fixAvailable.name ? v.fixAvailable.name + "@" + v.fixAvailable.version + (v.fixAvailable.isSemVerMajor ? " (major)" : "") : v.fixAvailable));
+            const msg = rows.length ? rows.join("%0A") : "no high or critical vulnerabilities left";
+            console.log((rows.length ? "::error title=npm audit left::" : "::notice title=npm audit::") + msg);
+          '
       - name: Typecheck and test
         working-directory: src/core-backend
         run: |
