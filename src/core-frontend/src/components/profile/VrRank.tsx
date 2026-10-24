@@ -5,6 +5,7 @@ import ru from '../../locales/ru';
 import { fmtDate, Section } from '../../ui';
 import { VR_RANKS, rankById } from '../../vrisingRanks';
 import { isArray, isObject, useFetched } from './useFetched';
+import { AchBrowser, AchFlag } from './Achievements';
 
 /** rank name in the interface language (the ladder module keeps the Russian one) */
 export function rankName(r: { id: string; name: string }): string {
@@ -48,7 +49,7 @@ export function RankHeaderBadge() {
   if (!data || !data.nick) return null;
   return (
     <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" style={{ color: data.rank.color }} title={t('vr.rank.title')}>
-      <RankEmblem rank={data.rank} size={28} />
+      <RankEmblem rank={data.rank} size={36} />
       {rankName(data.rank)}
     </span>
   );
@@ -67,12 +68,13 @@ export function RankCard() {
 }
 
 function RankBody({ d }: { d: MyRank }) {
+  const [pick, setPick] = useState<string | null>(null);
   const curIdx = Math.max(0, VR_RANKS.findIndex((r) => r.id === d.rank.id));
   const left = d.next ? Math.max(0, d.next.minHours - d.hours) : 0;
   return (
     <div className="space-y-4">
       <div className="vr-rank">
-        <RankEmblem rank={d.rank} size={96} />
+        <RankEmblem rank={d.rank} size={112} />
         <div className="vr-rank-main">
           <div className="wrap-break-word text-xl font-black leading-tight" style={{ color: d.rank.color }}>{rankName(d.rank)}</div>
           <div className="mt-0.5 text-sm font-semibold text-mute">
@@ -82,7 +84,7 @@ function RankBody({ d }: { d: MyRank }) {
             <div className="mt-3">
               <div className="flex items-baseline justify-between gap-3 text-sm font-extrabold">
                 <span className="min-w-0 truncate">{t('vr.rank.next', { name: rankName(d.next) })}</span>
-                <span className="shrink-0 text-mute">{t('vr.rank.left', { hours: fmtH(left) })}</span>
+                <span className="shrink-0 text-mute">{Math.round(d.progress * 100)}% · {t('vr.rank.left', { hours: fmtH(left) })}</span>
               </div>
               <div className="pf-bar mt-2" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(d.progress * 100)} aria-label={t('vr.rank.title')}>
                 <i style={{ width: `${Math.round(d.progress * 100)}%`, background: d.next.color }} />
@@ -95,16 +97,22 @@ function RankBody({ d }: { d: MyRank }) {
       </div>
       <ul className="vr-ladder" aria-label={t('vr.rank.ladder')}>
         {VR_RANKS.map((r, i) => (
-          <li
-            key={r.id}
-            className={i < curIdx ? 'is-got' : i === curIdx ? 'is-cur' : ''}
-            style={{ ['--vr-c' as string]: r.color }}
-            title={t('vr.rank.tip', { name: rankName(r), hours: r.minHours })}
-          >
-            <RankEmblem rank={r} size={36} />
+          <li key={r.id} className={i < curIdx ? 'is-got' : i === curIdx ? 'is-cur' : ''} style={{ ['--vr-c' as string]: r.color }}>
+            <button type="button" aria-pressed={(pick ?? d.rank.id) === r.id} aria-label={t('vr.rank.tip', { name: rankName(r), hours: r.minHours })} onClick={() => setPick(r.id)}>
+              <RankEmblem rank={r} size={36} />
+            </button>
           </li>
         ))}
       </ul>
+      {(() => {
+        const sel = VR_RANKS.find((x) => x.id === (pick ?? d.rank.id)) ?? d.rank;
+        return (
+          <p className="text-sm font-bold" style={{ color: sel.color }} aria-live="polite">
+            {t('vr.rank.tip', { name: rankName(sel), hours: 'minHours' in sel ? sel.minHours : d.rank.minHours })}
+            {sel.id === d.rank.id && <span className="pf-here"> · {t('vr.rank.here')}</span>}
+          </p>
+        );
+      })()}
     </div>
   );
 }
@@ -119,6 +127,7 @@ function Card({ a }: { a: VrAchievement }) {
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
       <span className="pf-ach-ico">
         {!failed && <img className="vr-ach-img" src={src} width={44} height={44} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />}
+        <AchFlag earned={a.earned} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{title}</div>
@@ -148,7 +157,7 @@ export function VrAchievementsGrid() {
   return (
     <Section title={t('vr.ach.title')} description={data ? t('pf.ach.count', { done, total: list.length }) : undefined}>
       {data === undefined && <div className="skeleton h-32 rounded-2xl bg-soft" />}
-      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <Card key={a.id} a={a} />)}</ul>}
+      {data && list.length > 0 && <AchBrowser list={list} render={(a) => <Card key={a.id} a={a} />} />}
     </Section>
   );
 }
