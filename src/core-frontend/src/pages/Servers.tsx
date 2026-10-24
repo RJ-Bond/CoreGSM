@@ -7,6 +7,7 @@ import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useDepth, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
+import { pingTone, TONE_TEXT } from '../components/server/helpers';
 import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
@@ -159,6 +160,7 @@ function ServerList() {
   const attentionIds = new Set(attention.map((s) => s.id));
   const rest = sorted.filter((s) => s.id !== hero?.id && !attentionIds.has(s.id));
   const offlineCount = servers.filter((s) => !s.online).length;
+  const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
   // a filter other than "all" turns the bento into a plain grid of the matching servers
   const effFilter: Filter = filter === 'fav' && !me ? 'all' : filter;
@@ -204,7 +206,7 @@ function ServerList() {
     <div className="space-y-5">
       <PageHead
         title="Серверы"
-        subtitle={me ? `${greeting(me.username)}. Серверы в реальном времени` : 'Состояние ваших игровых серверов в реальном времени'}
+        subtitle={me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
@@ -229,7 +231,7 @@ function ServerList() {
                 ['online', `Онлайн · ${online.length}`, online.length],
                 ['offline', `Недоступные · ${offlineCount}`, offlineCount],
                 ...(me ? [['fav', `Избранные · ${favCount}`, favCount]] : []),
-              ] as [Filter, string, number][]).map(([id, label, count]) => (
+              ] as [Filter, string, number][]).filter(([id, , count]) => id !== 'offline' || count > 0 || effFilter === id).map(([id, label, count]) => (
                 // an empty filter stays reachable but is dimmed, so the eye goes to the ones that have servers
                 <button key={id} type="button" className={`seg-item whitespace-nowrap${count === 0 && effFilter !== id ? ' opacity-70' : ''}`} aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
               ))}
@@ -297,6 +299,15 @@ function ServerList() {
         </div>
       )}
 
+      {servers.length > 0 && (
+        <footer className="srv-foot">
+          <span>CoreGSM</span>
+          <a href="/status">{t('nav.status')}</a>
+          <a href="/community">{t('nav.community')}</a>
+          <a href="/news">{t('nav.news')}</a>
+        </footer>
+      )}
+
       {selOn && (
         <BulkBar
           selected={selectedServers}
@@ -350,6 +361,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       style={{
         ...stagger(idx),
         ...emb.style,
+        ['--gc' as string]: gameColor(s.game),
         background: coverBackground(s.coverUrl, gameBackdrop(c1), { strong: true, game: s.game }),
         boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
       }}
@@ -386,7 +398,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
-            {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
+            {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />пинг {s.ping} мс</span>}
           </div>
           <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
           <div className="sh-chart relative mt-auto pt-2">
@@ -445,7 +457,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
         <h3 className="line-clamp-2 wrap-break-word text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
+        <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
@@ -454,7 +466,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
           <div className="flex items-baseline gap-1.5 px-1.5">
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
-            <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-[13px] font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />{`${s.ping} мс`}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
           {s.players === 0
@@ -474,7 +486,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="truncate font-mono" />
-        <span className="shrink-0">{s.online ? (s.map || (s.updatedAt != null && Date.now() - s.updatedAt > 60_000 ? ago(s.updatedAt) : '')) : ago(s.updatedAt)}</span>
+        <span className="shrink-0">{s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}</span>
       </div>
     </article>
   );

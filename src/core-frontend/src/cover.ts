@@ -31,7 +31,7 @@ export function coverBackground(
   if (coverUrl) url = opts.small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
   else if (opts.game && DEFAULT_COVERS.has(opts.game)) url = `/games/covers/${opts.game}${opts.small ? '@s' : ''}.jpg`;
   if (!url) return gradient;
-  const [a, b] = opts.strong ? [0.3, 0.62] : [0.22, 0.5];
+  const [a, b] = opts.strong ? ['var(--cv-a, .3)', 'var(--cv-b, .62)'] : [0.22, 0.5];
   return `linear-gradient(180deg, rgba(8,10,20,${a}) 0%, rgba(8,10,20,${b}) 100%), url("${url}") center / cover no-repeat, ${gradient}`;
 }
 

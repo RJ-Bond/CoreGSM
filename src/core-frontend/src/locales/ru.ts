@@ -929,6 +929,11 @@ const ru = {
   'srv.empty.now': 'Сейчас никого',
   'srv.addr.copy': 'Скопировать адрес',
   'srv.addr.copied': 'Адрес скопирован',
+  'spark.now': 'сейчас',
+  'spark.h': 'ч',
+  'spark.min': 'мин',
+  'srv.sub.live': 'Игроков сейчас: {n} · серверов онлайн: {s} из {total}',
+  'srv.sub.empty': 'Состояние ваших игровых серверов в реальном времени',
 };
 
 export default ru;
