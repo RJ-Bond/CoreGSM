@@ -1,0 +1,52 @@
+name: update-deps
+
+# One-off helper. Push a branch named update-deps/<name> with a file .github/update-deps.packages, one line per part:
+#   core-backend bcryptjs@3 @types/nodemailer@8
+# The job installs the packages, runs the same checks as ci.yml for each part, rebuilds install.sh and pushes the
+# result to <branch>-result. Open a pull request from that branch. Commits made with GITHUB_TOKEN do not start other
+# workflows, which is why the checks run inside this job. Remove this file when the updates are done.
+on:
+  push:
+    branches: ['update-deps/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the listed packages and check each part
+        run: |
+          set -e
+          while read -r dir pkgs; do
+            [ -n "$dir" ] || continue
+            echo "::group::$dir: $pkgs"
+            (
+              cd "src/$dir"
+              npm ci --no-audit --no-fund
+              # shellcheck disable=SC2086
+              npm install --no-audit --no-fund $pkgs
+              npm run typecheck
+              npm test
+              if [ "$dir" = core-frontend ]; then npx vite build; fi
+              npm audit --omit=dev --audit-level=high || echo "::warning::npm audit reports high findings in $dir"
+            )
+            echo "::endgroup::"
+          done < .github/update-deps.packages
+      - name: Rebuild install.sh
+        run: bash tools/build-installer.sh
+      - name: Push result branch
+        run: |
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "${GITHUB_REF_NAME}-result"
+          git add -A
+          git commit -m "Update dependencies: $(tr '\n' ';' < .github/update-deps.packages)"
+          git push --force -u origin "${GITHUB_REF_NAME}-result"

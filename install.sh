@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="54dcc5f94054"
+COREGSM_BUILD="156a856c36d3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -623,7 +623,7 @@ __COREGSM_EOF__
       "name": "core-backend",
       "version": "1.0.0",
       "dependencies": {
-        "bcryptjs": "^2.4.3",
+        "bcryptjs": "^3.0.3",
         "better-sqlite3": "^11.5.0",
         "express": "^4.21.1",
         "fetch-socks": "^1.3.3",
@@ -637,11 +637,11 @@ __COREGSM_EOF__
       },
       "devDependencies": {
         "@types/bcryptjs": "^2.4.6",
-        "@types/better-sqlite3": "^7.6.11",
+        "@types/better-sqlite3": "^9.6.0",
         "@types/express": "^4.17.21",
         "@types/jsonwebtoken": "^9.0.7",
         "@types/node": "^22.10.0",
-        "@types/nodemailer": "^6.4.24",
+        "@types/nodemailer": "^8.0.2",
         "tsx": "^4.23.15",
         "typescript": "^5.6.3"
       }
@@ -1248,9 +1248,9 @@ __COREGSM_EOF__
       "license": "MIT"
     },
     "node_modules/@types/better-sqlite3": {
-      "version": "7.6.13",
-      "resolved": "https://registry.npmjs.org/@types/better-sqlite3/-/better-sqlite3-7.6.13.tgz",
-      "integrity": "sha512-NMv9ASNARoKksWtsq/SHakpYAYnhBrQgGD8zkLYk/jaK8jUGn08CfEdTRgYhMypUQAfzSP8W6gNLe0q19/t4VA==",
+      "version": "9.6.0",
+      "resolved": "https://registry.npmjs.org/@types/better-sqlite3/-/better-sqlite3-9.6.0.tgz",
+      "integrity": "sha512-ZEEwBSgMu7GYJOynoagg5X9JbxfL6dTJDsgViJIqh67jV44kyOr9RXfmFjLK5rzC4MWssP06t9hu/JwGDnUbCg==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
@@ -1353,9 +1353,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@types/nodemailer": {
-      "version": "6.4.24",
-      "resolved": "https://registry.npmjs.org/@types/nodemailer/-/nodemailer-6.4.24.tgz",
-      "integrity": "sha512-Ww4u0rT9wQNXh4JiQaIwx3QWdcOFXzOjQA2zc+jtFYNmQiT4mIUqcDin51bDFdkzKubFnQCZNK7FIHlPKQ/q9w==",
+      "version": "8.0.2",
+      "resolved": "https://registry.npmjs.org/@types/nodemailer/-/nodemailer-8.0.2.tgz",
+      "integrity": "sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
@@ -1485,10 +1485,13 @@ __COREGSM_EOF__
       "license": "MIT"
     },
     "node_modules/bcryptjs": {
-      "version": "2.4.3",
-      "resolved": "https://registry.npmjs.org/bcryptjs/-/bcryptjs-2.4.3.tgz",
-      "integrity": "sha512-V/Hy/X9Vt7f3BbPJEi8BdVFMByHi+jNXrYkW3huaybV/kQ0KJg0Y6PkEMbn+zeT+i+SiKZ/HMqJGIIt4LZDqNQ==",
-      "license": "MIT"
+      "version": "3.0.3",
+      "resolved": "https://registry.npmjs.org/bcryptjs/-/bcryptjs-3.0.3.tgz",
+      "integrity": "sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvTS+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==",
+      "license": "BSD-3-Clause",
+      "bin": {
+        "bcrypt": "bin/bcrypt"
+      }
     },
     "node_modules/better-sqlite3": {
       "version": "11.10.0",
@@ -3701,7 +3704,7 @@ __COREGSM_EOF__
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.3",
     "better-sqlite3": "^11.5.0",
     "express": "^4.21.1",
     "fetch-socks": "^1.3.3",
@@ -3715,11 +3718,11 @@ __COREGSM_EOF__
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/better-sqlite3": "^7.6.11",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.10.0",
-    "@types/nodemailer": "^6.4.24",
+    "@types/nodemailer": "^8.0.2",
     "tsx": "^4.23.15",
     "typescript": "^5.6.3"
   }
@@ -19495,7 +19498,7 @@ __COREGSM_EOF__
         "@types/react-dom": "^18.3.1",
         "@vitejs/plugin-react": "^4.3.3",
         "autoprefixer": "^10.4.20",
-        "postcss": "^8.4.47",
+        "postcss": "^8.5.31",
         "tailwindcss": "^3.4.14",
         "typescript": "^5.6.3",
         "vite": "^5.4.10",
@@ -21756,9 +21759,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/postcss": {
-      "version": "8.5.30",
-      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.30.tgz",
-      "integrity": "sha512-zkd+e9S1AQHhmaBKye9zlFHWjOwVgqXl1q3ECYy8561K7qxR2cREf/STLskulBFd78k6AOFeA+ff1TtEzk9bAA==",
+      "version": "8.5.31",
+      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.31.tgz",
+      "integrity": "sha512-YUbWYCgErwnMAVkjUnYa+KlMBzGpHwiIt/DE7f0G33AuX2LH9UcTk6KgWxd3zRU+pN3u/C+Xl3EnMLM4Hea7Sg==",
       "dev": true,
       "funding": [
         {
@@ -22615,7 +22618,7 @@ __COREGSM_EOF__
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.47",
+    "postcss": "^8.5.31",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
