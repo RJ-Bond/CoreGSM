@@ -19,7 +19,7 @@
 }
 .pp-i { min-width: 0; padding: 9px 12px; background: rgba(0, 0, 0, 0.26); }
 .pp-i.wide { grid-column: 1 / -1; }
-.pp-k { font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.72); }
+.pp-k { font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.88); }
 .pp-v { margin-top: 1px; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 650; color: #fff; }
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
@@ -290,6 +290,6 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
   .srv-hero > .srv-hero-free { grid-column: 1 / -1; }
 }
 .srv-addr-btn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; max-width: 100%; }
-@media (max-width: 639px) { .srv-addr-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; } }
+@media (max-width: 639px) { .srv-addr-btn { min-width: 0; max-width: 100%; } }
 /* reviews: an empty block is one line */
 .rv-none { margin: 0; font-weight: 600; color: rgb(var(--mute)); }

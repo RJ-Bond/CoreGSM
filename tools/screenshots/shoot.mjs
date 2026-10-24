@@ -66,6 +66,8 @@ for (const theme of ['dark', 'light']) {
     for (const [name, p] of pages) {
       await page.goto(panel + p, { waitUntil: 'networkidle' }).catch(() => undefined);
       await page.waitForTimeout(1200);
+      // the first screen as the visitor sees it (a full-page picture moves fixed bars into the middle of the page)
+      await page.screenshot({ path: path.join(outDir, `${theme}-${sizeName}-${name}-top.png`) }).catch((e) => console.log('skip', name, e.message));
       await page.screenshot({ path: path.join(outDir, `${theme}-${sizeName}-${name}.png`), fullPage: true }).catch((e) => console.log('skip', name, e.message));
     }
     await ctx.close();
