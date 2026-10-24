@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type NewsAction, type NewsCategory, type NewsChange, type NewsReaction, type Server } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { GameAvatar, StatusPill, UserAvatar, toast, usePoll } from '../../ui';
+import { Burst, GameAvatar, StatusPill, UserAvatar, toast, usePoll } from '../../ui';
 import { IconClose } from '../../icons';
 import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
 import { CategoryIcon, ChangeIcon, PinIcon } from './NewsIcons';
@@ -296,10 +296,12 @@ export function Reactions({
   onChange: (r: NewsReaction[]) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [pop, setPop] = useState<{ e: string; k: number } | null>(null);
   const list = fullReactions(reactions);
   const click = async (emoji: string) => {
     if (!canReact || busy) return;
     const prev = list;
+    if (!prev.find((r) => r.emoji === emoji)?.mine) setPop({ e: emoji, k: Date.now() });
     const { list: opt, next } = toggleReaction(prev, emoji);
     onChange(opt);
     setBusy(true);
@@ -321,6 +323,7 @@ export function Reactions({
           <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} disabled={!canReact} onClick={() => void click(r.emoji)}>
             <span aria-hidden className="nw-react-emoji">{r.emoji}</span>
             <span className="tabular-nums">{r.count}</span>
+            {pop?.e === r.emoji && <Burst key={pop.k} count={6} radius={20} />}
           </button>
         ))}
       </div>

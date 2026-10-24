@@ -49,7 +49,7 @@ function useWorks(): Works {
   return works;
 }
 
-function AsideSection({ id, title, wide, children, className = '' }: { id: string; title: string; wide: boolean; children: ReactNode; className?: string }) {
+function AsideSection({ id, title, wide, children, className = '', hint }: { id: string; title: string; wide: boolean; children: ReactNode; className?: string; hint?: string }) {
   const [open, setOpen] = useState(false);
   const shown = wide || open;
   return (
@@ -59,6 +59,7 @@ function AsideSection({ id, title, wide, children, className = '' }: { id: strin
       ) : (
         <button type="button" className="nw-side-toggle" aria-expanded={open} aria-controls={`nw-side-${id}`} onClick={() => setOpen((v) => !v)}>
           <span>{title}</span>
+          {hint && !open && <span className="nw-side-hint">{hint}</span>}
           <span aria-hidden>{open ? '−' : '+'}</span>
         </button>
       )}
@@ -70,13 +71,12 @@ function AsideSection({ id, title, wide, children, className = '' }: { id: strin
 function FeedSkeleton() {
   return (
     <div className="nw-skel" aria-busy="true" aria-label={t('nw.loading')}>
-      <div className="skeleton nw-skel-hero" />
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="nw-skel-row">
-          <div className="skeleton nw-skel-thumb" />
+      {[0, 1].map((i) => (
+        <div key={i} className="nw-skel-entry">
+          <div className="skeleton nw-skel-banner" />
           <div className="nw-skel-lines">
-            <div className="skeleton h-3 w-24 rounded-full" />
-            <div className="skeleton h-5 w-4/5 rounded-full" />
+            <div className="skeleton h-4 w-full rounded-full" />
+            <div className="skeleton h-4 w-11/12 rounded-full" />
             <div className="skeleton h-4 w-3/5 rounded-full" />
           </div>
         </div>
@@ -171,6 +171,7 @@ export function NewsListPage() {
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
           {!loaded && <FeedSkeleton />}
           {loaded && !error && ordered.length === 0 && (
+            <>
             <StateView
               kind="empty"
               art={<NewsArt />}
@@ -178,6 +179,16 @@ export function NewsListPage() {
               text={t('nw.empty.text')}
               action={canWrite ? <a href="/admin/news/new" className="btn">{t('nw.empty.write')}</a> : <a href="/servers" className="btn btn-soft">{t('nw.empty.servers')}</a>}
             />
+            <ul className="nw-hints" aria-label={t('nw.hints.title')}>
+              {(['update', 'event', 'maintenance'] as const).map((c) => (
+                <li key={c} className={`nw-hint nw-tone-${c}`}>
+                  <span className="nw-hint-ico"><CategoryIcon category={c} size={20} /></span>
+                  <b>{t(`nw.hints.${c}` as const)}</b>
+                  <span>{t(`nw.hints.${c}.t` as const)}</span>
+                </li>
+              ))}
+            </ul>
+            </>
           )}
           {loaded && ordered.length > 0 && shown.length === 0 && (
             <StateView
@@ -212,7 +223,7 @@ export function NewsListPage() {
               </AsideSection>
             )}
             {liveServers.length > 0 && (
-              <AsideSection id="live" title={t('nw.liveNow')} wide={wide}>
+              <AsideSection id="live" title={t('nw.liveNow')} wide={wide} hint={t('nw.liveHint', { n: liveServers.reduce((a, sv) => a + (sv.online ? sv.players : 0), 0), s: liveServers.filter((sv) => sv.online).length })}>
                 <ul className="nw-side-list nw-live">
                   {liveServers.map((sv: Server) => (
                     <li key={sv.id}>

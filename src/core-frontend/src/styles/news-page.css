@@ -272,3 +272,16 @@
 .nw-soon { display: grid; gap: .35rem; padding: .35rem 0 .6rem; color: inherit; text-decoration: none; }
 .nw-soon b { font-weight: 650; overflow-wrap: anywhere; }
 .nw-soon:hover b { text-decoration: underline; }
+
+.nw-hints { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; list-style: none; padding: 0; margin: 18px 0 0; }
+.nw-hint { display: grid; gap: 4px; padding: 14px; border-radius: 14px; border: 1px dashed rgb(var(--line)); font-size: 13px; }
+.nw-hint b { font-size: 14px; }
+.nw-hint > span:last-child { opacity: .7; }
+.nw-hint-ico { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: color-mix(in srgb, currentColor 10%, transparent); }
+.nw-side-hint { margin-left: auto; margin-right: 8px; font-size: 12px; font-weight: 500; opacity: .65; }
+.nw-gallery-3 > li:first-child, .nw-gallery-5 > li:first-child { grid-column: span 2; grid-row: span 2; }
+.nw-gallery-6 > li:first-child { grid-column: span 2; grid-row: span 2; }
+.nw-react-btn { position: relative; }
+.nw-skel-entry { border-radius: 16px; overflow: hidden; border: 1px solid rgb(var(--line)); margin-bottom: 14px; }
+.nw-skel-banner { height: 120px; border-radius: 0; }
+.nw-skel-entry .nw-skel-lines { display: grid; gap: 10px; padding: 16px; }
