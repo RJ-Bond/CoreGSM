@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c2034f22cd12"
+COREGSM_BUILD="7f2430b25a41"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -63143,6 +63143,62 @@ const en: Record<keyof typeof ru, string> = {
   'start.quick': 'Quick actions',
   'start.map': 'Where things are',
   'start.mapText': 'The menu on the left is split into four groups. Expand for a description of each section.',
+  'adm.com.seasons': 'Seasons',
+  'adm.com.reviews': 'Reviews',
+  'adm.com.gallery': 'Gallery',
+  'adm.com.subtitle': 'Seasons and the hall of fame, server reviews, the screenshot gallery',
+  'adm.com.nav': 'Community sections',
+  'adm.com.endQ': 'End “{name}”?',
+  'adm.com.endText': 'The current season ends, its top three go to the hall of fame and the new season’s table starts from zero.',
+  'adm.com.startNew': 'Start a new season',
+  'adm.com.seasonN': 'Season {n}',
+  'adm.com.started': 'A new season has started',
+  'adm.com.seasonName': 'Season name',
+  'adm.com.name': 'Name',
+  'adm.com.save': 'Save',
+  'adm.com.delQ': 'Delete “{name}”?',
+  'adm.com.delCurrent': 'The previous season becomes the current one again.',
+  'adm.com.delPast': 'The season disappears from the hall of fame. Game statistics are not deleted.',
+  'adm.com.newSeason': 'New season',
+  'adm.com.newSeasonText': 'Start a season, for example on wipe day. The season table on the “Community” page counts hours from its start, and when the next one begins the top three go to the hall of fame and get achievements.',
+  'adm.com.start': 'Start',
+  'adm.com.startBtn': 'Start the season',
+  'adm.com.count': '{n} season|{n} seasons',
+  'adm.com.none': 'No seasons yet',
+  'adm.com.running': 'running',
+  'adm.com.now': 'now',
+  'adm.com.leads': 'leading',
+  'adm.com.champion': 'champion',
+  'adm.com.hours': '{n} h',
+  'adm.com.rename': 'Rename',
+  'adm.com.revHidden': 'Review hidden',
+  'adm.com.revShown': 'Review is visible again',
+  'adm.com.revDelQ': 'Delete the review?',
+  'adm.com.revDelText': 'The author will be able to write a new one.',
+  'adm.com.revTitle': 'Server reviews',
+  'adm.com.revDesc': 'Reviews are visible at once. A hidden review does not count towards the server’s rating; the author sees a “hidden by a moderator” note.',
+  'adm.com.revNone': 'No reviews yet.',
+  'adm.com.hidden': 'hidden',
+  'adm.com.show': 'Show',
+  'adm.com.hide': 'Hide',
+  'adm.com.shotDelQ': 'Delete the screenshot?',
+  'adm.com.shotDelText': 'The picture will be deleted for good.',
+  'adm.com.waiting': 'Waiting for review: {n}',
+  'adm.com.noWaiting': 'No new screenshots waiting for review.',
+  'adm.com.shotsNone': 'No screenshots yet',
+  'adm.com.shotsNoneText': 'Players upload them on the “Gallery” page.',
+  'adm.com.openGallery': 'Open the gallery',
+  'adm.com.noCaption': 'No caption',
+  'adm.com.published': 'Screenshot published',
+  'adm.com.approve': 'Approve',
+  'adm.com.rejected': 'Screenshot rejected',
+  'adm.com.reject': 'Reject',
+  'adm.com.unstarred': 'Star removed',
+  'adm.com.starred': 'Screenshot added to the best',
+  'adm.com.inBest': '★ In the best',
+  'adm.com.toBest': '☆ Add to the best',
+  'adm.com.unpublished': 'Screenshot unpublished',
+  'adm.com.take': 'Unpublish',
 };
 
 export default en;
@@ -64221,6 +64277,62 @@ const ru = {
   'start.quick': 'Быстрые действия',
   'start.map': 'Где что находится',
   'start.mapText': 'Меню слева разделено на четыре группы. Развернуть описание разделов.',
+  'adm.com.seasons': 'Сезоны',
+  'adm.com.reviews': 'Отзывы',
+  'adm.com.gallery': 'Галерея',
+  'adm.com.subtitle': 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов',
+  'adm.com.nav': 'Разделы сообщества',
+  'adm.com.endQ': 'Завершить «{name}»?',
+  'adm.com.endText': 'Текущий сезон закончится, его тройка лучших попадёт в зал славы, а таблица нового сезона начнётся с нуля.',
+  'adm.com.startNew': 'Начать новый сезон',
+  'adm.com.seasonN': 'Сезон {n}',
+  'adm.com.started': 'Новый сезон начался',
+  'adm.com.seasonName': 'Название сезона',
+  'adm.com.name': 'Название',
+  'adm.com.save': 'Сохранить',
+  'adm.com.delQ': 'Удалить «{name}»?',
+  'adm.com.delCurrent': 'Предыдущий сезон снова станет текущим.',
+  'adm.com.delPast': 'Сезон пропадёт из зала славы. Игровая статистика не удаляется.',
+  'adm.com.newSeason': 'Новый сезон',
+  'adm.com.newSeasonText': 'Начните сезон, например, в день вайпа. Таблица сезона на странице «Сообщество» считает часы с его начала, а когда начнётся следующий, тройка лучших попадёт в зал славы и получит достижения.',
+  'adm.com.start': 'Начало',
+  'adm.com.startBtn': 'Начать сезон',
+  'adm.com.count': '{n} сезон|{n} сезона|{n} сезонов',
+  'adm.com.none': 'Сезонов пока нет',
+  'adm.com.running': 'идёт',
+  'adm.com.now': 'сейчас',
+  'adm.com.leads': 'лидирует',
+  'adm.com.champion': 'чемпион',
+  'adm.com.hours': '{n} ч',
+  'adm.com.rename': 'Переименовать',
+  'adm.com.revHidden': 'Отзыв скрыт',
+  'adm.com.revShown': 'Отзыв снова виден',
+  'adm.com.revDelQ': 'Удалить отзыв?',
+  'adm.com.revDelText': 'Автор сможет написать новый.',
+  'adm.com.revTitle': 'Отзывы о серверах',
+  'adm.com.revDesc': 'Отзывы видны сразу. Скрытый отзыв не учитывается в оценке сервера, автор видит пометку «скрыт модератором».',
+  'adm.com.revNone': 'Отзывов пока нет.',
+  'adm.com.hidden': 'скрыт',
+  'adm.com.show': 'Показать',
+  'adm.com.hide': 'Скрыть',
+  'adm.com.shotDelQ': 'Удалить скриншот?',
+  'adm.com.shotDelText': 'Картинка будет удалена насовсем.',
+  'adm.com.waiting': 'Ждут проверки: {n}',
+  'adm.com.noWaiting': 'Новых скриншотов на проверке нет.',
+  'adm.com.shotsNone': 'Скриншотов пока нет',
+  'adm.com.shotsNoneText': 'Игроки загружают их на странице «Галерея».',
+  'adm.com.openGallery': 'Открыть галерею',
+  'adm.com.noCaption': 'Без подписи',
+  'adm.com.published': 'Скриншот опубликован',
+  'adm.com.approve': 'Одобрить',
+  'adm.com.rejected': 'Скриншот отклонён',
+  'adm.com.reject': 'Отклонить',
+  'adm.com.unstarred': 'Звезда снята',
+  'adm.com.starred': 'Скриншот в лучших',
+  'adm.com.inBest': '★ В лучших',
+  'adm.com.toBest': '☆ В лучшие',
+  'adm.com.unpublished': 'Скриншот снят с публикации',
+  'adm.com.take': 'Снять',
 };
 
 export default ru;
@@ -64862,8 +64974,9 @@ __COREGSM_EOF__
 /** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers, the screenshot gallery. */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
+import { t, useI18n } from '../i18n';
 import { confirmDialog, promptDialog } from '../confirm';
-import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, plural, toast, num, SkeletonRows } from '../ui';
+import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
 import type { Seasons } from './Community';
 import { useAuth } from '../auth';
 import { Stars, type Review } from '../components/server/Reviews';
@@ -64871,20 +64984,21 @@ import { Lightbox, type Shot } from './Gallery';
 import '../styles/gallery.css';
 
 export const COMMUNITY_TABS = [
-  { id: 'seasons', label: 'Сезоны', admin: true },
-  { id: 'reviews', label: 'Отзывы', admin: false },
-  { id: 'gallery', label: 'Галерея', admin: false },
+  { id: 'seasons', get label() { return t('adm.com.seasons'); }, admin: true },
+  { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
+  { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
 ] as const;
 
 export default function AdminCommunity({ sub = '' }: { sub?: string }) {
+  useI18n();
   const { me } = useAuth();
-  const tabs = COMMUNITY_TABS.filter((t) => !t.admin || me?.role === 'admin');
-  const tab = tabs.find((t) => t.id === sub.split('/')[0])?.id ?? tabs[0].id;
+  const tabs = COMMUNITY_TABS.filter((tab) => !tab.admin || me?.role === 'admin');
+  const tab = tabs.find((tab) => tab.id === sub.split('/')[0])?.id ?? tabs[0].id;
   return (
-    <AdminPage head={<PageHead icon={<IconTrophy />} title="Сообщество" subtitle="Сезоны и зал славы, отзывы о серверах, галерея скриншотов" />}>
+    <AdminPage head={<PageHead icon={<IconTrophy />} title={t('adm.s.community')} subtitle={t('adm.com.subtitle')} />}>
       {tabs.length > 1 && (
-        <nav className="seg" aria-label="Разделы сообщества">
-          {tabs.map((t) => <a key={t.id} href={`/admin/community/${t.id}`} className="seg-item" aria-current={tab === t.id ? 'page' : undefined}>{t.label}</a>)}
+        <nav className="seg" aria-label={t('adm.com.nav')}>
+          {tabs.map((x) => <a key={x.id} href={`/admin/community/${x.id}`} className="seg-item" aria-current={tab === x.id ? 'page' : undefined}>{x.label}</a>)}
         </nav>
       )}
       {tab === 'seasons' && <SeasonsAdmin />}
@@ -64900,6 +65014,7 @@ const toLocalInput = (ts: number) => {
 };
 
 function SeasonsAdmin() {
+  useI18n();
   const [s, setS] = useState<Seasons | null>(null);
   const [error, setError] = useState('');
   const [name, setName] = useState('');
@@ -64911,49 +65026,49 @@ function SeasonsAdmin() {
   const create = async (e: FormEvent) => {
     e.preventDefault();
     const at = new Date(start).getTime();
-    if (s?.current && !(await confirmDialog({ title: `Завершить «${s.current.name}»?`, text: 'Текущий сезон закончится, его тройка лучших попадёт в зал славы, а таблица нового сезона начнётся с нуля.', confirmLabel: 'Начать новый сезон' }))) return;
+    if (s?.current && !(await confirmDialog({ title: t('adm.com.endQ', { name: s.current.name }), text: t('adm.com.endText'), confirmLabel: t('adm.com.startNew') }))) return;
     setBusy(true);
-    await api<Seasons>('/seasons', 'POST', { name: name.trim() || `Сезон ${count + 1}`, startsAt: Number.isFinite(at) ? at : undefined })
-      .then((v) => { setS(v); setName(''); setError(''); toast('Новый сезон начался'); })
+    await api<Seasons>('/seasons', 'POST', { name: name.trim() || t('adm.com.seasonN', { n: count + 1 }), startsAt: Number.isFinite(at) ? at : undefined })
+      .then((v) => { setS(v); setName(''); setError(''); toast(t('adm.com.started')); })
       .catch((err: Error) => setError(err.message))
       .finally(() => setBusy(false));
   };
   const rename = async (id: number, old: string) => {
-    const v = await promptDialog({ title: 'Название сезона', label: 'Название', value: old, confirmLabel: 'Сохранить' });
+    const v = await promptDialog({ title: t('adm.com.seasonName'), label: t('adm.com.name'), value: old, confirmLabel: t('adm.com.save') });
     if (!v || v.trim() === old) return;
     await api<Seasons>(`/seasons/${id}`, 'PUT', { name: v.trim() }).then(setS).catch((err: Error) => setError(err.message));
   };
   const remove = async (id: number, n: string, current: boolean) => {
-    if (!(await confirmDialog({ title: `Удалить «${n}»?`, text: current ? 'Предыдущий сезон снова станет текущим.' : 'Сезон пропадёт из зала славы. Игровая статистика не удаляется.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('adm.com.delQ', { name: n }), text: current ? t('adm.com.delCurrent') : t('adm.com.delPast'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
     await api<Seasons>(`/seasons/${id}`, 'DELETE').then(setS).catch((err: Error) => setError(err.message));
   };
 
   const rows = s ? [...(s.current ? [{ ...s.current, endsAt: null as number | null, podium: s.current.top.slice(0, 3), isCurrent: true }] : []), ...s.past.map((p) => ({ ...p, isCurrent: false }))] : [];
   return (
     <>
-      <Section title="Новый сезон" description="Начните сезон, например, в день вайпа. Таблица сезона на странице «Сообщество» считает часы с его начала, а когда начнётся следующий, тройка лучших попадёт в зал славы и получит достижения.">
+      <Section title={t('adm.com.newSeason')} description={t('adm.com.newSeasonText')}>
         <form onSubmit={create} className="flex flex-wrap items-end gap-3">
-          <div className="min-w-48 flex-1"><Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={`Сезон ${count + 1}`} /></Field></div>
-          <div className="min-w-48"><Field label="Начало"><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
-          <Button loading={busy}>Начать сезон</Button>
+          <div className="min-w-48 flex-1"><Field label={t('adm.com.name')}><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={t('adm.com.seasonN', { n: count + 1 })} /></Field></div>
+          <div className="min-w-48"><Field label={t('adm.com.start')}><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
+          <Button loading={busy}>{t('adm.com.startBtn')}</Button>
         </form>
         <ErrorLine text={error} />
       </Section>
 
-      <Section title="Сезоны" description={!s ? undefined : rows.length ? `${rows.length} ${plural(rows.length, ['сезон', 'сезона', 'сезонов'])}` : 'Сезонов пока нет'}>
+      <Section title={t('adm.com.seasons')} description={!s ? undefined : rows.length ? t('adm.com.count', { n: rows.length }) : t('adm.com.none')}>
         {!s && !error && <SkeletonRows n={2} />}
         <ul className="grid gap-2">
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-center gap-2 font-extrabold">{r.name}{r.isCurrent && <span className="pill pill-ok">идёт</span>}</span>
+                <span className="flex flex-wrap items-center gap-2 font-extrabold">{r.name}{r.isCurrent && <span className="pill pill-ok">{t('adm.com.running')}</span>}</span>
                 <span className="block text-sm font-semibold text-mute">
-                  {fmtDate(r.startsAt)}{r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}
-                  {r.podium.length > 0 && ` · ${r.isCurrent ? 'лидирует' : 'чемпион'} ${r.podium[0].name} (${num(r.podium[0].hours)} ч)`}
+                  {fmtDate(r.startsAt)}{r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ` – ${t('adm.com.now')}`}
+                  {r.podium.length > 0 && ` · ${r.isCurrent ? t('adm.com.leads') : t('adm.com.champion')} ${r.podium[0].name} (${t('adm.com.hours', { n: num(r.podium[0].hours) })})`}
                 </span>
               </span>
-              <button type="button" className="row-act" aria-label="Переименовать" title="Переименовать" onClick={() => void rename(r.id, r.name)}><IconEdit /></button>
-              <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void remove(r.id, r.name, r.isCurrent)}><IconTrash /></button>
+              <button type="button" className="row-act" aria-label={t('adm.com.rename')} title={t('adm.com.rename')} onClick={() => void rename(r.id, r.name)}><IconEdit /></button>
+              <button type="button" className="row-act row-act-danger" aria-label={t('adm.srv.delete')} title={t('adm.srv.delete')} onClick={() => void remove(r.id, r.name, r.isCurrent)}><IconTrash /></button>
             </li>
           ))}
         </ul>
@@ -64963,19 +65078,20 @@ function SeasonsAdmin() {
 }
 
 function ReviewsAdmin() {
+  useI18n();
   const [list, setList] = useState<(Review & { serverId: number; serverName: string })[] | null>(null);
   const [error, setError] = useState('');
   const load = () => api<(Review & { serverId: number; serverName: string })[]>('/reviews').then(setList).catch((e: Error) => setError(e.message));
   useEffect(() => { void load(); }, []);
-  const hide = (id: number, hidden: boolean) => api(`/reviews/${id}`, 'PATCH', { hidden }).then(() => { toast(hidden ? 'Отзыв скрыт' : 'Отзыв снова виден'); void load(); }).catch((e: Error) => setError(e.message));
+  const hide = (id: number, hidden: boolean) => api(`/reviews/${id}`, 'PATCH', { hidden }).then(() => { toast(hidden ? t('adm.com.revHidden') : t('adm.com.revShown')); void load(); }).catch((e: Error) => setError(e.message));
   const del = async (id: number) => {
-    if (!(await confirmDialog({ title: 'Удалить отзыв?', text: 'Автор сможет написать новый.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('adm.com.revDelQ'), text: t('adm.com.revDelText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
     await api(`/reviews/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
   return (
-    <Section title="Отзывы о серверах" description="Отзывы видны сразу. Скрытый отзыв не учитывается в оценке сервера, автор видит пометку «скрыт модератором».">
+    <Section title={t('adm.com.revTitle')} description={t('adm.com.revDesc')}>
       <ErrorLine text={error} />
-      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">Отзывов пока нет.</p> : (
+      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{t('adm.com.revNone')}</p> : (
         <ul className="grid gap-2">
           {list.map((r) => (
             <li key={r.id} className={`flex flex-wrap items-start gap-3 rounded-2xl bg-soft px-3 py-2.5 ${r.hidden ? 'opacity-60' : ''}`}>
@@ -64985,12 +65101,12 @@ function ReviewsAdmin() {
                   <Stars value={r.stars} />
                   <a href={`/servers/${r.serverId}`} className="text-sm font-bold text-link hover:underline">{r.serverName}</a>
                   <span className="text-xs font-bold text-mute">{ago(r.updatedAt)}</span>
-                  {r.hidden && <span className="pill pill-mute">скрыт</span>}
+                  {r.hidden && <span className="pill pill-mute">{t('adm.com.hidden')}</span>}
                 </span>
                 {r.text && <span className="mt-1 block whitespace-pre-line text-sm font-semibold">{r.text}</span>}
               </span>
-              <button type="button" className="row-act" aria-label={r.hidden ? 'Показать' : 'Скрыть'} title={r.hidden ? 'Показать' : 'Скрыть'} onClick={() => void hide(r.id, !r.hidden)}>{r.hidden ? <IconEye /> : <IconEyeOff />}</button>
-              <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void del(r.id)}><IconTrash /></button>
+              <button type="button" className="row-act" aria-label={r.hidden ? t('adm.com.show') : t('adm.com.hide')} title={r.hidden ? t('adm.com.show') : t('adm.com.hide')} onClick={() => void hide(r.id, !r.hidden)}>{r.hidden ? <IconEye /> : <IconEyeOff />}</button>
+              <button type="button" className="row-act row-act-danger" aria-label={t('adm.srv.delete')} title={t('adm.srv.delete')} onClick={() => void del(r.id)}><IconTrash /></button>
             </li>
           ))}
         </ul>
@@ -65000,6 +65116,7 @@ function ReviewsAdmin() {
 }
 
 function GalleryAdmin() {
+  useI18n();
   const [list, setList] = useState<Shot[] | null>(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState<number | null>(null);
@@ -65008,28 +65125,28 @@ function GalleryAdmin() {
   const patch = (id: number, body: { status?: Shot['status']; featured?: boolean }, done: string) =>
     api(`/gallery/${id}`, 'PATCH', body).then(() => { toast(done); void load(); }).catch((e: Error) => setError(e.message));
   const del = async (id: number) => {
-    if (!(await confirmDialog({ title: 'Удалить скриншот?', text: 'Картинка будет удалена насовсем.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('adm.com.shotDelQ'), text: t('adm.com.shotDelText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
     await api(`/gallery/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
   const waiting = list?.filter((s) => s.status === 'pending').length ?? 0;
   return (
-    <Section title="Галерея" description={waiting ? `Ждут проверки: ${waiting}` : 'Новых скриншотов на проверке нет.'}>
+    <Section title={t('adm.com.gallery')} description={waiting ? t('adm.com.waiting', { n: waiting }) : t('adm.com.noWaiting')}>
       <ErrorLine text={error} />
-      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title="Скриншотов пока нет" text="Игроки загружают их на странице «Галерея»."><a href="/gallery" className="btn btn-soft mt-2">Открыть галерею</a></Empty> : (
+      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title={t('adm.com.shotsNone')} text={t('adm.com.shotsNoneText')}><a href="/gallery" className="btn btn-soft mt-2">{t('adm.com.openGallery')}</a></Empty> : (
         <ul className="ga-grid">
           {list.map((s, i) => (
             <li key={s.id} className={`ga-card is-${s.status}`}>
-              <button type="button" className="ga-img" onClick={() => setOpen(i)} aria-label="Открыть"><img src={s.thumb} alt="" loading="lazy" /></button>
+              <button type="button" className="ga-img" onClick={() => setOpen(i)} aria-label={t('adm.open')}><img src={s.thumb} alt="" loading="lazy" /></button>
               <div className="ga-meta">
-                <span className="block truncate font-extrabold">{s.caption || 'Без подписи'}</span>
+                <span className="block truncate font-extrabold">{s.caption || t('adm.com.noCaption')}</span>
                 <span className="block truncate text-xs font-bold text-mute">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
               </div>
               <div className="ga-acts">
-                {s.status !== 'approved' && <button type="button" className="btn btn-success btn-xs" onClick={() => void patch(s.id, { status: 'approved' }, 'Скриншот опубликован')}>Одобрить</button>}
-                {s.status === 'pending' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, 'Скриншот отклонён')}>Отклонить</button>}
-                {s.status === 'approved' && <button type="button" className={`btn btn-xs ${s.featured ? 'btn-warn' : 'btn-soft'}`} onClick={() => void patch(s.id, { featured: !s.featured }, s.featured ? 'Звезда снята' : 'Скриншот в лучших')}>{s.featured ? '★ В лучших' : '☆ В лучшие'}</button>}
-                {s.status === 'approved' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, 'Скриншот снят с публикации')}>Снять</button>}
-                <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void del(s.id)}><IconTrash /></button>
+                {s.status !== 'approved' && <button type="button" className="btn btn-success btn-xs" onClick={() => void patch(s.id, { status: 'approved' }, t('adm.com.published'))}>{t('adm.com.approve')}</button>}
+                {s.status === 'pending' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, t('adm.com.rejected'))}>{t('adm.com.reject')}</button>}
+                {s.status === 'approved' && <button type="button" className={`btn btn-xs ${s.featured ? 'btn-warn' : 'btn-soft'}`} onClick={() => void patch(s.id, { featured: !s.featured }, s.featured ? t('adm.com.unstarred') : t('adm.com.starred'))}>{s.featured ? t('adm.com.inBest') : t('adm.com.toBest')}</button>}
+                {s.status === 'approved' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, t('adm.com.unpublished'))}>{t('adm.com.take')}</button>}
+                <button type="button" className="row-act row-act-danger" aria-label={t('adm.srv.delete')} title={t('adm.srv.delete')} onClick={() => void del(s.id)}><IconTrash /></button>
               </div>
             </li>
           ))}
