@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="65f81fdeb000"
+COREGSM_BUILD="14491ea4ac5b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -54245,7 +54245,7 @@ __COREGSM_EOF__
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { fmtDateTime, smoothPath, toast } from '../../ui';
+import { fmtDateTime, smoothPath, smoothValues, toast } from '../../ui';
 import { exportFileName, pingTone, TONE_TEXT } from './helpers';
 import { findPeak, peakWhen } from './serverLogic';
 
@@ -54408,6 +54408,14 @@ export default function HistoryChart({
     } else if (cur.length) { segments.push(cur); cur = []; }
   }
   if (cur.length) segments.push(cur);
+  // a dense day is a comb of single samples: a short moving average takes the jitter out of the line (the last point stays
+  // the real value, and the tooltip, the peak and the numbers above the chart still use the raw samples)
+  const drawn = segments.map((seg) => {
+    const r = seg.length > 600 ? 6 : seg.length > 300 ? 4 : seg.length > 150 ? 2 : 0;
+    if (!r || series !== 'players') return seg;
+    const sm = smoothValues(seg.map((p) => p.v), r);
+    return seg.map((p, i) => ({ ts: p.ts, v: i === seg.length - 1 ? p.v : sm[i] }));
+  });
 
   const nearest = (clientX: number): number | null => {
     const r = svg.current?.getBoundingClientRect();
@@ -54692,7 +54700,7 @@ export default function HistoryChart({
               </g>
             );
           })}
-          {segments.map((seg, i) => {
+          {drawn.map((seg, i) => {
             const pts = seg.map((p): [number, number] => [x(p.ts), y(p.v)]);
             const d = smoothPath(pts);
             return (
@@ -55487,6 +55495,8 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   const [stars, setStars] = useState(0);
   const [text, setText] = useState('');
   const [editing, setEditing] = useState(false);
+  // with no reviews at all the form stays folded behind one button instead of filling the block
+  const [composing, setComposing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -55508,12 +55518,17 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   };
 
   if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
-  const formOpen = !!me && (editing || !r.mine);
-  const others = r.items.filter((x) => x.id !== r.mine?.id);
   const empty = r.count === 0;
+  const formOpen = !!me && (editing || (!r.mine && (!empty || composing)));
+  const others = r.items.filter((x) => x.id !== r.mine?.id);
   return (
     <div className="rv">
-      {empty && <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>}
+      {empty && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>
+          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>Оставить отзыв</button>}
+        </div>
+      )}
       {!empty && <div className="rv-score">
         <div className="text-center">
           <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
@@ -55555,7 +55570,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
           <textarea className="input min-h-20" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
           <ErrorLine text={error} />
           <div className="flex justify-end gap-2">
-            {editing && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>}
+            {(editing || (composing && empty)) && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing(false); setComposing(false); }}>Отмена</button>}
             <Button loading={busy} className="btn-sm">{r.mine ? 'Сохранить' : 'Оставить отзыв'}</Button>
           </div>
         </form>
@@ -56039,6 +56054,29 @@ export default function SubscribeMenu({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/coverAccent.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { calmSeriesColor, hueOf } from './coverAccent';
+
+describe('chart colour', () => {
+  it('reads the hue of hsl and hex colours', () => {
+    expect(hueOf('hsl(210 60% 52%)')).toBe(210);
+    expect(Math.round(hueOf('#ff0000') ?? -1)).toBe(0);
+    expect(Math.round(hueOf('#00ff00') ?? -1)).toBe(120);
+    expect(hueOf('#888888')).toBeNull();
+    expect(hueOf('rgb(var(--link))')).toBeNull();
+  });
+  it('replaces red with the calm colour and keeps the others', () => {
+    expect(calmSeriesColor('hsl(2 70% 52%)')).toBe('rgb(var(--link))');
+    expect(calmSeriesColor('hsl(352 70% 52%)')).toBe('rgb(var(--link))');
+    expect(calmSeriesColor('#e11d2e')).toBe('rgb(var(--link))');
+    expect(calmSeriesColor('hsl(150 60% 45%)')).toBe('hsl(150 60% 45%)');
+    expect(calmSeriesColor('hsl(40 80% 50%)')).toBe('hsl(40 80% 50%)');
+    expect(calmSeriesColor('rgb(var(--link))')).toBe('rgb(var(--link))');
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/coverAccent.ts" << '__COREGSM_EOF__'
 /**
  * The accent of a server page taken from its cover: the picture is shrunk to 32x32 and the hue of its colourful
@@ -56109,6 +56147,31 @@ export function useCoverAccent(url: string | null | undefined, fallback: string)
     return () => { alive = false; };
   }, [url]);
   return c ?? fallback;
+}
+
+/** the hue (0-360) of an `hsl(...)` or `#rrggbb` colour, null for anything else */
+export function hueOf(color: string): number | null {
+  const m = /^hsl\(\s*([\d.]+)/i.exec(color.trim());
+  if (m) return Number(m[1]) % 360;
+  const h = /^#([0-9a-f]{6})$/i.exec(color.trim());
+  if (!h) return null;
+  const r = parseInt(h[1].slice(0, 2), 16) / 255;
+  const g = parseInt(h[1].slice(2, 4), 16) / 255;
+  const b = parseInt(h[1].slice(4, 6), 16) / 255;
+  const mx = Math.max(r, g, b);
+  const d = mx - Math.min(r, g, b);
+  if (d < 0.05) return null;
+  const x = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (x * 60 + 360) % 360;
+}
+
+/**
+ * The line colour of the players chart: the server's accent, except red. Red on a healthy server reads as an alarm
+ * (red is the colour of outages in these charts), so a red accent gives way to the panel's link colour.
+ */
+export function calmSeriesColor(accent: string, fallback = 'rgb(var(--link))'): string {
+  const h = hueOf(accent);
+  return h != null && (h >= 345 || h <= 22) ? fallback : accent;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
@@ -56635,6 +56698,15 @@ export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; b
       <span />
       {Array.from({ length: 24 }, (_, h) => <span key={h} className="cm-heat-h">{h % 6 === 0 ? h : ''}</span>)}
     </div>
+  );
+}
+
+/** the colour scale of the heat map: lighter = fewer players */
+export function HeatLegend() {
+  return (
+    <p className="cm-heat-scale" aria-hidden>
+      меньше {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} больше
+    </p>
   );
 }
 
@@ -60345,6 +60417,7 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 
 .srv-tabbar { transition: background-color .2s ease, box-shadow .2s ease; }
 .srv-tabbar.is-stuck { background: rgb(var(--page) / 0.78); -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3); box-shadow: 0 1px 0 rgb(var(--line)); }
+.spark-axis { position: absolute; left: 8px; padding: 1px 6px; border-radius: 6px; background: rgb(0 0 0 / .38); color: rgb(255 255 255 / .92); font-size: 12px; font-weight: 700; line-height: 1.3; pointer-events: none; font-variant-numeric: tabular-nums; }
 .no-scrollbar { scrollbar-width: none; }
 /* a row that scrolls sideways fades out at the edge that still has content (browsers without scroll-driven animations show no fade) */
 @property --fl { syntax: '<length>'; inherits: false; initial-value: 0px; }
@@ -63667,10 +63740,15 @@ export default function AdminStart() {
         </div>
       </section>
 
-      <section aria-labelledby="start-map" className="tile p-5 sm:p-6">
-        <h2 id="start-map" className="text-lg font-black">Где что находится</h2>
-        <p className="mb-4 font-semibold text-mute">Меню слева разделено на четыре группы. Вот зачем нужен каждый раздел.</p>
-        <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
+      <details className="tile start-map group p-5 sm:p-6">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+          <span>
+            <span className="block text-lg font-black">Где что находится</span>
+            <span className="block font-semibold text-mute">Меню слева разделено на четыре группы. Развернуть описание разделов.</span>
+          </span>
+          <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-mute transition-transform group-open:rotate-180"><path d="M6 9l6 6 6-6" /></svg>
+        </summary>
+        <div className="mt-4 grid gap-x-8 gap-y-5 md:grid-cols-2">
           {ADMIN_GROUPS.map((g, gi) => (
             <div key={g.title}>
               <div className="adm-group-title px-0!">{g.title}</div>
@@ -63681,7 +63759,7 @@ export default function AdminStart() {
             </div>
           ))}
         </div>
-      </section>
+      </details>
     </AdminPage>
   );
 }
@@ -64297,7 +64375,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
+import { busiestText, FeedItem, HeatLegend, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
 import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
@@ -64437,10 +64515,18 @@ export default function CommunityPage() {
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
         <MiniHeat cells={c.heatmap.cells} big />
+        <HeatLegend />
         <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам.</p>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {/* nobody has played yet: two empty cards become one line */}
+      {top.length === 0 && c.feed.length === 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="text-lg font-extrabold">Активность игроков</h2>
+          <p className="cm-sub">Пока никто не играл. Здесь появятся самые активные игроки и живая лента заходов.</p>
+        </section>
+      )}
+      <div className={`grid gap-5 lg:grid-cols-2 ${top.length === 0 && c.feed.length === 0 ? 'hidden' : ''}`}>
         <section className="tile p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-extrabold">Самые активные</h2>
@@ -67840,7 +67926,7 @@ import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
-import { useCoverAccent } from '../components/server/coverAccent';
+import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
@@ -68129,7 +68215,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
       ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
+        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
@@ -68189,11 +68275,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-5 lg:self-start" style={stagger(2)} title="Последние события">
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-5 lg:col-start-1 lg:self-start" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
+          </SectionCard>
+          {/* the reviews sit under the events: the left column fills the height of the player list */}
+          <SectionCard id="ov-reviews" state={sections} className="lg:col-span-5 lg:col-start-1 lg:self-start" style={stagger(4)} title="Отзывы игроков">
+            <ServerReviews serverId={id} />
           </SectionCard>
         </div>
         {probes && probes.probes.length > 0 && (
@@ -68201,9 +68291,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <ProbesView v={probes} />
           </SectionCard>
         )}
-        <SectionCard id="ov-reviews" state={sections} style={stagger(4)} title="Отзывы игроков">
-          <ServerReviews serverId={id} />
-        </SectionCard>
       </div>
     );
   }
@@ -72041,6 +72128,8 @@ __COREGSM_EOF__
 .cm-heat.is-big { gap: 3px; grid-template-columns: 2.2rem repeat(24, minmax(0, 1fr)); }
 .cm-heat-d { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
 .cm-heat-h { font-size: 12px; font-weight: 600; color: rgb(var(--mute)); }
+.cm-heat-scale { margin-top: 10px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; color: rgb(var(--mute)); }
+.cm-heat-scale i { width: 14px; height: 14px; border-radius: 4px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
 .cm-heat-c { height: 15px; border-radius: 3px; background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 100%), rgb(var(--soft))); }
 .cm-heat.is-big .cm-heat-c { height: clamp(14px, 2.4vw, 26px); border-radius: 5px; }
 
@@ -73467,7 +73556,7 @@ export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/fo
 export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
-export { Spark, MiniSpark, smoothPath, SmoothArea, FleetBar, useSparkSpanMin, spanCaption } from './ui/charts';
+export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
@@ -74341,8 +74430,16 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const pts = smoothValues(filled(players), hero ? 2 : 1);
   const downs = downs24.filter(Boolean).length;
   const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
+  const top = Math.max(...pts);
   return hero
-    ? <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+    ? (
+      <div className="relative">
+        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+        {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
+        <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
+        <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
+      </div>
+    )
     : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
 }
 

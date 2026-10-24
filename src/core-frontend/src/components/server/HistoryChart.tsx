@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { fmtDateTime, smoothPath, toast } from '../../ui';
+import { fmtDateTime, smoothPath, smoothValues, toast } from '../../ui';
 import { exportFileName, pingTone, TONE_TEXT } from './helpers';
 import { findPeak, peakWhen } from './serverLogic';
 
@@ -164,6 +164,14 @@ export default function HistoryChart({
     } else if (cur.length) { segments.push(cur); cur = []; }
   }
   if (cur.length) segments.push(cur);
+  // a dense day is a comb of single samples: a short moving average takes the jitter out of the line (the last point stays
+  // the real value, and the tooltip, the peak and the numbers above the chart still use the raw samples)
+  const drawn = segments.map((seg) => {
+    const r = seg.length > 600 ? 6 : seg.length > 300 ? 4 : seg.length > 150 ? 2 : 0;
+    if (!r || series !== 'players') return seg;
+    const sm = smoothValues(seg.map((p) => p.v), r);
+    return seg.map((p, i) => ({ ts: p.ts, v: i === seg.length - 1 ? p.v : sm[i] }));
+  });
 
   const nearest = (clientX: number): number | null => {
     const r = svg.current?.getBoundingClientRect();
@@ -448,7 +456,7 @@ export default function HistoryChart({
               </g>
             );
           })}
-          {segments.map((seg, i) => {
+          {drawn.map((seg, i) => {
             const pts = seg.map((p): [number, number] => [x(p.ts), y(p.v)]);
             const d = smoothPath(pts);
             return (

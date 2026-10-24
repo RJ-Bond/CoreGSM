@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
+import { busiestText, FeedItem, HeatLegend, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
 import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
@@ -144,10 +144,18 @@ export default function CommunityPage() {
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
         <MiniHeat cells={c.heatmap.cells} big />
+        <HeatLegend />
         <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам.</p>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {/* nobody has played yet: two empty cards become one line */}
+      {top.length === 0 && c.feed.length === 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="text-lg font-extrabold">Активность игроков</h2>
+          <p className="cm-sub">Пока никто не играл. Здесь появятся самые активные игроки и живая лента заходов.</p>
+        </section>
+      )}
+      <div className={`grid gap-5 lg:grid-cols-2 ${top.length === 0 && c.feed.length === 0 ? 'hidden' : ''}`}>
         <section className="tile p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-extrabold">Самые активные</h2>
