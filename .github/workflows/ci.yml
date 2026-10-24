@@ -108,3 +108,10 @@ jobs:
           done
       - name: Backend image loads its native modules
         run: docker run --rm --entrypoint node coregsm-core-backend:ci -e "require('better-sqlite3'); require('skia-canvas'); console.log('native modules ok')"
+      - name: Scan the images for known vulnerabilities (Trivy, advisory)
+        # fixed HIGH/CRITICAL findings are listed in the job summary; they do not fail the build because most come from the base image
+        run: |
+          for part in core-backend core-bot core-frontend; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.1 image --quiet --severity HIGH,CRITICAL --ignore-unfixed --format table "coregsm-$part:ci" > "/tmp/trivy-$part.txt" 2>&1 || true
+            { echo "### $part"; echo '```'; head -c 6000 "/tmp/trivy-$part.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done
