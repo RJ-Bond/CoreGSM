@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fd29dc97a6dc"
+COREGSM_BUILD="985dc7196089"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -15180,6 +15180,9 @@ router.get('/api/manifest.json', (_req, res) => {
   const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
   res.type('application/manifest+json').json({
     id: '/',
+    lang: 'ru',
+    dir: 'ltr',
+    orientation: 'any',
     name: b.name,
     short_name: b.name.slice(0, 12),
     description: 'Мониторинг игровых серверов: кто играет, доступность, новости',
@@ -33755,6 +33758,37 @@ __COREGSM_EOF__
 </svg>
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
+  cat > "$APP_DIR/core-frontend/public/offline.html" << '__COREGSM_EOF__'
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Нет соединения · CoreGSM</title>
+<style>
+  :root { color-scheme: dark light; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #09090e; color: #e8e8f2; text-align: center; }
+  main { max-width: 420px; }
+  .logo { width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 20px; display: block; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p { margin: 0 0 24px; line-height: 1.5; color: #a8a8c0; }
+  button { font: inherit; font-weight: 600; padding: 12px 22px; min-height: 44px; border: 0; border-radius: 12px; background: #6d5ef5; color: #fff; cursor: pointer; }
+  button:focus-visible { outline: 3px solid #c4bcff; outline-offset: 2px; }
+  @media (prefers-color-scheme: light) { body { background: #f6f6fb; color: #1b1b2e; } p { color: #55556e; } }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="/logo-128.png" alt="">
+  <h1>Нет соединения</h1>
+  <p>Панель показывает серверы в реальном времени и без сети не открывается. Проверьте интернет и повторите попытку.</p>
+  <button type="button" onclick="location.reload()">Повторить</button>
+</main>
+</body>
+</html>
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/public"
   base64 -d > "$APP_DIR/core-frontend/public/og-default.png" << '__COREGSM_EOF__'
 iVBORw0KGgoAAAANSUhEUgAABLAAAAJ2CAIAAADAIuwLAAAAAXNSR0IArs4c6QAAmwJJREFUeNrc
 wkESQCAAQNHufz0QN0BVxbbBAVpgNOq/eWIPR+5bpv7/Adp/0pXYQdunba0NtL7fVFZBr8macIGe
@@ -34457,29 +34491,52 @@ EP4BeQojTBa++28AAAAASUVORK5CYII=
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
   cat > "$APP_DIR/core-frontend/public/sw.js" << '__COREGSM_EOF__'
-// Service worker: lets the browser offer "install app" and shows push notifications. Nothing is cached and
-// requests are not intercepted: the panel is always live.
-self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+// Service worker: lets the browser offer "install app", shows push notifications and, when the network is gone, shows a
+// small offline page instead of the browser's error. Nothing else is cached: the panel is always live.
+const OFFLINE = '/offline.html';
+const CACHE = 'coregsm-offline-v1';
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open(CACHE).then((c) => c.add(OFFLINE)).catch(() => undefined).then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', (e) => e.waitUntil((async () => {
+  for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
+  await self.clients.claim();
+})()));
+
+// only page navigations are intercepted, and only to answer with the offline page when the network fails
+self.addEventListener('fetch', (e) => {
+  if (e.request.mode !== 'navigate') return;
+  e.respondWith(fetch(e.request).catch(async () => (await caches.match(OFFLINE)) || Response.error()));
+});
 
 // a notification from the panel: { title, body, url, tag }
 self.addEventListener('push', (e) => {
   let m = {};
   try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(m.title || 'CoreGSM', {
-    body: m.body || '',
+  if (!m || typeof m !== 'object') m = {};
+  e.waitUntil(self.registration.showNotification(String(m.title || 'CoreGSM'), {
+    body: String(m.body || ''),
     icon: '/logo-192.png',
     badge: '/logo-128.png',
-    tag: m.tag || undefined,
+    tag: m.tag ? String(m.tag) : undefined,
     renotify: !!m.tag,
-    data: { url: m.url || '/' },
+    data: { url: typeof m.url === 'string' ? m.url : '/' },
   }));
 });
+
+// the address of a notification must stay on the panel's own origin: anything else opens the start page
+const safeUrl = (raw) => {
+  try {
+    const u = new URL(raw || '/', self.location.origin);
+    return u.origin === self.location.origin ? u.href : self.location.origin + '/';
+  } catch { return self.location.origin + '/'; }
+};
 
 // a click opens the page of the notification: an open tab of the panel is reused
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin).href;
+  const url = safeUrl(e.notification.data && e.notification.data.url);
   e.waitUntil((async () => {
     const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of tabs) {
@@ -34489,7 +34546,22 @@ self.addEventListener('notificationclick', (e) => {
         return;
       }
     }
-    await self.clients.openWindow(url);
+    await self.clients.openWindow(url).catch(() => undefined);
+  })());
+});
+
+// the browser renewed or dropped the push subscription: subscribe again with the panel's key and tell the panel
+self.addEventListener('pushsubscriptionchange', (e) => {
+  e.waitUntil((async () => {
+    try {
+      const { publicKey } = await (await fetch('/api/push/key')).json();
+      const pad = '='.repeat((4 - (publicKey.length % 4)) % 4);
+      const raw = atob((publicKey + pad).replace(/-/g, '+').replace(/_/g, '/'));
+      const key = Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
+      const sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      // the panel stores subscriptions per signed-in user: an open tab does that with the user's session
+      for (const c of await self.clients.matchAll({ type: 'window', includeUncontrolled: true })) c.postMessage({ type: 'push-resubscribe', subscription: sub.toJSON() });
+    } catch { /* the panel offers to subscribe again on the next visit */ }
   })());
 });
 __COREGSM_EOF__
@@ -61790,6 +61862,8 @@ import './styles/profile.css';
 import './styles/buttons.css';
 import App from './App';
 import { RootBoundary } from './RootBoundary';
+import { api, getToken } from './api';
+import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -61816,6 +61890,21 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
+  // a new service worker took over a page that was already controlled: the page may run old scripts next to new
+  // ones, so offer a reload (not forced: the person may be in the middle of a form)
+  const hadController = !!navigator.serviceWorker.controller;
+  let offered = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || offered) return;
+    offered = true;
+    toast('Доступна новая версия панели', { kind: 'ok', duration: 60000, action: { label: 'Обновить', onClick: () => location.reload() } });
+  });
+  // the browser renewed the push subscription: the service worker subscribed again, the signed-in page stores it
+  navigator.serviceWorker.addEventListener('message', (e: MessageEvent) => {
+    if (e.data && e.data.type === 'push-resubscribe' && e.data.subscription && getToken()) {
+      void api('/push/subscribe', 'POST', e.data.subscription).catch(() => undefined);
+    }
+  });
 }
 
 // pause decorative animations while the page is not visible or the window is not focused (see the black-square note in index.css)

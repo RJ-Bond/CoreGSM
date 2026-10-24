@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Нет соединения · CoreGSM</title>
+<style>
+  :root { color-scheme: dark light; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #09090e; color: #e8e8f2; text-align: center; }
+  main { max-width: 420px; }
+  .logo { width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 20px; display: block; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p { margin: 0 0 24px; line-height: 1.5; color: #a8a8c0; }
+  button { font: inherit; font-weight: 600; padding: 12px 22px; min-height: 44px; border: 0; border-radius: 12px; background: #6d5ef5; color: #fff; cursor: pointer; }
+  button:focus-visible { outline: 3px solid #c4bcff; outline-offset: 2px; }
+  @media (prefers-color-scheme: light) { body { background: #f6f6fb; color: #1b1b2e; } p { color: #55556e; } }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="/logo-128.png" alt="">
+  <h1>Нет соединения</h1>
+  <p>Панель показывает серверы в реальном времени и без сети не открывается. Проверьте интернет и повторите попытку.</p>
+  <button type="button" onclick="location.reload()">Повторить</button>
+</main>
+</body>
+</html>

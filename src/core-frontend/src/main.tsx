@@ -15,6 +15,8 @@ import './styles/profile.css';
 import './styles/buttons.css';
 import App from './App';
 import { RootBoundary } from './RootBoundary';
+import { api, getToken } from './api';
+import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -41,6 +43,21 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
+  // a new service worker took over a page that was already controlled: the page may run old scripts next to new
+  // ones, so offer a reload (not forced: the person may be in the middle of a form)
+  const hadController = !!navigator.serviceWorker.controller;
+  let offered = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || offered) return;
+    offered = true;
+    toast('Доступна новая версия панели', { kind: 'ok', duration: 60000, action: { label: 'Обновить', onClick: () => location.reload() } });
+  });
+  // the browser renewed the push subscription: the service worker subscribed again, the signed-in page stores it
+  navigator.serviceWorker.addEventListener('message', (e: MessageEvent) => {
+    if (e.data && e.data.type === 'push-resubscribe' && e.data.subscription && getToken()) {
+      void api('/push/subscribe', 'POST', e.data.subscription).catch(() => undefined);
+    }
+  });
 }
 
 // pause decorative animations while the page is not visible or the window is not focused (see the black-square note in index.css)
