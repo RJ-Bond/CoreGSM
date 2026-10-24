@@ -315,6 +315,8 @@
     --au2: 0.12;
     --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='%23463c8c'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
     --hex-a: 0.16;
+    --cv-a: .12;
+    --cv-b: .5;
     --glass-a: 0.84;
     --glass-sheen: none;
     --wash-a: rgb(var(--brand) / 0.15);
@@ -374,6 +376,8 @@
       --au2: 0.14;
       --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
       --hex-a: 0.06;
+      --cv-a: .3;
+      --cv-b: .62;
       --glass-a: 0.68;
       --glass-sheen: linear-gradient(
         160deg,
@@ -427,6 +431,8 @@
     --au2: 0.14;
     --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
     --hex-a: 0.06;
+    --cv-a: .3;
+    --cv-b: .62;
     --glass-a: 0.68;
     --glass-sheen: linear-gradient(
       160deg,

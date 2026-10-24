@@ -928,6 +928,11 @@ const en: Record<keyof typeof ru, string> = {
   'srv.empty.now': 'Nobody online right now',
   'srv.addr.copy': 'Copy the address',
   'srv.addr.copied': 'Address copied',
+  'spark.now': 'now',
+  'spark.h': 'h',
+  'spark.min': 'min',
+  'srv.sub.live': 'Players now: {n} · servers online: {s} of {total}',
+  'srv.sub.empty': 'The state of your game servers in real time',
 };
 
 export default en;

@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ebc1e469bc00"
+COREGSM_BUILD="c140028019f3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -59965,7 +59965,7 @@ export function coverBackground(
   if (coverUrl) url = opts.small ? `${coverUrl}${coverUrl.includes('?') ? '&' : '?'}s=1` : coverUrl;
   else if (opts.game && DEFAULT_COVERS.has(opts.game)) url = `/games/covers/${opts.game}${opts.small ? '@s' : ''}.jpg`;
   if (!url) return gradient;
-  const [a, b] = opts.strong ? [0.3, 0.62] : [0.22, 0.5];
+  const [a, b] = opts.strong ? ['var(--cv-a, .3)', 'var(--cv-b, .62)'] : [0.22, 0.5];
   return `linear-gradient(180deg, rgba(8,10,20,${a}) 0%, rgba(8,10,20,${b}) 100%), url("${url}") center / cover no-repeat, ${gradient}`;
 }
 
@@ -60862,6 +60862,8 @@ __COREGSM_EOF__
     --au2: 0.12;
     --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='%23463c8c'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
     --hex-a: 0.16;
+    --cv-a: .12;
+    --cv-b: .5;
     --glass-a: 0.84;
     --glass-sheen: none;
     --wash-a: rgb(var(--brand) / 0.15);
@@ -60921,6 +60923,8 @@ __COREGSM_EOF__
       --au2: 0.14;
       --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
       --hex-a: 0.06;
+      --cv-a: .3;
+      --cv-b: .62;
       --glass-a: 0.68;
       --glass-sheen: linear-gradient(
         160deg,
@@ -60974,6 +60978,8 @@ __COREGSM_EOF__
     --au2: 0.14;
     --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='white'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
     --hex-a: 0.06;
+    --cv-a: .3;
+    --cv-b: .62;
     --glass-a: 0.68;
     --glass-sheen: linear-gradient(
       160deg,
@@ -63219,6 +63225,11 @@ const en: Record<keyof typeof ru, string> = {
   'srv.empty.now': 'Nobody online right now',
   'srv.addr.copy': 'Copy the address',
   'srv.addr.copied': 'Address copied',
+  'spark.now': 'now',
+  'spark.h': 'h',
+  'spark.min': 'min',
+  'srv.sub.live': 'Players now: {n} · servers online: {s} of {total}',
+  'srv.sub.empty': 'The state of your game servers in real time',
 };
 
 export default en;
@@ -64356,6 +64367,11 @@ const ru = {
   'srv.empty.now': 'Сейчас никого',
   'srv.addr.copy': 'Скопировать адрес',
   'srv.addr.copied': 'Адрес скопирован',
+  'spark.now': 'сейчас',
+  'spark.h': 'ч',
+  'spark.min': 'мин',
+  'srv.sub.live': 'Игроков сейчас: {n} · серверов онлайн: {s} из {total}',
+  'srv.sub.empty': 'Состояние ваших игровых серверов в реальном времени',
 };
 
 export default ru;
@@ -70575,6 +70591,7 @@ import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useDepth, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
+import { pingTone, TONE_TEXT } from '../components/server/helpers';
 import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
@@ -70727,6 +70744,7 @@ function ServerList() {
   const attentionIds = new Set(attention.map((s) => s.id));
   const rest = sorted.filter((s) => s.id !== hero?.id && !attentionIds.has(s.id));
   const offlineCount = servers.filter((s) => !s.online).length;
+  const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
   // a filter other than "all" turns the bento into a plain grid of the matching servers
   const effFilter: Filter = filter === 'fav' && !me ? 'all' : filter;
@@ -70772,7 +70790,7 @@ function ServerList() {
     <div className="space-y-5">
       <PageHead
         title="Серверы"
-        subtitle={me ? `${greeting(me.username)}. Серверы в реальном времени` : 'Состояние ваших игровых серверов в реальном времени'}
+        subtitle={me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
@@ -70797,7 +70815,7 @@ function ServerList() {
                 ['online', `Онлайн · ${online.length}`, online.length],
                 ['offline', `Недоступные · ${offlineCount}`, offlineCount],
                 ...(me ? [['fav', `Избранные · ${favCount}`, favCount]] : []),
-              ] as [Filter, string, number][]).map(([id, label, count]) => (
+              ] as [Filter, string, number][]).filter(([id, , count]) => id !== 'offline' || count > 0 || effFilter === id).map(([id, label, count]) => (
                 // an empty filter stays reachable but is dimmed, so the eye goes to the ones that have servers
                 <button key={id} type="button" className={`seg-item whitespace-nowrap${count === 0 && effFilter !== id ? ' opacity-70' : ''}`} aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
               ))}
@@ -70865,6 +70883,15 @@ function ServerList() {
         </div>
       )}
 
+      {servers.length > 0 && (
+        <footer className="srv-foot">
+          <span>CoreGSM</span>
+          <a href="/status">{t('nav.status')}</a>
+          <a href="/community">{t('nav.community')}</a>
+          <a href="/news">{t('nav.news')}</a>
+        </footer>
+      )}
+
       {selOn && (
         <BulkBar
           selected={selectedServers}
@@ -70918,6 +70945,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       style={{
         ...stagger(idx),
         ...emb.style,
+        ['--gc' as string]: gameColor(s.game),
         background: coverBackground(s.coverUrl, gameBackdrop(c1), { strong: true, game: s.game }),
         boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
       }}
@@ -70954,7 +70982,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
-            {s.ping != null && <span className="ml-auto font-bold text-white/90">пинг {s.ping} мс</span>}
+            {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />пинг {s.ping} мс</span>}
           </div>
           <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
           <div className="sh-chart relative mt-auto pt-2">
@@ -71013,7 +71041,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
         <h3 className="line-clamp-2 wrap-break-word text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>
+        <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
@@ -71022,7 +71050,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
           <div className="flex items-baseline gap-1.5 px-1.5">
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
-            <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-[13px] font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />{`${s.ping} мс`}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
           {s.players === 0
@@ -71042,7 +71070,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="truncate font-mono" />
-        <span className="shrink-0">{s.online ? (s.map || (s.updatedAt != null && Date.now() - s.updatedAt > 60_000 ? ago(s.updatedAt) : '')) : ago(s.updatedAt)}</span>
+        <span className="shrink-0">{s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}</span>
       </div>
     </article>
   );
@@ -75131,12 +75159,12 @@ __COREGSM_EOF__
 .pulse-nums dd { margin: 3px 0 0; font-size: 24px; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pulse-nums dd small { font-size: .62em; font-weight: 600; color: rgb(var(--mute)); letter-spacing: 0; }
 .pulse-chart { margin: 0; min-width: 0; color: rgb(var(--pulse)); }
-.pulse-plot { position: relative; height: 56px; }
+.pulse-plot { position: relative; height: 72px; }
 .pulse-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .pulse-peak { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: var(--r-pill); background: rgb(var(--card)); box-shadow: 0 0 0 2.5px currentColor; pointer-events: none; }
-.pulse-chart figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.pulse-chart figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12.5px; font-weight: 650; color: rgb(var(--mute)); }
 .pulse-peak-text { color: rgb(var(--ink)); }
-.pulse-chart-empty { display: grid; place-items: center; min-height: 56px; padding: 0 8px; text-align: center; font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+.pulse-chart-empty { display: grid; place-items: center; min-height: 72px; padding: 0 8px; text-align: center; font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
 @media (max-width: 1023px) {
   .pulse { grid-template-columns: minmax(0, 1fr) minmax(200px, 1fr); }
   .pulse-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; }
@@ -75158,8 +75186,9 @@ __COREGSM_EOF__
 /* ---------- hero: why this server ---------- */
 .hero-reason {
   display: inline-flex; align-items: center; margin-top: 8px; padding: 3px 10px; border-radius: var(--r-pill);
-  font-size: 12px; font-weight: 650; letter-spacing: .01em; color: #fff; background: rgb(255 255 255 / .22);
+  gap: 6px; font-size: 12px; font-weight: 700; letter-spacing: .01em; color: #11131f; background: rgb(255 255 255 / .92);
 }
+.hero-reason::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--gc, rgb(var(--brand))); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gc, rgb(var(--brand))) 35%, transparent); }
 .hero-reason.attn { color: rgb(var(--bad)); background: #fff; }
 
 /* ---------- selection mode (administrators) ---------- */
@@ -75349,6 +75378,30 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 @media (min-width: 900px) { .srv-hero-skel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); column-gap: 32px; } .srv-hero-skel > .skel-chart { grid-column: 2; grid-row: 1 / span 4; min-height: 190px; } }
 /* 5: the status and the admin link of the heading sit together */
 .srv-head-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+
+/* 1: the soft decorative circles are not drawn behind the curve of a split hero (they looked like a smudge on the glass) */
+@media (min-width: 900px) { .srv-hero.is-split .depth-l1 { display: none; } }
+/* 2: how long ago the left, the middle and the right end of the hero curve are */
+.spark-times { position: absolute; left: 36px; right: 8px; bottom: 3%; display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; line-height: 1.3; color: rgb(255 255 255 / .72); pointer-events: none; font-variant-numeric: tabular-nums; }
+/* 3: the figures, the bar and the slots of the hero share one rhythm */
+@media (min-width: 900px) { .srv-hero.is-split { row-gap: 16px; } }
+.srv-hero .sh-count { margin-bottom: 2px; }
+/* 7: ping with a colour */
+.ping-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--ok)); flex: none; }
+.ping-dot.warn { background: rgb(var(--warn)); }
+.ping-dot.bad { background: rgb(var(--bad)); }
+/* 8: «nobody online» is a thin line */
+.srv-empty-now { padding: 6px 12px; margin-block: -2px; font-size: 12.5px; }
+/* 11: the four figures of the banner are separate chips */
+.pulse-nums > div { padding: 6px 4px 6px 18px; border-left: 1px solid rgb(var(--line) / .6); }
+.pulse-nums > div:first-child { padding-left: 4px; border-left: 0; }
+@media (max-width: 899px) { .pulse-nums > div { padding-left: 12px; } .pulse-nums > div:first-child { padding-left: 0; } }
+/* 13: a card reached with the keyboard is clearly lifted and ringed */
+.srv-tile:has(:focus-visible), .srv-hero:has(:focus-visible) { outline: 3px solid rgb(var(--brand)); outline-offset: 3px; transform: translateY(-2px); }
+/* 15: the end of the page */
+.srv-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 8px 0 4px; font-size: 13px; font-weight: 650; color: rgb(var(--mute)); }
+.srv-foot a { color: inherit; }
+.srv-foot a:hover, .srv-foot a:focus-visible { color: rgb(var(--link)); text-decoration: underline; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
@@ -76257,6 +76310,7 @@ __COREGSM_EOF__
 /** Small charts: the 24 h sparkline, smooth area paths and the fleet status bar. */
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
+import { t } from '../i18n';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -76382,6 +76436,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const downs = downs24.filter(Boolean).length;
   const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
   const top = Math.max(...pts);
+  const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
     ? (
       <div className="relative">
@@ -76389,10 +76444,14 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
         {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
         <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
         <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
+        <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
       </div>
     )
     : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
 }
+
+/** «−24 ч» / «−90 мин»: how long ago a point of the chart is */
+const ageLabel = (min: number): string => (min >= 120 ? `−${Math.round(min / 60)} ${t('spark.h')}` : `−${Math.max(1, Math.round(min))} ${t('spark.min')}`);
 
 /**
  * The red «server was down» band of sample `i` of `n` in a chart `w` wide with `pad` on both sides: the part of the
