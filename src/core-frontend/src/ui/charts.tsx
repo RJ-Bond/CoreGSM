@@ -129,7 +129,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   return hero
     ? (
       <div className="relative">
-        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2.3} className="h-[130px]" label={label} />
         {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
         <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
         <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>

@@ -6,7 +6,8 @@ import { coverBackground, emblemStyle, gameBackdrop } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useDepth, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
-import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
+import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { AttentionStrip } from '../components/servers/AttentionStrip';
@@ -42,7 +43,7 @@ function FavButton({ on, name, onClick, className = '', glass = false }: { on: b
   return (
     <button
       onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
-      className={glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'}
+      className={`${glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'} ${on ? '' : 'star-quiet'}`}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`В избранное: ${name}`}
       aria-pressed={on}
@@ -206,8 +207,10 @@ function ServerList() {
         subtitle={me ? `${greeting(me.username)}. Серверы в реальном времени` : 'Состояние ваших игровых серверов в реальном времени'}
         icon={<IconServers />}
       >
-        <LiveBadge at={updatedAt} />
-        {isAdmin && <a className="btn btn-soft" href="/admin/servers" data-magnetic>Управление серверами</a>}
+        <span className="srv-head-actions">
+          <LiveBadge at={updatedAt} />
+          {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>Управление серверами</a>}
+        </span>
       </PageHead>
 
       {loaded && servers.length > 0 && (
@@ -234,7 +237,7 @@ function ServerList() {
           ) : <span />}
           <div className="srv-bar-tools flex items-center gap-2.5">
             {canSelect && (
-              <button type="button" className="btn btn-soft" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
+              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
               </button>
             )}
@@ -416,6 +419,8 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
 
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps }) {
   const [c1, c2] = gameGradient(s.game);
+  // the accent is taken from the cover picture, so two games of the same colour family still look different
+  const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
   const lag = isLag(s);
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
@@ -423,11 +428,12 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
     <article
       className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
-      style={{ ...stagger(idx), ['--gc' as string]: gameColor(s.game), ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
+      style={{ ...stagger(idx), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`${emb.className} flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
+      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${accent}` }}>
+        <span aria-hidden className="cover-scrim" />
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -450,8 +456,10 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
             <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
-          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
-          <div className="px-1.5"><Spark serverId={s.id} color={gameColor(s.game)} /></div>
+          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
+          {s.players === 0
+            ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
+            : <div className="px-1.5"><Spark serverId={s.id} color={accent} /></div>}
         </>
       ) : (
         s.hasStatus ? (
@@ -465,7 +473,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
-        <span className="truncate font-mono" title={s.address}>{s.address}</span>
+        <AddrCopy address={s.address} className="truncate font-mono" />
         <span className="shrink-0">{s.online ? (s.map || (s.updatedAt != null && Date.now() - s.updatedAt > 60_000 ? ago(s.updatedAt) : '')) : ago(s.updatedAt)}</span>
       </div>
     </article>

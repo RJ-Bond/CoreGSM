@@ -111,7 +111,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
   const maint = overview?.maintenance ?? [];
   const bodyId = 'srv-whatsnew-body';
   return (
-    <aside className="panel srv-new" aria-label={t('srv.new.title')}>
+    <aside className={`panel srv-new ${open && news === null && maint.length === 0 ? 'srv-new-compact' : ''}`} aria-label={t('srv.new.title')}>
       <h2 className="m-0">
         <button type="button" className="srv-new-head" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
           <span className="font-black">{t('srv.new.title')}</span>
