@@ -73,6 +73,13 @@
 
 /* ---------- view switcher row ---------- */
 .srv-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; }
+/* the select button and the view switch stay on one line; on a phone they are a little tighter so that they fit */
+.srv-bar-tools { flex-wrap: nowrap; max-width: 100%; }
+@media (max-width: 480px) {
+  .srv-bar-tools { width: 100%; justify-content: space-between; gap: 8px; }
+  .srv-bar-tools .btn { padding-inline: 14px; }
+  .srv-bar-tools .seg-item { padding-inline: 12px; }
+}
 
 /* ---------- list view ---------- */
 .srv-list { overflow: hidden; padding: 4px 0; }

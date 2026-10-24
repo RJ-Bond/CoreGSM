@@ -222,16 +222,17 @@ function ServerList() {
           {servers.length > 1 ? (
             <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
               {([
-                ['all', `Все · ${servers.length}`],
-                ['online', `Онлайн · ${online.length}`],
-                ['offline', `Недоступные · ${offlineCount}`],
-                ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
-              ] as [Filter, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
+                ['all', `Все · ${servers.length}`, servers.length],
+                ['online', `Онлайн · ${online.length}`, online.length],
+                ['offline', `Недоступные · ${offlineCount}`, offlineCount],
+                ...(me ? [['fav', `Избранные · ${favCount}`, favCount]] : []),
+              ] as [Filter, string, number][]).map(([id, label, count]) => (
+                // an empty filter stays reachable but is dimmed, so the eye goes to the ones that have servers
+                <button key={id} type="button" className={`seg-item whitespace-nowrap${count === 0 && effFilter !== id ? ' opacity-70' : ''}`} aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
               ))}
             </nav>
           ) : <span />}
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="srv-bar-tools flex items-center gap-2.5">
             {canSelect && (
               <button type="button" className="btn btn-soft" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
@@ -465,7 +466,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <span className="truncate font-mono" title={s.address}>{s.address}</span>
-        <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
+        <span className="shrink-0">{s.online ? (s.map || (Date.now() - s.updatedAt > 60_000 ? ago(s.updatedAt) : '')) : ago(s.updatedAt)}</span>
       </div>
     </article>
   );
