@@ -76,6 +76,8 @@ app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use('/api/config/import', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '50kb' }));
+// Express 5 leaves req.body undefined when a request has no body (4 gave {}): the handlers parse it with zod objects
+app.use((req, _res, next) => { if (req.body === undefined) req.body = {}; next(); });
 installAudit(app);
 
 app.get('/api/health', (_req, res) => {
