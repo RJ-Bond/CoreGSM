@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
 import EmailVerifyState from '../components/EmailVerifyState';
 import { useAuth } from '../auth';
@@ -10,24 +10,26 @@ import { AvatarEditor } from '../components/profile/AvatarEditor';
 import { BannerEditor } from '../components/profile/BannerEditor';
 import { bannerStyle } from '../components/profile/banner';
 import { AchievementsGrid, AchievementsPreview } from '../components/profile/Achievements';
-import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/profile/VrRank';
+import { RankCard, RankHeaderBadge, VrAchievementsGrid, useMyRank } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
-import { StatsPanel, StatsSummary } from '../components/profile/Stats';
+import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
+import { IcoDiscord, IcoGamepad, IcoHome, IcoLogout, IcoShield, IcoSliders } from '../components/profile/bits';
+import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
-const TABS: { id: Tab; label: TKey }[] = [
-  { id: 'overview', label: 'pf.tab.overview' },
-  { id: 'player', label: 'pf.tab.player' },
-  { id: 'look', label: 'pf.tab.look' },
-  { id: 'security', label: 'pf.tab.security' },
+const TABS: { id: Tab; label: TKey; icon: ReactNode }[] = [
+  { id: 'overview', label: 'pf.tab.overview', icon: <IcoHome /> },
+  { id: 'player', label: 'pf.tab.player', icon: <IcoGamepad /> },
+  { id: 'look', label: 'pf.tab.look', icon: <IcoSliders /> },
+  { id: 'security', label: 'pf.tab.security', icon: <IcoShield /> },
 ];
 
 /** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (/profile/security). */
@@ -36,6 +38,7 @@ export default function ProfilePage() {
   const { sub } = useRoute();
   useI18n();
   if (!me) return null;
+  const newLogin = !!me.newDevice && !isNewDeviceDismissed(me.newDevice.ts);
   const first = sub.split('/')[0];
   const tab: Tab = TABS.some((x) => x.id === first) ? (first as Tab) : 'overview';
 
@@ -46,7 +49,10 @@ export default function ProfilePage() {
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>
           {TABS.map((x) => (
-            <a key={x.id} href={`/profile/${x.id}`} className="seg-item" aria-current={tab === x.id ? 'page' : undefined}>{t(x.label)}</a>
+            <a key={x.id} href={`/profile/${x.id}`} className="seg-item pf-tab" aria-current={tab === x.id ? 'page' : undefined}>
+              {x.icon}{t(x.label)}
+              {x.id === 'security' && newLogin && <span className="pf-tab-dot" title={t('pf.tab.alert')}><span className="sr-only">{t('pf.tab.alert')}</span></span>}
+            </a>
           ))}
         </nav>
       </div>
@@ -64,6 +70,8 @@ function OverviewTab() {
   const { me, isAdmin, logout, reload } = useAuth();
   const [favs, setFavs] = useState<Server[] | null>(null);
   const [editBanner, setEditBanner] = useState(false);
+  const stats = useMyStats(30);
+  const rank = useMyRank().data;
 
   useEffect(() => {
     Promise.all([api<number[]>('/favorites'), api<Server[]>('/servers')])
@@ -77,6 +85,7 @@ function OverviewTab() {
   return (
     <div className="space-y-5">
       <NewDeviceBanner />
+      <Greeting name={me.username} lastSeen={stats.data?.lastSeenAt ?? null} />
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
           <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={() => setEditBanner((v) => !v)}>
@@ -84,22 +93,24 @@ function OverviewTab() {
           </button>
         </div>
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><AvatarEditor onChanged={reload} /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={rank && rank.nick ? { ['--ring' as string]: rank.rank.color } : undefined}><AvatarEditor onChanged={reload} size={96} /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
-              {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}
               <RankHeaderBadge />
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {me.discordName && <span className="pf-meta"><IcoDiscord />{me.discordName}</span>}
+            </div>
           </div>
-          <button className="btn btn-soft mt-3" onClick={logout}>{t('hdr.logout')}</button>
+          <button className="btn btn-soft btn-sm pf-icon-btn mt-3" onClick={logout} title={t('hdr.logout')} aria-label={t('hdr.logout')}><IcoLogout /><span className="max-sm:sr-only">{t('hdr.logout')}</span></button>
         </div>
       </div>
 
       {editBanner && <BannerEditor onChanged={reload} />}
 
-      <StatsSummary />
+      <StatsSummary data={stats.data} />
 
       <div className="grid items-start gap-5 lg:grid-cols-2">
         <div className="space-y-5">
@@ -122,6 +133,18 @@ function OverviewTab() {
       {isAdmin && (
         <Section title={t('pf.tour.title')} description={t('pf.tour.text')} actions={<button className="btn btn-soft" onClick={() => restartTour(me.username)}>{t('pf.tour.again')}</button>} />
       )}
+    </div>
+  );
+}
+
+/** «Добрый день, имя» and when the player was last in the game */
+function Greeting({ name, lastSeen }: { name: string; lastSeen: number | null }) {
+  const h = new Date().getHours();
+  const key = h < 5 ? 'pf.greet.night' : h < 12 ? 'pf.greet.morning' : h < 18 ? 'pf.greet.day' : 'pf.greet.evening';
+  return (
+    <div className="pf-greet">
+      <h2>{t(key, { name })}</h2>
+      {lastSeen ? <p>{t('pf.greet.seen', { when: ago(lastSeen) })}</p> : null}
     </div>
   );
 }
