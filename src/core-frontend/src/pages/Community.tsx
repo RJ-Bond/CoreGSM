@@ -148,7 +148,14 @@ export default function CommunityPage() {
         <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам.</p>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {/* nobody has played yet: two empty cards become one line */}
+      {top.length === 0 && c.feed.length === 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="text-lg font-extrabold">Активность игроков</h2>
+          <p className="cm-sub">Пока никто не играл. Здесь появятся самые активные игроки и живая лента заходов.</p>
+        </section>
+      )}
+      <div className={`grid gap-5 lg:grid-cols-2 ${top.length === 0 && c.feed.length === 0 ? 'hidden' : ''}`}>
         <section className="tile p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-extrabold">Самые активные</h2>

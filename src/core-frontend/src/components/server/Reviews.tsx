@@ -42,6 +42,8 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   const [stars, setStars] = useState(0);
   const [text, setText] = useState('');
   const [editing, setEditing] = useState(false);
+  // with no reviews at all the form stays folded behind one button instead of filling the block
+  const [composing, setComposing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -63,12 +65,17 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   };
 
   if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
-  const formOpen = !!me && (editing || !r.mine);
-  const others = r.items.filter((x) => x.id !== r.mine?.id);
   const empty = r.count === 0;
+  const formOpen = !!me && (editing || (!r.mine && (!empty || composing)));
+  const others = r.items.filter((x) => x.id !== r.mine?.id);
   return (
     <div className="rv">
-      {empty && <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>}
+      {empty && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>
+          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>Оставить отзыв</button>}
+        </div>
+      )}
       {!empty && <div className="rv-score">
         <div className="text-center">
           <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
@@ -110,7 +117,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
           <textarea className="input min-h-20" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
           <ErrorLine text={error} />
           <div className="flex justify-end gap-2">
-            {editing && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>}
+            {(editing || (composing && empty)) && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing(false); setComposing(false); }}>Отмена</button>}
             <Button loading={busy} className="btn-sm">{r.mine ? 'Сохранить' : 'Оставить отзыв'}</Button>
           </div>
         </form>
