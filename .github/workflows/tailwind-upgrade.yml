@@ -1,0 +1,47 @@
+name: tailwind-upgrade
+
+# One-off: runs the official Tailwind 3 -> 4 upgrade tool on the frontend, checks the result and pushes it to
+# <branch>-result. Remove this file when the upgrade is done.
+on:
+  push:
+    branches: ['update-deps/tailwind']
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Run the upgrade tool
+        working-directory: src/core-frontend
+        run: |
+          set -e
+          npm ci --no-audit --no-fund
+          npx --yes @tailwindcss/upgrade --force 2>&1 | tee ../../upgrade.log
+      - name: Typecheck, tests and build
+        working-directory: src/core-frontend
+        run: |
+          npm run typecheck
+          npm test
+          npx vite build
+      - name: Show what changed
+        run: |
+          git status --short | head -50
+          git diff --stat | tail -3
+      - name: Rebuild install.sh
+        run: bash tools/build-installer.sh
+      - name: Push result branch
+        run: |
+          set -e
+          rm -f upgrade.log
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "${GITHUB_REF_NAME}-result"
+          git add -A
+          git commit -m "Upgrade to Tailwind CSS 4 with the official upgrade tool"
+          git push --force -u origin "${GITHUB_REF_NAME}-result"
