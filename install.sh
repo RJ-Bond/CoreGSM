@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="78bb099d79a8"
+COREGSM_BUILD="699008e77249"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -53855,7 +53855,8 @@ export function useDropTarget(onFile: (f: File) => void, disabled = false) {
 }
 
 /** Profile picture: upload or drop a photo (cropped to a square on the server), or fall back to the Discord avatar. */
-export function AvatarEditor({ onChanged, size = 80 }: { onChanged: () => Promise<void>; size?: number }) {
+/** `ring`: a colour for the ring round the picture (the rank); with it the editor is the compact one of the profile header: only the picture, the actions in one small line under it */
+export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => Promise<void>; size?: number; ring?: string | null }) {
   const { me } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -53888,8 +53889,10 @@ export function AvatarEditor({ onChanged, size = 80 }: { onChanged: () => Promis
     setBusy(false);
   };
 
+  const compact = ring !== undefined;
   return (
-    <div className="flex flex-col items-center gap-2" {...drop.props}>
+    <div className={`flex flex-col items-center ${compact ? 'gap-1' : 'gap-2'}`} {...drop.props}>
+      <div className={compact ? 'pf-avatar-ring p-1' : undefined} style={compact && ring ? { ['--ring' as string]: ring } : undefined}>
       <button
         type="button"
         onClick={() => input.current?.click()}
@@ -53902,12 +53905,13 @@ export function AvatarEditor({ onChanged, size = 80 }: { onChanged: () => Promis
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
       </button>
+      </div>
       <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
-      <div className="flex gap-3 text-sm font-extrabold">
+      <div className={`flex ${compact ? 'gap-2 text-xs' : 'gap-3 text-sm'} font-extrabold`}>
         <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>
         {me.avatarSource === 'custom' && <button type="button" className="btn-link-danger" onClick={() => void remove()} disabled={busy}>{me.discordName ? t('pf.avatar.fromDiscord') : t('common.remove')}</button>}
       </div>
-      <p className="max-w-48 text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>
+      {!compact && <p className="max-w-48 text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>}
       {error && <p className="max-w-48 text-center text-xs font-bold text-bad" role="alert">{error}</p>}
     </div>
   );
@@ -69768,7 +69772,7 @@ function OverviewTab() {
           </button>
         </div>
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={rank && rank.nick ? { ['--ring' as string]: rank.rank.color } : undefined}><AvatarEditor onChanged={reload} size={96} /></div></div>
+          <div className="pf-hero-avatar"><AvatarEditor onChanged={reload} size={80} ring={rank && rank.nick ? rank.rank.color : null} /></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -70136,7 +70140,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
         <div className="panel pf-hero">
           <div className="pf-banner skeleton" />
           <div className="pf-hero-body">
-            <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><div className="skeleton h-24 w-24 rounded-3xl bg-soft" /></div></div>
+            <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><div className="skeleton h-20 w-20 rounded-3xl bg-soft" /></div></div>
             <div className="min-w-0 flex-1 basis-56 space-y-2 pt-3">
               <div className="skeleton h-7 w-48 rounded-full bg-soft" />
               <div className="skeleton h-5 w-64 max-w-full rounded-full bg-soft" />
@@ -70168,7 +70172,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(p.bannerUrl, p.bannerPreset)} />
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={p.rank ? { ['--ring' as string]: p.rank.color } : undefined}><UserAvatar name={p.username} url={p.avatarUrl} size={96} tone="brand" className="rounded-3xl!" /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={p.rank ? { ['--ring' as string]: p.rank.color } : undefined}><UserAvatar name={p.username} url={p.avatarUrl} size={80} tone="brand" className="rounded-3xl!" /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <h1 className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{p.username}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -75806,7 +75810,7 @@ __COREGSM_EOF__
 .pf-banner-btn:hover { background: rgb(0 0 0 / .66); }
 @media (max-width: 639px) { .pf-banner-btn { min-height: 44px; } }
 .pf-hero-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem 1.25rem; padding: 0 1.25rem 1.25rem; }
-.pf-hero-avatar { margin-top: -3.25rem; position: relative; z-index: 1; }
+.pf-hero-avatar { margin-top: -2.75rem; position: relative; z-index: 1; }
 .pf-avatar-ring { border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: 0 0 0 4px rgb(var(--card)), 0 0 0 7px var(--ring, rgb(var(--card))); }
 .pf-drop-on { box-shadow: 0 0 0 3px rgb(var(--brand)), 0 0 0 7px rgb(var(--brand) / .25); }
 .pf-banner-ratio { aspect-ratio: 3 / 1; width: 100%; background-size: cover; background-position: center; border-radius: var(--r-lg); background-color: rgb(var(--soft)); }
