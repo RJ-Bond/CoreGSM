@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0e62e68e3676"
+COREGSM_BUILD="985dc7196089"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -15180,6 +15180,9 @@ router.get('/api/manifest.json', (_req, res) => {
   const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
   res.type('application/manifest+json').json({
     id: '/',
+    lang: 'ru',
+    dir: 'ltr',
+    orientation: 'any',
     name: b.name,
     short_name: b.name.slice(0, 12),
     description: 'Мониторинг игровых серверов: кто играет, доступность, новости',
@@ -33755,6 +33758,37 @@ __COREGSM_EOF__
 </svg>
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
+  cat > "$APP_DIR/core-frontend/public/offline.html" << '__COREGSM_EOF__'
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Нет соединения · CoreGSM</title>
+<style>
+  :root { color-scheme: dark light; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #09090e; color: #e8e8f2; text-align: center; }
+  main { max-width: 420px; }
+  .logo { width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 20px; display: block; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p { margin: 0 0 24px; line-height: 1.5; color: #a8a8c0; }
+  button { font: inherit; font-weight: 600; padding: 12px 22px; min-height: 44px; border: 0; border-radius: 12px; background: #6d5ef5; color: #fff; cursor: pointer; }
+  button:focus-visible { outline: 3px solid #c4bcff; outline-offset: 2px; }
+  @media (prefers-color-scheme: light) { body { background: #f6f6fb; color: #1b1b2e; } p { color: #55556e; } }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="/logo-128.png" alt="">
+  <h1>Нет соединения</h1>
+  <p>Панель показывает серверы в реальном времени и без сети не открывается. Проверьте интернет и повторите попытку.</p>
+  <button type="button" onclick="location.reload()">Повторить</button>
+</main>
+</body>
+</html>
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/public"
   base64 -d > "$APP_DIR/core-frontend/public/og-default.png" << '__COREGSM_EOF__'
 iVBORw0KGgoAAAANSUhEUgAABLAAAAJ2CAIAAADAIuwLAAAAAXNSR0IArs4c6QAAmwJJREFUeNrc
 wkESQCAAQNHufz0QN0BVxbbBAVpgNOq/eWIPR+5bpv7/Adp/0pXYQdunba0NtL7fVFZBr8macIGe
@@ -34457,29 +34491,52 @@ EP4BeQojTBa++28AAAAASUVORK5CYII=
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
   cat > "$APP_DIR/core-frontend/public/sw.js" << '__COREGSM_EOF__'
-// Service worker: lets the browser offer "install app" and shows push notifications. Nothing is cached and
-// requests are not intercepted: the panel is always live.
-self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+// Service worker: lets the browser offer "install app", shows push notifications and, when the network is gone, shows a
+// small offline page instead of the browser's error. Nothing else is cached: the panel is always live.
+const OFFLINE = '/offline.html';
+const CACHE = 'coregsm-offline-v1';
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open(CACHE).then((c) => c.add(OFFLINE)).catch(() => undefined).then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', (e) => e.waitUntil((async () => {
+  for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
+  await self.clients.claim();
+})()));
+
+// only page navigations are intercepted, and only to answer with the offline page when the network fails
+self.addEventListener('fetch', (e) => {
+  if (e.request.mode !== 'navigate') return;
+  e.respondWith(fetch(e.request).catch(async () => (await caches.match(OFFLINE)) || Response.error()));
+});
 
 // a notification from the panel: { title, body, url, tag }
 self.addEventListener('push', (e) => {
   let m = {};
   try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(m.title || 'CoreGSM', {
-    body: m.body || '',
+  if (!m || typeof m !== 'object') m = {};
+  e.waitUntil(self.registration.showNotification(String(m.title || 'CoreGSM'), {
+    body: String(m.body || ''),
     icon: '/logo-192.png',
     badge: '/logo-128.png',
-    tag: m.tag || undefined,
+    tag: m.tag ? String(m.tag) : undefined,
     renotify: !!m.tag,
-    data: { url: m.url || '/' },
+    data: { url: typeof m.url === 'string' ? m.url : '/' },
   }));
 });
+
+// the address of a notification must stay on the panel's own origin: anything else opens the start page
+const safeUrl = (raw) => {
+  try {
+    const u = new URL(raw || '/', self.location.origin);
+    return u.origin === self.location.origin ? u.href : self.location.origin + '/';
+  } catch { return self.location.origin + '/'; }
+};
 
 // a click opens the page of the notification: an open tab of the panel is reused
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin).href;
+  const url = safeUrl(e.notification.data && e.notification.data.url);
   e.waitUntil((async () => {
     const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of tabs) {
@@ -34489,7 +34546,22 @@ self.addEventListener('notificationclick', (e) => {
         return;
       }
     }
-    await self.clients.openWindow(url);
+    await self.clients.openWindow(url).catch(() => undefined);
+  })());
+});
+
+// the browser renewed or dropped the push subscription: subscribe again with the panel's key and tell the panel
+self.addEventListener('pushsubscriptionchange', (e) => {
+  e.waitUntil((async () => {
+    try {
+      const { publicKey } = await (await fetch('/api/push/key')).json();
+      const pad = '='.repeat((4 - (publicKey.length % 4)) % 4);
+      const raw = atob((publicKey + pad).replace(/-/g, '+').replace(/_/g, '/'));
+      const key = Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
+      const sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      // the panel stores subscriptions per signed-in user: an open tab does that with the user's session
+      for (const c of await self.clients.matchAll({ type: 'window', includeUncontrolled: true })) c.postMessage({ type: 'push-resubscribe', subscription: sub.toJSON() });
+    } catch { /* the panel offers to subscribe again on the next visit */ }
   })());
 });
 __COREGSM_EOF__
@@ -44345,6 +44417,43 @@ export default function App() {
       </div>
     </AuthContext.Provider>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/RootBoundary.tsx" << '__COREGSM_EOF__'
+/**
+ * The last line of defence: an error in the shell of the panel (header, navigation, a provider) would otherwise leave a
+ * white screen. Shows a calm notice with the details and a reload button instead.
+ */
+import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { t } from './i18n';
+
+export class RootBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[coregsm] render error', error, info.componentStack);
+  }
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    const details = `${error.name}: ${error.message}\n${location.href}\n${navigator.userAgent}`;
+    return (
+      <div className="grid min-h-screen place-items-center px-4 text-center" role="alert">
+        <div className="max-w-md space-y-4">
+          <h1 className="text-xl font-extrabold">{t('crash.title')}</h1>
+          <p className="text-mute">{t('crash.hint')}</p>
+          <pre className="max-h-40 overflow-auto rounded-xl bg-black/20 p-3 text-left text-xs whitespace-pre-wrap">{details}</pre>
+          <div className="flex justify-center gap-2">
+            <button type="button" className="btn" onClick={() => window.location.reload()}>{t('page.reload')}</button>
+            <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(details).catch(() => undefined)}>{t('crash.copy')}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -60163,6 +60272,9 @@ const en: Record<keyof typeof ru, string> = {
   'common.save': 'Save',
   'page.loadFailed': 'The page could not be loaded. The panel may have just been updated.',
   'page.reload': 'Reload the page',
+  'crash.title': 'Something went wrong',
+  'crash.hint': 'The panel hit an unexpected error. Reloading usually helps; if it keeps happening, report it with the details below.',
+  'crash.copy': 'Copy details',
   'toast.close': 'Dismiss notification',
   'ago.s': '{n}s ago',
   'ago.m': '{n} min ago',
@@ -61049,6 +61161,9 @@ const ru = {
   'common.save': 'Сохранить',
   'page.loadFailed': 'Не удалось загрузить страницу. Возможно, панель только что обновилась.',
   'page.reload': 'Обновить страницу',
+  'crash.title': 'Что-то пошло не так',
+  'crash.hint': 'В панели произошла непредвиденная ошибка. Обычно помогает перезагрузка; если повторяется, сообщите об этом, приложив детали ниже.',
+  'crash.copy': 'Скопировать детали',
   'toast.close': 'Закрыть уведомление',
   'ago.s': '{n} с назад',
   'ago.m': '{n} мин назад',
@@ -61746,6 +61861,9 @@ import './styles/profile.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
 import App from './App';
+import { RootBoundary } from './RootBoundary';
+import { api, getToken } from './api';
+import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -61757,7 +61875,9 @@ installSegIndicator();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <RootBoundary>
+      <App />
+    </RootBoundary>
   </React.StrictMode>,
 );
 
@@ -61770,6 +61890,21 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => undefined); });
+  // a new service worker took over a page that was already controlled: the page may run old scripts next to new
+  // ones, so offer a reload (not forced: the person may be in the middle of a form)
+  const hadController = !!navigator.serviceWorker.controller;
+  let offered = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || offered) return;
+    offered = true;
+    toast('Доступна новая версия панели', { kind: 'ok', duration: 60000, action: { label: 'Обновить', onClick: () => location.reload() } });
+  });
+  // the browser renewed the push subscription: the service worker subscribed again, the signed-in page stores it
+  navigator.serviceWorker.addEventListener('message', (e: MessageEvent) => {
+    if (e.data && e.data.type === 'push-resubscribe' && e.data.subscription && getToken()) {
+      void api('/push/subscribe', 'POST', e.data.subscription).catch(() => undefined);
+    }
+  });
 }
 
 // pause decorative animations while the page is not visible or the window is not focused (see the black-square note in index.css)
@@ -68062,16 +68197,17 @@ function ServerList() {
           {servers.length > 1 ? (
             <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
               {([
-                ['all', `Все · ${servers.length}`],
-                ['online', `Онлайн · ${online.length}`],
-                ['offline', `Недоступные · ${offlineCount}`],
-                ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
-              ] as [Filter, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
+                ['all', `Все · ${servers.length}`, servers.length],
+                ['online', `Онлайн · ${online.length}`, online.length],
+                ['offline', `Недоступные · ${offlineCount}`, offlineCount],
+                ...(me ? [['fav', `Избранные · ${favCount}`, favCount]] : []),
+              ] as [Filter, string, number][]).map(([id, label, count]) => (
+                // an empty filter stays reachable but is dimmed, so the eye goes to the ones that have servers
+                <button key={id} type="button" className={`seg-item whitespace-nowrap${count === 0 && effFilter !== id ? ' opacity-70' : ''}`} aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
               ))}
             </nav>
           ) : <span />}
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="srv-bar-tools flex items-center gap-2.5">
             {canSelect && (
               <button type="button" className="btn btn-soft" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
@@ -68305,7 +68441,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <span className="truncate font-mono" title={s.address}>{s.address}</span>
-        <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
+        <span className="shrink-0">{s.online ? (s.map || (s.updatedAt != null && Date.now() - s.updatedAt > 60_000 ? ago(s.updatedAt) : '')) : ago(s.updatedAt)}</span>
       </div>
     </article>
   );
@@ -72287,6 +72423,13 @@ __COREGSM_EOF__
 
 /* ---------- view switcher row ---------- */
 .srv-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; }
+/* the select button and the view switch stay on one line; on a phone they are a little tighter so that they fit */
+.srv-bar-tools { flex-wrap: nowrap; max-width: 100%; }
+@media (max-width: 480px) {
+  .srv-bar-tools { width: 100%; justify-content: space-between; gap: 8px; }
+  .srv-bar-tools .btn { padding-inline: 14px; }
+  .srv-bar-tools .seg-item { padding-inline: 12px; }
+}
 
 /* ---------- list view ---------- */
 .srv-list { overflow: hidden; padding: 4px 0; }
