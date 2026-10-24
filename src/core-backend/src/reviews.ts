@@ -14,6 +14,7 @@ import { allow, auth, type AuthedRequest, rateLimit, viewer } from './auth.js';
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
+import { param } from './http.js';
 
 export const router = express.Router();
 
@@ -50,7 +51,7 @@ export function scoreOf(serverId: number): { avg: number | null; count: number; 
 
 const serverExists = (id: number) => Number.isInteger(id) && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
 
-router.get('/api/servers/:id(\\d+)/reviews', viewer, (req: AuthedRequest, res) => {
+router.get('/api/servers/:id/reviews', param('id'), viewer, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
   const items = (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.hidden = 0 ORDER BY r.updated_at DESC LIMIT 50`).all(id) as Row[]).map(out);
@@ -58,7 +59,7 @@ router.get('/api/servers/:id(\\d+)/reviews', viewer, (req: AuthedRequest, res) =
   res.json({ ...scoreOf(id), items, mine: mine ? out(mine) : null });
 });
 
-router.put('/api/servers/:id(\\d+)/reviews', auth, rateLimit(20), (req: AuthedRequest, res) => {
+router.put('/api/servers/:id/reviews', param('id'), auth, rateLimit(20), (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
   const b = z.object({ stars: z.number().int().min(1).max(5), text: z.string().trim().max(1000).default('') }).safeParse(req.body);
@@ -73,7 +74,7 @@ router.put('/api/servers/:id(\\d+)/reviews', auth, rateLimit(20), (req: AuthedRe
   res.json({ ...scoreOf(id), mine: out(mine) });
 });
 
-router.delete('/api/servers/:id(\\d+)/reviews/mine', auth, (req: AuthedRequest, res) => {
+router.delete('/api/servers/:id/reviews/mine', param('id'), auth, (req: AuthedRequest, res) => {
   db.prepare('DELETE FROM server_reviews WHERE server_id = ? AND user_id = ?').run(Number(req.params.id), req.user!.id);
   res.json({ ok: true });
 });
@@ -85,7 +86,7 @@ router.get('/api/reviews', staff, (_req, res) => {
   res.json(rows.map((r) => ({ ...out(r), serverName: r.server_name })));
 });
 
-router.patch('/api/reviews/:id(\\d+)', staff, (req, res) => {
+router.patch('/api/reviews/:id', param('id'), staff, (req, res) => {
   const b = z.object({ hidden: z.boolean() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   const r = db.prepare('UPDATE server_reviews SET hidden = ? WHERE id = ?').run(b.data.hidden ? 1 : 0, Number(req.params.id));
@@ -93,7 +94,7 @@ router.patch('/api/reviews/:id(\\d+)', staff, (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/api/reviews/:id(\\d+)', staff, (req, res) => {
+router.delete('/api/reviews/:id', param('id'), staff, (req, res) => {
   db.prepare('DELETE FROM server_reviews WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });

@@ -15,6 +15,7 @@ import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { incidentsSince } from './incidents.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
+import { param } from './http.js';
 
 const { Canvas } = skia;
 const DAY = 86_400_000;
@@ -334,7 +335,7 @@ export function registerDigest({ app, admin }: { app: Express; admin: RequestHan
       next(e);
     }
   });
-  app.get('/api/digest/:to(\\d+)-:sig([0-9a-f]{20}).png', async (req, res, next) => {
+  app.get('/api/digest/:to-:sig.png', param('to'), param('sig', /^[0-9a-f]{20}$/), async (req, res, next) => {
     const to = Number(req.params.to);
     if (req.params.sig !== sign(to) || to > Date.now() + 60_000) return res.status(404).json({ error: 'Не найдено' });
     try {

@@ -15,6 +15,7 @@ import { viewer } from '../auth.js';
 import { db, getSetting } from '../db.js';
 import { localParts } from '../localTime.js';
 import { vrRankIdFor } from '../profile.js';
+import { param } from '../http.js';
 
 export const router = express.Router();
 
@@ -173,7 +174,7 @@ export function analyticsFor(serverId: number, days: number, now = Date.now()) {
 // one computation per server and period per minute: the page polls and several people may look at once
 const cache = new Map<string, { at: number; v: ReturnType<typeof analyticsFor> }>();
 
-router.get('/api/servers/:id(\\d+)/analytics', viewer, (req, res) => {
+router.get('/api/servers/:id/analytics', param('id'), viewer, (req, res) => {
   const id = Number(req.params.id);
   if (!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
   const asked = Number(req.query.days);

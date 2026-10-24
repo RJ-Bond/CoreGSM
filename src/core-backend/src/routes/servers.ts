@@ -9,7 +9,7 @@ import { type BindingRow, db, type ServerRow } from '../db.js';
 import { gameLabel } from '../games.js';
 import { countryOf } from '../geo.js';
 import { queryServer, refreshServer } from '../gsm.js';
-import { wrap } from '../http.js';
+import { param, wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
 import { downtimeByDay, incidentsSince } from '../incidents.js';
@@ -242,7 +242,7 @@ router.get('/api/servers/:id/history', viewer, (req, res) => {
 
 // public PNG card (shared links, link previews). A private panel hides it unless the request carries a session token (?t=).
 router.get(
-  '/api/card/:id(\\d+).png',
+  '/api/card/:id.png', param('id'),
   wrap(async (req, res) => {
     if (!publicPanel() && !userFromToken(String(req.query.t ?? '')) && !loadUser(req)) return res.status(404).json({ error: 'Сервер не найден' });
     const buf = await renderCard(Number(req.params.id));
@@ -269,7 +269,7 @@ const esc = (v: unknown) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-router.get('/s/:id(\\d+)', (req, res) => {
+router.get('/s/:id', param('id'), (req, res) => {
   res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
   const gone = () =>
     void res
