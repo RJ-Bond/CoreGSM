@@ -10,7 +10,12 @@ const [panel, backend, dbFile, pwDir, outDir] = process.argv.slice(2);
 const DAY = 86_400_000;
 const require = createRequire(path.resolve('src/core-backend/package.json'));
 const Database = require('better-sqlite3');
-const { chromium } = createRequire(path.join(pwDir, 'package.json'))('playwright');
+const pwRequire = createRequire(path.join(pwDir, 'package.json'));
+const { chromium } = pwRequire('playwright');
+const axeMod = (() => { try { return pwRequire('@axe-core/playwright'); } catch { return null; } })();
+const AxeBuilder = axeMod?.default ?? axeMod?.AxeBuilder ?? null;
+// accessibility findings of every page: rule -> { impact, help, nodes, where }
+const a11y = new Map();
 
 const ADMIN = { username: 'admin', password: 'Passw0rd!long' };
 const post = async (url, body) => {
@@ -69,9 +74,28 @@ for (const theme of ['dark', 'light']) {
       // the first screen as the visitor sees it (a full-page picture moves fixed bars into the middle of the page)
       await page.screenshot({ path: path.join(outDir, `${theme}-${sizeName}-${name}-top.png`) }).catch((e) => console.log('skip', name, e.message));
       await page.screenshot({ path: path.join(outDir, `${theme}-${sizeName}-${name}.png`), fullPage: true }).catch((e) => console.log('skip', name, e.message));
+      if (AxeBuilder) {
+        try {
+          const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+          for (const v of r.violations) {
+            const e = a11y.get(v.id) ?? { impact: v.impact, help: v.help, url: v.helpUrl, nodes: 0, where: new Set(), sample: v.nodes[0]?.target?.join(' ') ?? '' };
+            e.nodes += v.nodes.length;
+            e.where.add(`${theme}-${sizeName}-${name}`);
+            a11y.set(v.id, e);
+          }
+        } catch (e) { console.log('axe skipped', name, e.message); }
+      }
     }
     await ctx.close();
   }
 }
 await browser.close();
+if (AxeBuilder) {
+  const order = { critical: 0, serious: 1, moderate: 2, minor: 3 };
+  const rows = [...a11y.entries()].sort((a, b) => (order[a[1].impact] ?? 9) - (order[b[1].impact] ?? 9) || b[1].nodes - a[1].nodes);
+  const md = ['# Accessibility (axe-core, WCAG 2.0/2.1 A and AA)', '', rows.length ? '| impact | rule | elements | pages | example |' : 'No violations found.', rows.length ? '|---|---|---|---|---|' : ''];
+  for (const [id, e] of rows) md.push(`| ${e.impact} | [${id}](${e.url}): ${e.help} | ${e.nodes} | ${[...e.where].slice(0, 4).join(', ')}${e.where.size > 4 ? ` +${e.where.size - 4}` : ''} | \`${e.sample.replace(/\|/g, '/').slice(0, 80)}\` |`);
+  fs.writeFileSync(path.join(outDir, 'A11Y.md'), md.join('\n') + '\n');
+  console.log('a11y rules with violations:', rows.length);
+}
 console.log('screenshots:', fs.readdirSync(outDir).length);
