@@ -1,2 +1,1 @@
-core-backend bcryptjs@3 @types/nodemailer@8 @types/better-sqlite3@9
-core-frontend postcss@8.5.31
+core-bot https-proxy-agent@9 socks-proxy-agent@10
