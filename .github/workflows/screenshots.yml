@@ -2,10 +2,11 @@ name: screenshots
 
 # Photographs the panel on demo data (real backend on a throwaway database, real login) and pushes the PNG files to
 # the branch `ci-screenshots`, so a change to the interface can be looked at without a server. Runs on a push to a
-# branch named `ui/**` or by hand.
+# branch named `ui/**` or by hand. The pictures of `main` go to `ci-screenshots-main` and are the baseline: every other
+# run compares against it (DIFF.md and marked pictures in diff/) and lists accessibility findings (A11Y.md, axe-core).
 on:
   push:
-    branches: ['ui/**']
+    branches: ['ui/**', main]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +26,7 @@ jobs:
           npm ci --no-audit --no-fund --prefix src/core-frontend
       - name: Install Playwright
         run: |
-          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm install --no-audit --no-fund playwright
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm install --no-audit --no-fund playwright @axe-core/playwright pixelmatch pngjs
           npx playwright install --with-deps chromium
       - name: Start the backend and the panel
         run: |
@@ -46,15 +47,27 @@ jobs:
             exit 1
           fi
           cat /tmp/shoot.log
+      - name: Compare with main
+        if: github.ref_name != 'main'
+        continue-on-error: true
+        run: |
+          if git ls-remote --exit-code --heads origin ci-screenshots-main >/dev/null 2>&1; then
+            rm -rf /tmp/base && mkdir /tmp/base && cd /tmp/base && git init -q && git fetch -q --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-screenshots-main && git checkout -q FETCH_HEAD
+            cd "$GITHUB_WORKSPACE" && node tools/screenshots/compare.mjs /tmp/pw /tmp/shots /tmp/base /tmp/shots-diff/diff && cp /tmp/shots-diff/DIFF.md /tmp/shots/ && cp -r /tmp/shots-diff/diff /tmp/shots/diff
+          else
+            echo 'no baseline yet (ci-screenshots-main)'
+          fi
       - name: Push the pictures to ci-screenshots
         run: |
           set -e
-          rm -rf /tmp/out && mkdir /tmp/out && cp /tmp/shots/*.png /tmp/out/
+          target=ci-screenshots; [ "$GITHUB_REF_NAME" = main ] && target=ci-screenshots-main
+          rm -rf /tmp/out && mkdir /tmp/out && cp /tmp/shots/*.png /tmp/shots/*.md /tmp/out/ 2>/dev/null || cp /tmp/shots/*.png /tmp/out/
+          [ -d /tmp/shots/diff ] && cp -r /tmp/shots/diff /tmp/out/diff
           cd /tmp/out
           printf 'Built from %s (%s)\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" > README.txt
-          git init -q -b ci-screenshots
+          git init -q -b "$target"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -q -m "Screenshots of $GITHUB_REF_NAME $GITHUB_SHA"
-          git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" HEAD:refs/heads/ci-screenshots
+          git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" HEAD:refs/heads/$target
