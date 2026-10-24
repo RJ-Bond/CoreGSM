@@ -3,6 +3,7 @@ import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
 import { t } from '../../i18n';
 import { Button, ErrorLine, PasswordField, toast } from '../../ui';
+import QrCode from '../server/QrCode';
 
 interface Status { enabled: boolean; recoveryLeft: number; hasPassword: boolean }
 interface Setup { secret: string; uri: string }
@@ -94,6 +95,7 @@ export function TwoFactorCard() {
       {!st.enabled && setup && (
         <form onSubmit={enable} noValidate className="space-y-3.5">
           <p className="font-semibold text-mute">{t('pf.2fa.scan')}</p>
+          <div className="max-w-52"><QrCode text={setup.uri} label={t('pf.2fa.qr')} /></div>
           <p className="text-sm font-bold">
             <a className="text-link hover:underline" href={setup.uri}>{t('pf.2fa.openApp')}</a>
           </p>
