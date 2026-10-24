@@ -29,4 +29,15 @@ jobs:
           node-version: 22
       - name: npm audit (production dependencies, high and critical)
         working-directory: src/${{ matrix.package }}
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high > audit.txt 2>&1
+          rc=$?
+          cat audit.txt
+          if [ "$rc" -ne 0 ]; then
+            # the report is also put into an annotation and the run summary, so it can be read without opening the raw log
+            { echo '### npm audit: ${{ matrix.package }}'; echo '```'; head -c 6000 audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            msg=$(head -c 3500 audit.txt | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=npm audit failed (exit $rc)::$msg"
+          fi
+          exit "$rc"
