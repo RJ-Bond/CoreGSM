@@ -4,6 +4,8 @@ import ReactDOM from 'react-dom/client';
 import '@fontsource-variable/golos-text/wght.css';
 // the serif of the news headlines (Cyrillic)
 import '@fontsource-variable/literata/wght.css';
+// the monospace of addresses and codes (Latin and Cyrillic)
+import '@fontsource-variable/jetbrains-mono/wght.css';
 import './index.css';
 import './styles/servers.css';
 import './styles/detail.css';
