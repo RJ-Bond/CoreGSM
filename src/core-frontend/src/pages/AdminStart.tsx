@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
+import { t, useI18n } from '../i18n';
 import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
@@ -45,6 +46,7 @@ const len = (v: unknown) => (Array.isArray(v) ? v.length : null);
 /** Reads the real state of the panel and turns it into the checklist. A failing request only marks its step «неизвестно». */
 function useStartSteps() {
   const { me, access } = useAuth();
+  const { lang } = useI18n();
   const username = me?.username ?? '';
   const [raw, setRaw] = useState<Raw | null>(null);
   const [skipped, setSkipped] = useState<StepId[]>(() => readSkipped(username));
@@ -80,17 +82,17 @@ function useStartSteps() {
       else if (raw.bot.state === 'online') bot = 'done';
       else {
         bot = 'todo';
-        botNote = raw.bot.state === 'error' && raw.bot.error ? `Токен сохранён, но бот не подключился: ${raw.bot.error}` : 'Токен сохранён, бот ещё подключается. Если так долго, проверьте токен.';
+        botNote = raw.bot.state === 'error' && raw.bot.error ? t('start.botErr', { e: raw.bot.error }) : t('start.botWait');
       }
     }
     return [
-      { id: 'server', short: 'сервер', title: 'Добавьте игровой сервер', why: 'Без сервера панели нечего показывать: онлайн, карту и пинг она берёт у вашего игрового сервера.', href: '/admin/servers/new', cta: 'Добавить сервер', state: st(raw.servers) },
-      { id: 'bot', short: 'бот', title: 'Подключите Discord-бота', why: 'Бот публикует состояние серверов и новости в Discord. Ему нужен токен из Discord Developer Portal.', href: '/admin/settings/bot', cta: 'Указать токен', state: bot, note: botNote },
-      { id: 'channel', short: 'канал', title: 'Привяжите канал для сообщений', why: 'Привязка говорит боту, в какой канал писать. Он отправит одно сообщение и будет обновлять его само.', href: '/admin/discord', cta: 'Привязать канал', state: st(raw.bindings) },
-      { id: 'news', short: 'новость', title: 'Напишите первую новость', why: 'Новости видят и игроки в панели, и участники в Discord: так удобно сообщать о вайпах и работах.', href: '/admin/news/new', cta: 'Написать новость', state: st(raw.news) },
-      { id: 'brand', short: 'оформление', title: 'Настройте оформление', why: 'Название, цвет и логотип делают панель вашей: их видят посетители и участники Discord.', href: '/admin/settings/brand', cta: 'Настроить', state: brandDone ? 'done' : 'todo' },
+      { id: 'server', short: t('start.server.short'), title: t('start.server.title'), why: t('start.server.why'), href: '/admin/servers/new', cta: t('start.server.cta'), state: st(raw.servers) },
+      { id: 'bot', short: t('start.bot.short'), title: t('start.bot.title'), why: t('start.bot.why'), href: '/admin/settings/bot', cta: t('start.bot.cta'), state: bot, note: botNote },
+      { id: 'channel', short: t('start.channel.short'), title: t('start.channel.title'), why: t('start.channel.why'), href: '/admin/discord', cta: t('start.channel.cta'), state: st(raw.bindings) },
+      { id: 'news', short: t('start.news.short'), title: t('start.news.title'), why: t('start.news.why'), href: '/admin/news/new', cta: t('start.news.cta'), state: st(raw.news) },
+      { id: 'brand', short: t('start.brand.short'), title: t('start.brand.title'), why: t('start.brand.why'), href: '/admin/settings/brand', cta: t('start.brand.cta'), state: brandDone ? 'done' : 'todo' },
     ];
-  }, [raw, brandDone]);
+  }, [raw, brandDone, lang]);
 
   const skip = (id: StepId) => setSkipped((cur) => { const n = cur.includes(id) ? cur : [...cur, id]; writeSkipped(username, n); return n; });
   const unskip = (id: StepId) => setSkipped((cur) => { const n = cur.filter((x) => x !== id); writeSkipped(username, n); return n; });
@@ -103,16 +105,17 @@ function useStartSteps() {
 
 /** A compact progress card for the sidebar: «Настройка 4 из 5» with the first step left; hidden when everything is done or skipped. */
 export function SetupProgress() {
+  useI18n();
   const s = useStartSteps();
   if (s.loading || s.resolved || s.steps.length === 0) return null;
   const left = s.steps.find((x) => x.state !== 'done' && !s.skipped.includes(x.id));
   const pct = Math.round((s.doneCount / s.total) * 100);
   return (
     <div className="hidden md:block">
-      <a href="/admin/start" className="adm-progress" aria-label={`Настройка: ${s.doneCount} из ${s.total}`}>
-        <span className="flex items-baseline justify-between gap-2"><b>Настройка</b><span>{s.doneCount} из {s.total}</span></span>
+      <a href="/admin/start" className="adm-progress" aria-label={t('start.progress', { a: s.doneCount, b: s.total })}>
+        <span className="flex items-baseline justify-between gap-2"><b>{t('start.setup')}</b><span>{t('start.ofTotal', { a: s.doneCount, b: s.total })}</span></span>
         <span className="adm-progress-bar" aria-hidden><i style={{ width: `${pct}%` }} /></span>
-        {left && <span className="adm-progress-left">Дальше: {left.short}</span>}
+        {left && <span className="adm-progress-left">{t('start.next')} {left.short}</span>}
       </a>
     </div>
   );
@@ -131,7 +134,7 @@ export function AdminHome() {
 
 function StartSkeleton() {
   return (
-    <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
+    <div className="space-y-5" aria-busy="true" aria-label={t('adm.loading')}>
       <div className="skeleton h-14 w-72 rounded-2xl" />
       <div className="skeleton tile h-28" />
       {[0, 1, 2].map((i) => <div key={i} className="skeleton tile h-24" />)}
@@ -177,7 +180,7 @@ export default function AdminStart() {
     setBusy(true);
     try {
       await downloadFile('/backup', 'coregsm-backup.tar.gz');
-      toast('Копия скачана');
+      toast(t('start.backupDone'));
     } catch (e) {
       toast((e as Error).message, 'err');
     } finally {
@@ -186,11 +189,11 @@ export default function AdminStart() {
   };
 
   const quick: { key: string; label: string; text: string; icon: ReactNode; href?: string; onClick?: () => void }[] = [
-    { key: 'server', label: 'Добавить сервер', text: 'Игра, адрес и порт', icon: <IconServers />, href: '/admin/servers/new' },
-    { key: 'news', label: 'Написать новость', text: 'С шаблоном и предпросмотром', icon: <IconNews />, href: '/admin/news/new' },
-    { key: 'backup', label: busy ? 'Готовлю копию…' : 'Скачать копию', text: 'Все данные одним файлом', icon: <IconDownload />, onClick: () => void backup() },
-    { key: 'system', label: 'Проверить систему', text: 'Диск, бот, сертификат', icon: <IconSystem />, href: '/admin/system' },
-    { key: 'player', label: 'Открыть панель как игрок', text: 'Так её видят посетители', icon: <IconStart />, href: '/servers' },
+    { key: 'server', label: t('start.q.server'), text: t('start.q.server.t'), icon: <IconServers />, href: '/admin/servers/new' },
+    { key: 'news', label: t('start.q.news'), text: t('start.q.news.t'), icon: <IconNews />, href: '/admin/news/new' },
+    { key: 'backup', label: busy ? t('start.q.backupBusy') : t('start.q.backup'), text: t('start.q.backup.t'), icon: <IconDownload />, onClick: () => void backup() },
+    { key: 'system', label: t('start.q.system'), text: t('start.q.system.t'), icon: <IconSystem />, href: '/admin/system' },
+    { key: 'player', label: t('start.q.player'), text: t('start.q.player.t'), icon: <IconStart />, href: '/servers' },
   ];
 
   return (
@@ -198,10 +201,10 @@ export default function AdminStart() {
       head={(
         <PageHead
           icon={<IconStart />}
-          title="Начало работы"
-          subtitle={me ? `Здравствуйте, ${me.username}! Пять шагов, и панель готова` : 'Пять шагов, и панель готова'}
-          hint="Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели."
-          help={<p>Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.</p>}
+          title={t('adm.s.start')}
+          subtitle={me ? t('start.hello', { name: me.username }) : t('start.five')}
+          hint={t('start.hint')}
+          help={<p>{t('start.help')}</p>}
         />
       )}
     >
@@ -214,25 +217,25 @@ export default function AdminStart() {
             <div className="tile fade-in flex flex-wrap items-center gap-4 p-5" role="status">
               <span className="pop grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-okbg text-ok"><Check size={30} /></span>
               <div className="min-w-0 flex-1 basis-60">
-                <h2 className="text-xl font-extrabold leading-tight">Завершено: всё настроено</h2>
-                <p className="font-semibold text-mute">Панель работает сама: бот обновляет сообщения, оповещения следят за серверами. Вернуться сюда можно из меню слева.</p>
+                <h2 className="text-xl font-extrabold leading-tight">{t('start.allDone')}</h2>
+                <p className="font-semibold text-mute">{t('start.allDoneText')}</p>
               </div>
-              <a className="btn" href="/admin/servers">Перейти к серверам</a>
+              <a className="btn" href="/admin/servers">{t('start.toServers')}</a>
             </div>
           ) : (
             <div className="tile flex flex-wrap items-center gap-4 p-5">
               <Ring done={s.doneCount} total={s.total} />
               <div className="min-w-0 flex-1 basis-60">
-                <h2 className="text-xl font-extrabold leading-tight">{s.doneCount} из {s.total} шагов выполнено</h2>
+                <h2 className="text-xl font-extrabold leading-tight">{t('start.stepsDone', { a: s.doneCount, b: s.total })}</h2>
                 <p className="font-semibold text-mute">
-                  {left.length > 0 ? `Осталось: ${left.map((x) => x.short).join(', ')}.` : ''}
+                  {left.length > 0 ? t('start.left', { list: left.map((x) => x.short).join(', ') }) : ''}
                 </p>
               </div>
-              {firstTodo && <a className="btn" href={firstTodo.href}>Продолжить: {firstTodo.cta.toLowerCase()}</a>}
+              {firstTodo && <a className="btn" href={firstTodo.href}>{t('start.continue')} {firstTodo.cta.toLowerCase()}</a>}
             </div>
           )}
 
-          <ol className="space-y-3" aria-label="Шаги настройки">
+          <ol className="space-y-3" aria-label={t('start.stepsLabel')}>
             {s.steps.map((st, i) => {
               const skipped = s.skipped.includes(st.id) && st.state !== 'done';
               const current = firstTodo?.id === st.id;
@@ -249,25 +252,25 @@ export default function AdminStart() {
                   <div className="min-w-0 flex-1 basis-60">
                     <h3 className="flex flex-wrap items-center gap-2 font-extrabold leading-tight">
                       <span>{st.title}</span>
-                      {st.state === 'done' && <span className="pill pill-ok">ГОТОВО</span>}
-                      {st.state === 'unknown' && <span className="pill pill-mute">НЕ УДАЛОСЬ ПРОВЕРИТЬ</span>}
-                      {skipped && <span className="pill pill-mute">ПРОПУЩЕНО</span>}
+                      {st.state === 'done' && <span className="pill pill-ok">{t('start.pill.done')}</span>}
+                      {st.state === 'unknown' && <span className="pill pill-mute">{t('start.pill.unknown')}</span>}
+                      {skipped && <span className="pill pill-mute">{t('start.pill.skipped')}</span>}
                     </h3>
                     <p className="text-sm font-semibold text-mute">{st.why}</p>
                     {st.note && st.state !== 'done' && <p className="mt-1 text-sm font-bold text-warn">{st.note}</p>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
                     <a className={`btn ${current || st.state === 'unknown' ? '' : 'btn-soft'} ${st.state === 'done' ? 'btn-sm' : ''}`} href={st.href}>
-                      {st.state === 'done' ? 'Открыть' : st.cta}
+                      {st.state === 'done' ? t('adm.open') : st.cta}
                     </a>
                     {st.state !== 'done' && !skipped && (
                       <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.skip(st.id)}>
-                        Пропустить
+                        {t('start.skip')}
                       </button>
                     )}
                     {skipped && (
                       <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.unskip(st.id)}>
-                        Вернуть шаг
+                        {t('start.unskip')}
                       </button>
                     )}
                   </div>
@@ -279,7 +282,7 @@ export default function AdminStart() {
       )}
 
       <section aria-labelledby="start-quick">
-        <h2 id="start-quick" className="mb-3 text-lg font-black">Быстрые действия</h2>
+        <h2 id="start-quick" className="mb-3 text-lg font-black">{t('start.quick')}</h2>
         <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3">
           {quick.map((q) => {
             const inner = (
@@ -304,8 +307,8 @@ export default function AdminStart() {
       <details className="tile start-map group p-5 sm:p-6">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
           <span>
-            <span className="block text-lg font-black">Где что находится</span>
-            <span className="block font-semibold text-mute">Меню слева разделено на четыре группы. Развернуть описание разделов.</span>
+            <span className="block text-lg font-black">{t('start.map')}</span>
+            <span className="block font-semibold text-mute">{t('start.mapText')}</span>
           </span>
           <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-mute transition-transform group-open:rotate-180"><path d="M6 9l6 6 6-6" /></svg>
         </summary>
