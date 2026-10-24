@@ -96,6 +96,7 @@ const { trackAlerts } = await import('../src/alerts.ts');
 const M = await import('../src/maintenance.ts');
 const { appliedVersions, LATEST_VERSION, runMigrations, MIGRATIONS } = await import('../src/migrations.ts');
 const health = await import('../src/health.ts');
+const dbMaint = await import('../src/dbMaintenance.ts');
 type ServerRow = import('../src/db.ts').ServerRow;
 type QueryResult = import('../src/gsm.ts').QueryResult;
 
@@ -543,5 +544,18 @@ describe('an old database starts and upgrades', () => {
       await api.stop();
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('database maintenance', () => {
+  it('truncates the write-ahead log and optimises without errors', () => {
+    db.prepare('CREATE TABLE IF NOT EXISTS t_maint (a INTEGER)').run();
+    for (let i = 0; i < 200; i++) db.prepare('INSERT INTO t_maint (a) VALUES (?)').run(i);
+    const r = dbMaint.checkpointWal();
+    assert.notEqual(r.checkpointed, null);
+    assert.equal(r.busy, false);
+    const wal = `${process.env.DB_PATH}-wal`;
+    assert.equal(fs.existsSync(wal) ? fs.statSync(wal).size : 0, 0);
+    assert.equal(dbMaint.optimizeDb(), true);
   });
 });
