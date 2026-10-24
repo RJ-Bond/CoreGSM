@@ -137,6 +137,9 @@ router.get('/api/manifest.json', (_req, res) => {
   const icon = b.hasLogo ? `/api/branding/logo?v=${b.logoV}` : '/logo-192.png';
   res.type('application/manifest+json').json({
     id: '/',
+    lang: 'ru',
+    dir: 'ltr',
+    orientation: 'any',
     name: b.name,
     short_name: b.name.slice(0, 12),
     description: 'Мониторинг игровых серверов: кто играет, доступность, новости',
