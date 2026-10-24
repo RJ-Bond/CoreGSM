@@ -265,8 +265,10 @@ export default function App() {
       e.preventDefault();
       setPaletteOpen((o) => !o);
     };
+    const onOpen = () => { if (shellOk.current) setPaletteOpen(true); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('coregsm:palette', onOpen);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('coregsm:palette', onOpen); };
   }, []);
 
   const isStaff = isAdmin || me?.role === 'moderator';

@@ -126,7 +126,7 @@ export function AdminHome() {
   const s = useStartSteps();
   useEffect(() => {
     if (s.loading) return;
-    const target = s.resolved ? '/admin/servers' : '/admin/start';
+    const target = s.resolved ? '/admin/overview' : '/admin/start';
     navigate(target, { replace: true });
   }, [s.loading, s.resolved]);
   return <StartSkeleton />;

@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="59af31f98276"
+COREGSM_BUILD="78bb099d79a8"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -46061,8 +46061,10 @@ export default function App() {
       e.preventDefault();
       setPaletteOpen((o) => !o);
     };
+    const onOpen = () => { if (shellOk.current) setPaletteOpen(true); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('coregsm:palette', onOpen);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('coregsm:palette', onOpen); };
   }, []);
 
   const isStaff = isAdmin || me?.role === 'moderator';
@@ -63488,6 +63490,50 @@ const en: Record<keyof typeof ru, string> = {
   'pub.more': '{k} more',
   'pub.less': 'Show less',
   'pf.tab.alert': 'New sign-in from an unknown device',
+  'adm.s.overview': 'Overview',
+  'adm.d.overview': 'What is happening with the panel right now and what needs attention.',
+  'adm.ov.title': 'Overview',
+  'adm.ov.subtitle': 'The state of the panel right now',
+  'adm.ov.servers': 'Servers online',
+  'adm.ov.players': 'Players now',
+  'adm.ov.pending': 'Awaiting approval',
+  'adm.ov.backup': 'Last backup',
+  'adm.ov.noBackup': 'none',
+  'adm.ov.version': 'Version',
+  'adm.ov.attn': 'Needs attention',
+  'adm.ov.allGood': 'All good',
+  'adm.ov.allGoodText': 'Servers answer, no requests or updates.',
+  'adm.ov.down': 'Servers down: {names}',
+  'adm.ov.downMore': ' and {k} more',
+  'adm.ov.pend': 'Waiting for approval: {k}',
+  'adm.ov.certSoon': 'The HTTPS certificate expires in {k} days',
+  'adm.ov.certGone': 'The HTTPS certificate has expired',
+  'adm.ov.upd': 'A panel update is available',
+  'adm.ov.botErr': 'The Discord bot is not connected',
+  'adm.ov.noBackups': 'There are no backups yet',
+  'adm.ov.oldBackup': 'The last backup is over a week old',
+  'adm.ov.fix': 'Open',
+  'adm.ov.chart': 'Players over 24 hours',
+  'adm.ov.chartPeak': 'Peak: {k}',
+  'adm.ov.chartNone': 'Not enough data yet',
+  'adm.ov.recent': 'Latest actions',
+  'adm.ov.journal': 'Whole journal',
+  'adm.ov.noEvents': 'No actions yet',
+  'adm.ov.quick': 'Quick actions',
+  'adm.ov.addServer': 'Add a server',
+  'adm.ov.writeNews': 'Write news',
+  'adm.ov.pollAll': 'Poll all servers',
+  'adm.ov.polled': 'Servers polled',
+  'adm.ov.backupNow': 'Download a backup',
+  'adm.ov.backupDone': 'Backup downloaded',
+  'adm.nav.search': 'Find a section',
+  'adm.badge.problems': 'Servers down: {k}',
+  'adm.badge.pending': 'Awaiting approval: {k}',
+  'adm.crumb.new': 'Create',
+  'adm.crumb.edit': 'Edit',
+  'adm.crumb.aria': 'Breadcrumbs',
+  'adm.pinMove': 'Drag to reorder (Alt + arrows)',
+  'adm.stack.hide': 'Hide',
 };
 
 export default en;
@@ -64672,6 +64718,50 @@ const ru = {
   'pub.more': 'Ещё {k}',
   'pub.less': 'Свернуть',
   'pf.tab.alert': 'Новый вход с незнакомого устройства',
+  'adm.s.overview': 'Сводка',
+  'adm.d.overview': 'Что происходит с панелью прямо сейчас и что требует внимания.',
+  'adm.ov.title': 'Сводка',
+  'adm.ov.subtitle': 'Состояние панели прямо сейчас',
+  'adm.ov.servers': 'Серверы онлайн',
+  'adm.ov.players': 'Игроков сейчас',
+  'adm.ov.pending': 'Ждут одобрения',
+  'adm.ov.backup': 'Резервная копия',
+  'adm.ov.noBackup': 'нет',
+  'adm.ov.version': 'Версия',
+  'adm.ov.attn': 'Требует внимания',
+  'adm.ov.allGood': 'Всё в порядке',
+  'adm.ov.allGoodText': 'Серверы отвечают, заявок и обновлений нет.',
+  'adm.ov.down': 'Недоступны серверы: {names}',
+  'adm.ov.downMore': ' и ещё {k}',
+  'adm.ov.pend': 'Ждут одобрения: {k}',
+  'adm.ov.certSoon': 'Сертификат HTTPS истекает через {k} дн.',
+  'adm.ov.certGone': 'Сертификат HTTPS истёк',
+  'adm.ov.upd': 'Доступно обновление панели',
+  'adm.ov.botErr': 'Discord-бот не подключён',
+  'adm.ov.noBackups': 'Резервных копий ещё нет',
+  'adm.ov.oldBackup': 'Последней копии больше недели',
+  'adm.ov.fix': 'Открыть',
+  'adm.ov.chart': 'Игроки за 24 часа',
+  'adm.ov.chartPeak': 'Пик: {k}',
+  'adm.ov.chartNone': 'Данных пока мало',
+  'adm.ov.recent': 'Последние действия',
+  'adm.ov.journal': 'Весь журнал',
+  'adm.ov.noEvents': 'Действий пока нет',
+  'adm.ov.quick': 'Быстрые действия',
+  'adm.ov.addServer': 'Добавить сервер',
+  'adm.ov.writeNews': 'Написать новость',
+  'adm.ov.pollAll': 'Опросить все серверы',
+  'adm.ov.polled': 'Серверы опрошены',
+  'adm.ov.backupNow': 'Скачать копию',
+  'adm.ov.backupDone': 'Копия скачана',
+  'adm.nav.search': 'Найти раздел',
+  'adm.badge.problems': 'Недоступных серверов: {k}',
+  'adm.badge.pending': 'Ждут одобрения: {k}',
+  'adm.crumb.new': 'Создание',
+  'adm.crumb.edit': 'Редактирование',
+  'adm.crumb.aria': 'Хлебные крошки',
+  'adm.pinMove': 'Перетащите, чтобы изменить порядок (Alt + стрелки)',
+  'adm.stack.hide': 'Скрыть',
 };
 
 export default ru;
@@ -64938,14 +65028,15 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo } from '../api';
+import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
 import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, usePoll, navigate } from '../ui';
-import { ADMIN_GROUPS, ADMIN_SECTIONS, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
-import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
+import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
+import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
+import AdminOverview from './AdminOverview';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
@@ -64961,6 +65052,28 @@ import SettingsPage, { UsersTab } from './Settings';
 
 export { ADMIN_SECTIONS };
 import SystemPage from './System';
+
+interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
+
+/** the small counters on the sidebar: servers that do not answer, people waiting for approval */
+function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadge> {
+  const [b, setB] = useState<Record<string, NavBadge>>({});
+  usePoll(async () => {
+    const out: Record<string, NavBadge> = {};
+    if (isAdmin || perms.includes('servers')) {
+      const list = await api<Server[]>('/servers').catch(() => null);
+      const down = list ? list.filter((s) => !s.online && s.hasStatus && !s.maintenance).length : 0;
+      if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
+    }
+    if (isAdmin) {
+      const users = await api<UserRow[]>('/users').catch(() => null);
+      const wait = users ? users.filter((u) => u.status === 'pending').length : 0;
+      if (wait > 0) out.users = { n: wait, tone: 'warn', label: t('adm.badge.pending', { k: wait }) };
+    }
+    setB(out);
+  }, 30_000);
+  return b;
+}
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
@@ -64994,6 +65107,19 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     setPins(r.pins);
     writeIds(PINS_KEY, r.pins);
   };
+  const badges = useNavBadges(isAdmin, me?.perms ?? []);
+  // the sidebar scrolls sideways on a phone: keep the current section in view
+  useEffect(() => {
+    if (!window.matchMedia('(max-width: 767px)').matches) return;
+    document.querySelector('.adm-link[aria-current="page"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [current]);
+  // pinned sections can be dragged (or moved with Alt+↑/↓) to change their order
+  const dragId = useRef<string | null>(null);
+  const reorder = (id: string, to: number) => {
+    const n = movePin(pins, id, to);
+    setPins(n);
+    writeIds(PINS_KEY, n);
+  };
   const byId = (id: string) => ADMIN_SECTIONS.find((x) => x.id === id);
   const pinned = pins.map(byId).filter((x): x is AdminSection => !!x);
   const recents = recent.filter((id) => id !== current && !pins.includes(id)).map(byId).filter((x): x is AdminSection => !!x);
@@ -65002,7 +65128,23 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const item = (s: AdminSection, scope = '') => {
     const on = pins.includes(s.id);
     return (
-      <div key={`${scope}${s.id}`} className="adm-item" data-current={current === s.id ? 'true' : undefined} data-pinned={on ? 'true' : undefined}>
+      <div
+        key={`${scope}${s.id}`}
+        className="adm-item"
+        data-current={current === s.id ? 'true' : undefined}
+        data-pinned={on ? 'true' : undefined}
+        draggable={scope === 'p-' || undefined}
+        title={scope === 'p-' ? t('adm.pinMove') : undefined}
+        onDragStart={scope === 'p-' ? (e) => { dragId.current = s.id; e.dataTransfer.effectAllowed = 'move'; } : undefined}
+        onDragOver={scope === 'p-' ? (e) => { if (dragId.current) e.preventDefault(); } : undefined}
+        onDrop={scope === 'p-' ? (e) => { e.preventDefault(); if (dragId.current && dragId.current !== s.id) reorder(dragId.current, pins.indexOf(s.id)); dragId.current = null; } : undefined}
+        onDragEnd={scope === 'p-' ? () => { dragId.current = null; } : undefined}
+        onKeyDown={scope === 'p-' ? (e) => {
+          if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+          e.preventDefault();
+          reorder(s.id, pins.indexOf(s.id) + (e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 1));
+        } : undefined}
+      >
         {link(s, true)}
         <button
           type="button"
@@ -65026,9 +65168,12 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
+      {badges[s.id] && <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>}
       {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
     </a>
   );
+  const first = tail.split('/')[0];
+  const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
@@ -65036,7 +65181,13 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
         {isAdmin ? (
           <>
+            <button type="button" className="adm-find max-md:hidden" onClick={() => window.dispatchEvent(new Event('coregsm:palette'))}>
+              <span aria-hidden>⌕</span>
+              <span className="min-w-0 flex-1 truncate text-left">{t('adm.nav.search')}</span>
+              <kbd>Ctrl K</kbd>
+            </button>
             {link(START_SECTION)}
+            {link(OVERVIEW_SECTION)}
             <SetupProgress />
             {pinned.length > 0 && (
               <div className="contents md:block">
@@ -65073,9 +65224,21 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         )}
       </nav>
       <div className="min-w-0 space-y-5">
-        {isAdmin && updateAvailable && current !== 'settings' && <UpdateBanner />}
-        {isAdmin && <CertWarning />}
+        {isAdmin && (
+          <div className="space-y-2 empty:hidden">
+            {updateAvailable && current !== 'settings' && <UpdateBanner />}
+            <CertWarning />
+          </div>
+        )}
+        {!home && crumb && (
+          <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
+            <a href={`/admin/${current}`}>{byId(current)?.label}</a>
+            <span aria-hidden>›</span>
+            <span aria-current="page">{crumb}</span>
+          </nav>
+        )}
         {home && <AdminHome />}
+        {!home && current === 'overview' && <AdminOverview />}
         {!home && current === 'start' && <AdminStart />}
         {!home && current === 'servers' && <ServersManage sub={tail} />}
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
@@ -65098,6 +65261,7 @@ function UpdateBanner() {
   useI18n();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [offline, setOffline] = useState(false);
+  const [hidden, setHidden] = useState(() => { try { return sessionStorage.getItem('coregsm_update_banner_hidden') === '1'; } catch { return false; } });
   const wasRunning = useRef(false);
   usePoll(
     () =>
@@ -65119,6 +65283,7 @@ function UpdateBanner() {
   const failed = info?.job?.state === "error" && info.available;
   // nothing to install any more (or the status is not known yet): no banner
   if (!running && info && !info.available) return null;
+  if (hidden && !running && !failed) return null;
   const pct = typeof info?.job?.progress === "number" ? Math.max(0, Math.min(100, Math.round(info.job.progress))) : null;
   const latest = info?.latest ?? null;
   return (
@@ -65147,6 +65312,11 @@ function UpdateBanner() {
         )}
       </div>
       <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
+      {!running && !failed && (
+        <button type="button" className="btn-icon-ghost btn-icon-sm relative text-white" aria-label={t('adm.stack.hide')} title={t('adm.stack.hide')} onClick={() => { try { sessionStorage.setItem('coregsm_update_banner_hidden', '1'); } catch { /* not remembered */ } setHidden(true); }}>
+          <IconClose size={14} />
+        </button>
+      )}
     </div>
   );
 }
@@ -65497,6 +65667,193 @@ function GalleryAdmin() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/AdminOverview.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
+import type { OverviewData } from '../components/servers/overviewLogic';
+import { t, useI18n } from '../i18n';
+import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll } from '../ui';
+import { Icon } from '../icons';
+import { downloadFile } from './Backups';
+
+interface AuditRow { id: number; ts: number; actor: string; action: string; detail: string }
+
+interface Raw {
+  servers: Server[] | null;
+  overview: OverviewData | null;
+  users: UserRow[] | null;
+  backups: BackupInfo | null;
+  update: UpdateInfo | null;
+  bot: BotStatus | null;
+  cert: CertInfo | null;
+  audit: AuditRow[] | null;
+}
+
+interface Attention { id: string; tone: 'bad' | 'warn' | 'info'; text: string; href: string }
+
+const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
+const WEEK = 7 * 86_400_000;
+
+function Tile({ label, value, sub, tone, href }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string }) {
+  const body = (
+    <>
+      <span className="adm-tile-k">{label}</span>
+      <span className={`adm-tile-v ${tone ? `is-${tone}` : ''}`}>{value}</span>
+      {sub && <span className="adm-tile-s">{sub}</span>}
+    </>
+  );
+  return href ? <a href={href} className="adm-tile">{body}</a> : <div className="adm-tile">{body}</div>;
+}
+
+/** «Сводка»: the state of the panel now, what needs attention, the last actions and the common jobs in one click */
+export default function AdminOverview() {
+  useI18n();
+  const [raw, setRaw] = useState<Raw | null>(null);
+  const [busy, setBusy] = useState<'poll' | 'backup' | null>(null);
+
+  const load = async () => {
+    const [servers, overview, users, backups, update, bot, sys, audit] = await Promise.allSettled([
+      api<Server[]>('/servers'),
+      api<OverviewData>('/overview?hours=24'),
+      api<UserRow[]>('/users'),
+      api<BackupInfo>('/backups'),
+      api<UpdateInfo>('/update/status'),
+      api<BotStatus>('/bot/status'),
+      api<{ cert?: CertInfo }>('/system'),
+      api<AuditRow[]>('/audit?limit=5'),
+    ]);
+    setRaw({
+      servers: ok(servers), overview: ok(overview), users: ok(users), backups: ok(backups), update: ok(update), bot: ok(bot),
+      cert: ok(sys)?.cert ?? null, audit: ok(audit),
+    });
+  };
+  usePoll(load, 30_000);
+
+  const servers = raw?.servers ?? [];
+  const online = servers.filter((s) => s.online).length;
+  const down = servers.filter((s) => !s.online && s.hasStatus && !s.maintenance);
+  const players = servers.reduce((n, s) => n + (s.online ? s.players : 0), 0);
+  const pending = (raw?.users ?? []).filter((u) => u.status === 'pending').length;
+  const lastBackup = raw?.backups?.items.reduce<number>((m, b) => Math.max(m, b.createdAt), 0) ?? 0;
+
+  const attention: Attention[] = [];
+  if (down.length > 0) {
+    const names = down.slice(0, 3).map((s) => s.name).join(', ');
+    attention.push({ id: 'down', tone: 'bad', text: t('adm.ov.down', { names }) + (down.length > 3 ? t('adm.ov.downMore', { k: down.length - 3 }) : ''), href: '/admin/servers' });
+  }
+  if (raw?.bot?.state === 'error') attention.push({ id: 'bot', tone: 'bad', text: t('adm.ov.botErr'), href: '/admin/settings/bot' });
+  if (raw?.cert && raw.cert.daysLeft != null && raw.cert.daysLeft <= 14) {
+    attention.push({ id: 'cert', tone: raw.cert.daysLeft <= 0 ? 'bad' : 'warn', text: raw.cert.daysLeft <= 0 ? t('adm.ov.certGone') : t('adm.ov.certSoon', { k: raw.cert.daysLeft }), href: '/admin/system' });
+  }
+  if (pending > 0) attention.push({ id: 'pending', tone: 'warn', text: t('adm.ov.pend', { k: pending }), href: '/admin/users' });
+  if (raw?.update?.available) attention.push({ id: 'update', tone: 'info', text: t('adm.ov.upd'), href: '/admin/settings/updates' });
+  if (raw?.backups) {
+    if (raw.backups.items.length === 0) attention.push({ id: 'nobackup', tone: 'warn', text: t('adm.ov.noBackups'), href: '/admin/settings/updates' });
+    else if (Date.now() - lastBackup > WEEK) attention.push({ id: 'oldbackup', tone: 'warn', text: t('adm.ov.oldBackup'), href: '/admin/settings/updates' });
+  }
+
+  const points = raw?.overview?.points ?? [];
+  const series = points.map((p) => p.players);
+
+  const pollAll = async () => {
+    setBusy('poll');
+    await Promise.allSettled(servers.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
+    toast(t('adm.ov.polled'));
+    await load();
+    setBusy(null);
+  };
+  const backupNow = async () => {
+    setBusy('backup');
+    try {
+      await downloadFile('/backup', 'coregsm-backup.tar.gz');
+      toast(t('adm.ov.backupDone'));
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    }
+    setBusy(null);
+  };
+
+  return (
+    <AdminPage head={<PageHead title={t('adm.ov.title')} subtitle={t('adm.ov.subtitle')} icon={<Icon size={22}><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></Icon>} />}>
+      {!raw ? (
+        <div className="space-y-5" aria-busy="true" aria-label={t('adm.loading')}>
+          <div className="adm-tiles">{[0, 1, 2, 3, 4].map((i) => <div key={i} className="skeleton h-24 rounded-2xl" />)}</div>
+          <div className="skeleton tile h-32" />
+        </div>
+      ) : (
+        <>
+          <div className="adm-tiles">
+            <Tile label={t('adm.ov.servers')} value={servers.length ? `${online} / ${servers.length}` : '–'} tone={servers.length === 0 ? undefined : down.length ? 'bad' : 'ok'} href="/admin/servers" />
+            <Tile label={t('adm.ov.players')} value={String(players)} href="/admin/servers" />
+            <Tile label={t('adm.ov.pending')} value={raw.users ? String(pending) : '–'} tone={pending > 0 ? 'warn' : undefined} href="/admin/users" />
+            <Tile label={t('adm.ov.backup')} value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'} tone={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? 'warn' : undefined} href="/admin/settings/updates" />
+            <Tile label={t('adm.ov.version')} value={raw.update?.current ? raw.update.current.slice(0, 7) : '–'} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
+          </div>
+
+          <Section title={t('adm.ov.attn')}>
+            {attention.length === 0 ? (
+              <div className="st-calm">
+                <span aria-hidden>✓</span>
+                <div>
+                  <p className="font-extrabold">{t('adm.ov.allGood')}</p>
+                  <p className="text-sm font-semibold text-mute">{t('adm.ov.allGoodText')}</p>
+                </div>
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {attention.map((a) => (
+                  <li key={a.id} className={`adm-attn is-${a.tone}`}>
+                    <span className="adm-attn-dot" aria-hidden />
+                    <span className="min-w-0 flex-1 font-bold">{a.text}</span>
+                    <a href={a.href} className="btn btn-soft btn-sm">{t('adm.ov.fix')}</a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+
+          <div className="grid items-start gap-5 lg:grid-cols-2">
+            <Section title={t('adm.ov.chart')} description={raw.overview?.peak ? t('adm.ov.chartPeak', { k: raw.overview.peak.players }) : undefined}>
+              {series.length >= 3 ? (
+                <SmoothArea values={series} color="rgb(var(--link))" w={400} h={90} fill={0.22} strokeWidth={2} className="h-24" label={t('adm.ov.chart')} />
+              ) : (
+                <p className="font-semibold text-mute">{t('adm.ov.chartNone')}</p>
+              )}
+            </Section>
+
+            <Section title={t('adm.ov.quick')}>
+              <div className="flex flex-wrap gap-2">
+                <a href="/admin/servers/new" className="btn">{t('adm.ov.addServer')}</a>
+                <a href="/admin/news/new" className="btn btn-soft">{t('adm.ov.writeNews')}</a>
+                <Button type="button" variant="soft" loading={busy === 'poll'} disabled={servers.length === 0} onClick={() => void pollAll()}>{t('adm.ov.pollAll')}</Button>
+                <Button type="button" variant="soft" loading={busy === 'backup'} onClick={() => void backupNow()}>{t('adm.ov.backupNow')}</Button>
+              </div>
+            </Section>
+          </div>
+
+          <Section title={t('adm.ov.recent')} actions={<a href="/admin/journal" className="text-sm font-extrabold text-link hover:underline">{t('adm.ov.journal')}</a>}>
+            {raw.audit && raw.audit.length > 0 ? (
+              <ul className="divide-y divide-line">
+                {raw.audit.map((r) => (
+                  <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2">
+                    <span className="w-32 shrink-0 text-sm font-semibold tabular-nums text-mute" title={fmtDateTime(r.ts)}>{ago(r.ts)}</span>
+                    <span className="font-extrabold">{r.action}</span>
+                    {r.detail && <span className="min-w-0 truncate font-semibold text-mute">{r.detail}</span>}
+                    <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="font-semibold text-mute">{t('adm.ov.noEvents')}</p>
+            )}
+          </Section>
+        </>
+      )}
+    </AdminPage>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminServersTable.tsx" << '__COREGSM_EOF__'
 // The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
 // server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
@@ -65790,7 +66147,7 @@ export function AdminHome() {
   const s = useStartSteps();
   useEffect(() => {
     if (s.loading) return;
-    const target = s.resolved ? '/admin/servers' : '/admin/start';
+    const target = s.resolved ? '/admin/overview' : '/admin/start';
     navigate(target, { replace: true });
   }, [s.loading, s.resolved]);
   return <StartSkeleton />;
@@ -72733,6 +73090,7 @@ __COREGSM_EOF__
 import type { ReactNode } from 'react';
 import type { Perm } from '../api';
 import { t } from '../i18n';
+import { Icon } from '../icons';
 import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
@@ -72752,6 +73110,14 @@ export const START_SECTION: AdminSection = {
   icon: IconStart,
   get desc() { return t('adm.d.start'); },
   keywords: 'старт начало первые шаги чек-лист помощь с чего начать новичок',
+};
+
+export const OVERVIEW_SECTION: AdminSection = {
+  id: 'overview',
+  get label() { return t('adm.s.overview'); },
+  icon: () => <Icon size={22}><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></Icon>,
+  get desc() { return t('adm.d.overview'); },
+  keywords: 'сводка обзор дашборд главная состояние внимание быстрые действия панель',
 };
 
 const S = {
@@ -72781,7 +73147,7 @@ export const ADMIN_GROUPS: AdminGroup[] = [
 ];
 
 /** every section in the order of the sidebar, «Начало работы» first */
-export const ADMIN_SECTIONS: AdminSection[] = [START_SECTION, ...ADMIN_GROUPS.flatMap((g) => g.sections)];
+export const ADMIN_SECTIONS: AdminSection[] = [START_SECTION, OVERVIEW_SECTION, ...ADMIN_GROUPS.flatMap((g) => g.sections)];
 
 export const SETTINGS_TABS = [
   { id: 'bot', get label() { return t('adm.tab.bot'); }, keywords: 'токен бот прокси proxy вход через discord client secret redirect oauth пригласить' },
@@ -72862,6 +73228,15 @@ export function togglePin(pins: string[], id: string, max = PINS_MAX): { pins: s
   if (pins.includes(id)) return { pins: pins.filter((x) => x !== id), full: false };
   if (pins.length >= max) return { pins, full: true };
   return { pins: [...pins, id], full: false };
+}
+
+/** moves `id` to position `to` (clamped); an unknown id leaves the list as it was */
+export function movePin(pins: string[], id: string, to: number): string[] {
+  const from = pins.indexOf(id);
+  if (from < 0) return pins;
+  const rest = pins.filter((x) => x !== id);
+  rest.splice(Math.max(0, Math.min(rest.length, to)), 0, id);
+  return rest;
 }
 
 export function readIds(key: string, valid: readonly string[], max: number): string[] {
@@ -74114,6 +74489,30 @@ __COREGSM_EOF__
 @media (min-width: 768px) { .save-bar { bottom: 1rem; } }
 .save-bar-dot { flex: none; width: 9px; height: 9px; border-radius: var(--r-pill); background: rgb(var(--warn)); }
 .save-bar-dot.is-bad { background: rgb(var(--bad)); }
+
+/* ---------- overview, sidebar badges and search, breadcrumbs ---------- */
+.adm-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 12px; }
+.adm-tile { display: grid; gap: 2px; align-content: start; padding: 14px 16px; border-radius: var(--r-xl); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); min-width: 0; }
+a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) / .4); }
+.adm-tile-k { font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.adm-tile-v { font-size: 26px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.adm-tile-v.is-ok { color: rgb(var(--ok)); }
+.adm-tile-v.is-warn { color: rgb(var(--warn)); }
+.adm-tile-v.is-bad { color: rgb(var(--bad)); }
+.adm-tile-s { font-size: 12px; font-weight: 650; color: rgb(var(--warn)); }
+.adm-attn { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.adm-attn-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: rgb(var(--link)); }
+.adm-attn.is-bad .adm-attn-dot { background: rgb(var(--bad)); }
+.adm-attn.is-warn .adm-attn-dot { background: rgb(var(--warn)); }
+.adm-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); display: inline-grid; place-items: center; font-size: 12px; font-weight: 800; line-height: 1; background: rgb(var(--warn)); color: rgb(var(--card)); font-variant-numeric: tabular-nums; }
+.adm-badge.is-bad { background: rgb(var(--bad)); }
+.adm-find { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; margin-bottom: 4px; border-radius: var(--r-md); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); color: rgb(var(--mute)); font-size: 14px; font-weight: 650; }
+.adm-find:hover { color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .5); }
+.adm-find kbd { font: inherit; font-size: 11px; font-weight: 650; padding: 1px 6px; border-radius: 6px; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.adm-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; font-weight: 650; color: rgb(var(--mute)); }
+.adm-crumbs a { color: rgb(var(--link)); }
+.adm-crumbs a:hover { text-decoration: underline; }
+.adm-item[draggable='true'] { cursor: grab; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'

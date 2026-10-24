@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { exportFileName } from '../src/components/server/helpers';
 import { computeWizard } from '../src/components/DiscordWizard';
-import { cleanIds, pushRecent, togglePin } from '../src/pages/adminShortcuts';
+import { cleanIds, movePin, pushRecent, togglePin } from '../src/pages/adminShortcuts';
 import { normalizeAppearance } from '../src/appearance';
 import type { Binding, BotStatus, DiscordGuild } from '../src/api';
 
@@ -66,6 +66,13 @@ describe('admin shortcuts', () => {
     for (const id of ['1', '2', '3', '4', '5', '6']) pins = togglePin(pins, id).pins;
     expect(togglePin(pins, '7')).toEqual({ pins, full: true });
     expect(togglePin(pins, '3').pins).toEqual(['1', '2', '4', '5', '6']);
+  });
+  it('reorders pins', () => {
+    const pins = ['a', 'b', 'c'];
+    expect(movePin(pins, 'c', 0)).toEqual(['c', 'a', 'b']);
+    expect(movePin(pins, 'a', 9)).toEqual(['b', 'c', 'a']);
+    expect(movePin(pins, 'a', -3)).toEqual(['a', 'b', 'c']);
+    expect(movePin(pins, 'x', 0)).toBe(pins);
   });
 });
 
