@@ -15,6 +15,7 @@ import { registerDigest, startDigestTimer } from './digest.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
+import { registerMetrics } from './metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
 import { registerNews } from './news.js';
@@ -79,6 +80,8 @@ app.use(express.json({ limit: '50kb' }));
 // Express 5 leaves req.body undefined when a request has no body (4 gave {}): the handlers parse it with zod objects
 app.use((req, _res, next) => { if (req.body === undefined) req.body = {}; next(); });
 installAudit(app);
+
+registerMetrics(app);
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true });

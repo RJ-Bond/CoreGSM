@@ -58,6 +58,8 @@ After installation the `coregsm` command is available (run without arguments for
 
 `coregsm backup` writes `/opt/coregsm/backups/coregsm-DATE.tgz` (mode 600): a consistent database copy, news images, the logo, `.env` and certificates. Ten copies of each kind are kept. On restore, only the secrets that must match the database are taken from `.env` (`JWT_SECRET`, `INTERNAL_TOKEN`, `SECRETS_KEY`); the domain, version and certificates of the current server are kept.
 
+**Metrics for Prometheus / Grafana.** `/api/metrics` is off until `METRICS_TOKEN` (at least 16 characters, e.g. `openssl rand -hex 24`) is set in `/opt/coregsm/.env`; after `coregsm restart` it serves the Prometheus text format with `Authorization: Bearer <METRICS_TOKEN>`: online, players and ping of every server, poll duration, bot state, database size, memory and free disk. For `prometheus.yml`: `metrics_path: /api/metrics`, `scheme: https`, `authorization: { credentials: <METRICS_TOKEN> }`.
+
 ## Secrets and security
 
 The Discord token, SMTP password and RCON passwords are stored encrypted (AES-256-GCM) with a key derived from `SECRETS_KEY` in `.env`. Keep it in your backups. Report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
