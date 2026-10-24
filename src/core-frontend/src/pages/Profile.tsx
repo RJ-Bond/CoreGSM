@@ -93,7 +93,7 @@ function OverviewTab() {
           </button>
         </div>
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={rank && rank.nick ? { ['--ring' as string]: rank.rank.color } : undefined}><AvatarEditor onChanged={reload} size={96} /></div></div>
+          <div className="pf-hero-avatar"><AvatarEditor onChanged={reload} size={80} ring={rank && rank.nick ? rank.rank.color : null} /></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
