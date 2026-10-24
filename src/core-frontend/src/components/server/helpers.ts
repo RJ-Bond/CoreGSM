@@ -106,10 +106,6 @@ export const VETERAN_MS = 2 * 3600_000;
 // ---------- load / ping thresholds ----------
 export type Tone = 'ok' | 'warn' | 'bad';
 
-export function loadTone(pct: number): Tone {
-  return pct >= 85 ? 'bad' : pct >= 50 ? 'warn' : 'ok';
-}
-
 /** <= 60 ms good, <= 120 ms ok, more is bad */
 export function pingTone(ping: number): { tone: Tone; label: string } {
   if (ping <= 60) return { tone: 'ok', label: 'отличный' };
