@@ -178,12 +178,12 @@
 .pulse-nums dd { margin: 3px 0 0; font-size: 24px; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pulse-nums dd small { font-size: .62em; font-weight: 600; color: rgb(var(--mute)); letter-spacing: 0; }
 .pulse-chart { margin: 0; min-width: 0; color: rgb(var(--pulse)); }
-.pulse-plot { position: relative; height: 56px; }
+.pulse-plot { position: relative; height: 72px; }
 .pulse-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .pulse-peak { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: var(--r-pill); background: rgb(var(--card)); box-shadow: 0 0 0 2.5px currentColor; pointer-events: none; }
-.pulse-chart figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.pulse-chart figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12.5px; font-weight: 650; color: rgb(var(--mute)); }
 .pulse-peak-text { color: rgb(var(--ink)); }
-.pulse-chart-empty { display: grid; place-items: center; min-height: 56px; padding: 0 8px; text-align: center; font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+.pulse-chart-empty { display: grid; place-items: center; min-height: 72px; padding: 0 8px; text-align: center; font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
 @media (max-width: 1023px) {
   .pulse { grid-template-columns: minmax(0, 1fr) minmax(200px, 1fr); }
   .pulse-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; }
@@ -205,8 +205,9 @@
 /* ---------- hero: why this server ---------- */
 .hero-reason {
   display: inline-flex; align-items: center; margin-top: 8px; padding: 3px 10px; border-radius: var(--r-pill);
-  font-size: 12px; font-weight: 650; letter-spacing: .01em; color: #fff; background: rgb(255 255 255 / .22);
+  gap: 6px; font-size: 12px; font-weight: 700; letter-spacing: .01em; color: #11131f; background: rgb(255 255 255 / .92);
 }
+.hero-reason::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--gc, rgb(var(--brand))); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gc, rgb(var(--brand))) 35%, transparent); }
 .hero-reason.attn { color: rgb(var(--bad)); background: #fff; }
 
 /* ---------- selection mode (administrators) ---------- */
@@ -396,3 +397,27 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 @media (min-width: 900px) { .srv-hero-skel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); column-gap: 32px; } .srv-hero-skel > .skel-chart { grid-column: 2; grid-row: 1 / span 4; min-height: 190px; } }
 /* 5: the status and the admin link of the heading sit together */
 .srv-head-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+
+/* 1: the soft decorative circles are not drawn behind the curve of a split hero (they looked like a smudge on the glass) */
+@media (min-width: 900px) { .srv-hero.is-split .depth-l1 { display: none; } }
+/* 2: how long ago the left, the middle and the right end of the hero curve are */
+.spark-times { position: absolute; left: 36px; right: 8px; bottom: 3%; display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; line-height: 1.3; color: rgb(255 255 255 / .72); pointer-events: none; font-variant-numeric: tabular-nums; }
+/* 3: the figures, the bar and the slots of the hero share one rhythm */
+@media (min-width: 900px) { .srv-hero.is-split { row-gap: 16px; } }
+.srv-hero .sh-count { margin-bottom: 2px; }
+/* 7: ping with a colour */
+.ping-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--ok)); flex: none; }
+.ping-dot.warn { background: rgb(var(--warn)); }
+.ping-dot.bad { background: rgb(var(--bad)); }
+/* 8: «nobody online» is a thin line */
+.srv-empty-now { padding: 6px 12px; margin-block: -2px; font-size: 12.5px; }
+/* 11: the four figures of the banner are separate chips */
+.pulse-nums > div { padding: 6px 4px 6px 18px; border-left: 1px solid rgb(var(--line) / .6); }
+.pulse-nums > div:first-child { padding-left: 4px; border-left: 0; }
+@media (max-width: 899px) { .pulse-nums > div { padding-left: 12px; } .pulse-nums > div:first-child { padding-left: 0; } }
+/* 13: a card reached with the keyboard is clearly lifted and ringed */
+.srv-tile:has(:focus-visible), .srv-hero:has(:focus-visible) { outline: 3px solid rgb(var(--brand)); outline-offset: 3px; transform: translateY(-2px); }
+/* 15: the end of the page */
+.srv-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 8px 0 4px; font-size: 13px; font-weight: 650; color: rgb(var(--mute)); }
+.srv-foot a { color: inherit; }
+.srv-foot a:hover, .srv-foot a:focus-visible { color: rgb(var(--link)); text-decoration: underline; }
