@@ -6,7 +6,7 @@ import { bot } from '../botState.js';
 import { renderCard } from '../card.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
 import { refreshServer } from '../gsm.js';
-import { wrap } from '../http.js';
+import { param, wrap } from '../http.js';
 import { buildPresence } from '../presence.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 
@@ -26,7 +26,7 @@ router.get('/internal/servers/:id/embed', internal, (req, res) => {
 
 // the same PNG card, for the bot (works while the panel is private)
 router.get(
-  '/internal/card/:id(\\d+).png',
+  '/internal/card/:id.png', param('id'),
   internal,
   wrap(async (req, res) => {
     const buf = await renderCard(Number(req.params.id));

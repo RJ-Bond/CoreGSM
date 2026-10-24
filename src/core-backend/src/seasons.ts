@@ -15,6 +15,7 @@ import { admin, viewer } from './auth.js';
 import { db } from './db.js';
 import { mk, type Achievement } from './profile.js';
 import { topPlayers } from './routes/community.js';
+import { param } from './http.js';
 
 export const router = express.Router();
 
@@ -103,7 +104,7 @@ router.post('/api/seasons', admin, (req, res) => {
   res.json({ id, ...seasonsView() });
 });
 
-router.put('/api/seasons/:id(\\d+)', admin, (req, res) => {
+router.put('/api/seasons/:id', param('id'), admin, (req, res) => {
   const b = z.object({ name: nameSchema }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   const r = db.prepare('UPDATE seasons SET name = ? WHERE id = ?').run(b.data.name, Number(req.params.id));
@@ -111,7 +112,7 @@ router.put('/api/seasons/:id(\\d+)', admin, (req, res) => {
   res.json(seasonsView());
 });
 
-router.delete('/api/seasons/:id(\\d+)', admin, (req, res) => {
+router.delete('/api/seasons/:id', param('id'), admin, (req, res) => {
   const id = Number(req.params.id);
   const s = db.prepare('SELECT * FROM seasons WHERE id = ?').get(id) as SeasonRow | undefined;
   if (!s) return res.status(404).json({ error: 'Не найдено' });

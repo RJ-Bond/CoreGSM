@@ -14,6 +14,7 @@ import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
 import { addColumn } from './schema.js';
+import { param } from './http.js';
 
 const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
 fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -724,7 +725,7 @@ export function registerNews(deps: {
     if (g?.url) return g.url;
     return `${base}/og-default.png`;
   };
-  app.get('/n/:id(\\d+)', (req, res) => {
+  app.get('/n/:id', param('id'), (req, res) => {
     res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
     const gone = () => void res.status(404).type('html').send('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Не найдено</title></head><body><p>Новость не найдена.</p></body></html>');
     if (deps.publicPanel && !deps.publicPanel()) return gone();

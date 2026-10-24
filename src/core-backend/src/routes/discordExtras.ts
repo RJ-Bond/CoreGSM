@@ -16,6 +16,7 @@ import { bot } from '../botState.js';
 import { db, EFFECTIVE_NAME } from '../db.js';
 import { publicBase } from '../site.js';
 import { playerCard, topPlayers } from './community.js';
+import { param } from '../http.js';
 
 export const router = express.Router();
 
@@ -119,7 +120,7 @@ router.get('/internal/discord/sync', internal, (_req, res) => {
   res.json({ autoroles, counters });
 });
 
-router.post('/internal/discord/autoroles/:id(\\d+)', internal, (req, res) => {
+router.post('/internal/discord/autoroles/:id', param('id'), internal, (req, res) => {
   const b = z
     .object({ added: z.array(z.string().max(30)).max(50), removed: z.array(z.string().max(30)).max(50), error: z.string().max(300).nullable().optional() })
     .safeParse(req.body);
@@ -134,7 +135,7 @@ router.post('/internal/discord/autoroles/:id(\\d+)', internal, (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/internal/discord/counters/:id(\\d+)', internal, (req, res) => {
+router.post('/internal/discord/counters/:id', param('id'), internal, (req, res) => {
   const b = z.object({ error: z.string().max(300).nullable() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   db.prepare('UPDATE voice_counters SET last_error = ? WHERE id = ?').run(b.data.error, Number(req.params.id));
@@ -233,7 +234,7 @@ router.post('/api/discord/autoroles', admin, (req, res) => {
 });
 
 /** removing a rule forgets its holders; the roles already given stay (the admin removes them in Discord if needed) */
-router.delete('/api/discord/autoroles/:id(\\d+)', admin, (req, res) => {
+router.delete('/api/discord/autoroles/:id', param('id'), admin, (req, res) => {
   db.prepare('DELETE FROM autoroles WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });
@@ -249,7 +250,7 @@ router.post('/api/discord/counters', admin, (req, res) => {
   }
 });
 
-router.delete('/api/discord/counters/:id(\\d+)', admin, (req, res) => {
+router.delete('/api/discord/counters/:id', param('id'), admin, (req, res) => {
   db.prepare('DELETE FROM voice_counters WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });
