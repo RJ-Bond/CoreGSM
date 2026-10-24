@@ -26,7 +26,7 @@
   --font-sans:
     'Golos Text Variable', 'Golos Text', ui-sans-serif, system-ui,
     -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --font-weight-bold: 600;
   --font-weight-extrabold: 650;

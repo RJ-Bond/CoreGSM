@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ee09b0d99f2b"
+COREGSM_BUILD="ecb62e9d9b55"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20091,6 +20091,15 @@ __COREGSM_EOF__
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
+  cat > "$APP_DIR/core-frontend/.oxlintrc.json" << '__COREGSM_EOF__'
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "jsx-a11y"],
+  "categories": { "correctness": "error", "suspicious": "warn" },
+  "ignorePatterns": ["dist", "node_modules"]
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/Dockerfile" << '__COREGSM_EOF__'
 FROM node:24-bookworm-slim AS build
 WORKDIR /build
@@ -23384,7 +23393,8 @@ __COREGSM_EOF__
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint"
   },
   "dependencies": {
     "@fontsource-variable/golos-text": "^5.3.0",
@@ -59809,7 +59819,7 @@ __COREGSM_EOF__
   --font-sans:
     'Golos Text Variable', 'Golos Text', ui-sans-serif, system-ui,
     -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --font-weight-bold: 600;
   --font-weight-extrabold: 650;
@@ -63178,6 +63188,8 @@ import ReactDOM from 'react-dom/client';
 import '@fontsource-variable/golos-text/wght.css';
 // the serif of the news headlines (Cyrillic)
 import '@fontsource-variable/literata/wght.css';
+// the monospace of addresses and codes (Latin and Cyrillic)
+import '@fontsource-variable/jetbrains-mono/wght.css';
 import './index.css';
 import './styles/servers.css';
 import './styles/detail.css';
@@ -72923,7 +72935,7 @@ __COREGSM_EOF__
 .pp-k { font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 255, 255, 0.88); }
 .pp-v { margin-top: 1px; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 650; color: #fff; }
 .pp-v > span, .pp-v > a, .pp-v > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pp-v code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
+.pp-v code { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
 .pp-v a { text-decoration: underline; text-underline-offset: 3px; }
 /* the ping's quality: white text (readable on any cover) and a coloured light in front of it */
 .pp-v > :is(.pp-tone-ok, .pp-tone-warn, .pp-tone-bad) { display: inline-flex; align-items: center; gap: 7px; color: #fff; white-space: normal; overflow: visible; }
@@ -72960,7 +72972,7 @@ __COREGSM_EOF__
 }
 .cn-big code {
   min-width: 0; flex: 1 1 200px; overflow-x: auto; white-space: nowrap; padding: 10px 12px; border-radius: var(--r-md);
-  background: rgb(var(--card)); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 600;
+  background: rgb(var(--card)); font-family: var(--font-mono); font-size: 15px; font-weight: 600;
 }
 .cn-step { display: flex; gap: 12px; }
 .cn-num {
@@ -73104,7 +73116,7 @@ __COREGSM_EOF__
 .cn-sub li::marker { color: rgb(var(--mute)); }
 .cn-big code { font-size: 16px; }
 .cn-part { display: inline; padding: 2px 4px; margin-right: 6px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; background: transparent; color: rgb(var(--link)); }
-.cn-part code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
+.cn-part code { font-family: var(--font-mono); font-weight: 600; }
 .cn-part:focus, .cn-part:focus-visible { outline: 0 !important; }
 .cn-part:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / 0.55); border-radius: 6px; }
 @media (max-width: 639px) { .cn-qr { width: min(100%, 320px); } }
@@ -73190,7 +73202,7 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
   .srv-hero > .srv-hero-bar { grid-column: 2; margin-top: 0; }
   .srv-hero > .srv-hero-free { grid-column: 1 / -1; }
 }
-.srv-addr-btn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; max-width: 100%; }
+.srv-addr-btn { font-family: var(--font-mono); font-weight: 600; max-width: 100%; }
 @media (max-width: 639px) { .srv-addr-btn { min-width: 0; max-width: 100%; } }
 /* reviews: an empty block is one line */
 .rv-none { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
