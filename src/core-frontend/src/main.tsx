@@ -14,6 +14,7 @@ import './styles/profile.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
 import App from './App';
+import { RootBoundary } from './RootBoundary';
 import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -25,7 +26,9 @@ installSegIndicator();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <RootBoundary>
+      <App />
+    </RootBoundary>
   </React.StrictMode>,
 );
 
