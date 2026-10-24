@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="11fe3ca8f539"
+COREGSM_BUILD="5d5f535eff7e"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -562,7 +562,7 @@ generate_project() {
   mkdir -p "$APP_DIR"
   mkdir -p "$APP_DIR/core-backend"
   cat > "$APP_DIR/core-backend/Dockerfile" << '__COREGSM_EOF__'
-FROM node:22-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
@@ -572,7 +572,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /srv
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -640,7 +640,7 @@ __COREGSM_EOF__
         "@types/better-sqlite3": "^9.6.0",
         "@types/express": "^5.0.6",
         "@types/jsonwebtoken": "^9.0.7",
-        "@types/node": "^22.10.0",
+        "@types/node": "^24.19.2",
         "@types/nodemailer": "^8.0.2",
         "tsx": "^4.23.15",
         "typescript": "^5.6.3"
@@ -1335,13 +1335,13 @@ __COREGSM_EOF__
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "22.20.5",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-22.20.5.tgz",
-      "integrity": "sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==",
+      "version": "24.19.2",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.19.2.tgz",
+      "integrity": "sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
-        "undici-types": "~6.21.0"
+        "undici-types": ">=7.24.0 <7.24.7"
       }
     },
     "node_modules/@types/nodemailer": {
@@ -3224,9 +3224,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/undici-types": {
-      "version": "6.21.0",
-      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-6.21.0.tgz",
-      "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==",
+      "version": "7.24.6",
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
+      "integrity": "sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==",
       "dev": true,
       "license": "MIT"
     },
@@ -3356,7 +3356,7 @@ __COREGSM_EOF__
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.7",
-    "@types/node": "^22.10.0",
+    "@types/node": "^24.19.2",
     "@types/nodemailer": "^8.0.2",
     "tsx": "^4.23.15",
     "typescript": "^5.6.3"
@@ -16541,7 +16541,7 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot"
   cat > "$APP_DIR/core-bot/Dockerfile" << '__COREGSM_EOF__'
-FROM node:22-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -16549,7 +16549,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /srv
 COPY --from=build /build/node_modules ./node_modules
@@ -16578,7 +16578,7 @@ __COREGSM_EOF__
         "ws": "^8.17.0"
       },
       "devDependencies": {
-        "@types/node": "^22.10.0",
+        "@types/node": "^24.19.2",
         "tsx": "^4.23.15",
         "typescript": "^5.6.3"
       }
@@ -17189,12 +17189,12 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@types/node": {
-      "version": "22.20.5",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-22.20.5.tgz",
-      "integrity": "sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==",
+      "version": "24.19.2",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.19.2.tgz",
+      "integrity": "sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==",
       "license": "MIT",
       "dependencies": {
-        "undici-types": "~6.21.0"
+        "undici-types": ">=7.24.0 <7.24.7"
       }
     },
     "node_modules/@types/ws": {
@@ -17514,9 +17514,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/undici-types": {
-      "version": "6.21.0",
-      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-6.21.0.tgz",
-      "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==",
+      "version": "7.24.6",
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
+      "integrity": "sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==",
       "license": "MIT"
     },
     "node_modules/ws": {
@@ -17565,7 +17565,7 @@ __COREGSM_EOF__
     "ws": "^8.17.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^24.19.2",
     "tsx": "^4.23.15",
     "typescript": "^5.6.3"
   }
@@ -19029,7 +19029,7 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/Dockerfile" << '__COREGSM_EOF__'
-FROM node:22-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
