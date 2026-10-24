@@ -7,7 +7,7 @@ name: update-deps
 on:
   # runs on a push to this helper branch, so it works before the file reaches main (the Actions UI lists only workflows on main)
   push:
-    branches: [update-deps-workflow]
+    branches: ['update-deps/**']
   workflow_dispatch:
     inputs:
       packages:
@@ -22,7 +22,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     env:
-      PACKAGES: ${{ inputs.packages || 'nodemailer@latest' }}
+      PACKAGES: ${{ inputs.packages || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,10 +32,12 @@ jobs:
         working-directory: src/core-backend
         run: |
           set -e
+          # the packages come from the dispatch input, or from .github/update-deps.packages on the pushed branch
+          [ -n "$PACKAGES" ] || PACKAGES=$(cat ../../.github/update-deps.packages)
+          echo "PACKAGES=$PACKAGES" >> "$GITHUB_ENV"
           npm ci
           # shellcheck disable=SC2086
           npm install $PACKAGES
-          npm update body-parser express
       - name: npm audit (report only)
         working-directory: src/core-backend
         run: |
@@ -54,12 +56,12 @@ jobs:
           npm test
       - name: Rebuild install.sh
         run: bash tools/build-installer.sh
-      - name: Push branch fix-audit
+      - name: Push result branch
         run: |
           set -e
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -b fix-audit
+          git checkout -b "${GITHUB_REF_NAME}-result"
           git add -A
           git commit -m "Update dependencies reported by npm audit ($PACKAGES)"
-          git push --force -u origin fix-audit
+          git push --force -u origin "${GITHUB_REF_NAME}-result"
