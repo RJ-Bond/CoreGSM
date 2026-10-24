@@ -1,1 +1,2 @@
-core-backend express@5 @types/express@5
+core-backend @types/node@24
+core-bot @types/node@24

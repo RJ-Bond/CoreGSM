@@ -11,7 +11,7 @@ Self-hosted аналог DiscordGSM. Веб-панель, где вы добав
 ![Пример карточки](docs/card-preview.png)
 
 - **Панель**: React и Tailwind, светлый дизайн Pastel Soft. Серверы, карточки, привязка каналов, смена пароля.
-- **Бэкенд**: Node.js 22, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig) (опрос серверов), SQLite, генерация PNG-карточек.
+- **Бэкенд**: Node.js 24, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig) (опрос серверов), SQLite, генерация PNG-карточек.
 - **Бот**: discord.js 14. Отправляет одно сообщение с картинкой в канал и дальше редактирует его.
 - **Nginx**: HTTPS, редирект с HTTP, Let's Encrypt с автопродлением.
 - **Прокси**: SOCKS5 и HTTP для бота и установки (см. раздел «Прокси»).
@@ -388,7 +388,7 @@ ssh root@192.168.88.152 "SKIP_UPDATE=1 bash install.sh"
 Запуск частей на своём компьютере без Docker:
 
 ```bash
-# бэкенд (нужен Node.js 22+ и компилятор для better-sqlite3)
+# бэкенд (нужен Node.js 24+ и компилятор для better-sqlite3)
 cd src/core-backend && npm ci && npm run build
 DB_PATH=./data/dev.db JWT_SECRET=dev-secret-dev-secret INTERNAL_TOKEN=dev-token-dev-token SETUP_TOKEN=dev-code npm start   # код установки для мастера: dev-code
 

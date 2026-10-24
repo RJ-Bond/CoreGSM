@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: src/core-backend/package-lock.json
       - run: npm ci --no-audit --no-fund
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: src/core-frontend/package-lock.json
       - run: npm ci --no-audit --no-fund
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: src/core-bot/package-lock.json
       - run: npm ci --no-audit --no-fund
@@ -83,3 +83,18 @@ jobs:
           # no fixed full-screen wash layer and no outline restyling on :focus
           if awk '/body::before[[:space:]]*\{/{b=1} b&&/position:[[:space:]]*fixed/{print FILENAME": "FNR": "$0; f=1} b&&/\}/{b=0} END{exit !f}' src/core-frontend/src/index.css; then echo 'body::before fixed wash layer is back'; exit 1; fi
           grep -q ':focus, :focus-visible { outline: 0 !important; }' src/core-frontend/src/index.css
+
+  # The images are what actually runs: this catches a base image or a native module (better-sqlite3, skia-canvas)
+  # that no longer builds or loads, which the tests on the runner do not.
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the backend, bot and frontend images
+        run: |
+          set -e
+          for part in core-backend core-bot core-frontend; do
+            docker build -t "coregsm-$part:ci" "src/$part"
+          done
+      - name: Backend image loads its native modules
+        run: docker run --rm --entrypoint node coregsm-core-backend:ci -e "require('better-sqlite3'); require('skia-canvas'); console.log('native modules ok')"
