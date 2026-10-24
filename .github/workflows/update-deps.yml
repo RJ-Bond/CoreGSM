@@ -5,6 +5,9 @@ name: update-deps
 # `fix-audit`. Open a pull request from that branch afterwards. Commits made with GITHUB_TOKEN do not start other
 # workflows, which is why the checks run inside this job.
 on:
+  # runs on a push to this helper branch, so it works before the file reaches main (the Actions UI lists only workflows on main)
+  push:
+    branches: [update-deps-workflow]
   workflow_dispatch:
     inputs:
       packages:
@@ -19,7 +22,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     env:
-      PACKAGES: ${{ inputs.packages }}
+      PACKAGES: ${{ inputs.packages || 'nodemailer@latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
