@@ -1,0 +1,73 @@
+name: release
+
+# Publishes the installer as a GitHub Release once CI has passed on main. Servers update from the newest release
+# (tools/coregsm.sh and the panel's own check), not from the tip of main, so a commit that breaks CI never reaches them.
+#
+# Assets of a release:
+#   install.sh         the generated installer (the same file as in the repository)
+#   version.txt        build id and SHA-256 of install.sh
+#   install.sh.bundle  keyless Sigstore signature of install.sh, made here; `coregsm update` checks it with cosign when
+#                      cosign is installed on the server (identity: this workflow on main, issuer: GitHub Actions)
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Is this still the tip of main, and is there no release for it yet?
+        id: plan
+        run: |
+          set -e
+          publish=true
+          if [ "${{ github.event_name }}" = workflow_run ]; then
+            tip="$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)"
+            if [ "$tip" != "$SHA" ]; then echo "main has moved on; the newer commit publishes itself"; publish=false; fi
+          fi
+          build="$(sed -n 's/^build=//p' version.txt)"
+          if [ -z "$build" ]; then echo "version.txt has no build id"; exit 1; fi
+          if gh release view "build-$build" >/dev/null 2>&1; then echo "release build-$build exists"; publish=false; fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - name: install.sh and version.txt must match what the sources build
+        if: steps.plan.outputs.publish == 'true'
+        run: |
+          bash tools/build-installer.sh
+          git -c core.fileMode=false diff --exit-code -- install.sh version.txt
+          bash -n install.sh
+
+      - uses: sigstore/cosign-installer@v3
+        if: steps.plan.outputs.publish == 'true'
+
+      - name: Sign install.sh
+        if: steps.plan.outputs.publish == 'true'
+        run: cosign sign-blob --yes --bundle install.sh.bundle install.sh
+
+      - name: Publish the release
+        if: steps.plan.outputs.publish == 'true'
+        run: |
+          set -e
+          git log -1 --format=%B "$SHA" > notes.md
+          gh release create "build-${{ steps.plan.outputs.build }}" install.sh version.txt install.sh.bundle \
+            --target "$SHA" --title "Build ${{ steps.plan.outputs.build }}" --notes-file notes.md --latest

@@ -13,6 +13,9 @@ export const router = express.Router();
 // a root systemd path unit on the host notices it and runs `coregsm-update`, which reports progress in status.json.
 const UPDATE_DIR = process.env.UPDATE_DIR ?? '';
 const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main';
+// The same channel as the host updater (tools/coregsm.sh): the newest GitHub Release first, the tip of the branch when
+// there is no release yet. A custom UPDATE_BASE_URL (a fork, a test branch) or UPDATE_CHANNEL=main skips the release.
+const RELEASE_BASE = process.env.UPDATE_RELEASE_BASE_URL ?? (process.env.UPDATE_BASE_URL || process.env.UPDATE_CHANNEL === 'main' ? '' : 'https://github.com/RJ-Bond/CoreGSM/releases/latest/download');
 
 let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
 
@@ -37,10 +40,23 @@ async function fetchRepoText(file: string): Promise<string> {
   return res.text();
 }
 
+/** version.txt of the newest release, or null when there is none (or it does not look right) */
+async function fetchReleaseVersion(): Promise<string | null> {
+  if (!RELEASE_BASE) return null;
+  try {
+    const r = await fetch(`${RELEASE_BASE}/version.txt`, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'CoreGSM' } });
+    if (!r.ok) return null;
+    const text = await r.text();
+    return /^build=[a-f0-9]{6,64}$/m.test(text) && /^sha256=[a-f0-9]{64}$/m.test(text) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 async function checkRemote(force = false): Promise<void> {
   if (!force && Date.now() - remote.at < 5 * 60_000) return;
   try {
-    const m = /^build=([a-f0-9]{6,64})$/m.exec(await fetchRepoText('version.txt'));
+    const m = /^build=([a-f0-9]{6,64})$/m.exec((await fetchReleaseVersion()) ?? (await fetchRepoText('version.txt')));
     if (!m) throw new Error('некорректный version.txt');
     remote = { build: m[1], error: null, at: Date.now() };
   } catch (e) {

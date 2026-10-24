@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
-import { clampConcurrency, clampThreshold, decideStatus, runPool } from '../src/pollLogic.ts';
+import { clampConcurrency, clampDays, clampThreshold, decideStatus, pruneDue, RETENTION_DEFAULTS, runPool } from '../src/pollLogic.ts';
 import { ADMIN, setupAdmin, startBackend, type Api } from './harness.ts';
 
 // ---------------------------------------------------------------- pure logic
@@ -52,6 +52,19 @@ describe('failure confirmation (decideStatus)', () => {
     assert.equal(clampConcurrency(null), 8);
     assert.equal(clampConcurrency('0'), 1);
     assert.equal(clampConcurrency(500), 32);
+  });
+
+  it('retention days are clamped and the cleanup runs about once an hour', () => {
+    assert.deepEqual(RETENTION_DEFAULTS, { history: 30, playerSessions: 90, accountEvents: 180, uptime: 90 });
+    assert.equal(clampDays(undefined, 30), 30);
+    assert.equal(clampDays('', 30), 30);
+    assert.equal(clampDays('abc', 30), 30);
+    assert.equal(clampDays('0', 30), 1);
+    assert.equal(clampDays('45', 30), 45);
+    assert.equal(clampDays(99999, 30), 3650);
+    assert.equal(pruneDue(1_000_000, 0), true, 'first cycle');
+    assert.equal(pruneDue(1_000_000 + 59 * 60_000, 1_000_000), false, '59 minutes later');
+    assert.equal(pruneDue(1_000_000 + 60 * 60_000, 1_000_000), true, 'an hour later');
   });
 });
 

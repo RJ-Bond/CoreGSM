@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey } from './secrets.js';
+import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey, reencrypt, usesLegacyKey } from './secrets.js';
 import { runMigrations } from './migrations.js';
+import { addColumn } from './schema.js';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 export const DATA_DIR = path.dirname(dbPath);
@@ -128,31 +129,19 @@ CREATE TABLE IF NOT EXISTS bindings (
 `);
 
 // older databases: users get a role (every existing account was created by the setup wizard, so it is an admin)
-try {
-  db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
-} catch {
-  /* column already exists */
-}
-try {
-  db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER');
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'users', 'role', "TEXT NOT NULL DEFAULT 'admin'");
+addColumn(db, 'users', 'created_at', 'INTEGER');
 
 // accounts: approval status, linked Discord account, sessions
-for (const ddl of [
-  "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
-  'ALTER TABLE users ADD COLUMN discord_id TEXT',
-  'ALTER TABLE users ADD COLUMN discord_name TEXT',
-  'ALTER TABLE users ADD COLUMN discord_avatar TEXT',
-  'ALTER TABLE users ADD COLUMN no_password INTEGER NOT NULL DEFAULT 0',
-  'ALTER TABLE users ADD COLUMN email TEXT',
+for (const [column, ddl] of [
+  ['status', "TEXT NOT NULL DEFAULT 'active'"],
+  ['discord_id', 'TEXT'],
+  ['discord_name', 'TEXT'],
+  ['discord_avatar', 'TEXT'],
+  ['no_password', 'INTEGER NOT NULL DEFAULT 0'],
+  ['email', 'TEXT'],
 ]) {
-  try {
-    db.exec(ddl);
-  } catch {
-    /* column already exists */
-  }
+  addColumn(db, 'users', column, ddl);
 }
 db.exec(`
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_discord ON users(discord_id) WHERE discord_id IS NOT NULL;
@@ -183,11 +172,7 @@ CREATE TABLE IF NOT EXISTS uptime_daily (
   PRIMARY KEY (server_id, day)
 );
 `);
-try {
-  db.exec('ALTER TABLE history ADD COLUMN ping INTEGER');
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'history', 'ping', 'INTEGER');
 // profile: preferences, player profile, game sessions, account journal
 db.exec(`
 CREATE TABLE IF NOT EXISTS user_prefs (
@@ -237,32 +222,16 @@ if (restoredNow) {
 }
 
 // older databases: new columns are added once
-try {
-  db.exec("ALTER TABLE bindings ADD COLUMN style TEXT NOT NULL DEFAULT 'embed'");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'bindings', 'style', "TEXT NOT NULL DEFAULT 'embed'");
 
 // one Discord message may show several servers (up to 10 embeds): the extra server ids
-try {
-  db.exec("ALTER TABLE bindings ADD COLUMN extra_ids TEXT NOT NULL DEFAULT '[]'");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'bindings', 'extra_ids', "TEXT NOT NULL DEFAULT '[]'");
 
 // older databases: country override (ISO code, '' = detect automatically)
-try {
-  db.exec("ALTER TABLE servers ADD COLUMN country TEXT NOT NULL DEFAULT ''");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'servers', 'country', "TEXT NOT NULL DEFAULT ''");
 
 // older databases: add the column once
-try {
-  db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'servers', 'display_address', "TEXT NOT NULL DEFAULT ''");
 
 // versioned migrations (v1 = everything above); a copy of an existing database is made first, see migrations.ts
 runMigrations(db, { dataDir: DATA_DIR, existing: hadSchema });
@@ -304,12 +273,17 @@ export function undecryptableSecrets(): string[] {
   return rows.filter((r) => isSecretKey(r.key) && isEncrypted(r.value) && !canDecrypt(r.value)).map((r) => r.key);
 }
 
-// secrets stored in plaintext by older versions are encrypted once (idempotent: encrypted rows are skipped)
+// secrets stored in plaintext by older versions are encrypted once, and values written with the old JWT_SECRET-derived
+// key are written again with SECRETS_KEY (idempotent: rows that already use the current key are skipped)
 try {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   const upd = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
   db.transaction(() => {
-    for (const r of rows) if (isSecretKey(r.key) && r.value !== '' && !isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
+    for (const r of rows) {
+      if (!isSecretKey(r.key) || r.value === '') continue;
+      if (!isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
+      else if (usesLegacyKey(r.value)) upd.run(reencrypt(r.value), r.key);
+    }
   })();
 } catch (e) {
   // no key at all: config.ts stops with a clear message when it loads

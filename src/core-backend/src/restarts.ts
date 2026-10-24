@@ -17,9 +17,10 @@ import { z } from 'zod';
 import { admin, allow, type AuthedRequest } from './auth.js';
 import { enqueueAlert } from './alerts.js';
 import { db, EFFECTIVE_NAME, getSetting } from './db.js';
+import { wrap } from './http.js';
 import { defaultSay, nextRun } from './restartLogic.js';
 import { rconCommand } from './rcon.js';
-import { decryptSecret, encryptSecret } from './secrets.js';
+import { decryptSecret, encryptSecret, reencrypt, usesLegacyKey } from './secrets.js';
 import { analyticsFor } from './routes/analytics.js';
 
 export const router = express.Router();
@@ -46,6 +47,16 @@ CREATE TABLE IF NOT EXISTS server_rcon (
   password TEXT NOT NULL
 );
 `);
+
+// RCON passwords written with the old JWT_SECRET-derived key are written again with SECRETS_KEY (see secrets.ts)
+try {
+  const upd = db.prepare('UPDATE server_rcon SET password = ? WHERE server_id = ?');
+  for (const r of db.prepare('SELECT server_id, password FROM server_rcon').all() as { server_id: number; password: string }[]) {
+    if (usesLegacyKey(r.password)) upd.run(reencrypt(r.password), r.server_id);
+  }
+} catch (e) {
+  console.error('rcon secrets migration skipped:', (e as Error).message);
+}
 
 export interface Plan {
   server_id: number;
@@ -154,7 +165,7 @@ export function startRestartTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    void tickRestarts().catch(() => undefined).finally(() => { busy = false; });
+    void tickRestarts().catch((e) => console.error('restart timer failed', (e as Error).message)).finally(() => { busy = false; });
   }, 30_000);
   timer.unref();
 }
@@ -242,7 +253,7 @@ router.put('/api/servers/:id(\\d+)/rcon', admin, (req, res) => {
   res.json(view(s.id, s.game));
 });
 
-router.post('/api/servers/:id(\\d+)/rcon/test', admin, async (req, res) => {
+router.post('/api/servers/:id(\\d+)/rcon/test', admin, wrap(async (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
   const b = z.object({ command: z.string().trim().min(1).max(200) }).safeParse(req.body);
@@ -254,11 +265,11 @@ router.post('/api/servers/:id(\\d+)/rcon/test', admin, async (req, res) => {
   } catch (e) {
     res.json({ ok: false, answer: (e as Error).message });
   }
-});
+}));
 
-router.post('/api/servers/:id(\\d+)/restart/now', allow('maintenance'), async (req: AuthedRequest, res) => {
+router.post('/api/servers/:id(\\d+)/restart/now', allow('maintenance'), wrap(async (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
-  const result = await run(s.id, planOf(s.id), Date.now(), req.user?.username ?? 'админка');
+  const result = await run(s.id, planOf(s.id), Date.now(), (req as AuthedRequest).user?.username ?? 'админка');
   res.json({ ...view(s.id, s.game), lastResult: result });
-});
+}));

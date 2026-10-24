@@ -12,6 +12,7 @@
 import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { addColumn, hasTable } from './schema.js';
 
 type Db = InstanceType<typeof Database>;
 
@@ -19,12 +20,6 @@ export interface Migration {
   version: number;
   name: string;
   up: (db: Db) => void;
-}
-
-const hasTable = (db: Db, t: string): boolean => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
-const hasColumn = (db: Db, t: string, c: string): boolean => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
-function addColumn(db: Db, table: string, column: string, ddl: string): void {
-  if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }
 
 export const MIGRATIONS: Migration[] = [

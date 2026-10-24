@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { STUCK_MS, stuckFor } from '../src/watchdog.js';
 
 test('modules loaded before the gateway patch do not import discord.js', () => {
   // the proxy hook only works when it is installed before discord.js loads (see index.ts)
@@ -36,4 +37,12 @@ test('SIGTERM stops the bot cleanly even when the panel is unreachable', async (
   assert.ok(Date.now() - t0 < 8000);
   assert.match(out, /SIGTERM: shutting down/);
   assert.match(out, /stopped/);
+});
+
+test('a tick that never finishes is recognised as stuck, a running one is not', () => {
+  assert.equal(STUCK_MS, 600_000);
+  assert.equal(stuckFor(1_000_000, 0, true), false, 'no tick started');
+  assert.equal(stuckFor(1_000_000, 900_000, true), false, 'running for 100 s');
+  assert.equal(stuckFor(1_000_000, 100_000, true), true, 'running for 15 min');
+  assert.equal(stuckFor(1_000_000, 100_000, false), false, 'not busy');
 });

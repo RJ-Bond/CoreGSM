@@ -562,11 +562,14 @@ setup_firewall() {
 
 write_env() {
   step "Генерация секретов и .env"
-  local jwt internal
+  local jwt internal secrets_key
   SETUP_TOKEN="$(env_get SETUP_TOKEN)"; [ -n "$SETUP_TOKEN" ] || SETUP_TOKEN="$(gen_secret 16)"
   jwt="$(env_get JWT_SECRET)";          [ -n "$jwt" ]      || jwt="$(gen_secret 64)"
   internal="$(env_get INTERNAL_TOKEN)"; [ -n "$internal" ] || internal="$(gen_secret 48)"
-  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
+  # a key of its own for the secrets in the database: JWT_SECRET can then be changed without losing them. An older
+  # installation gets one on its next update; the backend writes its stored secrets again with it at start.
+  secrets_key="$(env_get SECRETS_KEY)"; [ -n "$secrets_key" ] || secrets_key="$(gen_secret 64)"
+  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|SECRETS_KEY|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
   # the .env is truncated by the redirection below, so everything is read from it first
   local appver; appver="$(env_get APP_VERSION)"
   poll="$(env_get POLL_INTERVAL_SEC)"; [ -n "$poll" ] || poll=30
@@ -597,6 +600,9 @@ CERT_MODE=${cert_mode}
 SETUP_TOKEN=${SETUP_TOKEN}
 JWT_SECRET=${jwt}
 INTERNAL_TOKEN=${internal}
+# encrypts the Discord token, SMTP password and other secrets stored in the database; keep it with the database
+# backups (the backup archive of the coregsm command includes it). Do not change it: the secrets become unreadable.
+SECRETS_KEY=${secrets_key}
 POLL_INTERVAL_SEC=${poll}
 ENVFILE
   if [ -n "$extra" ]; then printf '# custom settings (kept on re-install)\n%s\n' "$extra" >> "$APP_DIR/.env"; fi
