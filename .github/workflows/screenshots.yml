@@ -48,13 +48,24 @@ jobs:
           cat /tmp/shoot.log
       - name: Push the pictures to ci-screenshots
         run: |
-          set -e
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan shots-tmp
-          git rm -rf -q . || true
-          cp /tmp/shots/*.png .
-          printf 'Built from %s (%s)\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" > README.txt
-          git add -A
-          git commit -q -m "Screenshots of $GITHUB_REF_NAME $GITHUB_SHA"
-          git push --force origin HEAD:refs/heads/ci-screenshots
+          set +e
+          {
+            set -x
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            ls /tmp/shots | head -5
+            git checkout --orphan shots-tmp
+            git rm -rf -q .
+            cp /tmp/shots/*.png .
+            printf 'Built from %s (%s)\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" > README.txt
+            git add -A
+            git commit -q -m "Screenshots of $GITHUB_REF_NAME $GITHUB_SHA"
+            git push --force origin HEAD:refs/heads/ci-screenshots
+          } > /tmp/push.log 2>&1
+          rc=$?
+          cat /tmp/push.log
+          if [ "$rc" -ne 0 ]; then
+            msg=$(tail -c 3000 /tmp/push.log | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=push::$msg"
+          fi
+          exit "$rc"
