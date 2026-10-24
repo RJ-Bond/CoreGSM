@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="985dc7196089"
+COREGSM_BUILD="4d29ce6625e5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7252,6 +7252,15 @@ export const ERRORS = {
   new_password_min_8: 'Новый пароль должен быть не короче 8 символов',
   passwords_differ: 'Пароли не совпадают',
   wrong_current_password: 'Текущий пароль неверен',
+  two_factor_code_bad: 'Неверный код подтверждения',
+  too_many_attempts_later: 'Слишком много попыток. Попробуйте позже.',
+  two_factor_already_on: 'Двухфакторная защита уже включена',
+  two_factor_code_required: 'Введите код из приложения',
+  two_factor_not_started: 'Сначала начните настройку',
+  two_factor_enable_code_bad: 'Код не подошёл. Проверьте время на телефоне и попробуйте ещё раз',
+  two_factor_not_on: 'Двухфакторная защита не включена',
+  password_wrong: 'Пароль неверен',
+  two_factor_code_mismatch: 'Код не подошёл',
   email_needs_password: 'Введите текущий пароль, чтобы изменить почту',
   check_address: 'Проверьте адрес',
   bad_email: 'Некорректный адрес электронной почты',
@@ -9483,6 +9492,17 @@ CREATE TABLE IF NOT EXISTS smart_state (
     name: 'users.perms',
     // what a moderator may do (JSON array of permission names); NULL = the default set
     up: (db) => addColumn(db, 'users', 'perms', 'TEXT'),
+  },
+  {
+    version: 9,
+    name: 'users.two_factor',
+    // totp_secret is encrypted (secrets.ts); totp_recovery is a JSON array of sha256 hashes; totp_step guards against replaying a code
+    up: (db) => {
+      addColumn(db, 'users', 'totp_secret', 'TEXT');
+      addColumn(db, 'users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'users', 'totp_recovery', 'TEXT');
+      addColumn(db, 'users', 'totp_step', 'INTEGER NOT NULL DEFAULT 0');
+    },
   },
 ];
 
@@ -13402,6 +13422,8 @@ __COREGSM_EOF__
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { decryptSecret, encryptSecret } from '../secrets.js';
+import { newRecoveryCodes, newSecret, otpauthUri, useRecoveryCode, verifyCode } from '../totp.js';
 import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
@@ -13419,7 +13441,7 @@ router.post(
   '/api/auth/login',
   loginLimiter,
   wrap(async (req, res) => {
-    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256) }).safeParse(req.body);
+    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256), code: z.string().trim().max(32).optional() }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
     // progressive lockout of the whole address after failures across several logins
     const ipWait = ipLockRemaining(req.ip);
@@ -13434,7 +13456,7 @@ router.post(
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
-      | { id: number; username: string; password_hash: string; role: Role; status: string }
+      | { id: number; username: string; password_hash: string; role: Role; status: string; totp_enabled: number; totp_secret: string | null; totp_recovery: string | null; totp_step: number }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
@@ -13443,8 +13465,38 @@ router.post(
       if (u) logAccount(req, u.id, 'login_failed');
       return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft });
     }
+    if (u.status !== 'active') {
+      accountLoginOk(req.ip, body.data.username);
+      return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
+    }
+    // second factor: without a code the panel is told to ask for one (no token yet); a wrong code counts like a wrong password
+    if (u.totp_enabled && u.totp_secret) {
+      if (!body.data.code) return res.json({ twoFactor: true });
+      let passed = false;
+      try {
+        const step = verifyCode(decryptSecret(u.totp_secret), body.data.code, Date.now(), u.totp_step);
+        if (step !== null) {
+          db.prepare('UPDATE users SET totp_step = ? WHERE id = ?').run(step, u.id);
+          passed = true;
+        } else {
+          const left = useRecoveryCode(JSON.parse(u.totp_recovery || '[]') as string[], body.data.code);
+          if (left) {
+            db.prepare('UPDATE users SET totp_recovery = ? WHERE id = ?').run(JSON.stringify(left), u.id);
+            logAccount(req, u.id, 'profile_changed', '2fa_recovery_used');
+            passed = true;
+          }
+        }
+      } catch {
+        /* the secret cannot be decrypted (SECRETS_KEY changed): nobody gets in on a guess */
+      }
+      if (!passed) {
+        const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
+        ipLoginFailed(req.ip, body.data.username);
+        logAccount(req, u.id, 'login_failed', '2fa');
+        return res.status(401).json({ error: 'Неверный код подтверждения', attemptsLeft, twoFactor: true });
+      }
+    }
     accountLoginOk(req.ip, body.data.username);
-    if (u.status !== 'active') return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
     resetAttempts(req.ip);
     logAccount(req, u.id, 'login');
     noteLogin(req, u.id, brand().name);
@@ -13650,6 +13702,71 @@ router.post(
     // other devices have to sign in again with the new password
     db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(req.user!.id, (req.user as { sid?: string }).sid ?? '');
     logAccount(req, req.user!.id, 'password_changed');
+    res.json({ ok: true });
+  }),
+);
+
+// ---------- two-factor sign-in (TOTP) ----------
+const twoFactorRow = (id: number) =>
+  db.prepare('SELECT username, password_hash, no_password, totp_secret, totp_enabled, totp_recovery, totp_step FROM users WHERE id = ?').get(id) as {
+    username: string; password_hash: string; no_password: number; totp_secret: string | null; totp_enabled: number; totp_recovery: string | null; totp_step: number;
+  };
+
+router.get('/api/auth/2fa', auth, (req: AuthedRequest, res) => {
+  const u = twoFactorRow(req.user!.id);
+  res.json({ enabled: !!u.totp_enabled, recoveryLeft: u.totp_enabled ? (JSON.parse(u.totp_recovery || '[]') as string[]).length : 0, hasPassword: !u.no_password });
+});
+
+// step 1: a fresh secret is stored (encrypted, not active yet) and shown once for the authenticator app
+router.post('/api/auth/2fa/setup', auth, windowLimiter(20, 3600_000, 'Слишком много попыток. Попробуйте позже.'), (req: AuthedRequest, res) => {
+  const u = twoFactorRow(req.user!.id);
+  if (u.totp_enabled) return res.status(409).json({ error: 'Двухфакторная защита уже включена' });
+  const secret = newSecret();
+  db.prepare('UPDATE users SET totp_secret = ?, totp_step = 0 WHERE id = ?').run(encryptSecret(secret), req.user!.id);
+  res.json({ secret, uri: otpauthUri(secret, u.username, brand().name || 'CoreGSM') });
+});
+
+// step 2: the first valid code turns it on and hands out the recovery codes (shown once)
+router.post('/api/auth/2fa/enable', auth, windowLimiter(30, 3600_000, 'Слишком много попыток. Попробуйте позже.'), (req: AuthedRequest, res) => {
+  const b = z.object({ code: z.string().max(32) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Введите код из приложения' });
+  const u = twoFactorRow(req.user!.id);
+  if (u.totp_enabled) return res.status(409).json({ error: 'Двухфакторная защита уже включена' });
+  if (!u.totp_secret) return res.status(400).json({ error: 'Сначала начните настройку' });
+  let step: number | null = null;
+  try {
+    step = verifyCode(decryptSecret(u.totp_secret), b.data.code);
+  } catch {
+    /* unreadable secret: start again */
+  }
+  if (step === null) return res.status(400).json({ error: 'Код не подошёл. Проверьте время на телефоне и попробуйте ещё раз' });
+  const rec = newRecoveryCodes();
+  db.prepare('UPDATE users SET totp_enabled = 1, totp_step = ?, totp_recovery = ? WHERE id = ?').run(step, JSON.stringify(rec.hashes), req.user!.id);
+  logAccount(req, req.user!.id, 'profile_changed', '2fa_on');
+  res.json({ ok: true, recoveryCodes: rec.plain });
+});
+
+// turning it off needs the password (when there is one) and a current code or a recovery code
+router.post(
+  '/api/auth/2fa/disable',
+  auth,
+  windowLimiter(20, 3600_000, 'Слишком много попыток. Попробуйте позже.'),
+  wrap(async (req: AuthedRequest, res) => {
+    const b = z.object({ password: z.string().max(256).optional(), code: z.string().max(32) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Введите код из приложения' });
+    const u = twoFactorRow(req.user!.id);
+    if (!u.totp_enabled) return res.status(409).json({ error: 'Двухфакторная защита не включена' });
+    if (!u.no_password && !(await bcrypt.compare(b.data.password ?? '', u.password_hash))) return res.status(403).json({ error: 'Пароль неверен' });
+    let ok = false;
+    try {
+      ok = verifyCode(decryptSecret(u.totp_secret ?? ''), b.data.code, Date.now(), u.totp_step) !== null || useRecoveryCode(JSON.parse(u.totp_recovery || '[]') as string[], b.data.code) !== null;
+    } catch {
+      /* unreadable secret: only a recovery code can still pass */
+      ok = useRecoveryCode(JSON.parse(u.totp_recovery || '[]') as string[], b.data.code) !== null;
+    }
+    if (!ok) return res.status(400).json({ error: 'Код не подошёл' });
+    db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_recovery = NULL, totp_step = 0 WHERE id = ?').run(req.user!.id);
+    logAccount(req, req.user!.id, 'profile_changed', '2fa_off');
     res.json({ ok: true });
   }),
 );
@@ -16795,6 +16912,105 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     }
     res.json({ ok: true, unread: unreadNotifications(uid) });
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/totp.ts" << '__COREGSM_EOF__'
+/**
+ * Two-factor sign-in: TOTP (RFC 6238, SHA-1, 6 digits, 30 s: what Google Authenticator, Aegis, 1Password and the others
+ * speak) and one-time recovery codes. No dependency: it is HMAC and base32.
+ */
+import crypto from 'node:crypto';
+
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+export const STEP_SEC = 30;
+const DIGITS = 6;
+
+export function base32Encode(buf: Buffer): string {
+  let bits = 0;
+  let value = 0;
+  let out = '';
+  for (const byte of buf) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += ALPHABET[(value << (5 - bits)) & 31];
+  return out;
+}
+
+export function base32Decode(s: string): Buffer {
+  const clean = s.toUpperCase().replace(/[\s=-]/g, '');
+  let bits = 0;
+  let value = 0;
+  const out: number[] = [];
+  for (const ch of clean) {
+    const i = ALPHABET.indexOf(ch);
+    if (i < 0) throw new Error('bad base32');
+    value = (value << 5) | i;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 255);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+export const newSecret = (): string => base32Encode(crypto.randomBytes(20));
+
+/** the 6-digit code of one 30-second step */
+export function codeAt(secret: string, step: number): string {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const h = crypto.createHmac('sha1', base32Decode(secret)).update(counter).digest();
+  const o = h[h.length - 1] & 15;
+  const n = ((h[o] & 127) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3];
+  return String(n % 10 ** DIGITS).padStart(DIGITS, '0');
+}
+
+/**
+ * Checks a code against the current step and one step either side (clock drift). Returns the matched step so the caller
+ * can refuse to accept it a second time (replay), or null.
+ */
+export function verifyCode(secret: string, code: string, now = Date.now(), lastStep = 0): number | null {
+  const c = code.replace(/\s/g, '');
+  if (!/^\d{6}$/.test(c)) return null;
+  const cur = Math.floor(now / 1000 / STEP_SEC);
+  for (const step of [cur, cur - 1, cur + 1]) {
+    if (step <= lastStep) continue;
+    const want = Buffer.from(codeAt(secret, step));
+    if (crypto.timingSafeEqual(want, Buffer.from(c))) return step;
+  }
+  return null;
+}
+
+export function otpauthUri(secret: string, account: string, issuer: string): string {
+  const label = encodeURIComponent(`${issuer}:${account}`);
+  return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SEC}`;
+}
+
+const hashCode = (c: string): string => crypto.createHash('sha256').update(c.replace(/[\s-]/g, '').toLowerCase()).digest('hex');
+
+/** 8 one-time codes: the plain list (shown once) and the hashes to store */
+export function newRecoveryCodes(): { plain: string[]; hashes: string[] } {
+  const plain = Array.from({ length: 8 }, () => {
+    const raw = crypto.randomBytes(5).toString('hex');
+    return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+  });
+  return { plain, hashes: plain.map(hashCode) };
+}
+
+/** removes the code from the list when it matches; null when it does not */
+export function useRecoveryCode(hashes: string[], code: string): string[] | null {
+  if (!/^[0-9a-f]{5}-?[0-9a-f]{5}$/i.test(code.trim())) return null;
+  const h = hashCode(code);
+  const i = hashes.indexOf(h);
+  if (i < 0) return null;
+  return hashes.filter((_, j) => j !== i);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -52876,6 +53092,149 @@ export function StatsSummary() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/TwoFactorCard.tsx" << '__COREGSM_EOF__'
+/** Profile → Security: two-factor sign-in (TOTP) with one-time recovery codes. */
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { api } from '../../api';
+import { t } from '../../i18n';
+import { Button, ErrorLine, PasswordField, toast } from '../../ui';
+
+interface Status { enabled: boolean; recoveryLeft: number; hasPassword: boolean }
+interface Setup { secret: string; uri: string }
+
+const groups = (secret: string) => secret.replace(/(.{4})/g, '$1 ').trim();
+
+export function TwoFactorCard() {
+  const [st, setSt] = useState<Status | null>(null);
+  const [setup, setSetup] = useState<Setup | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [disabling, setDisabling] = useState(false);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try { setSt(await api<Status>('/auth/2fa')); } catch (e) { setError((e as Error).message); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const reset = () => { setSetup(null); setDisabling(false); setCode(''); setPassword(''); setError(''); };
+
+  const start = async () => {
+    setError(''); setBusy(true);
+    try { setSetup(await api<Setup>('/auth/2fa/setup', 'POST')); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+
+  const enable = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try {
+      const r = await api<{ recoveryCodes: string[] }>('/auth/2fa/enable', 'POST', { code: code.trim() });
+      toast(t('pf.2fa.enabledToast'));
+      reset();
+      setCodes(r.recoveryCodes);
+      await load();
+    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+  };
+
+  const disable = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try {
+      await api('/auth/2fa/disable', 'POST', { code: code.trim(), ...(st?.hasPassword ? { password } : {}) });
+      toast(t('pf.2fa.done'));
+      reset();
+      await load();
+    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+  };
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText((codes ?? []).join('\n')); toast(t('pf.2fa.copied')); } catch { /* the codes stay on screen */ }
+  };
+
+  if (!st) return <div className="panel p-6"><ErrorLine text={error} /></div>;
+
+  if (codes) {
+    return (
+      <section className="panel space-y-3.5 p-6" aria-labelledby="pf-2fa-rec">
+        <h2 id="pf-2fa-rec" className="text-lg font-black">{t('pf.2fa.recoveryTitle')}</h2>
+        <p className="font-semibold text-mute">{t('pf.2fa.recoveryHint')}</p>
+        <ul className="grid grid-cols-2 gap-2 font-mono text-sm font-bold">
+          {codes.map((c) => <li key={c} className="rounded-xl bg-black/10 px-3 py-2 text-center select-all">{c}</li>)}
+        </ul>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn btn-outline" onClick={() => void copy()}>{t('pf.2fa.copy')}</button>
+          <button type="button" className="btn" onClick={() => setCodes(null)}>{t('pf.2fa.saved')}</button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel space-y-3.5 p-6" aria-labelledby="pf-2fa">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="pf-2fa" className="text-lg font-black">{t('pf.2fa.title')}</h2>
+        <span className={`rounded-full px-3 py-1 text-xs font-black ${st.enabled ? 'bg-okbg text-ok' : 'bg-black/10 text-mute'}`}>{st.enabled ? t('pf.2fa.on') : t('pf.2fa.off')}</span>
+      </div>
+
+      {!st.enabled && !setup && (
+        <>
+          <p className="font-semibold text-mute">{t('pf.2fa.intro')}</p>
+          <ErrorLine text={error} />
+          <Button type="button" loading={busy} onClick={() => void start()}>{t('pf.2fa.start')}</Button>
+        </>
+      )}
+
+      {!st.enabled && setup && (
+        <form onSubmit={enable} noValidate className="space-y-3.5">
+          <p className="font-semibold text-mute">{t('pf.2fa.scan')}</p>
+          <p className="text-sm font-bold">
+            <a className="text-link hover:underline" href={setup.uri}>{t('pf.2fa.openApp')}</a>
+          </p>
+          <div>
+            <div className="label">{t('pf.2fa.key')}</div>
+            <code className="block rounded-xl bg-black/10 px-3 py-2 font-mono text-sm font-bold break-all select-all">{groups(setup.secret)}</code>
+          </div>
+          <div>
+            <label htmlFor="pf-2fa-code" className="label">{t('pf.2fa.code')}</label>
+            <input id="pf-2fa-code" className="input tracking-widest" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" maxLength={8} autoFocus />
+          </div>
+          <ErrorLine text={error} />
+          <div className="flex flex-wrap gap-2">
+            <Button loading={busy}>{t('pf.2fa.confirm')}</Button>
+            <button type="button" className="btn btn-outline" onClick={reset}>{t('pf.2fa.cancel')}</button>
+          </div>
+        </form>
+      )}
+
+      {st.enabled && !disabling && (
+        <>
+          <p className="font-semibold text-mute">{t('pf.2fa.left', { n: st.recoveryLeft })}</p>
+          <button type="button" className="btn btn-outline" onClick={() => setDisabling(true)}>{t('pf.2fa.disable')}</button>
+        </>
+      )}
+
+      {st.enabled && disabling && (
+        <form onSubmit={disable} noValidate className="space-y-3.5">
+          <p className="font-semibold text-mute">{t('pf.2fa.disableHint')}</p>
+          {st.hasPassword && <PasswordField id="pf-2fa-pass" label={t('pf.2fa.password')} value={password} onChange={setPassword} autoComplete="current-password" />}
+          <div>
+            <label htmlFor="pf-2fa-dcode" className="label">{t('pf.2fa.code')}</label>
+            <input id="pf-2fa-dcode" className="input tracking-widest" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" maxLength={16} autoFocus />
+          </div>
+          <ErrorLine text={error} />
+          <div className="flex flex-wrap gap-2">
+            <Button loading={busy}>{t('pf.2fa.disable')}</Button>
+            <button type="button" className="btn btn-outline" onClick={reset}>{t('pf.2fa.cancel')}</button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/VrRank.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import type { MyRank, VrAchievement } from '../../api';
@@ -60341,6 +60700,31 @@ const en: Record<keyof typeof ru, string> = {
   'login.locked': 'Too many attempts. Try again in {time}',
   'login.remember': 'Remember me (username only)',
   'login.submit': 'Sign in',
+  'login.code': 'Verification code',
+  'login.enterCode': 'Enter the code',
+  'login.codeHint': 'Six digits from your authenticator app, or one of your recovery codes.',
+  'pf.2fa.title': 'Two-factor authentication',
+  'pf.2fa.intro': 'Besides the password, signing in will ask for a code from an authenticator app (Google Authenticator, Aegis, 1Password and others).',
+  'pf.2fa.on': 'On',
+  'pf.2fa.off': 'Off',
+  'pf.2fa.left': 'Recovery codes left: {n}',
+  'pf.2fa.start': 'Turn on',
+  'pf.2fa.scan': 'Add the key to your authenticator app: open the link or type the key by hand.',
+  'pf.2fa.openApp': 'Open in the app',
+  'pf.2fa.key': 'Key',
+  'pf.2fa.code': 'Code from the app',
+  'pf.2fa.confirm': 'Confirm and turn on',
+  'pf.2fa.cancel': 'Cancel',
+  'pf.2fa.recoveryTitle': 'Save your recovery codes',
+  'pf.2fa.recoveryHint': 'Each code works once and replaces the app code if you lose your phone. They are shown only now.',
+  'pf.2fa.copy': 'Copy',
+  'pf.2fa.copied': 'Copied',
+  'pf.2fa.saved': 'I have saved the codes',
+  'pf.2fa.disable': 'Turn off',
+  'pf.2fa.disableHint': 'Turning it off needs your password and a code from the app (or a recovery code).',
+  'pf.2fa.password': 'Password',
+  'pf.2fa.done': 'Two-factor authentication is off',
+  'pf.2fa.enabledToast': 'Two-factor authentication is on',
   'login.checking': 'Checking…',
   'reg.rule': 'Username: 3-32 characters: letters, digits, single spaces between words, _ . -',
   'reg.taken': 'This username is already taken',
@@ -61000,6 +61384,15 @@ const errorsEn: Record<string, string> = {
   new_password_min_8: 'The new password must be at least 8 characters long',
   passwords_differ: 'The passwords do not match',
   wrong_current_password: 'The current password is wrong',
+  two_factor_code_bad: 'The verification code is wrong',
+  too_many_attempts_later: 'Too many attempts. Try again later',
+  two_factor_already_on: 'Two-factor authentication is already on',
+  two_factor_code_required: 'Enter the code from the app',
+  two_factor_not_started: 'Start the set-up first',
+  two_factor_enable_code_bad: 'The code did not match. Check the time on your phone and try again',
+  two_factor_not_on: 'Two-factor authentication is not on',
+  password_wrong: 'The password is wrong',
+  two_factor_code_mismatch: 'The code did not match',
   email_needs_password: 'Enter your current password to change the e-mail',
   check_address: 'Check the address',
   bad_email: 'Invalid e-mail address',
@@ -61230,6 +61623,31 @@ const ru = {
   'login.locked': 'Слишком много попыток. Повторите через {time}',
   'login.remember': 'Запомнить меня (только логин)',
   'login.submit': 'Войти',
+  'login.code': 'Код подтверждения',
+  'login.enterCode': 'Введите код',
+  'login.codeHint': 'Шесть цифр из приложения-аутентификатора или один из кодов восстановления.',
+  'pf.2fa.title': 'Двухфакторная защита',
+  'pf.2fa.intro': 'При входе, кроме пароля, потребуется код из приложения-аутентификатора (Google Authenticator, Aegis, 1Password и др.).',
+  'pf.2fa.on': 'Включена',
+  'pf.2fa.off': 'Выключена',
+  'pf.2fa.left': 'Кодов восстановления осталось: {n}',
+  'pf.2fa.start': 'Включить',
+  'pf.2fa.scan': 'Добавьте ключ в приложение-аутентификатор: отсканируйте код или введите ключ вручную.',
+  'pf.2fa.openApp': 'Открыть в приложении',
+  'pf.2fa.key': 'Ключ',
+  'pf.2fa.code': 'Код из приложения',
+  'pf.2fa.confirm': 'Подтвердить и включить',
+  'pf.2fa.cancel': 'Отмена',
+  'pf.2fa.recoveryTitle': 'Сохраните коды восстановления',
+  'pf.2fa.recoveryHint': 'Каждый код работает один раз и заменяет код из приложения, если телефон потерян. Показываются только сейчас.',
+  'pf.2fa.copy': 'Копировать',
+  'pf.2fa.copied': 'Скопировано',
+  'pf.2fa.saved': 'Я сохранил(а) коды',
+  'pf.2fa.disable': 'Выключить',
+  'pf.2fa.disableHint': 'Для выключения нужны пароль и код из приложения (или код восстановления).',
+  'pf.2fa.password': 'Пароль',
+  'pf.2fa.done': 'Двухфакторная защита выключена',
+  'pf.2fa.enabledToast': 'Двухфакторная защита включена',
   'login.checking': 'Проверяю…',
   'reg.rule': 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -',
   'reg.taken': 'Этот логин уже занят',
@@ -64989,6 +65407,11 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   const [passErr, setPassErr] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
+  // second factor: set once the server says the account has it; the code field then appears
+  const [needCode, setNeedCode] = useState(false);
+  const [code, setCode] = useState('');
+  const [codeErr, setCodeErr] = useState('');
+  const codeRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [lockUntil, setLockUntil] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -65020,8 +65443,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy || locked) return;
-    setUserErr(''); setPassErr(''); setError(''); setPending(false);
+    setUserErr(''); setPassErr(''); setCodeErr(''); setError(''); setPending(false);
     const name = username.trim();
+    if (needCode && !code.trim()) { setCodeErr(t('login.enterCode')); codeRef.current?.focus(); shake(); return; }
     if (!name || !password) {
       if (!name) setUserErr(t('login.enterUser'));
       if (!password) setPassErr(t('login.enterPass'));
@@ -65031,7 +65455,13 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
     }
     setBusy(true);
     try {
-      const r = await api<{ token: string }>('/auth/login', 'POST', { username: name, password });
+      const r = await api<{ token?: string; twoFactor?: boolean }>('/auth/login', 'POST', needCode ? { username: name, password, code: code.trim() } : { username: name, password });
+      if (!r.token) {
+        // the password was right and the account asks for a code
+        setNeedCode(true);
+        setTimeout(() => codeRef.current?.focus(), 0);
+        return;
+      }
       writeName(remember ? name : '');
       setToken(r.token);
       onDone();
@@ -65044,6 +65474,11 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         setNow(Date.now());
       } else if (status === 403 && data.pending) {
         setPending(true);
+      } else if (status === 401 && data.twoFactor) {
+        const n = typeof data.attemptsLeft === 'number' ? data.attemptsLeft : null;
+        setCodeErr(`${(err as Error).message}${n !== null ? t('login.attempts', { n }) : ''}`);
+        codeRef.current?.focus();
+        codeRef.current?.select();
       } else if (status === 401) {
         const n = typeof data.attemptsLeft === 'number' ? data.attemptsLeft : null;
         setPassErr(`${(err as Error).message}${n !== null ? t('login.attempts', { n }) : ''}`);
@@ -65101,6 +65536,29 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         error={passErr}
         disabled={locked}
       />
+
+      {needCode && (
+        <div>
+          <label htmlFor="login-code" className="label">{t('login.code')}</label>
+          <input
+            id="login-code"
+            ref={codeRef}
+            className="input tracking-widest"
+            value={code}
+            onChange={(e) => { setCode(e.target.value); setCodeErr(''); }}
+            inputMode="text"
+            autoComplete="one-time-code"
+            autoCapitalize="none"
+            spellCheck={false}
+            maxLength={16}
+            disabled={locked}
+            aria-invalid={codeErr ? true : undefined}
+            aria-describedby="login-code-hint"
+          />
+          <p id="login-code-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('login.codeHint')}</p>
+          <FieldError id="login-code-err" text={codeErr} />
+        </div>
+      )}
 
       <label className="flex cursor-pointer items-center gap-2.5 text-sm font-bold text-mute">
         <input type="checkbox" className="h-4 w-4 accent-brand" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
@@ -66429,6 +66887,7 @@ import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/pro
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
+import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary } from '../components/profile/Stats';
@@ -66574,6 +67033,7 @@ function SecurityTab() {
       <div className="grid items-start gap-5 md:grid-cols-2">
         <EmailCard onChanged={reload} />
         <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
+        <TwoFactorCard />
         <DiscordCard onChanged={reload} />
         <PushCard />
         <SessionsCard key={rev} />
