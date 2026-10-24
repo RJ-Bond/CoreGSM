@@ -9,7 +9,7 @@ A self-hosted alternative to DiscordGSM. A web panel where you add game servers,
 ![Card example](docs/card-preview.png)
 
 - **Panel**: React and Tailwind. Servers, cards, channel bindings, roles, news, gallery, backups.
-- **Backend**: Node.js 22, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig) (server queries), SQLite, PNG card rendering.
+- **Backend**: Node.js 24, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig) (server queries), SQLite, PNG card rendering.
 - **Bot**: discord.js 14. Sends one message with an image to a channel and edits it from then on.
 - **Nginx**: HTTPS, HTTP redirect, Let's Encrypt with auto-renewal.
 - **Proxy**: SOCKS5 and HTTP for the bot and the installer.
@@ -77,7 +77,7 @@ bash tools/build-installer.sh
 Commit them together with your changes; the `check-installer` workflow fails if they are stale. Run the parts locally without Docker:
 
 ```bash
-# backend (Node.js 22+ and a compiler for better-sqlite3)
+# backend (Node.js 24+ and a compiler for better-sqlite3)
 cd src/core-backend && npm ci && npm run build
 DB_PATH=./data/dev.db JWT_SECRET=dev-secret-dev-secret INTERNAL_TOKEN=dev-token-dev-token SETUP_TOKEN=dev-code npm start
 
