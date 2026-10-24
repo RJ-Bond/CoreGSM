@@ -1019,6 +1019,23 @@ const en: Record<keyof typeof ru, string> = {
   'adm.crumb.aria': 'Breadcrumbs',
   'adm.pinMove': 'Drag to reorder (Alt + arrows)',
   'adm.stack.hide': 'Hide',
+  'adm.tbl.copied': 'Address copied',
+  'adm.tbl.copy': 'Copy the address',
+  'adm.tbl.details': 'Details',
+  'adm.tbl.maintOn': 'Maintenance for an hour',
+  'adm.tbl.maintOff': 'End the maintenance',
+  'adm.tbl.maintGlobal': 'The window covers all servers: end it in «Maintenance»',
+  'adm.tbl.maintEnded': 'Maintenance ended',
+  'adm.tbl.maintStarted': 'One hour of maintenance started',
+  'adm.tbl.maintName': 'Maintenance',
+  'adm.tbl.d.addr': 'Address',
+  'adm.tbl.d.query': 'Query port',
+  'adm.tbl.d.shown': 'Shown as',
+  'adm.tbl.d.game': 'Game',
+  'adm.tbl.d.channels': 'Bound channels',
+  'adm.tbl.d.updated': 'Polled',
+  'adm.tbl.d.maint': 'Maintenance',
+  'adm.density': 'Compact',
 };
 
 export default en;

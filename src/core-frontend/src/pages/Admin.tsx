@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
+import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
-import { confirmDialog } from '../confirm';
+import type { MaintenanceWindow } from '../maintenance';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, usePoll, navigate } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminOverview from './AdminOverview';
+import { ServersArt } from '../components/Illustrations';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
@@ -79,6 +80,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     writeIds(PINS_KEY, r.pins);
   };
   const badges = useNavBadges(isAdmin, me?.perms ?? []);
+  const [dense, setDense] = useState(() => { try { return localStorage.getItem('coregsm_admin_density') === 'compact'; } catch { return false; } });
+  const flipDense = () => setDense((v) => { try { localStorage.setItem('coregsm_admin_density', v ? 'cozy' : 'compact'); } catch { /* not remembered */ } return !v; });
   // the sidebar scrolls sideways on a phone: keep the current section in view
   useEffect(() => {
     if (!window.matchMedia('(max-width: 767px)').matches) return;
@@ -148,7 +151,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
+    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]" data-density={dense ? 'compact' : undefined}>
       <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
         {isAdmin ? (
           <>
@@ -193,6 +196,9 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             {sections.map((s) => link(s))}
           </>
         )}
+        <button type="button" className="adm-density max-md:hidden" aria-pressed={dense} onClick={flipDense}>
+          <span aria-hidden>{dense ? '▤' : '▦'}</span>{t('adm.density')}
+        </button>
       </nav>
       <div className="min-w-0 space-y-5">
         {isAdmin && (
@@ -338,6 +344,21 @@ function ServersManage({ sub }: { sub: string }) {
   const [editing, setEditing] = useState<{ id?: number; data: ServerInput; cover?: string | null } | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
+  // removed servers are hidden at once and really deleted after the 6 s in which «Отменить» works
+  const [hidden, setHidden] = useState<number[]>([]);
+  const [bindings, setBindings] = useState<Map<number, number>>(new Map());
+  const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
+  usePoll(
+    () => Promise.allSettled([api<Binding[]>('/bindings'), api<MaintenanceWindow[]>('/maintenance')]).then(([b, w]) => {
+      if (b.status === 'fulfilled') {
+        const m = new Map<number, number>();
+        for (const x of b.value) for (const id of x.serverIds?.length ? x.serverIds : [x.serverId]) m.set(id, (m.get(id) ?? 0) + 1);
+        setBindings(m);
+      }
+      if (w.status === 'fulfilled') setWindows(w.value);
+    }),
+    30_000,
+  );
   // 30-day availability of every server (the public status endpoint); a column stays «–» without it
   const [uptime, setUptime] = useState<Map<number, number>>(new Map());
   usePoll(
@@ -366,10 +387,40 @@ function ServersManage({ sub }: { sub: string }) {
     if (sub === 'new') navigate('/admin/servers');
   };
 
-  const remove = async (s: Server) => {
-    if (!(await confirmDialog({ title: t('adm.srv.deleteQ', { name: s.name }), text: t('adm.srv.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
-    await api(`/servers/${s.id}`, 'DELETE').then(() => toast(t('adm.srv.deleted'))).catch((e: Error) => setError(e.message));
-    void load();
+  const removeSome = (list: Server[], text: string) => {
+    const ids = list.map((x) => x.id);
+    setHidden((h) => [...h, ...ids]);
+    undoable({
+      text,
+      restore: () => setHidden((h) => h.filter((x) => !ids.includes(x))),
+      commit: async () => {
+        const res = await Promise.allSettled(ids.map((id) => api(`/servers/${id}`, 'DELETE')));
+        const failed = res.filter((r) => r.status === 'rejected').length;
+        if (failed) toast(t('adm.srv.delPartial', { ok: ids.length - failed, bad: failed }), 'err');
+        setHidden((h) => h.filter((x) => !ids.includes(x)));
+        await load();
+      },
+    });
+  };
+  const remove = (s: Server) => removeSome([s], t('adm.srv.deleted'));
+  // a one-hour window for this server, or the end of the one that is running
+  const toggleMaintenance = async (s: Server) => {
+    try {
+      if (s.maintenance) {
+        const w = windows.find((x) => x.serverId === s.id && x.active);
+        if (!w) { toast(t('adm.tbl.maintGlobal'), 'info'); return; }
+        await api(`/maintenance/${w.id}`, 'DELETE');
+        toast(t('adm.tbl.maintEnded'));
+      } else {
+        const now = Date.now();
+        await api('/maintenance', 'POST', { serverId: s.id, name: t('adm.tbl.maintName'), startTs: now, endTs: now + 3_600_000, repeat: 'none' });
+        toast(t('adm.tbl.maintStarted'));
+      }
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    }
+    await load();
+    api<MaintenanceWindow[]>('/maintenance').then(setWindows).catch(() => undefined);
   };
   const refreshMany = async (list: Server[]) => {
     await Promise.allSettled(list.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
@@ -377,10 +428,7 @@ function ServersManage({ sub }: { sub: string }) {
     await load();
   };
   const removeMany = async (list: Server[]) => {
-    const res = await Promise.allSettled(list.map((s) => api(`/servers/${s.id}`, 'DELETE')));
-    const failed = res.filter((r) => r.status === 'rejected').length;
-    toast(failed ? t('adm.srv.delPartial', { ok: list.length - failed, bad: failed }) : t('adm.srv.delMany', { n: list.length }), failed ? 'err' : undefined);
-    await load();
+    removeSome(list, t('adm.srv.delMany', { n: list.length }));
   };
   const refresh = async (s: Server) => {
     setBusyId(s.id);
@@ -412,7 +460,7 @@ function ServersManage({ sub }: { sub: string }) {
       )}
 
       {loaded && !error && servers.length === 0 && (
-        <Empty title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
+        <Empty art={<ServersArt />} title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
           <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </Empty>
       )}
@@ -420,11 +468,13 @@ function ServersManage({ sub }: { sub: string }) {
       {servers.length > 0 && (
         <div className="fade-in">
           <AdminServersTable
-            servers={servers}
+            servers={servers.filter((x) => !hidden.includes(x.id))}
             a={{
               isAdmin,
               busyId,
               uptime,
+              bindings,
+              onMaintenance: (sv) => void toggleMaintenance(sv),
               onRefresh: (sv) => void refresh(sv),
               onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
               onRemove: (sv) => void remove(sv),
