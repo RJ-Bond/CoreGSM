@@ -678,7 +678,6 @@ export interface PublicNews {
   reactions?: NewsReaction[];
 }
 
-export type NewsEmoji = '👍' | '🔥' | '❤️' | '😮';
 export interface NewsReaction { emoji: string; count: number; mine: boolean }
 
 /** GET /news/:id */
