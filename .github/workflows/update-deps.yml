@@ -1,0 +1,54 @@
+name: update-deps
+
+# One-off helper, started by hand (Actions -> update-deps -> Run workflow). It bumps the packages that `npm audit`
+# complains about, checks the result (audit, build, tests), rebuilds install.sh and pushes the result to the branch
+# `fix-audit`. Open a pull request from that branch afterwards. Commits made with GITHUB_TOKEN do not start other
+# workflows, which is why the checks run inside this job.
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Packages to bump in core-backend (space separated, e.g. nodemailer@latest)'
+        default: 'nodemailer@latest'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      PACKAGES: ${{ inputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bump packages
+        working-directory: src/core-backend
+        run: |
+          set -e
+          npm ci
+          # shellcheck disable=SC2086
+          npm install $PACKAGES
+          npm update body-parser express
+      - name: npm audit
+        working-directory: src/core-backend
+        run: npm audit --omit=dev --audit-level=high
+      - name: Typecheck and test
+        working-directory: src/core-backend
+        run: |
+          npm run typecheck
+          npm test
+      - name: Rebuild install.sh
+        run: bash tools/build-installer.sh
+      - name: Push branch fix-audit
+        run: |
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b fix-audit
+          git add -A
+          git commit -m "Update dependencies reported by npm audit ($PACKAGES)"
+          git push --force -u origin fix-audit
