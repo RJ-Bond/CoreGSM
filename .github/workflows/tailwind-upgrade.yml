@@ -23,6 +23,11 @@ jobs:
           set -e
           npm ci --no-audit --no-fund
           npx --yes @tailwindcss/upgrade --force 2>&1 | tee ../../upgrade.log
+      - name: Undo the tool's rename of the Button variant (outline is a variant name here, not a Tailwind class)
+        working-directory: src/core-frontend
+        run: |
+          grep -n "outline-solid" src/components/Button.tsx || true
+          sed -i "s/outline-solid/outline/g" src/components/Button.tsx
       - name: Typecheck, tests and build
         working-directory: src/core-frontend
         run: |
