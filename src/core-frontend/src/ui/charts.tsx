@@ -1,6 +1,7 @@
 /** Small charts: the 24 h sparkline, smooth area paths and the fleet status bar. */
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
+import { t } from '../i18n';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -126,6 +127,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const downs = downs24.filter(Boolean).length;
   const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
   const top = Math.max(...pts);
+  const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
     ? (
       <div className="relative">
@@ -133,10 +135,14 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
         {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
         <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
         <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
+        <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
       </div>
     )
     : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
 }
+
+/** «−24 ч» / «−90 мин»: how long ago a point of the chart is */
+const ageLabel = (min: number): string => (min >= 120 ? `−${Math.round(min / 60)} ${t('spark.h')}` : `−${Math.max(1, Math.round(min))} ${t('spark.min')}`);
 
 /**
  * The red «server was down» band of sample `i` of `n` in a chart `w` wide with `pad` on both sides: the part of the
