@@ -25,6 +25,23 @@ function Sparkle({ x, y, s = 1 }: { x: number; y: number; s?: number }) {
   );
 }
 
+/** A sheet with lines and a pen: the journal of actions. */
+export function JournalArt() {
+  return (
+    <Frame label="Журнал действий">
+      <ellipse cx="110" cy="132" rx="78" ry="9" className="fill-soft" />
+      <circle cx="110" cy="72" r="62" className="fill-soft" />
+      <rect x="72" y="26" width="78" height="100" rx="10" className="fill-card stroke-line" strokeWidth="2" />
+      {[46, 62, 78, 94].map((y, i) => <rect key={y} x="84" y={y} width={i === 3 ? 30 : 54} height="6" rx="3" className="fill-line" />)}
+      <g className="art-float">
+        <circle cx="156" cy="40" r="15" className="fill-brand" />
+        <path d="M150 46l2-6 9-9 4 4-9 9-6 2z" stroke="#fff" strokeWidth="2" strokeLinejoin="round" fill="none" />
+      </g>
+      <Sparkle x={52} y={40} /> <Sparkle x={178} y={104} s={0.8} />
+    </Frame>
+  );
+}
+
 /** A small rack of three servers with the three status lights. */
 export function ServersArt() {
   const rows = [34, 66, 98];

@@ -1,4 +1,5 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { confirmDialog } from '../confirm';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES } from '../games';
 import GamePicker from '../components/GamePicker';
@@ -7,6 +8,16 @@ import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
 import { errorText } from '../apiErrors';
+
+/** the first problem with the address field, or '' (an address only: no scheme, path, spaces or a port glued to it) */
+export function hostError(v: string): string {
+  const h = v.trim();
+  if (!h) return '';
+  if (/\s/.test(h)) return 'В адресе не должно быть пробелов';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(h) || h.includes('/')) return 'Укажите только адрес, без http:// и пути';
+  if ((h.match(/:/g) ?? []).length === 1) return 'Порт вводится в отдельном поле, уберите «:порт» из адреса';
+  return '';
+}
 
 export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
 
@@ -85,7 +96,21 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   const gameProfile = custom ? undefined : profiles?.[f.game];
   const fieldList = shownFields(gameProfile?.fields);
 
-  const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0;
+  const hostProblem = hostError(f.host);
+  const portProblem = f.port && (f.port < 1 || f.port > 65535 || !Number.isInteger(f.port)) ? 'Порт — число от 1 до 65535' : '';
+  const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0 && !hostProblem && !portProblem;
+  // closing with unsaved edits asks first; a reload or closing the tab is warned about by the browser
+  const dirty = JSON.stringify(f) !== JSON.stringify(initial);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+  const close = async () => {
+    if (dirty && !(await confirmDialog({ title: 'Закрыть без сохранения?', text: 'Изменения в форме будут потеряны.', confirmLabel: 'Закрыть', cancelLabel: 'Продолжить правку', danger: true }))) return;
+    onClose();
+  };
 
   const runTest = async () => {
     setTesting(true);
@@ -114,7 +139,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   };
 
   return (
-    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={onClose}>
+    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={() => void close()}>
       <form onSubmit={submit} className="space-y-3.5">
         <div>
           <span className="label">Игра</span>
@@ -128,7 +153,8 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
             <Field label="Адрес для опроса (IP или домен)">
-              <input id="srv-host" className="input" value={f.host} onChange={(e) => change({ host: e.target.value.trim() })} required placeholder="192.168.1.10" />
+              <input id="srv-host" className="input" value={f.host} onChange={(e) => change({ host: e.target.value.trim() })} required placeholder="192.168.1.10" aria-invalid={hostProblem ? true : undefined} aria-describedby={hostProblem ? 'srv-host-err' : undefined} />
+            {hostProblem && <p id="srv-host-err" className="mt-1 text-sm font-bold text-bad" role="alert">{hostProblem}</p>}
             </Field>
           </div>
           <Field label="Порт">
@@ -200,8 +226,9 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
         </details>
 
         <ErrorLine text={error} />
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
+        {portProblem && <p className="text-sm font-bold text-bad" role="alert">{portProblem}</p>}
+        <div className="adm-sticky-foot flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-ghost" onClick={() => void close()}>Отмена</button>
           <button className="btn" disabled={busy || !canTest}>{busy ? 'Сохраняю…' : 'Сохранить'}</button>
         </div>
       </form>

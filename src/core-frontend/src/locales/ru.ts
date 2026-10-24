@@ -1020,6 +1020,23 @@ const ru = {
   'adm.crumb.aria': 'Хлебные крошки',
   'adm.pinMove': 'Перетащите, чтобы изменить порядок (Alt + стрелки)',
   'adm.stack.hide': 'Скрыть',
+  'adm.tbl.copied': 'Адрес скопирован',
+  'adm.tbl.copy': 'Копировать адрес',
+  'adm.tbl.details': 'Подробности',
+  'adm.tbl.maintOn': 'Тех. работы на час',
+  'adm.tbl.maintOff': 'Завершить тех. работы',
+  'adm.tbl.maintGlobal': 'Работы заданы для всех серверов: завершите их в разделе «Обслуживание»',
+  'adm.tbl.maintEnded': 'Тех. работы завершены',
+  'adm.tbl.maintStarted': 'Тех. работы на час включены',
+  'adm.tbl.maintName': 'Технические работы',
+  'adm.tbl.d.addr': 'Адрес',
+  'adm.tbl.d.query': 'Query-порт',
+  'adm.tbl.d.shown': 'Показывается как',
+  'adm.tbl.d.game': 'Игра',
+  'adm.tbl.d.channels': 'Привязано каналов',
+  'adm.tbl.d.updated': 'Опрошен',
+  'adm.tbl.d.maint': 'Тех. работы',
+  'adm.density': 'Компактно',
 };
 
 export default ru;
