@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c140028019f3"
+COREGSM_BUILD="171528e9a3d5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -75402,6 +75402,9 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 8px 0 4px; font-size: 13px; font-weight: 650; color: rgb(var(--mute)); }
 .srv-foot a { color: inherit; }
 .srv-foot a:hover, .srv-foot a:focus-visible { color: rgb(var(--link)); text-decoration: underline; }
+/* the end dot and the peak caption of the banner chart stay inside the card */
+.pulse-chart { padding: 8px 10px 0 0; }
+.pulse-nums > div { border-left-color: rgb(var(--ink) / .14); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
