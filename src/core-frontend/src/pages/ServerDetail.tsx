@@ -372,7 +372,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-5 lg:self-start" style={stagger(2)} title="Последние события">
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-5" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>

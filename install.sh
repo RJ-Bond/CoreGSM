@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e06dcb923cde"
+COREGSM_BUILD="2d435049d22b"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -55495,6 +55495,8 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   const [stars, setStars] = useState(0);
   const [text, setText] = useState('');
   const [editing, setEditing] = useState(false);
+  // with no reviews at all the form stays folded behind one button instead of filling the block
+  const [composing, setComposing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -55516,12 +55518,17 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   };
 
   if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
-  const formOpen = !!me && (editing || !r.mine);
-  const others = r.items.filter((x) => x.id !== r.mine?.id);
   const empty = r.count === 0;
+  const formOpen = !!me && (editing || (!r.mine && (!empty || composing)));
+  const others = r.items.filter((x) => x.id !== r.mine?.id);
   return (
     <div className="rv">
-      {empty && <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>}
+      {empty && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>
+          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>Оставить отзыв</button>}
+        </div>
+      )}
       {!empty && <div className="rv-score">
         <div className="text-center">
           <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
@@ -55563,7 +55570,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
           <textarea className="input min-h-20" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
           <ErrorLine text={error} />
           <div className="flex justify-end gap-2">
-            {editing && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>}
+            {(editing || (composing && empty)) && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing(false); setComposing(false); }}>Отмена</button>}
             <Button loading={busy} className="btn-sm">{r.mine ? 'Сохранить' : 'Оставить отзыв'}</Button>
           </div>
         </form>
@@ -63733,10 +63740,15 @@ export default function AdminStart() {
         </div>
       </section>
 
-      <section aria-labelledby="start-map" className="tile p-5 sm:p-6">
-        <h2 id="start-map" className="text-lg font-black">Где что находится</h2>
-        <p className="mb-4 font-semibold text-mute">Меню слева разделено на четыре группы. Вот зачем нужен каждый раздел.</p>
-        <div className="grid gap-x-8 gap-y-5 md:grid-cols-2">
+      <details className="tile start-map group p-5 sm:p-6">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+          <span>
+            <span className="block text-lg font-black">Где что находится</span>
+            <span className="block font-semibold text-mute">Меню слева разделено на четыре группы. Развернуть описание разделов.</span>
+          </span>
+          <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-mute transition-transform group-open:rotate-180"><path d="M6 9l6 6 6-6" /></svg>
+        </summary>
+        <div className="mt-4 grid gap-x-8 gap-y-5 md:grid-cols-2">
           {ADMIN_GROUPS.map((g, gi) => (
             <div key={g.title}>
               <div className="adm-group-title px-0!">{g.title}</div>
@@ -63747,7 +63759,7 @@ export default function AdminStart() {
             </div>
           ))}
         </div>
-      </section>
+      </details>
     </AdminPage>
   );
 }
@@ -64507,7 +64519,14 @@ export default function CommunityPage() {
         <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам.</p>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {/* nobody has played yet: two empty cards become one line */}
+      {top.length === 0 && c.feed.length === 0 && (
+        <section className="tile p-4 sm:p-5">
+          <h2 className="text-lg font-extrabold">Активность игроков</h2>
+          <p className="cm-sub">Пока никто не играл. Здесь появятся самые активные игроки и живая лента заходов.</p>
+        </section>
+      )}
+      <div className={`grid gap-5 lg:grid-cols-2 ${top.length === 0 && c.feed.length === 0 ? 'hidden' : ''}`}>
         <section className="tile p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-extrabold">Самые активные</h2>
@@ -68256,7 +68275,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-5 lg:self-start" style={stagger(2)} title="Последние события">
+          <SectionCard id="ov-events" state={sections} className="lg:col-span-5" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           <SectionCard id="ov-players" state={sections} className="lg:col-span-7" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
