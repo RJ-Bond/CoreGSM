@@ -15,6 +15,7 @@ import { registerDigest, startDigestTimer } from './digest.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
+import { startDbMaintenance } from './dbMaintenance.js';
 import { registerMetrics } from './metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
@@ -165,6 +166,7 @@ registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
+startDbMaintenance();
 registerOverview({ app, viewer });
 
 // ---------- errors ----------
