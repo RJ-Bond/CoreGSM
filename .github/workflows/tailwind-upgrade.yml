@@ -26,9 +26,17 @@ jobs:
       - name: Typecheck, tests and build
         working-directory: src/core-frontend
         run: |
-          npm run typecheck
-          npm test
-          npx vite build
+          note() { # $1 = title, $2 = file: the tail of the output as an annotation
+            msg=$(tail -c 3000 "$2" | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=$1::$msg"
+          }
+          fail=0
+          npm run typecheck > /tmp/tc.txt 2>&1 || { note typecheck /tmp/tc.txt; fail=1; }
+          npm test > /tmp/test.txt 2>&1 || { note tests /tmp/test.txt; fail=1; }
+          npx vite build > /tmp/build.txt 2>&1 || { note build /tmp/build.txt; fail=1; }
+          note 'upgrade log' ../../upgrade.log || true
+          tail -n 15 /tmp/build.txt
+          exit $fail
       - name: Show what changed
         run: |
           git status --short | head -50
