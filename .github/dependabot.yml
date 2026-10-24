@@ -1,0 +1,42 @@
+# Weekly update PRs for the npm packages, the Docker base images and the GitHub Actions the workflows use.
+#
+# Note: install.sh and version.txt are generated from src/ (see check-installer.yml). A Dependabot PR changes src/, so
+# run `bash tools/build-installer.sh` on its branch and commit the two files before merging.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /src/core-backend
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch: { update-types: [minor, patch] }
+  - package-ecosystem: npm
+    directory: /src/core-bot
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch: { update-types: [minor, patch] }
+  - package-ecosystem: npm
+    directory: /src/core-frontend
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch: { update-types: [minor, patch] }
+  - package-ecosystem: docker
+    directory: /src/core-backend
+    schedule: { interval: weekly, day: monday }
+  - package-ecosystem: docker
+    directory: /src/core-bot
+    schedule: { interval: weekly, day: monday }
+  - package-ecosystem: docker
+    directory: /src/core-frontend
+    schedule: { interval: weekly, day: monday }
+  - package-ecosystem: docker
+    directory: /src/nginx
+    schedule: { interval: weekly, day: monday }
+  - package-ecosystem: docker-compose
+    directory: /src
+    schedule: { interval: weekly, day: monday }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }

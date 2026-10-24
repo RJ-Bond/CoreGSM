@@ -15,6 +15,13 @@ if [ -z "${APP_DIR:-}" ]; then
   if [ -s /etc/coregsm/app_dir ]; then APP_DIR="$(head -n1 /etc/coregsm/app_dir)"; else APP_DIR=/app; fi
 fi
 BASE="${COREGSM_BASE:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main}"
+# Updates come from the newest GitHub Release, which .github/workflows/release.yml publishes only after CI is green
+# (install.sh, version.txt and, signed with Sigstore, install.sh.bundle). Until a release exists, and with
+# COREGSM_CHANNEL=main or a custom COREGSM_BASE (a fork or a test branch), the tip of the branch is used as before.
+RELEASE_BASE="${COREGSM_RELEASE_BASE:-https://github.com/RJ-Bond/CoreGSM/releases/latest/download}"
+CHANNEL="${COREGSM_CHANNEL:-release}"
+[ -n "${COREGSM_BASE:-}" ] && [ -z "${COREGSM_CHANNEL:-}" ] && CHANNEL=main
+R_SOURCE=main
 UPD="$APP_DIR/update"
 BACKUPS="$APP_DIR/backups"
 PREV="$APP_DIR/.prev"
@@ -116,6 +123,17 @@ fetch_repo() { # fetch_repo FILE -> the file's content
   fetch "$BASE/$1"
 }
 
+# version.txt of the release channel: prints it when the release exists and the file looks right, else fails
+release_meta() {
+  [ "$CHANNEL" = main ] && return 1
+  local meta
+  meta="$(fetch "$RELEASE_BASE/version.txt" 2>/dev/null)" || return 1
+  printf '%s\n' "$meta" | grep -qE '^build=[0-9a-f]{6,64}$' || return 1
+  printf '%s\n' "$meta" | grep -qE '^sha256=[0-9a-f]{64}$' || return 1
+  printf '%s\n' "$meta"
+}
+fetch_version_txt() { release_meta || fetch_repo version.txt; }
+
 # ---------- state ----------
 panel_url() { printf 'https://%s' "$(envget DOMAIN)"; }
 cur_build() { envget APP_VERSION; }
@@ -123,7 +141,7 @@ cur_build() { envget APP_VERSION; }
 remote_build() { # cached for 10 minutes so the menu opens instantly
   local f="$UPD/.remote" b=""
   if [ -f "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 600 ]; then cat "$f"; return; fi
-  b="$(FETCH_TIMEOUT=4 fetch_repo version.txt 2>/dev/null | sed -n 's/^build=//p' | head -n1)"
+  b="$(FETCH_TIMEOUT=4 fetch_version_txt 2>/dev/null | sed -n 's/^build=//p' | head -n1)"
   if [ -n "$b" ]; then mkdir -p "$UPD"; printf '%s' "$b" > "$f"; fi
   printf '%s' "$b"
 }
@@ -345,13 +363,32 @@ screen_power() {
 }
 
 # ---------- installer download / run ----------
+# The Sigstore signature that release.yml made for install.sh. It proves the file was built by that workflow in this
+# repository, which a checksum from the same place cannot. Checked when cosign is installed; without it only the
+# checksum is verified (and a note says so). Only for the release channel. Messages go to stderr: the caller captures
+# the stdout of download_installer (the path of the file).
+release_signature_ok() { # release_signature_ok FILE
+  [ "$R_SOURCE" = release ] || return 0
+  if ! command -v cosign >/dev/null 2>&1; then dim "Подпись релиза не проверена: cosign не установлен (контрольная сумма проверена)" >&2; return 0; fi
+  local b rc; b="$(mktemp)"
+  if ! fetch "$RELEASE_BASE/install.sh.bundle" > "$b" 2>/dev/null; then rm -f "$b"; bad "У релиза нет файла подписи install.sh.bundle" >&2; return 1; fi
+  cosign verify-blob --bundle "$b" \
+    --certificate-identity-regexp '^https://github\.com/RJ-Bond/CoreGSM/\.github/workflows/release\.yml@refs/heads/main$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com "$1" >/dev/null 2>&1
+  rc=$?; rm -f "$b"
+  [ "$rc" -eq 0 ] || bad "Подпись релиза не прошла проверку" >&2
+  return "$rc"
+}
+
 download_installer() { # download_installer EXPECTED_SHA -> prints path
   local tmp i; tmp="$(mktemp)"
   for i in 1 2 3 4; do
-    # the plain URL first: it comes compressed; while its cache still holds an older file the checksum differs
-    # and the GitHub API (uncompressed, always current) is used instead
-    if { { fetch "$BASE/install.sh" > "$tmp" 2>/dev/null && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; } \
-         || { fetch_repo install.sh > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; }; } && bash -n "$tmp"; then
+    # a release is fetched from the release assets (no cache delay); otherwise the plain URL of the branch first: it
+    # comes compressed; while its cache still holds an older file the checksum differs and the GitHub API
+    # (uncompressed, always current) is used instead
+    if { { [ "$R_SOURCE" = release ] && fetch "$RELEASE_BASE/install.sh" > "$tmp" 2>/dev/null && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; } \
+         || { fetch "$BASE/install.sh" > "$tmp" 2>/dev/null && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; } \
+         || { fetch_repo install.sh > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; }; } && bash -n "$tmp" && release_signature_ok "$tmp"; then
       printf '%s' "$tmp"; return 0
     fi
     sleep "${RETRY_SLEEP:-8}"
@@ -363,8 +400,9 @@ run_installer() { # run_installer FILE  (DOMAIN / LE_EMAIL / PROXY_URL may be se
   SKIP_UPDATE=1 COREGSM_FROM_MANAGER=1 bash "$1" --install
 }
 
-remote_meta() { # sets R_BUILD R_SHA
-  local meta; meta="$(fetch_repo version.txt)" || return 1
+remote_meta() { # sets R_BUILD R_SHA R_SOURCE (release | main)
+  local meta
+  if meta="$(release_meta)"; then R_SOURCE=release; else R_SOURCE=main; meta="$(fetch_repo version.txt)" || return 1; fi
   R_BUILD="$(printf '%s\n' "$meta" | sed -n 's/^build=//p' | head -n1)"
   R_SHA="$(printf '%s\n' "$meta" | sed -n 's/^sha256=//p' | head -n1)"
   [ -n "$R_BUILD" ] && [ -n "$R_SHA" ]
@@ -466,7 +504,7 @@ cmd_restore() {
   tar xzf "$file" -C "$tmp" || { bad "Архив повреждён"; rm -rf "$tmp"; return 1; }
   [ -f "$tmp/coregsm.db" ] || { bad "В архиве нет базы данных"; rm -rf "$tmp"; return 1; }
   say "Будут заменены: база данных, картинки новостей и логотип (если они есть в копии),"
-  say "а также секреты JWT_SECRET и INTERNAL_TOKEN (они должны совпадать с базой)."
+  say "а также секреты JWT_SECRET, INTERNAL_TOKEN и SECRETS_KEY (они должны совпадать с базой)."
   say "Домен, версия и сертификаты этого сервера не меняются."
   ask_yn "Восстановить из $(basename "$file")?" || { dim "Отменено"; rm -rf "$tmp"; return 0; }
   local with_certs=0
@@ -481,11 +519,11 @@ cmd_restore() {
   restore_volume "$tmp" full && ok "База данных и файлы восстановлены" || { bad "Не удалось записать данные"; rm -rf "$tmp"; return 1; }
   if [ -f "$tmp/env" ]; then
     local k v
-    for k in JWT_SECRET INTERNAL_TOKEN; do
+    for k in JWT_SECRET INTERNAL_TOKEN SECRETS_KEY; do
       v="$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"
       [ -n "$v" ] && env_set "$k" "$v"
     done
-    ok "Секреты JWT_SECRET и INTERNAL_TOKEN восстановлены"
+    ok "Секреты JWT_SECRET, INTERNAL_TOKEN и SECRETS_KEY восстановлены"
     if [ "$with_certs" = 1 ]; then
       for k in DOMAIN LE_EMAIL LOCAL_MODE CERT_MODE; do
         grep -qE "^$k=" "$tmp/env" && env_set "$k" "$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"

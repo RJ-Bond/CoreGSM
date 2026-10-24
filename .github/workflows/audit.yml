@@ -1,0 +1,32 @@
+name: audit
+
+# Known vulnerabilities in the dependencies that end up in production (devDependencies are left out). Runs every Monday
+# and whenever a lock file changes. It is a separate workflow so that a new advisory does not block unrelated pull
+# requests in ci.yml; a red run here is the signal to update the package.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  pull_request:
+    paths:
+      - 'src/*/package-lock.json'
+      - '.github/workflows/audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [core-backend, core-bot, core-frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm audit (production dependencies, high and critical)
+        working-directory: src/${{ matrix.package }}
+        run: npm audit --omit=dev --audit-level=high

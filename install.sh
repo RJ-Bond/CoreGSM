@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="737f1e8c3475"
+COREGSM_BUILD="55974c396c3d"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5004,10 +5004,10 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
 
 // ---------- scheduler ----------
 export async function runScheduledIfDue(now = Date.now()): Promise<BackupItem | null> {
-  const s = backupSettings();
-  const lastAuto = listBackups().find((i) => i.kind === 'auto')?.createdAt ?? null;
-  if (!backupDue(s.schedule, lastAuto, now)) return null;
   try {
+    const s = backupSettings();
+    const lastAuto = listBackups().find((i) => i.kind === 'auto')?.createdAt ?? null;
+    if (!backupDue(s.schedule, lastAuto, now)) return null;
     const it = await createStoredBackup('auto');
     console.log(`scheduled backup created: ${it.name}`);
     return it;
@@ -6185,8 +6185,9 @@ __COREGSM_EOF__
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey } from './secrets.js';
+import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey, reencrypt, usesLegacyKey } from './secrets.js';
 import { runMigrations } from './migrations.js';
+import { addColumn } from './schema.js';
 
 const dbPath = process.env.DB_PATH ?? './data/coregsm.db';
 export const DATA_DIR = path.dirname(dbPath);
@@ -6312,31 +6313,19 @@ CREATE TABLE IF NOT EXISTS bindings (
 `);
 
 // older databases: users get a role (every existing account was created by the setup wizard, so it is an admin)
-try {
-  db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
-} catch {
-  /* column already exists */
-}
-try {
-  db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER');
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'users', 'role', "TEXT NOT NULL DEFAULT 'admin'");
+addColumn(db, 'users', 'created_at', 'INTEGER');
 
 // accounts: approval status, linked Discord account, sessions
-for (const ddl of [
-  "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
-  'ALTER TABLE users ADD COLUMN discord_id TEXT',
-  'ALTER TABLE users ADD COLUMN discord_name TEXT',
-  'ALTER TABLE users ADD COLUMN discord_avatar TEXT',
-  'ALTER TABLE users ADD COLUMN no_password INTEGER NOT NULL DEFAULT 0',
-  'ALTER TABLE users ADD COLUMN email TEXT',
+for (const [column, ddl] of [
+  ['status', "TEXT NOT NULL DEFAULT 'active'"],
+  ['discord_id', 'TEXT'],
+  ['discord_name', 'TEXT'],
+  ['discord_avatar', 'TEXT'],
+  ['no_password', 'INTEGER NOT NULL DEFAULT 0'],
+  ['email', 'TEXT'],
 ]) {
-  try {
-    db.exec(ddl);
-  } catch {
-    /* column already exists */
-  }
+  addColumn(db, 'users', column, ddl);
 }
 db.exec(`
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_discord ON users(discord_id) WHERE discord_id IS NOT NULL;
@@ -6367,11 +6356,7 @@ CREATE TABLE IF NOT EXISTS uptime_daily (
   PRIMARY KEY (server_id, day)
 );
 `);
-try {
-  db.exec('ALTER TABLE history ADD COLUMN ping INTEGER');
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'history', 'ping', 'INTEGER');
 // profile: preferences, player profile, game sessions, account journal
 db.exec(`
 CREATE TABLE IF NOT EXISTS user_prefs (
@@ -6421,32 +6406,16 @@ if (restoredNow) {
 }
 
 // older databases: new columns are added once
-try {
-  db.exec("ALTER TABLE bindings ADD COLUMN style TEXT NOT NULL DEFAULT 'embed'");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'bindings', 'style', "TEXT NOT NULL DEFAULT 'embed'");
 
 // one Discord message may show several servers (up to 10 embeds): the extra server ids
-try {
-  db.exec("ALTER TABLE bindings ADD COLUMN extra_ids TEXT NOT NULL DEFAULT '[]'");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'bindings', 'extra_ids', "TEXT NOT NULL DEFAULT '[]'");
 
 // older databases: country override (ISO code, '' = detect automatically)
-try {
-  db.exec("ALTER TABLE servers ADD COLUMN country TEXT NOT NULL DEFAULT ''");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'servers', 'country', "TEXT NOT NULL DEFAULT ''");
 
 // older databases: add the column once
-try {
-  db.exec("ALTER TABLE servers ADD COLUMN display_address TEXT NOT NULL DEFAULT ''");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'servers', 'display_address', "TEXT NOT NULL DEFAULT ''");
 
 // versioned migrations (v1 = everything above); a copy of an existing database is made first, see migrations.ts
 runMigrations(db, { dataDir: DATA_DIR, existing: hadSchema });
@@ -6488,12 +6457,17 @@ export function undecryptableSecrets(): string[] {
   return rows.filter((r) => isSecretKey(r.key) && isEncrypted(r.value) && !canDecrypt(r.value)).map((r) => r.key);
 }
 
-// secrets stored in plaintext by older versions are encrypted once (idempotent: encrypted rows are skipped)
+// secrets stored in plaintext by older versions are encrypted once, and values written with the old JWT_SECRET-derived
+// key are written again with SECRETS_KEY (idempotent: rows that already use the current key are skipped)
 try {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   const upd = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
   db.transaction(() => {
-    for (const r of rows) if (isSecretKey(r.key) && r.value !== '' && !isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
+    for (const r of rows) {
+      if (!isSecretKey(r.key) || r.value === '') continue;
+      if (!isEncrypted(r.value)) upd.run(encryptSecret(r.value), r.key);
+      else if (usesLegacyKey(r.value)) upd.run(reencrypt(r.value), r.key);
+    }
   })();
 } catch (e) {
   // no key at all: config.ts stops with a clear message when it loads
@@ -7909,6 +7883,7 @@ import { allow, auth, type AuthedRequest, can, loadUser, permsOf, rateLimit, vie
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
+import { wrap } from './http.js';
 
 const { Canvas, loadImage } = skia;
 
@@ -7982,7 +7957,7 @@ router.get('/api/gallery/mine', auth, (req: AuthedRequest, res) => {
   res.json((db.prepare(`${SELECT} WHERE g.user_id = ? ORDER BY g.created_at DESC LIMIT 100`).all(req.user!.id) as Row[]).map(out));
 });
 
-router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limit: '8mb' }), async (req: AuthedRequest, res) => {
+router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limit: '8mb' }), wrap(async (req: AuthedRequest, res) => {
   const q = z.object({ serverId: z.coerce.number().int().positive().optional(), caption: z.string().trim().max(140).default('') }).safeParse(req.query);
   if (!q.success) return res.status(400).json({ error: 'Неверные данные' });
   if (q.data.serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(q.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
@@ -8006,10 +7981,17 @@ router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limi
       .prepare('INSERT INTO gallery (user_id, server_id, caption, status, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(req.user!.id, q.data.serverId ?? null, q.data.caption, trusted ? 'approved' : 'pending', big.w, big.h, Date.now()).lastInsertRowid,
   );
-  fs.writeFileSync(fileOf(id), big.buf, { mode: 0o644 });
-  fs.writeFileSync(fileOf(id, true), small.buf, { mode: 0o644 });
+  try {
+    fs.writeFileSync(fileOf(id), big.buf, { mode: 0o644 });
+    fs.writeFileSync(fileOf(id, true), small.buf, { mode: 0o644 });
+  } catch (e) {
+    // a full disk must not leave a picture row without files
+    db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
+    fs.rmSync(fileOf(id), { force: true });
+    throw e;
+  }
   res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
-});
+}));
 
 router.get('/api/gallery/queue', staff, (_req, res) => {
   const rows = db.prepare(`${SELECT} ORDER BY g.status = 'pending' DESC, g.created_at DESC LIMIT 200`).all() as Row[];
@@ -8397,7 +8379,7 @@ import { onSessionsOpened } from './nickOnboarding.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
 import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
-import { clampConcurrency, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, runPool } from './pollLogic.js';
+import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, pruneDue, RETENTION_DEFAULTS, runPool } from './pollLogic.js';
 
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
 import { queryServer, type QueryResult } from './query.js';
@@ -8411,6 +8393,14 @@ ON CONFLICT(server_id) DO UPDATE SET
   error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures
 `);
 const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?, ?, ?, ?, ?, ?, ?)');
+// compiled once: these run for every server on every poll
+const nowNames = db.prepare('SELECT name FROM player_now WHERE server_id = ?');
+const nowClear = db.prepare('DELETE FROM player_now WHERE server_id = ?');
+const nowDelete = db.prepare('DELETE FROM player_now WHERE server_id = ? AND name = ?');
+const nowInsert = db.prepare('INSERT OR IGNORE INTO player_now (server_id, name, since) VALUES (?, ?, ?)');
+const sessOpen = db.prepare('SELECT id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL');
+const sessClose = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
+const sessInsert = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at) VALUES (?, ?, ?)');
 
 /**
  * Keeps player_now in step with the latest poll: names that left are removed, new ones get since = now.
@@ -8419,15 +8409,13 @@ const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, playe
 export function syncPlayersNow(serverId: number, names: string[], online: boolean, now: number): void {
   db.transaction(() => {
     if (!online) {
-      db.prepare('DELETE FROM player_now WHERE server_id = ?').run(serverId);
+      nowClear.run(serverId);
       return;
     }
     const current = new Set(names.slice(0, 200));
-    const have = db.prepare('SELECT name FROM player_now WHERE server_id = ?').all(serverId) as { name: string }[];
-    const del = db.prepare('DELETE FROM player_now WHERE server_id = ? AND name = ?');
-    for (const h of have) if (!current.has(h.name)) del.run(serverId, h.name);
-    const ins = db.prepare('INSERT OR IGNORE INTO player_now (server_id, name, since) VALUES (?, ?, ?)');
-    for (const n of current) ins.run(serverId, n, now);
+    const have = nowNames.all(serverId) as { name: string }[];
+    for (const h of have) if (!current.has(h.name)) nowDelete.run(serverId, h.name);
+    for (const n of current) nowInsert.run(serverId, n, now);
   })();
 }
 
@@ -8438,10 +8426,9 @@ export function syncPlayersNow(serverId: number, names: string[], online: boolea
 export function syncPlayerSessions(serverId: number, names: string[], online: boolean, now: number): string[] {
   const opened: string[] = [];
   db.transaction(() => {
-    const open = db.prepare('SELECT id, name FROM player_sessions WHERE server_id = ? AND left_at IS NULL').all(serverId) as { id: number; name: string }[];
-    const close = db.prepare('UPDATE player_sessions SET left_at = ? WHERE id = ?');
+    const open = sessOpen.all(serverId) as { id: number; name: string }[];
     if (!online) {
-      for (const o of open) close.run(now, o.id);
+      for (const o of open) sessClose.run(now, o.id);
       return;
     }
     const current = new Map<string, string>();
@@ -8453,13 +8440,12 @@ export function syncPlayerSessions(serverId: number, names: string[], online: bo
     for (const o of open) {
       const k = o.name.toLowerCase();
       // gone from the list, or a duplicate row left over from an earlier run
-      if (!current.has(k) || stillOpen.has(k)) close.run(now, o.id);
+      if (!current.has(k) || stillOpen.has(k)) sessClose.run(now, o.id);
       else stillOpen.add(k);
     }
-    const ins = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at) VALUES (?, ?, ?)');
     for (const [k, n] of current) {
       if (stillOpen.has(k)) continue;
-      ins.run(serverId, n, now);
+      sessInsert.run(serverId, n, now);
       opened.push(n);
     }
   })();
@@ -8589,6 +8575,29 @@ let lastStats: PollStats = { at: null, durationMs: null, servers: 0, failures: 0
 /** the last finished poll cycle: when, how long, how many servers did not answer */
 export const lastPollStats = (): PollStats => ({ ...lastStats });
 
+/**
+ * Days to keep each kind of old rows. Set HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ACCOUNT_EVENTS_DAYS and UPTIME_DAYS in
+ * .env to change them (1..3650); the defaults are 30, 90, 180 and 90.
+ */
+export const retentionDays = () => ({
+  history: clampDays(process.env.HISTORY_DAYS, RETENTION_DEFAULTS.history),
+  playerSessions: clampDays(process.env.PLAYER_SESSIONS_DAYS, RETENTION_DEFAULTS.playerSessions),
+  accountEvents: clampDays(process.env.ACCOUNT_EVENTS_DAYS, RETENTION_DEFAULTS.accountEvents),
+  uptime: clampDays(process.env.UPTIME_DAYS, RETENTION_DEFAULTS.uptime),
+});
+
+const DAY = 24 * 3600 * 1000;
+/** deletes the rows older than their retention; exported for tests */
+export function pruneOld(now = Date.now()): void {
+  const r = retentionDays();
+  db.prepare('DELETE FROM history WHERE ts < ?').run(now - r.history * DAY);
+  db.prepare('DELETE FROM player_sessions WHERE left_at IS NOT NULL AND left_at < ?').run(now - r.playerSessions * DAY);
+  db.prepare('DELETE FROM account_events WHERE ts < ?').run(now - r.accountEvents * DAY);
+  db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(now - r.uptime * DAY).toISOString().slice(0, 10));
+  pruneMaintenance();
+}
+let lastPrune = 0;
+
 let running = false;
 let stopping = false;
 let pollTimer: NodeJS.Timeout | undefined;
@@ -8624,11 +8633,14 @@ export async function pollAll(): Promise<void> {
     if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
       console.log(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
     }
-    db.prepare('DELETE FROM history WHERE ts < ?').run(Date.now() - 30 * 24 * 3600 * 1000);
-    db.prepare('DELETE FROM player_sessions WHERE left_at IS NOT NULL AND left_at < ?').run(Date.now() - 90 * 24 * 3600 * 1000);
-    db.prepare('DELETE FROM account_events WHERE ts < ?').run(Date.now() - 180 * 24 * 3600 * 1000);
-    db.prepare('DELETE FROM uptime_daily WHERE day < ?').run(new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10));
-    pruneMaintenance();
+    // old rows are deleted once an hour, not after every 30-second cycle; set before the work so a failure is not retried at once
+    if (pruneDue(Date.now(), lastPrune)) {
+      lastPrune = Date.now();
+      pruneOld();
+    }
+  } catch (e) {
+    // a database or disk error must not become an unhandled rejection (the timer calls pollAll with `void`)
+    console.error('poll cycle failed', (e as Error).message);
   } finally {
     running = false;
   }
@@ -8887,10 +8899,19 @@ export const safeEqual = (a: string, b: string): boolean => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
+/**
+ * Express 4 does not catch a rejected promise of an async handler: without this wrapper the rejection becomes an
+ * unhandled one. Every async route handler goes through it, so an error ends in the error middleware (a 500 answer).
+ * The request type is kept (`wrap(async (req: AuthedRequest, res) => ...)`).
+ */
 export const wrap =
-  (fn: (req: Request, res: Response) => unknown) =>
+  <R extends Request = Request>(fn: (req: R, res: Response) => unknown) =>
   (req: Request, res: Response, next: NextFunction) => {
-    Promise.resolve(fn(req, res)).catch(next);
+    try {
+      Promise.resolve(fn(req as R, res)).catch(next);
+    } catch (e) {
+      next(e);
+    }
   };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -9005,7 +9026,7 @@ import { registerOverview } from './overview.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverData.js';
-import { installShutdown, onShutdown } from './shutdown.js';
+import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from './shutdown.js';
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
 import { router as accountRouter } from './routes/account.js';
@@ -9030,6 +9051,17 @@ import { router as internalRouter } from './routes/internal.js';
 // optional first-start defaults from .env (the panel settings take over afterwards)
 if (getSetting('discord_token') === null && process.env.DISCORD_TOKEN) setSetting('discord_token', process.env.DISCORD_TOKEN);
 if (getSetting('proxy_url') === null && process.env.PROXY_URL) setSetting('proxy_url', process.env.PROXY_URL);
+
+// A rejected promise nobody awaits is logged and the process keeps running (the poller and the bot should not stop
+// because of one bad request). A synchronous exception that escaped everything means the state is unknown: stop
+// cleanly and let Docker start a fresh process (restart: unless-stopped).
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('uncaught exception:', err.stack ?? err.message);
+  void shutdownNow('uncaughtException');
+});
 
 const app = express();
 // One trusted proxy hop (the nginx container): req.ip / req.secure come from the X-Forwarded-For / X-Forwarded-Proto it
@@ -9157,6 +9189,7 @@ onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 onShutdown('restarts', stopRestartTimer);
 installShutdown(server);
+registerShutdownServer(server);
 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -9762,6 +9795,7 @@ __COREGSM_EOF__
 import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { addColumn, hasTable } from './schema.js';
 
 type Db = InstanceType<typeof Database>;
 
@@ -9769,12 +9803,6 @@ export interface Migration {
   version: number;
   name: string;
   up: (db: Db) => void;
-}
-
-const hasTable = (db: Db, t: string): boolean => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
-const hasColumn = (db: Db, t: string, c: string): boolean => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
-function addColumn(db: Db, table: string, column: string, ddl: string): void {
-  if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }
 
 export const MIGRATIONS: Migration[] = [
@@ -9953,6 +9981,7 @@ import { z } from 'zod';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
+import { addColumn } from './schema.js';
 
 const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
 fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -9972,19 +10001,10 @@ CREATE TABLE IF NOT EXISTS news (
 );
 `);
 
-try {
-  db.exec("ALTER TABLE news ADD COLUMN repeat TEXT NOT NULL DEFAULT 'none'");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'news', 'repeat', "TEXT NOT NULL DEFAULT 'none'");
 // delivery retries: failed attempts so far and the earliest time of the next one (see deliveries.ts)
-for (const ddl of ['ALTER TABLE news ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE news ADD COLUMN next_try_at INTEGER']) {
-  try {
-    db.exec(ddl);
-  } catch {
-    /* column already exists */
-  }
-}
+addColumn(db, 'news', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
+addColumn(db, 'news', 'next_try_at', 'INTEGER');
 // a manual retry from the deliveries list puts the item back into the queue it came from
 registerKind('news', {
   retry(refId, payload) {
@@ -9993,19 +10013,11 @@ registerKind('news', {
   },
 });
 
-try {
-  // 1 = a test send (never shown in lists, cleaned up after an hour)
-  db.exec('ALTER TABLE news ADD COLUMN test INTEGER NOT NULL DEFAULT 0');
-} catch {
-  /* column already exists */
-}
+// 1 = a test send (never shown in lists, cleaned up after an hour)
+addColumn(db, 'news', 'test', 'INTEGER NOT NULL DEFAULT 0');
 
-try {
-  // the user who created the item (its role is resolved at read time, see authorRole)
-  db.exec('ALTER TABLE news ADD COLUMN created_by INTEGER');
-} catch {
-  /* column already exists */
-}
+// the user who created the item (its role is resolved at read time, see authorRole)
+addColumn(db, 'news', 'created_by', 'INTEGER');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS news_reactions (
@@ -11292,6 +11304,7 @@ import fs from 'node:fs';
 import tls from 'node:tls';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
+import { wrap } from './http.js';
 import { currentFlags } from './health.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
@@ -11504,7 +11517,7 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
   };
   const count = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
 
-  app.get('/api/system', admin, async (_req, res) => {
+  app.get('/api/system', admin, wrap(async (_req, res) => {
     const cert = await checkCert().catch(() => NO_CERT);
     const space = freeSpace();
     const dbBytes = (() => {
@@ -11536,7 +11549,7 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
       // problems found in the health history (bot_offline, poll_slow, disk_low, db_growing)
       flags: currentFlags(),
     });
-  });
+  }));
 
   type Check = { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string };
   const probe = async (url: string): Promise<boolean> => {
@@ -11780,6 +11793,21 @@ export function clampThreshold(v: unknown): number {
 export function clampConcurrency(v: unknown): number {
   const n = toInt(v);
   return n === null ? DEFAULT_CONCURRENCY : Math.min(32, Math.max(1, n));
+}
+
+/** how long old rows are kept, in days (the defaults of the settings HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ...) */
+export const RETENTION_DEFAULTS = { history: 30, playerSessions: 90, accountEvents: 180, uptime: 90 } as const;
+
+/** days to keep a kind of old rows: 1..3650, `fallback` when unset or not a number */
+export function clampDays(v: unknown, fallback: number): number {
+  const n = toInt(v);
+  return n === null ? fallback : Math.min(3650, Math.max(1, n));
+}
+
+export const PRUNE_EVERY_MS = 3600_000;
+/** the cleanup of old rows runs on the first cycle and then at most once an hour (not on every 30-second poll) */
+export function pruneDue(now: number, last: number, every = PRUNE_EVERY_MS): boolean {
+  return last === 0 || now - last >= every;
 }
 
 export interface Decision {
@@ -13034,6 +13062,7 @@ import express from 'express';
 import { z } from 'zod';
 import { auth, type AuthedRequest, rateLimit } from './auth.js';
 import { db } from './db.js';
+import { wrap } from './http.js';
 import { publicBase } from './site.js';
 import { setPushHook } from './subscriptions.js';
 import { sendPush, vapidKeys } from './webpush.js';
@@ -13106,10 +13135,10 @@ router.delete('/api/push/subscribe', auth, (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
-router.post('/api/push/test', auth, rateLimit(10), async (req: AuthedRequest, res) => {
+router.post('/api/push/test', auth, rateLimit(10), wrap(async (req: AuthedRequest, res) => {
   const sent = await pushToUser(req.user!.id, { title: 'CoreGSM', body: 'Уведомления работают: сюда придут вести о ваших серверах.', url: '/profile', tag: 'test' });
   res.json({ sent });
-});
+}));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/query.ts" << '__COREGSM_EOF__'
@@ -13410,9 +13439,10 @@ import { z } from 'zod';
 import { admin, allow, type AuthedRequest } from './auth.js';
 import { enqueueAlert } from './alerts.js';
 import { db, EFFECTIVE_NAME, getSetting } from './db.js';
+import { wrap } from './http.js';
 import { defaultSay, nextRun } from './restartLogic.js';
 import { rconCommand } from './rcon.js';
-import { decryptSecret, encryptSecret } from './secrets.js';
+import { decryptSecret, encryptSecret, reencrypt, usesLegacyKey } from './secrets.js';
 import { analyticsFor } from './routes/analytics.js';
 
 export const router = express.Router();
@@ -13439,6 +13469,16 @@ CREATE TABLE IF NOT EXISTS server_rcon (
   password TEXT NOT NULL
 );
 `);
+
+// RCON passwords written with the old JWT_SECRET-derived key are written again with SECRETS_KEY (see secrets.ts)
+try {
+  const upd = db.prepare('UPDATE server_rcon SET password = ? WHERE server_id = ?');
+  for (const r of db.prepare('SELECT server_id, password FROM server_rcon').all() as { server_id: number; password: string }[]) {
+    if (usesLegacyKey(r.password)) upd.run(reencrypt(r.password), r.server_id);
+  }
+} catch (e) {
+  console.error('rcon secrets migration skipped:', (e as Error).message);
+}
 
 export interface Plan {
   server_id: number;
@@ -13547,7 +13587,7 @@ export function startRestartTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    void tickRestarts().catch(() => undefined).finally(() => { busy = false; });
+    void tickRestarts().catch((e) => console.error('restart timer failed', (e as Error).message)).finally(() => { busy = false; });
   }, 30_000);
   timer.unref();
 }
@@ -13635,7 +13675,7 @@ router.put('/api/servers/:id(\\d+)/rcon', admin, (req, res) => {
   res.json(view(s.id, s.game));
 });
 
-router.post('/api/servers/:id(\\d+)/rcon/test', admin, async (req, res) => {
+router.post('/api/servers/:id(\\d+)/rcon/test', admin, wrap(async (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
   const b = z.object({ command: z.string().trim().min(1).max(200) }).safeParse(req.body);
@@ -13647,14 +13687,14 @@ router.post('/api/servers/:id(\\d+)/rcon/test', admin, async (req, res) => {
   } catch (e) {
     res.json({ ok: false, answer: (e as Error).message });
   }
-});
+}));
 
-router.post('/api/servers/:id(\\d+)/restart/now', allow('maintenance'), async (req: AuthedRequest, res) => {
+router.post('/api/servers/:id(\\d+)/restart/now', allow('maintenance'), wrap(async (req, res) => {
   const s = serverOf(req);
   if (!s) return res.status(404).json({ error: 'Сервер не найден' });
-  const result = await run(s.id, planOf(s.id), Date.now(), req.user?.username ?? 'админка');
+  const result = await run(s.id, planOf(s.id), Date.now(), (req as AuthedRequest).user?.username ?? 'админка');
   res.json({ ...view(s.id, s.game), lastResult: result });
-});
+}));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/reviews.ts" << '__COREGSM_EOF__'
@@ -15581,6 +15621,9 @@ export const router = express.Router();
 // a root systemd path unit on the host notices it and runs `coregsm-update`, which reports progress in status.json.
 const UPDATE_DIR = process.env.UPDATE_DIR ?? '';
 const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main';
+// The same channel as the host updater (tools/coregsm.sh): the newest GitHub Release first, the tip of the branch when
+// there is no release yet. A custom UPDATE_BASE_URL (a fork, a test branch) or UPDATE_CHANNEL=main skips the release.
+const RELEASE_BASE = process.env.UPDATE_RELEASE_BASE_URL ?? (process.env.UPDATE_BASE_URL || process.env.UPDATE_CHANNEL === 'main' ? '' : 'https://github.com/RJ-Bond/CoreGSM/releases/latest/download');
 
 let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
 
@@ -15605,10 +15648,23 @@ async function fetchRepoText(file: string): Promise<string> {
   return res.text();
 }
 
+/** version.txt of the newest release, or null when there is none (or it does not look right) */
+async function fetchReleaseVersion(): Promise<string | null> {
+  if (!RELEASE_BASE) return null;
+  try {
+    const r = await fetch(`${RELEASE_BASE}/version.txt`, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'CoreGSM' } });
+    if (!r.ok) return null;
+    const text = await r.text();
+    return /^build=[a-f0-9]{6,64}$/m.test(text) && /^sha256=[a-f0-9]{64}$/m.test(text) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 async function checkRemote(force = false): Promise<void> {
   if (!force && Date.now() - remote.at < 5 * 60_000) return;
   try {
-    const m = /^build=([a-f0-9]{6,64})$/m.exec(await fetchRepoText('version.txt'));
+    const m = /^build=([a-f0-9]{6,64})$/m.exec((await fetchReleaseVersion()) ?? (await fetchRepoText('version.txt')));
     if (!m) throw new Error('некорректный version.txt');
     remote = { build: m[1], error: null, at: Date.now() };
   } catch (e) {
@@ -15817,6 +15873,24 @@ router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/schema.ts" << '__COREGSM_EOF__'
+/** Schema helpers shared by db.ts, the modules that own a table, and migrations.ts. */
+import type Database from 'better-sqlite3';
+
+type Db = InstanceType<typeof Database>;
+
+export const hasTable = (db: Db, t: string): boolean => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+export const hasColumn = (db: Db, t: string, c: string): boolean => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
+
+/**
+ * Adds a column once. Unlike `try { ALTER TABLE ... } catch {}` it asks the table first, so only "the column is
+ * already there" is skipped: a missing table or a bad definition still stops the start with its real error.
+ */
+export function addColumn(db: Db, table: string, column: string, ddl: string): void {
+  if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/seasons.ts" << '__COREGSM_EOF__'
 /**
  * Seasons (usually one per wipe): the admin starts a new season, the previous one ends at that moment.
@@ -15951,10 +16025,14 @@ __COREGSM_EOF__
  * Sensitive settings (bot token, OAuth client secret, backup passphrase, proxy URL with its password, SMTP password ...)
  * are stored in the database as "enc:v1:<base64 iv(12) | tag(16) | ciphertext>" (AES-256-GCM).
  *
- * The key comes from SECRETS_KEY (>= 32 characters) or, when that is not set, is derived from JWT_SECRET (HKDF-SHA256).
+ * The key comes from SECRETS_KEY (>= 32 characters), which the installer generates on its own. Older installations
+ * have no SECRETS_KEY and their key is derived from JWT_SECRET (HKDF-SHA256). While SECRETS_KEY is set, values that
+ * were encrypted with the JWT_SECRET-derived key are still readable (the "legacy" key) and are re-encrypted with the
+ * new key at start (see reencryptLegacy), so JWT_SECRET can be changed afterwards (to end every session) without
+ * losing the stored secrets.
  * Consequences worth knowing:
- *  - changing JWT_SECRET (or SECRETS_KEY) makes the stored secrets unreadable: the panel then treats them as "not set"
- *    and they have to be entered again;
+ *  - changing SECRETS_KEY makes the stored secrets unreadable: the panel then treats them as "not set" and they have
+ *    to be entered again; without SECRETS_KEY the same is true for JWT_SECRET;
  *  - a backup restored onto a host with a different key has the same problem: restore with the same SECRETS_KEY
  *    (or JWT_SECRET) as the host that created the backup. The restore reports such values instead of failing.
  */
@@ -15977,40 +16055,65 @@ export const isSecretKey = (key: string): boolean => SECRET_SETTING_KEYS.has(key
 
 export class SecretError extends Error {}
 
-let cached: { src: string; key: Buffer } | null = null;
+const keyCache = new Map<string, Buffer>();
+function keyFrom(src: string): Buffer {
+  let k = keyCache.get(src);
+  if (!k) {
+    k = Buffer.from(crypto.hkdfSync('sha256', src, 'coregsm-secrets-v1', 'settings-aes-256-gcm', 32));
+    keyCache.set(src, k);
+  }
+  return k;
+}
 
-function masterKey(): Buffer {
+/** The key that new secrets are written with, and the JWT_SECRET-derived one that old values may still use. */
+function keys(): { primary: Buffer; legacy: Buffer | null } {
   const own = (process.env.SECRETS_KEY ?? '').trim();
-  const src = own.length >= 32 ? own : (process.env.JWT_SECRET ?? '');
-  if (src.length < 32) throw new SecretError('нет ключа шифрования: задайте SECRETS_KEY или JWT_SECRET (не короче 32 символов)');
-  if (cached && cached.src === src) return cached.key;
-  const key = Buffer.from(crypto.hkdfSync('sha256', src, 'coregsm-secrets-v1', 'settings-aes-256-gcm', 32));
-  cached = { src, key };
-  return key;
+  const jwt = process.env.JWT_SECRET ?? '';
+  const primarySrc = own.length >= 32 ? own : jwt;
+  if (primarySrc.length < 32) throw new SecretError('нет ключа шифрования: задайте SECRETS_KEY или JWT_SECRET (не короче 32 символов)');
+  const legacy = primarySrc !== jwt && jwt.length >= 32 ? keyFrom(jwt) : null;
+  return { primary: keyFrom(primarySrc), legacy };
 }
 
 export const isEncrypted = (v: string): boolean => v.startsWith(ENC_PREFIX);
 
 export function encryptSecret(plain: string): string {
   const iv = crypto.randomBytes(12);
-  const c = crypto.createCipheriv('aes-256-gcm', masterKey(), iv);
+  const c = crypto.createCipheriv('aes-256-gcm', keys().primary, iv);
   const data = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
   return ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), data]).toString('base64');
+}
+
+function open(raw: Buffer, key: Buffer): string {
+  const d = crypto.createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12));
+  d.setAuthTag(raw.subarray(12, 28));
+  return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8');
+}
+
+function decryptWith(stored: string): { plain: string; legacy: boolean } {
+  const { primary, legacy } = keys();
+  const raw = Buffer.from(stored.slice(ENC_PREFIX.length), 'base64');
+  if (raw.length >= 29) {
+    try {
+      return { plain: open(raw, primary), legacy: false };
+    } catch {
+      /* not the current key: try the one derived from JWT_SECRET */
+    }
+    if (legacy) {
+      try {
+        return { plain: open(raw, legacy), legacy: true };
+      } catch {
+        /* neither key fits */
+      }
+    }
+  }
+  throw new SecretError('значение зашифровано другим ключом (SECRETS_KEY / JWT_SECRET) и не может быть прочитано');
 }
 
 /** A value without the prefix is a legacy plaintext and is returned as is. Throws SecretError when it cannot be decrypted. */
 export function decryptSecret(stored: string): string {
   if (!isEncrypted(stored)) return stored;
-  try {
-    const raw = Buffer.from(stored.slice(ENC_PREFIX.length), 'base64');
-    if (raw.length < 29) throw new Error('short');
-    const d = crypto.createDecipheriv('aes-256-gcm', masterKey(), raw.subarray(0, 12));
-    d.setAuthTag(raw.subarray(12, 28));
-    return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8');
-  } catch (e) {
-    if (e instanceof SecretError) throw e;
-    throw new SecretError('значение зашифровано другим ключом (SECRETS_KEY / JWT_SECRET) и не может быть прочитано');
-  }
+  return decryptWith(stored).plain;
 }
 
 /** true when the stored value can be read with the current key (plaintext always can) */
@@ -16022,6 +16125,19 @@ export function canDecrypt(stored: string): boolean {
     return false;
   }
 }
+
+/** true when the value is readable only with the old JWT_SECRET-derived key, so it should be written again */
+export function usesLegacyKey(stored: string): boolean {
+  if (!isEncrypted(stored)) return false;
+  try {
+    return decryptWith(stored).legacy;
+  } catch {
+    return false;
+  }
+}
+
+/** The same secret, encrypted with the current key (for values where usesLegacyKey() is true). */
+export const reencrypt = (stored: string): string => encryptSecret(decryptSecret(stored));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/security.ts" << '__COREGSM_EOF__'
@@ -16040,16 +16156,14 @@ import { z } from 'zod';
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { db, setSetting } from './db.js';
 import { guardGet, guardSet } from './loginGuard.js';
+import { addColumn } from './schema.js';
+import { wrap } from './http.js';
 import { enqueueDelivery } from './deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
 
 // ---------- schema ----------
-try {
-  db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0');
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
 CREATE TABLE IF NOT EXISTS password_resets (
   token_hash TEXT PRIMARY KEY,
@@ -16330,7 +16444,7 @@ export function registerSecurity(d: SecurityDeps): void {
 
   // ----- e-mail verification -----
   const lastVerifyRequest = new Map<number, number>();
-  app.post('/api/me/email/verify-request', d.auth, async (req, res) => {
+  app.post('/api/me/email/verify-request', d.auth, wrap(async (req, res) => {
     const id = d.userId(req);
     const u = emailOf(id);
     if (!u?.email) return res.status(400).json({ error: 'Сначала укажите адрес электронной почты' });
@@ -16360,7 +16474,7 @@ export function registerSecurity(d: SecurityDeps): void {
       lastVerifyRequest.delete(id);
       res.status(502).json({ error: (e as Error).message });
     }
-  });
+  }));
 
   app.post('/api/auth/verify-email', verifyLimiter, (req, res) => {
     const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела' });
@@ -16438,7 +16552,7 @@ export function registerSecurity(d: SecurityDeps): void {
     });
   });
 
-  app.post('/api/auth/reset', resetLimiter, async (req, res) => {
+  app.post('/api/auth/reset', resetLimiter, wrap(async (req, res) => {
     const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела. Запросите сброс ещё раз.' });
     const b = z.object({ token: z.string().min(10).max(200), password: z.string().min(8, 'Пароль должен быть не короче 8 символов').max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
@@ -16472,7 +16586,7 @@ export function registerSecurity(d: SecurityDeps): void {
       void sendMail({ to: u.email, subject: en ? 'Password changed' : 'Пароль изменён', ...body }).catch(() => undefined);
     }
     res.json({ ok: true });
-  });
+  }));
 
   // ----- cookie for a client that signed in the old way (Bearer token only) -----
   app.post('/api/auth/session', sessionLimiter, (req, res) => {
@@ -16673,7 +16787,19 @@ export async function shutdown(server: Server, signal: string): Promise<void> {
   }
   clearTimeout(force);
   console.log(`stopped in ${Date.now() - t0} ms`);
-  process.exit(0);
+  process.exit(signal === 'uncaughtException' ? 1 : 0);
+}
+
+let mainServer: Server | null = null;
+/** The HTTP server that shutdownNow() closes (set once at start). */
+export function registerShutdownServer(server: Server): void {
+  mainServer = server;
+}
+
+/** Starts the same graceful shutdown from code (an uncaught exception); a no-op until the server is registered. */
+export async function shutdownNow(signal: string): Promise<void> {
+  if (!mainServer) return void process.exit(1);
+  await shutdown(mainServer, signal);
 }
 
 export function installShutdown(server: Server): void {
@@ -18226,6 +18352,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleInteraction, registerCommands } from './commands.js';
@@ -18236,8 +18363,11 @@ import { buildNews, buildPayload, type Binding, type NewsPayload } from './messa
 import { parseProxy } from './proxy.js';
 import { syncDiscord } from './sync.js';
 import { updatePresence } from './presence.js';
+import { STUCK_MS, stuckFor } from './watchdog.js';
 
 const TICK_MS = 10_000;
+/** touched every TICK_MS from the timer; the container's health check reads its age (docker-compose.yml) */
+const HEARTBEAT_FILE = process.env.HEARTBEAT_FILE ?? '/tmp/coregsm-bot.beat';
 const LOGIN_RETRY_MS = 60_000;
 
 interface BotConfig {
@@ -18611,10 +18741,25 @@ async function updateBindings(): Promise<void> {
 let busy = false;
 let stopping = false;
 let timer: NodeJS.Timeout | undefined;
+let tickStartedAt = 0;
 
+function beat(): void {
+  try {
+    fs.writeFileSync(HEARTBEAT_FILE, String(Date.now()));
+  } catch {
+    /* not writable: the health check reports it */
+  }
+}
+
+// a tick that never returns keeps `busy` true for ever: see watchdog.ts
 async function tick(): Promise<void> {
+  if (!stopping && stuckFor(Date.now(), tickStartedAt, busy)) {
+    log(`a tick has been running for more than ${STUCK_MS / 60_000} minutes: restarting`);
+    process.exit(1);
+  }
   if (busy || stopping) return;
   busy = true;
+  tickStartedAt = Date.now();
   try {
     await applyConfig();
     await publishGuilds();
@@ -18627,14 +18772,19 @@ async function tick(): Promise<void> {
     log('tick failed:', (e as Error).message);
   } finally {
     busy = false;
+    tickStartedAt = 0;
     if (!stopping) await publishStatus();
   }
 }
 
 export function start(): void {
   log('CoreGSM bot started; waiting for configuration from the panel.');
+  beat();
   void tick();
-  timer = setInterval(() => void tick(), TICK_MS);
+  timer = setInterval(() => {
+    beat();
+    void tick();
+  }, TICK_MS);
 }
 
 /**
@@ -19589,6 +19739,20 @@ export async function syncDiscord(c: Client, stopping: () => boolean): Promise<v
   }
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/watchdog.ts" << '__COREGSM_EOF__'
+/** A tick that runs longer than this is stuck (a Discord call that never answers): the bot restarts itself. */
+export const STUCK_MS = 10 * 60_000;
+
+/**
+ * `busy` stays true while a tick runs. A call that never returns would keep it true for ever and the bot would look
+ * alive and do nothing; Docker cannot tell. Exiting lets `restart: unless-stopped` start a fresh process (a message
+ * that was being sent is not posted twice: it carries a nonce).
+ */
+export function stuckFor(now: number, startedAt: number, isBusy: boolean, limit = STUCK_MS): boolean {
+  return isBusy && startedAt > 0 && now - startedAt > limit;
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot"
   cat > "$APP_DIR/core-bot/tsconfig.json" << '__COREGSM_EOF__'
 {
@@ -19617,8 +19781,21 @@ RUN npm run build
 FROM nginx:stable-bookworm
 RUN rm -f /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY security-headers.conf csp.conf /etc/nginx/snippets/
 COPY --from=build /build/dist /usr/share/nginx/html
 EXPOSE 80
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend"
+  cat > "$APP_DIR/core-frontend/csp.conf" << '__COREGSM_EOF__'
+# Content-Security-Policy of the panel's pages (included from nginx.conf).
+#  - script-src 'self' plus the hash of the one inline script in index.html (applies the saved theme before first paint).
+#    If that script is edited, recompute the hash:  openssl dgst -sha256 -binary | base64  over the text between <script> tags.
+#    test/csp.test.ts fails when the hash here no longer matches index.html.
+#  - style-src 'unsafe-inline': React sets style attributes.
+#  - img-src: own images, data:/blob: (previews) and Discord avatars.
+#  - connect-src 'self': the panel only talks to its own /api. worker-src 'self': /sw.js. manifest-src 'self': /api/manifest.json.
+#  - frame-ancestors 'none' also forbids embedding the panel in a frame (X-Frame-Options DENY for old browsers).
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/index.html" << '__COREGSM_EOF__'
@@ -19660,17 +19837,13 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/nginx.conf" << '__COREGSM_EOF__'
 # Static panel (the edge nginx proxies "/" here and "/api" to the backend).
 #
-# Security headers. nginx does not inherit add_header into a location that has its own add_header, so the set is
-# repeated in every location below. Keep the blocks identical.
-#
-# Content-Security-Policy notes:
-#  - script-src 'self' plus the hash of the one inline script in index.html (applies the saved theme before first paint).
-#    If that script is edited, recompute the hash:  openssl dgst -sha256 -binary | base64  over the text between <script> tags.
-#  - style-src 'unsafe-inline': React sets style attributes.
-#  - img-src: own images, data:/blob: (previews) and Discord avatars.
-#  - connect-src 'self': the panel only talks to its own /api. worker-src 'self': /sw.js. manifest-src 'self': /api/manifest.json.
-#  - frame-ancestors 'none' also forbids embedding the panel in a frame (X-Frame-Options DENY for old browsers).
+# Security headers live in two files that every location includes (nginx does not inherit add_header into a location
+# that has its own add_header, so a location that sets Cache-Control must include them again):
+#   security-headers.conf   nosniff, frame, referrer and permissions policy
+#   csp.conf                the Content-Security-Policy (with the hash of the inline script of index.html)
 # HSTS is sent by the https edge (and by the backend for https requests), never from this plain-http container.
+
+server_tokens off;
 
 gzip on;
 gzip_vary on;
@@ -19684,29 +19857,20 @@ server {
   root /usr/share/nginx/html;
   index index.html;
 
-  add_header X-Content-Type-Options "nosniff" always;
-  add_header X-Frame-Options "DENY" always;
-  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-  add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+  include /etc/nginx/snippets/security-headers.conf;
+  include /etc/nginx/snippets/csp.conf;
 
+  # hashed build files never change under the same name
   location /assets/ {
-    expires 30d;
-    add_header Cache-Control "public, immutable";
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+    add_header Cache-Control "public, max-age=2592000, immutable";
+    include /etc/nginx/snippets/security-headers.conf;
+    include /etc/nginx/snippets/csp.conf;
   }
 
   # the service worker must be revalidated on every start so that updates reach people
   location = /sw.js {
     add_header Cache-Control "no-cache";
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
+    include /etc/nginx/snippets/security-headers.conf;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'" always;
   }
 
@@ -19714,19 +19878,15 @@ server {
   # https://host/go/servers/3/players -> https://host/servers/3/players
   # (a URL fragment is easy to lose in chat clients and link scanners; a plain path is not)
   location ~ ^/go(/(.*))?$ {
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    include /etc/nginx/snippets/security-headers.conf;
     return 302 /$2;
   }
 
   location / {
     try_files $uri /index.html;
     add_header Cache-Control "no-cache";
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+    include /etc/nginx/snippets/security-headers.conf;
+    include /etc/nginx/snippets/csp.conf;
   }
 }
 __COREGSM_EOF__
@@ -44323,6 +44483,15 @@ D7aGEx8CoIjvAiTDLa5e0i/a94kxabzjASw0PLzzZvTEmShpo+1okiC+VKhAs18H8TdJ+LteTp38
 3XynffBKOgBea985RzFhxiwPJU4ZUj18g6cO30fJGy2+uQ9QjEbpI8oc+fPDampqarK5mpEt5ShQ
 IwAAAABJRU5ErkJggg==
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend"
+  cat > "$APP_DIR/core-frontend/security-headers.conf" << '__COREGSM_EOF__'
+# Response headers every location sends (included from nginx.conf). nginx does not inherit add_header into a location
+# that has its own add_header, so each location includes this file instead of repeating the lines.
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
 import { paintGameTheme } from './gameThemes';
@@ -44606,7 +44775,7 @@ export default function App() {
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
   const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player', 'gallery'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'gallery' ? 'gallery' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'gallery' ? 'gallery' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin && import.meta.env.DEV ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
   if (page === 'u' || page === 'player') {
@@ -74461,6 +74630,10 @@ export function useDensity(): [Density, (d: Density) => void] {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/vite-env.d.ts" << '__COREGSM_EOF__'
+/// <reference types="vite/client" />
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/vrisingRanks.ts" << '__COREGSM_EOF__'
 /**
  * V Rising rank ladder (hours of play on `vrising` servers).
@@ -74616,6 +74789,21 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+# no service may gain privileges through setuid binaries; the Node services (backend, bot) need no Linux capabilities
+# at all. The nginx containers keep the default capability set: nginx starts as root, binds port 80/443 and then
+# hands the work to an unprivileged worker.
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+x-hardening-node: &hardening-node
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+# Memory ceilings: a runaway process is stopped (and restarted) instead of taking the whole host down. Raise one in
+# .env when a large server needs more, e.g. BACKEND_MEM_LIMIT=3g. The backend decodes uploaded pictures (up to
+# 12000x12000 pixels), which is what the default leaves room for.
 services:
   backend:
     build:
@@ -74624,6 +74812,8 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    <<: *hardening-node
+    mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
     init: true
     restart: unless-stopped
     logging: *logging
@@ -74656,6 +74846,8 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    <<: *hardening-node
+    mem_limit: ${BOT_MEM_LIMIT:-512m}
     init: true
     restart: unless-stopped
     logging: *logging
@@ -74667,6 +74859,13 @@ services:
       backend:
         condition: service_healthy
     networks: [internal]
+    # the bot touches this file every 10 seconds from its main loop (bot.ts); a stuck tick makes the bot exit by itself
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(Date.now()-process.getBuiltinModule('fs').statSync('/tmp/coregsm-bot.beat').mtimeMs<120000?0:1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   frontend:
     build:
@@ -74675,13 +74874,23 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    <<: *hardening
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
     init: true
     restart: unless-stopped
     logging: *logging
     networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/80' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   nginx-proxy:
     build: ./nginx
+    <<: *hardening
+    mem_limit: ${PROXY_MEM_LIMIT:-256m}
     init: true
     restart: unless-stopped
     logging: *logging
@@ -74707,6 +74916,8 @@ services:
 
   certbot:
     image: certbot/certbot
+    <<: *hardening
+    mem_limit: ${CERTBOT_MEM_LIMIT:-256m}
     init: true
     restart: unless-stopped
     logging: *logging
@@ -74754,6 +74965,10 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/nginx/templates"
   cat > "$APP_DIR/nginx/templates/default.conf.template" << '__COREGSM_EOF__'
 limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
+# a refused request is "429 Too Many Requests" (the default is 503, which reads like an outage)
+limit_req_status 429;
+# no nginx version in the Server header and on error pages
+server_tokens off;
 
 server {
     listen 80;
@@ -74785,6 +75000,13 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy same-origin always;
+    # The backend and the frontend nginx send these four headers too (the Referrer-Policy even with another value), so
+    # an answer used to carry each twice. This layer is the single source for them: the upstream copies are dropped.
+    # (proxy_hide_header is inherited by every location below, none of them sets its own.)
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Referrer-Policy;
 
     resolver 127.0.0.11 valid=10s ipv6=off;
     client_max_body_size 9m;   # news image uploads (up to 8 MB)
@@ -74858,11 +75080,14 @@ __COREGSM_EOF__
 
 write_env() {
   step "Генерация секретов и .env"
-  local jwt internal
+  local jwt internal secrets_key
   SETUP_TOKEN="$(env_get SETUP_TOKEN)"; [ -n "$SETUP_TOKEN" ] || SETUP_TOKEN="$(gen_secret 16)"
   jwt="$(env_get JWT_SECRET)";          [ -n "$jwt" ]      || jwt="$(gen_secret 64)"
   internal="$(env_get INTERNAL_TOKEN)"; [ -n "$internal" ] || internal="$(gen_secret 48)"
-  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
+  # a key of its own for the secrets in the database: JWT_SECRET can then be changed without losing them. An older
+  # installation gets one on its next update; the backend writes its stored secrets again with it at start.
+  secrets_key="$(env_get SECRETS_KEY)"; [ -n "$secrets_key" ] || secrets_key="$(gen_secret 64)"
+  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|SECRETS_KEY|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
   # the .env is truncated by the redirection below, so everything is read from it first
   local appver; appver="$(env_get APP_VERSION)"
   poll="$(env_get POLL_INTERVAL_SEC)"; [ -n "$poll" ] || poll=30
@@ -74893,6 +75118,9 @@ CERT_MODE=${cert_mode}
 SETUP_TOKEN=${SETUP_TOKEN}
 JWT_SECRET=${jwt}
 INTERNAL_TOKEN=${internal}
+# encrypts the Discord token, SMTP password and other secrets stored in the database; keep it with the database
+# backups (the backup archive of the coregsm command includes it). Do not change it: the secrets become unreadable.
+SECRETS_KEY=${secrets_key}
 POLL_INTERVAL_SEC=${poll}
 ENVFILE
   if [ -n "$extra" ]; then printf '# custom settings (kept on re-install)\n%s\n' "$extra" >> "$APP_DIR/.env"; fi
@@ -75103,6 +75331,13 @@ if [ -z "${APP_DIR:-}" ]; then
   if [ -s /etc/coregsm/app_dir ]; then APP_DIR="$(head -n1 /etc/coregsm/app_dir)"; else APP_DIR=/app; fi
 fi
 BASE="${COREGSM_BASE:-https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main}"
+# Updates come from the newest GitHub Release, which .github/workflows/release.yml publishes only after CI is green
+# (install.sh, version.txt and, signed with Sigstore, install.sh.bundle). Until a release exists, and with
+# COREGSM_CHANNEL=main or a custom COREGSM_BASE (a fork or a test branch), the tip of the branch is used as before.
+RELEASE_BASE="${COREGSM_RELEASE_BASE:-https://github.com/RJ-Bond/CoreGSM/releases/latest/download}"
+CHANNEL="${COREGSM_CHANNEL:-release}"
+[ -n "${COREGSM_BASE:-}" ] && [ -z "${COREGSM_CHANNEL:-}" ] && CHANNEL=main
+R_SOURCE=main
 UPD="$APP_DIR/update"
 BACKUPS="$APP_DIR/backups"
 PREV="$APP_DIR/.prev"
@@ -75204,6 +75439,17 @@ fetch_repo() { # fetch_repo FILE -> the file's content
   fetch "$BASE/$1"
 }
 
+# version.txt of the release channel: prints it when the release exists and the file looks right, else fails
+release_meta() {
+  [ "$CHANNEL" = main ] && return 1
+  local meta
+  meta="$(fetch "$RELEASE_BASE/version.txt" 2>/dev/null)" || return 1
+  printf '%s\n' "$meta" | grep -qE '^build=[0-9a-f]{6,64}$' || return 1
+  printf '%s\n' "$meta" | grep -qE '^sha256=[0-9a-f]{64}$' || return 1
+  printf '%s\n' "$meta"
+}
+fetch_version_txt() { release_meta || fetch_repo version.txt; }
+
 # ---------- state ----------
 panel_url() { printf 'https://%s' "$(envget DOMAIN)"; }
 cur_build() { envget APP_VERSION; }
@@ -75211,7 +75457,7 @@ cur_build() { envget APP_VERSION; }
 remote_build() { # cached for 10 minutes so the menu opens instantly
   local f="$UPD/.remote" b=""
   if [ -f "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 600 ]; then cat "$f"; return; fi
-  b="$(FETCH_TIMEOUT=4 fetch_repo version.txt 2>/dev/null | sed -n 's/^build=//p' | head -n1)"
+  b="$(FETCH_TIMEOUT=4 fetch_version_txt 2>/dev/null | sed -n 's/^build=//p' | head -n1)"
   if [ -n "$b" ]; then mkdir -p "$UPD"; printf '%s' "$b" > "$f"; fi
   printf '%s' "$b"
 }
@@ -75433,13 +75679,32 @@ screen_power() {
 }
 
 # ---------- installer download / run ----------
+# The Sigstore signature that release.yml made for install.sh. It proves the file was built by that workflow in this
+# repository, which a checksum from the same place cannot. Checked when cosign is installed; without it only the
+# checksum is verified (and a note says so). Only for the release channel. Messages go to stderr: the caller captures
+# the stdout of download_installer (the path of the file).
+release_signature_ok() { # release_signature_ok FILE
+  [ "$R_SOURCE" = release ] || return 0
+  if ! command -v cosign >/dev/null 2>&1; then dim "Подпись релиза не проверена: cosign не установлен (контрольная сумма проверена)" >&2; return 0; fi
+  local b rc; b="$(mktemp)"
+  if ! fetch "$RELEASE_BASE/install.sh.bundle" > "$b" 2>/dev/null; then rm -f "$b"; bad "У релиза нет файла подписи install.sh.bundle" >&2; return 1; fi
+  cosign verify-blob --bundle "$b" \
+    --certificate-identity-regexp '^https://github\.com/RJ-Bond/CoreGSM/\.github/workflows/release\.yml@refs/heads/main$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com "$1" >/dev/null 2>&1
+  rc=$?; rm -f "$b"
+  [ "$rc" -eq 0 ] || bad "Подпись релиза не прошла проверку" >&2
+  return "$rc"
+}
+
 download_installer() { # download_installer EXPECTED_SHA -> prints path
   local tmp i; tmp="$(mktemp)"
   for i in 1 2 3 4; do
-    # the plain URL first: it comes compressed; while its cache still holds an older file the checksum differs
-    # and the GitHub API (uncompressed, always current) is used instead
-    if { { fetch "$BASE/install.sh" > "$tmp" 2>/dev/null && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; } \
-         || { fetch_repo install.sh > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; }; } && bash -n "$tmp"; then
+    # a release is fetched from the release assets (no cache delay); otherwise the plain URL of the branch first: it
+    # comes compressed; while its cache still holds an older file the checksum differs and the GitHub API
+    # (uncompressed, always current) is used instead
+    if { { [ "$R_SOURCE" = release ] && fetch "$RELEASE_BASE/install.sh" > "$tmp" 2>/dev/null && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; } \
+         || { fetch "$BASE/install.sh" > "$tmp" 2>/dev/null && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; } \
+         || { fetch_repo install.sh > "$tmp" && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$1" ]; }; } && bash -n "$tmp" && release_signature_ok "$tmp"; then
       printf '%s' "$tmp"; return 0
     fi
     sleep "${RETRY_SLEEP:-8}"
@@ -75451,8 +75716,9 @@ run_installer() { # run_installer FILE  (DOMAIN / LE_EMAIL / PROXY_URL may be se
   SKIP_UPDATE=1 COREGSM_FROM_MANAGER=1 bash "$1" --install
 }
 
-remote_meta() { # sets R_BUILD R_SHA
-  local meta; meta="$(fetch_repo version.txt)" || return 1
+remote_meta() { # sets R_BUILD R_SHA R_SOURCE (release | main)
+  local meta
+  if meta="$(release_meta)"; then R_SOURCE=release; else R_SOURCE=main; meta="$(fetch_repo version.txt)" || return 1; fi
   R_BUILD="$(printf '%s\n' "$meta" | sed -n 's/^build=//p' | head -n1)"
   R_SHA="$(printf '%s\n' "$meta" | sed -n 's/^sha256=//p' | head -n1)"
   [ -n "$R_BUILD" ] && [ -n "$R_SHA" ]
@@ -75554,7 +75820,7 @@ cmd_restore() {
   tar xzf "$file" -C "$tmp" || { bad "Архив повреждён"; rm -rf "$tmp"; return 1; }
   [ -f "$tmp/coregsm.db" ] || { bad "В архиве нет базы данных"; rm -rf "$tmp"; return 1; }
   say "Будут заменены: база данных, картинки новостей и логотип (если они есть в копии),"
-  say "а также секреты JWT_SECRET и INTERNAL_TOKEN (они должны совпадать с базой)."
+  say "а также секреты JWT_SECRET, INTERNAL_TOKEN и SECRETS_KEY (они должны совпадать с базой)."
   say "Домен, версия и сертификаты этого сервера не меняются."
   ask_yn "Восстановить из $(basename "$file")?" || { dim "Отменено"; rm -rf "$tmp"; return 0; }
   local with_certs=0
@@ -75569,11 +75835,11 @@ cmd_restore() {
   restore_volume "$tmp" full && ok "База данных и файлы восстановлены" || { bad "Не удалось записать данные"; rm -rf "$tmp"; return 1; }
   if [ -f "$tmp/env" ]; then
     local k v
-    for k in JWT_SECRET INTERNAL_TOKEN; do
+    for k in JWT_SECRET INTERNAL_TOKEN SECRETS_KEY; do
       v="$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"
       [ -n "$v" ] && env_set "$k" "$v"
     done
-    ok "Секреты JWT_SECRET и INTERNAL_TOKEN восстановлены"
+    ok "Секреты JWT_SECRET, INTERNAL_TOKEN и SECRETS_KEY восстановлены"
     if [ "$with_certs" = 1 ]; then
       for k in DOMAIN LE_EMAIL LOCAL_MODE CERT_MODE; do
         grep -qE "^$k=" "$tmp/env" && env_set "$k" "$(grep -E "^$k=" "$tmp/env" | tail -n1 | cut -d= -f2-)"

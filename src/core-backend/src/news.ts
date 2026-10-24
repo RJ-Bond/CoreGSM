@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
+import { addColumn } from './schema.js';
 
 const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
 fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -32,19 +33,10 @@ CREATE TABLE IF NOT EXISTS news (
 );
 `);
 
-try {
-  db.exec("ALTER TABLE news ADD COLUMN repeat TEXT NOT NULL DEFAULT 'none'");
-} catch {
-  /* column already exists */
-}
+addColumn(db, 'news', 'repeat', "TEXT NOT NULL DEFAULT 'none'");
 // delivery retries: failed attempts so far and the earliest time of the next one (see deliveries.ts)
-for (const ddl of ['ALTER TABLE news ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE news ADD COLUMN next_try_at INTEGER']) {
-  try {
-    db.exec(ddl);
-  } catch {
-    /* column already exists */
-  }
-}
+addColumn(db, 'news', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
+addColumn(db, 'news', 'next_try_at', 'INTEGER');
 // a manual retry from the deliveries list puts the item back into the queue it came from
 registerKind('news', {
   retry(refId, payload) {
@@ -53,19 +45,11 @@ registerKind('news', {
   },
 });
 
-try {
-  // 1 = a test send (never shown in lists, cleaned up after an hour)
-  db.exec('ALTER TABLE news ADD COLUMN test INTEGER NOT NULL DEFAULT 0');
-} catch {
-  /* column already exists */
-}
+// 1 = a test send (never shown in lists, cleaned up after an hour)
+addColumn(db, 'news', 'test', 'INTEGER NOT NULL DEFAULT 0');
 
-try {
-  // the user who created the item (its role is resolved at read time, see authorRole)
-  db.exec('ALTER TABLE news ADD COLUMN created_by INTEGER');
-} catch {
-  /* column already exists */
-}
+// the user who created the item (its role is resolved at read time, see authorRole)
+addColumn(db, 'news', 'created_by', 'INTEGER');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS news_reactions (

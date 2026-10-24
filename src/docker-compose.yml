@@ -7,6 +7,21 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+# no service may gain privileges through setuid binaries; the Node services (backend, bot) need no Linux capabilities
+# at all. The nginx containers keep the default capability set: nginx starts as root, binds port 80/443 and then
+# hands the work to an unprivileged worker.
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+x-hardening-node: &hardening-node
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+# Memory ceilings: a runaway process is stopped (and restarted) instead of taking the whole host down. Raise one in
+# .env when a large server needs more, e.g. BACKEND_MEM_LIMIT=3g. The backend decodes uploaded pictures (up to
+# 12000x12000 pixels), which is what the default leaves room for.
 services:
   backend:
     build:
@@ -15,6 +30,8 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    <<: *hardening-node
+    mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
     init: true
     restart: unless-stopped
     logging: *logging
@@ -47,6 +64,8 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    <<: *hardening-node
+    mem_limit: ${BOT_MEM_LIMIT:-512m}
     init: true
     restart: unless-stopped
     logging: *logging
@@ -58,6 +77,13 @@ services:
       backend:
         condition: service_healthy
     networks: [internal]
+    # the bot touches this file every 10 seconds from its main loop (bot.ts); a stuck tick makes the bot exit by itself
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(Date.now()-process.getBuiltinModule('fs').statSync('/tmp/coregsm-bot.beat').mtimeMs<120000?0:1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   frontend:
     build:
@@ -66,13 +92,23 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
+    <<: *hardening
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
     init: true
     restart: unless-stopped
     logging: *logging
     networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/80' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   nginx-proxy:
     build: ./nginx
+    <<: *hardening
+    mem_limit: ${PROXY_MEM_LIMIT:-256m}
     init: true
     restart: unless-stopped
     logging: *logging
@@ -98,6 +134,8 @@ services:
 
   certbot:
     image: certbot/certbot
+    <<: *hardening
+    mem_limit: ${CERTBOT_MEM_LIMIT:-256m}
     init: true
     restart: unless-stopped
     logging: *logging
