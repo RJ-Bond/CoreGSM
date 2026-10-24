@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="62a44150024c"
+COREGSM_BUILD="4d29ce6625e5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7252,6 +7252,15 @@ export const ERRORS = {
   new_password_min_8: 'Новый пароль должен быть не короче 8 символов',
   passwords_differ: 'Пароли не совпадают',
   wrong_current_password: 'Текущий пароль неверен',
+  two_factor_code_bad: 'Неверный код подтверждения',
+  too_many_attempts_later: 'Слишком много попыток. Попробуйте позже.',
+  two_factor_already_on: 'Двухфакторная защита уже включена',
+  two_factor_code_required: 'Введите код из приложения',
+  two_factor_not_started: 'Сначала начните настройку',
+  two_factor_enable_code_bad: 'Код не подошёл. Проверьте время на телефоне и попробуйте ещё раз',
+  two_factor_not_on: 'Двухфакторная защита не включена',
+  password_wrong: 'Пароль неверен',
+  two_factor_code_mismatch: 'Код не подошёл',
   email_needs_password: 'Введите текущий пароль, чтобы изменить почту',
   check_address: 'Проверьте адрес',
   bad_email: 'Некорректный адрес электронной почты',
@@ -61375,6 +61384,15 @@ const errorsEn: Record<string, string> = {
   new_password_min_8: 'The new password must be at least 8 characters long',
   passwords_differ: 'The passwords do not match',
   wrong_current_password: 'The current password is wrong',
+  two_factor_code_bad: 'The verification code is wrong',
+  too_many_attempts_later: 'Too many attempts. Try again later',
+  two_factor_already_on: 'Two-factor authentication is already on',
+  two_factor_code_required: 'Enter the code from the app',
+  two_factor_not_started: 'Start the set-up first',
+  two_factor_enable_code_bad: 'The code did not match. Check the time on your phone and try again',
+  two_factor_not_on: 'Two-factor authentication is not on',
+  password_wrong: 'The password is wrong',
+  two_factor_code_mismatch: 'The code did not match',
   email_needs_password: 'Enter your current password to change the e-mail',
   check_address: 'Check the address',
   bad_email: 'Invalid e-mail address',
