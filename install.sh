@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="156a856c36d3"
+COREGSM_BUILD="9c675554fe71"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -16917,8 +16917,8 @@ __COREGSM_EOF__
       "dependencies": {
         "discord.js": "^14.16.3",
         "fetch-socks": "^1.3.2",
-        "https-proxy-agent": "^7.0.6",
-        "socks-proxy-agent": "^8.0.5",
+        "https-proxy-agent": "^9.1.0",
+        "socks-proxy-agent": "^10.1.0",
         "undici": "^6.27.0",
         "ws": "^8.17.0"
       },
@@ -17562,12 +17562,12 @@ __COREGSM_EOF__
       }
     },
     "node_modules/agent-base": {
-      "version": "7.1.4",
-      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz",
-      "integrity": "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==",
+      "version": "9.0.0",
+      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-9.0.0.tgz",
+      "integrity": "sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==",
       "license": "MIT",
       "engines": {
-        "node": ">= 14"
+        "node": ">= 20"
       }
     },
     "node_modules/debug": {
@@ -17703,16 +17703,17 @@ __COREGSM_EOF__
       }
     },
     "node_modules/https-proxy-agent": {
-      "version": "7.0.6",
-      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz",
-      "integrity": "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==",
+      "version": "9.1.0",
+      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-9.1.0.tgz",
+      "integrity": "sha512-ag87y7cJJ9/3+GxFr8Oy4O5faDsGRGnBGsJj/YjOSsSx/5eadKLYTMPlzuR6obgoCDDm0abAAZitXXQkMOPSpA==",
       "license": "MIT",
       "dependencies": {
-        "agent-base": "^7.1.2",
-        "debug": "4"
+        "agent-base": "9.0.0",
+        "debug": "^4.3.4",
+        "proxy-agent-negotiate": "1.1.0"
       },
       "engines": {
-        "node": ">= 14"
+        "node": ">= 20"
       }
     },
     "node_modules/ip-address": {
@@ -17748,6 +17749,23 @@ __COREGSM_EOF__
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
       "license": "MIT"
     },
+    "node_modules/proxy-agent-negotiate": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/proxy-agent-negotiate/-/proxy-agent-negotiate-1.1.0.tgz",
+      "integrity": "sha512-N8IBcM3UgCVzz2L2Lqv8DVntDnnC8/hiV4nEDUPkqq72TPUgYWjQc+bdZlBPZK9LzPAvOY//gAt0S0DApoOXWQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 20"
+      },
+      "peerDependencies": {
+        "kerberos": "^2.0.0"
+      },
+      "peerDependenciesMeta": {
+        "kerberos": {
+          "optional": true
+        }
+      }
+    },
     "node_modules/smart-buffer": {
       "version": "4.2.0",
       "resolved": "https://registry.npmjs.org/smart-buffer/-/smart-buffer-4.2.0.tgz",
@@ -17773,17 +17791,17 @@ __COREGSM_EOF__
       }
     },
     "node_modules/socks-proxy-agent": {
-      "version": "8.0.5",
-      "resolved": "https://registry.npmjs.org/socks-proxy-agent/-/socks-proxy-agent-8.0.5.tgz",
-      "integrity": "sha512-HehCEsotFqbPW9sJ8WVYB6UbmIMv7kUUORIF2Nncq4VQvBfNBLibW9YZR5dlYCSUhwcD628pRllm7n+E+YTzJw==",
+      "version": "10.1.0",
+      "resolved": "https://registry.npmjs.org/socks-proxy-agent/-/socks-proxy-agent-10.1.0.tgz",
+      "integrity": "sha512-WlMj/67cEJ6MDI1OcsnjuYKDNDoyPCCYZ249kuuXPiMDw9F8PXkVaQ7YWu3siTydfQ/4BEZcvGzu+aYvz7dDCQ==",
       "license": "MIT",
       "dependencies": {
-        "agent-base": "^7.1.2",
+        "agent-base": "9.0.0",
         "debug": "^4.3.4",
         "socks": "^2.8.3"
       },
       "engines": {
-        "node": ">= 14"
+        "node": ">= 20"
       }
     },
     "node_modules/ts-mixer": {
@@ -17886,8 +17904,8 @@ __COREGSM_EOF__
   "dependencies": {
     "discord.js": "^14.16.3",
     "fetch-socks": "^1.3.2",
-    "https-proxy-agent": "^7.0.6",
-    "socks-proxy-agent": "^8.0.5",
+    "https-proxy-agent": "^9.1.0",
+    "socks-proxy-agent": "^10.1.0",
     "undici": "^6.27.0",
     "ws": "^8.17.0"
   },
