@@ -926,6 +926,9 @@ const ru = {
   'adm.com.toBest': '☆ В лучшие',
   'adm.com.unpublished': 'Скриншот снят с публикации',
   'adm.com.take': 'Снять',
+  'srv.empty.now': 'Сейчас никого',
+  'srv.addr.copy': 'Скопировать адрес',
+  'srv.addr.copied': 'Адрес скопирован',
 };
 
 export default ru;
