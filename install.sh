@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0e62e68e3676"
+COREGSM_BUILD="e4aef330d79f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -44348,6 +44348,43 @@ export default function App() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/RootBoundary.tsx" << '__COREGSM_EOF__'
+/**
+ * The last line of defence: an error in the shell of the panel (header, navigation, a provider) would otherwise leave a
+ * white screen. Shows a calm notice with the details and a reload button instead.
+ */
+import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { t } from './i18n';
+
+export class RootBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[coregsm] render error', error, info.componentStack);
+  }
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    const details = `${error.name}: ${error.message}\n${location.href}\n${navigator.userAgent}`;
+    return (
+      <div className="grid min-h-screen place-items-center px-4 text-center" role="alert">
+        <div className="max-w-md space-y-4">
+          <h1 className="text-xl font-extrabold">{t('crash.title')}</h1>
+          <p className="text-mute">{t('crash.hint')}</p>
+          <pre className="max-h-40 overflow-auto rounded-xl bg-black/20 p-3 text-left text-xs whitespace-pre-wrap">{details}</pre>
+          <div className="flex justify-center gap-2">
+            <button type="button" className="btn btn-solid" onClick={() => window.location.reload()}>{t('page.reload')}</button>
+            <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(details).catch(() => undefined)}>{t('crash.copy')}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/accent.ts" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api, type Server } from './api';
@@ -60163,6 +60200,9 @@ const en: Record<keyof typeof ru, string> = {
   'common.save': 'Save',
   'page.loadFailed': 'The page could not be loaded. The panel may have just been updated.',
   'page.reload': 'Reload the page',
+  'crash.title': 'Something went wrong',
+  'crash.hint': 'The panel hit an unexpected error. Reloading usually helps; if it keeps happening, report it with the details below.',
+  'crash.copy': 'Copy details',
   'toast.close': 'Dismiss notification',
   'ago.s': '{n}s ago',
   'ago.m': '{n} min ago',
@@ -61049,6 +61089,9 @@ const ru = {
   'common.save': 'Сохранить',
   'page.loadFailed': 'Не удалось загрузить страницу. Возможно, панель только что обновилась.',
   'page.reload': 'Обновить страницу',
+  'crash.title': 'Что-то пошло не так',
+  'crash.hint': 'В панели произошла непредвиденная ошибка. Обычно помогает перезагрузка; если повторяется, сообщите об этом, приложив детали ниже.',
+  'crash.copy': 'Скопировать детали',
   'toast.close': 'Закрыть уведомление',
   'ago.s': '{n} с назад',
   'ago.m': '{n} мин назад',
@@ -61746,6 +61789,7 @@ import './styles/profile.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
 import App from './App';
+import { RootBoundary } from './RootBoundary';
 import { initAppearance } from './appearance';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -61757,7 +61801,9 @@ installSegIndicator();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <RootBoundary>
+      <App />
+    </RootBoundary>
   </React.StrictMode>,
 );
 
@@ -68062,16 +68108,17 @@ function ServerList() {
           {servers.length > 1 ? (
             <nav className="seg flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
               {([
-                ['all', `Все · ${servers.length}`],
-                ['online', `Онлайн · ${online.length}`],
-                ['offline', `Недоступные · ${offlineCount}`],
-                ...(me ? [['fav', `Избранные · ${favCount}`]] : []),
-              ] as [Filter, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item whitespace-nowrap" aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
+                ['all', `Все · ${servers.length}`, servers.length],
+                ['online', `Онлайн · ${online.length}`, online.length],
+                ['offline', `Недоступные · ${offlineCount}`, offlineCount],
+                ...(me ? [['fav', `Избранные · ${favCount}`, favCount]] : []),
+              ] as [Filter, string, number][]).map(([id, label, count]) => (
+                // an empty filter stays reachable but is dimmed, so the eye goes to the ones that have servers
+                <button key={id} type="button" className={`seg-item whitespace-nowrap${count === 0 && effFilter !== id ? ' opacity-70' : ''}`} aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
               ))}
             </nav>
           ) : <span />}
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="srv-bar-tools flex items-center gap-2.5">
             {canSelect && (
               <button type="button" className="btn btn-soft" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
@@ -68305,7 +68352,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <span className="truncate font-mono" title={s.address}>{s.address}</span>
-        <span className="shrink-0">{s.online && s.map ? s.map : ago(s.updatedAt)}</span>
+        <span className="shrink-0">{s.online ? (s.map || (s.updatedAt != null && Date.now() - s.updatedAt > 60_000 ? ago(s.updatedAt) : '')) : ago(s.updatedAt)}</span>
       </div>
     </article>
   );
@@ -72287,6 +72334,13 @@ __COREGSM_EOF__
 
 /* ---------- view switcher row ---------- */
 .srv-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; }
+/* the select button and the view switch stay on one line; on a phone they are a little tighter so that they fit */
+.srv-bar-tools { flex-wrap: nowrap; max-width: 100%; }
+@media (max-width: 480px) {
+  .srv-bar-tools { width: 100%; justify-content: space-between; gap: 8px; }
+  .srv-bar-tools .btn { padding-inline: 14px; }
+  .srv-bar-tools .seg-item { padding-inline: 12px; }
+}
 
 /* ---------- list view ---------- */
 .srv-list { overflow: hidden; padding: 4px 0; }
