@@ -35,6 +35,7 @@ export function uaLabel(ua: string | undefined): string {
 }
 
 import { checkNickNow } from './nickOnboarding.js';
+import { log } from './logger.js';
 
 export type AccountEventKind =
   | 'login'
@@ -64,7 +65,7 @@ export function logAccount(req: Request, userId: number, kind: AccountEventKind,
       detail.slice(0, 200),
     );
   } catch (e) {
-    console.error('account journal failed', (e as Error).message);
+    log.error('account journal failed', (e as Error).message);
   }
 }
 

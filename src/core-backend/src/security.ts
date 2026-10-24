@@ -18,6 +18,7 @@ import { wrap } from './http.js';
 import { enqueueDelivery } from './deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from './mail.js';
 import { logAccount, prefsOf, uaLabel } from './profile.js';
+import { log } from './logger.js';
 
 // ---------- schema ----------
 addColumn(db, 'users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
@@ -202,10 +203,10 @@ export function noteLogin(req: Request, userId: number, brandName: string): void
           ? [`A new sign-in to your account "${u.username}" from a device we have not seen before.`, `Device: ${label}`, `Address: ${ip}`, 'If this was not you, change your password and end other sessions in the profile.']
           : [`Новый вход в аккаунт «${u.username}» с устройства, которого мы раньше не видели.`, `Устройство: ${label}`, `Адрес: ${ip}`, 'Если это были не вы, смените пароль и завершите чужие сеансы в профиле.'],
       );
-      void sendMail({ to: u.email, subject: en ? 'New sign-in to your account' : 'Новый вход в аккаунт', ...body }).catch((e) => console.error('new-device mail failed:', (e as Error).message));
+      void sendMail({ to: u.email, subject: en ? 'New sign-in to your account' : 'Новый вход в аккаунт', ...body }).catch((e) => log.error('new-device mail failed:', (e as Error).message));
     }
   } catch (e) {
-    console.error('noteLogin failed', (e as Error).message);
+    log.error('noteLogin failed', (e as Error).message);
   }
 }
 
@@ -373,7 +374,7 @@ export function registerSecurity(d: SecurityDeps): void {
           if (!viaMail && !viaDiscord) return;
           const base = d.publicBase();
           if (!base) {
-            console.error('password reset letter not sent: the public address of the panel is unknown (set PUBLIC_URL or DOMAIN)');
+            log.error('password reset letter not sent: the public address of the panel is unknown (set PUBLIC_URL or DOMAIN)');
             return;
           }
           // at most 3 letters per account per hour
@@ -403,7 +404,7 @@ export function registerSecurity(d: SecurityDeps): void {
             await sendMail({ to: u.email!, subject: en ? 'Password reset' : 'Сброс пароля', ...body });
           }
         } catch (e) {
-          console.error('password reset letter failed:', (e as Error).message);
+          log.error('password reset letter failed:', (e as Error).message);
         }
       })();
     });

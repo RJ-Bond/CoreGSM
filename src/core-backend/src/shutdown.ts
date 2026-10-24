@@ -5,6 +5,7 @@
  */
 import type { Server } from 'node:http';
 import { db } from './db.js';
+import { log } from './logger.js';
 
 const FORCE_AFTER_MS = 8000;
 
@@ -23,9 +24,9 @@ export async function shutdown(server: Server, signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   const t0 = Date.now();
-  console.log(`${signal}: shutting down`);
+  log.info(`${signal}: shutting down`);
   const force = setTimeout(() => {
-    console.error(`shutdown took longer than ${FORCE_AFTER_MS} ms, exiting anyway`);
+    log.error(`shutdown took longer than ${FORCE_AFTER_MS} ms, exiting anyway`);
     process.exit(1);
   }, FORCE_AFTER_MS);
   force.unref();
@@ -41,17 +42,17 @@ export async function shutdown(server: Server, signal: string): Promise<void> {
       try {
         await s.run();
       } catch (e) {
-        console.error(`shutdown step "${s.name}" failed:`, (e as Error).message);
+        log.error(`shutdown step "${s.name}" failed:`, (e as Error).message);
       }
     }),
   ]);
   try {
     db.close();
   } catch (e) {
-    console.error('closing the database failed:', (e as Error).message);
+    log.error('closing the database failed:', (e as Error).message);
   }
   clearTimeout(force);
-  console.log(`stopped in ${Date.now() - t0} ms`);
+  log.info(`stopped in ${Date.now() - t0} ms`);
   process.exit(signal === 'uncaughtException' ? 1 : 0);
 }
 

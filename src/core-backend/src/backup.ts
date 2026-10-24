@@ -32,6 +32,7 @@ import * as tar from 'tar';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { canDecrypt, isEncrypted, isSecretKey } from './secrets.js';
+import { log } from './logger.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
@@ -322,7 +323,7 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
   } catch (e) {
     const err = e as Error & { cause?: { message?: string } };
     result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
-    console.error('backup upload failed:', result.error);
+    log.error('backup upload failed:', result.error);
   }
   try {
     setSetting('backup_last_remote', JSON.stringify(result));
@@ -339,10 +340,10 @@ export async function runScheduledIfDue(now = Date.now()): Promise<BackupItem | 
     const lastAuto = listBackups().find((i) => i.kind === 'auto')?.createdAt ?? null;
     if (!backupDue(s.schedule, lastAuto, now)) return null;
     const it = await createStoredBackup('auto');
-    console.log(`scheduled backup created: ${it.name}`);
+    log.info(`scheduled backup created: ${it.name}`);
     return it;
   } catch (e) {
-    console.error('scheduled backup failed:', (e as Error).message);
+    log.error('scheduled backup failed:', (e as Error).message);
     return null;
   }
 }
@@ -537,7 +538,7 @@ function restartSoon(): void {
 export function registerBackups({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const fail = (res: Response, e: unknown) => {
     if (e instanceof BackupError) return void res.status(e.status).json({ error: e.message });
-    console.error('backup error', e);
+    log.error('backup error', e);
     res.status(500).json({ error: `Не удалось выполнить операцию: ${(e as Error).message}` });
   };
   const guard =
