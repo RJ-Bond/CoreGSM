@@ -1,2 +1,0 @@
-core-frontend -D oxlint @testing-library/react @testing-library/dom happy-dom
-core-frontend @fontsource-variable/jetbrains-mono
