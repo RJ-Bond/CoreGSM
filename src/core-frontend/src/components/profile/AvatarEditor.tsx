@@ -37,7 +37,7 @@ export function useDropTarget(onFile: (f: File) => void, disabled = false) {
 }
 
 /** Profile picture: upload or drop a photo (cropped to a square on the server), or fall back to the Discord avatar. */
-export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) {
+export function AvatarEditor({ onChanged, size = 80 }: { onChanged: () => Promise<void>; size?: number }) {
   const { me } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -79,7 +79,7 @@ export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) 
         aria-label={t('pf.avatar.upload')}
         className={`group relative rounded-3xl ${drop.over ? 'pf-drop-on' : ''}`}
       >
-        <UserAvatar name={me.username} url={me.avatarUrl} size={80} tone="brand" className="rounded-3xl!" />
+        <UserAvatar name={me.username} url={me.avatarUrl} size={size} tone="brand" className="rounded-3xl!" />
         <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>

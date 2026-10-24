@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f2a0a6530eaf"
+COREGSM_BUILD="6f40463b0abd"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -53656,10 +53656,12 @@ export function toggleReaction(
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/Achievements.tsx" << '__COREGSM_EOF__'
+import { useState, type ReactNode } from 'react';
 import type { Achievement } from '../../api';
 import { t } from '../../i18n';
 import { fmtDate, Section } from '../../ui';
 import { AchievementArt } from './icons';
+import { IcoCheck, IcoLock } from './bits';
 import { isArray, useFetched } from './useFetched';
 
 export function useAchievements() {
@@ -53668,10 +53670,44 @@ export function useAchievements() {
 
 const pct = (a: Achievement) => (a.target > 0 ? Math.max(0, Math.min(100, (a.progress / a.target) * 100)) : a.earned ? 100 : 0);
 
+/** a small check (earned) or lock (not yet) on the corner of an achievement's picture */
+export function AchFlag({ earned }: { earned: boolean }) {
+  return <span className={`pf-ach-flag ${earned ? 'is-on' : ''}`} aria-hidden>{earned ? <IcoCheck /> : <IcoLock />}</span>;
+}
+
+type AchLike = { id: string; earned: boolean; earnedAt: number | null; progress: number; target: number };
+type AchFilter = 'all' | 'earned' | 'progress';
+const share = (a: AchLike) => (a.target > 0 ? Math.max(0, Math.min(1, a.progress / a.target)) : a.earned ? 1 : 0);
+
+/** «12 из 30» in a ring, the filter chips and the grid: earned first (newest on top), then the closest to earning */
+export function AchBrowser<T extends AchLike>({ list, render }: { list: T[]; render: (a: T) => ReactNode }) {
+  const [f, setF] = useState<AchFilter>('all');
+  const done = list.filter((a) => a.earned).length;
+  const view = list
+    .filter((a) => (f === 'earned' ? a.earned : f === 'progress' ? !a.earned : true))
+    .sort((x, y) => Number(y.earned) - Number(x.earned) || (x.earned ? (y.earnedAt ?? 0) - (x.earnedAt ?? 0) : share(y) - share(x)));
+  const total = Math.max(1, list.length);
+  return (
+    <div className="space-y-4">
+      <div className="pf-ach-head">
+        <div className="pf-ring" style={{ ['--p' as string]: `${Math.round((done / total) * 360)}deg` }} role="img" aria-label={t('pf.ach.ringOf', { done, total: list.length })}>
+          <span><b>{done}</b>/{list.length}</span>
+        </div>
+        <div className="pf-chips" role="group" aria-label={t('pf.ach.title')}>
+          {(['all', 'earned', 'progress'] as const).map((k) => (
+            <button key={k} type="button" className="pf-chip" aria-pressed={f === k} onClick={() => setF(k)}>{t(`pf.ach.f.${k}` as const)}</button>
+          ))}
+        </div>
+      </div>
+      {view.length === 0 ? <p className="font-semibold text-mute">{t('pf.ach.fNone')}</p> : <ul className="pf-ach-grid">{view.map((a) => render(a))}</ul>}
+    </div>
+  );
+}
+
 export function AchievementCard({ a }: { a: Achievement }) {
   return (
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
-      <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /></span>
+      <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /><AchFlag earned={a.earned} /></span>
       <div className="min-w-0 flex-1">
         <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{a.title}</div>
         {a.description && <div className="mt-0.5 text-sm font-semibold text-mute">{a.description}</div>}
@@ -53702,7 +53738,7 @@ export function AchievementsGrid() {
     <Section title={t('pf.ach.title')} description={data ? t('pf.ach.count', { done, total: list.length }) : undefined}>
       {data === undefined && <div className="skeleton h-32 rounded-2xl bg-soft" />}
       {data && list.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.none')}</p>}
-      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <AchievementCard key={a.id} a={a} />)}</ul>}
+      {data && list.length > 0 && <AchBrowser list={list} render={(a) => <AchievementCard key={a.id} a={a} />} />}
     </Section>
   );
 }
@@ -53728,12 +53764,16 @@ export function AchievementsPreview() {
         </ul>
       )}
       {next && (
-        <div className="rounded-2xl bg-soft px-4 py-3">
-          <div className="flex items-baseline justify-between gap-3 text-sm font-extrabold">
-            <span className="min-w-0 truncate">{t('pf.ach.next', { title: next.title })}</span>
-            <span className="shrink-0 text-mute">{Math.round(next.progress)} / {next.target}</span>
+        <div className="pf-next">
+          <span className="pf-ach-ico"><AchievementArt id={next.id} slug={next.icon} earned={false} size={44} /><AchFlag earned={false} /></span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-3 text-sm font-extrabold">
+              <span className="min-w-0 truncate">{t('pf.ach.next', { title: next.title })}</span>
+              <span className="shrink-0 text-mute">{Math.round(next.progress)} / {next.target}</span>
+            </div>
+            <div className="pf-bar mt-2"><i style={{ width: `${pct(next)}%` }} /></div>
+            <div className="mt-1 text-xs font-bold text-mute">{t('pf.ach.left', { n: Math.max(0, Math.ceil(next.target - next.progress)) })}</div>
           </div>
-          <div className="pf-bar mt-2"><i style={{ width: `${pct(next)}%` }} /></div>
         </div>
       )}
     </Section>
@@ -53813,7 +53853,7 @@ export function useDropTarget(onFile: (f: File) => void, disabled = false) {
 }
 
 /** Profile picture: upload or drop a photo (cropped to a square on the server), or fall back to the Discord avatar. */
-export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) {
+export function AvatarEditor({ onChanged, size = 80 }: { onChanged: () => Promise<void>; size?: number }) {
   const { me } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -53855,7 +53895,7 @@ export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) 
         aria-label={t('pf.avatar.upload')}
         className={`group relative rounded-3xl ${drop.over ? 'pf-drop-on' : ''}`}
       >
-        <UserAvatar name={me.username} url={me.avatarUrl} size={80} tone="brand" className="rounded-3xl!" />
+        <UserAvatar name={me.username} url={me.avatarUrl} size={size} tone="brand" className="rounded-3xl!" />
         <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
@@ -54570,9 +54610,10 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/Stats.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
+import { StatTile, IcoClock, IcoFlame, IcoHeart, IcoPlay, IcoTimer } from './bits';
 import type { MyStats } from '../../api';
 import { t } from '../../i18n';
-import { ago, fmtDay, fmtDateTime, GameAvatar, Section } from '../../ui';
+import { ago, Empty, fmtDay, fmtDateTime, GameAvatar, Section } from '../../ui';
 import { fmtDuration } from './format';
 import { isObject, useFetched } from './useFetched';
 
@@ -54585,25 +54626,16 @@ export function useMyStats(days: number) {
 
 export const PERIODS = [7, 30, 90] as const;
 
-function Tile({ value, label }: { value: string; label: string }) {
-  return (
-    <div className="pf-tile">
-      <div className="pf-tile-v">{value}</div>
-      <div className="pf-tile-l">{label}</div>
-    </div>
-  );
-}
-
 /** the five numbers of a period: hours online, sessions, streak, longest session, favourite server */
 export function StatTiles({ s, compact = false }: { s: MyStats; compact?: boolean }) {
   const fav = s.byServer?.find((x) => x.serverId === s.favouriteServerId)?.name;
   return (
     <div className="pf-tiles">
-      <Tile value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
-      <Tile value={String(s.sessions)} label={t('pf.stats.sessions')} />
-      <Tile value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
-      {!compact && <Tile value={fmtDuration(s.longestSessionSec)} label={t('pf.stats.longest')} />}
-      {!compact && <Tile value={fav ?? '–'} label={t('pf.stats.favourite')} />}
+      <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
+      <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
+      <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
+      {!compact && <StatTile icon={<IcoTimer />} value={fmtDuration(s.longestSessionSec)} label={t('pf.stats.longest')} />}
+      {!compact && <StatTile icon={<IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
     </div>
   );
 }
@@ -54614,8 +54646,13 @@ const levelOf = (sec: number, max: number) => {
   return k > 0.75 ? 4 : k > 0.5 ? 3 : k > 0.25 ? 2 : 1;
 };
 
-/** day squares coloured by hours, a column per week (Monday on top), like a contribution calendar */
+const CELL = 14, GAP = 4;
+const MONDAY = new Date('2024-01-01T12:00:00Z');
+const weekday = (row: number) => new Date(MONDAY.getTime() + row * 86_400_000).toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
+
+/** day squares coloured by hours, a column per week (Monday on top), like a contribution calendar: month labels on top, weekdays on the left, a tooltip on hover or tap */
 export function ActivityStrip({ byDay }: { byDay: MyStats['byDay'] }) {
+  const [hover, setHover] = useState<number | null>(null);
   if (byDay.length === 0) return null;
   const max = Math.max(0, ...byDay.map((d) => d.seconds));
   // number of empty cells before the first day so that rows are weekdays (Mon = 0)
@@ -54623,14 +54660,49 @@ export function ActivityStrip({ byDay }: { byDay: MyStats['byDay'] }) {
   const lead = Number.isNaN(first.getTime()) ? 0 : (first.getUTCDay() + 6) % 7;
   const total = byDay.reduce((a, d) => a + d.seconds, 0);
   const active = byDay.filter((d) => d.seconds > 0).length;
+  const weeks = Math.ceil((lead + byDay.length) / 7);
+  // the month label goes over the first column in which the month changes
+  const months: (string | null)[] = Array.from({ length: weeks }, (_, w) => {
+    const d = byDay[Math.max(0, w * 7 - lead)];
+    const prev = byDay[Math.max(0, (w - 1) * 7 - lead)];
+    if (!d) return null;
+    const m = new Date(`${d.date}T12:00:00Z`);
+    const pm = new Date(`${prev.date}T12:00:00Z`);
+    if (w > 0 && m.getUTCMonth() === pm.getUTCMonth()) return null;
+    return m.toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' }).replace('.', '');
+  });
+  const col = hover == null ? 0 : Math.floor((lead + hover) / 7);
+  const row = hover == null ? 0 : (lead + hover) % 7;
+  const h = hover != null ? byDay[hover] : null;
   return (
     <div>
-      <div className="pf-cal-wrap">
-        <div className="pf-cal" role="img" aria-label={t('pf.stats.stripAria', { days: byDay.length, active, time: fmtDuration(total) })}>
-          {Array.from({ length: lead }, (_, i) => <div key={`p${i}`} className="pf-cell pf-pad" aria-hidden />)}
-          {byDay.map((d) => (
-            <div key={d.date} className={`pf-cell pf-l${levelOf(d.seconds, max)}`} title={`${fmtDay(d.date)}: ${d.seconds > 0 ? fmtDuration(d.seconds) : t('pf.stats.noPlay')}`} />
-          ))}
+      <div className="pf-cal-outer">
+        <div className="pf-cal-days" aria-hidden>
+          {[0, 2, 4].map((r) => <span key={r} style={{ gridRow: r + 1 }}>{weekday(r)}</span>)}
+        </div>
+        <div className="pf-cal-wrap" onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHover(null); }}>
+          <div className="pf-cal-months" style={{ gridTemplateColumns: `repeat(${weeks}, ${CELL}px)` }} aria-hidden>
+            {months.map((m, w) => <span key={w}>{m}</span>)}
+          </div>
+          <div className="pf-cal-body">
+            <div className="pf-cal" role="img" aria-label={t('pf.stats.stripAria', { days: byDay.length, active, time: fmtDuration(total) })}>
+              {Array.from({ length: lead }, (_, i) => <div key={`p${i}`} className="pf-cell pf-pad" aria-hidden />)}
+              {byDay.map((d, i) => (
+                <div
+                  key={d.date}
+                  className={`pf-cell pf-l${levelOf(d.seconds, max)} ${hover === i ? 'is-hover' : ''}`}
+                  onPointerEnter={(e) => { if (e.pointerType === 'mouse') setHover(i); }}
+                  onPointerDown={(e) => { if (e.pointerType !== 'mouse') setHover((c) => (c === i ? null : i)); }}
+                />
+              ))}
+            </div>
+            {h && (
+              <div className={`pf-cal-tip ${col > weeks - 6 ? 'is-left' : ''}`} style={{ left: col > weeks - 6 ? col * (CELL + GAP) - 6 : col * (CELL + GAP) + CELL + 6, top: row * (CELL + GAP) + CELL / 2 }} aria-hidden>
+                <b>{fmtDay(h.date)}</b>
+                <span>{h.seconds > 0 ? fmtDuration(h.seconds) : t('pf.stats.noPlay')}</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-bold text-mute">
@@ -54656,8 +54728,9 @@ export function HourlyBars({ hourly }: { hourly: number[] }) {
         ))}
       </div>
       <div className="pf-hours-axis" aria-hidden>
-        <span>00</span><span>06</span><span>12</span><span>18</span>
+        {[0, 3, 6, 9, 12, 15, 18, 21].map((h) => <span key={h}>{String(h).padStart(2, '0')}</span>)}
       </div>
+      <p className="mt-2 text-sm font-bold">{t('pf.stats.peak', { h: `${String(peak).padStart(2, '0')}:00` })}</p>
     </div>
   );
 }
@@ -54665,15 +54738,16 @@ export function HourlyBars({ hourly }: { hourly: number[] }) {
 function ServerBars({ rows }: { rows: MyStats['byServer'] }) {
   if (rows.length === 0) return <p className="font-semibold text-mute">{t('pf.stats.noServers')}</p>;
   const max = Math.max(1, ...rows.map((r) => r.seconds));
+  const sum = Math.max(1, rows.reduce((a, r) => a + r.seconds, 0));
   return (
     <ul className="space-y-3">
-      {rows.map((r) => (
+      {rows.map((r, i) => (
         <li key={r.serverId} className="flex items-center gap-3">
           <GameAvatar game={r.game} size={34} />
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-3">
-              <a href={`/servers/${r.serverId}`} className="min-w-0 truncate font-extrabold hover:underline">{r.name}</a>
-              <span className="shrink-0 text-sm font-bold text-mute">{fmtDuration(r.seconds)}</span>
+              <a href={`/servers/${r.serverId}`} className="min-w-0 truncate font-extrabold hover:underline">{i === 0 && rows.length > 1 && <span className="pf-lead" aria-hidden>★ </span>}{r.name}</a>
+              <span className="shrink-0 text-sm font-bold text-mute">{fmtDuration(r.seconds)} · {t('pf.stats.share', { p: Math.round((r.seconds / sum) * 100) })}</span>
             </div>
             <div className="pf-bar pf-bar-lg mt-1" role="img" aria-label={`${r.name}: ${fmtDuration(r.seconds)}`}><i style={{ width: `${Math.max(2, (r.seconds / max) * 100)}%` }} /></div>
             <div className="mt-0.5 text-xs font-bold text-mute">{t('pf.stats.sessionsN', { n: r.sessions })}</div>
@@ -54712,6 +54786,8 @@ export function StatsPanel() {
     >
       {!s ? (
         <div className="skeleton h-32 rounded-2xl bg-soft" />
+      ) : s.totalSeconds <= 0 ? (
+        <Empty title={t('pf.stats.empty', { days })} text={t('pf.stats.emptyText')}><a href="/servers" className="btn mt-2">{t('pf.stats.emptyBtn')}</a></Empty>
       ) : (
         <>
           <StatTiles s={s} />
@@ -54738,13 +54814,35 @@ export function StatsPanel() {
   );
 }
 
-/** a compact summary for the overview tab: the 30-day numbers, no charts */
-export function StatsSummary() {
-  const { data } = useMyStats(30);
+const dayKeys = () => {
+  const d = new Date();
+  const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return new Set([local, d.toISOString().slice(0, 10)]);
+};
+
+/** «Сегодня»: the time played today against yesterday */
+function TodayBlock({ byDay }: { byDay: MyStats['byDay'] }) {
+  const last = byDay[byDay.length - 1];
+  if (!last || !dayKeys().has(last.date)) return null;
+  const today = last.seconds;
+  const yest = byDay[byDay.length - 2]?.seconds ?? 0;
+  const diff = today - yest;
+  const text = today <= 0 ? t('pf.today.none') : diff === 0 ? t('pf.today.same') : diff > 0 ? t('pf.today.up', { d: fmtDuration(diff) }) : t('pf.today.down', { d: fmtDuration(-diff) });
+  return (
+    <div className={`pf-today ${today > 0 && diff > 0 ? 'is-up' : ''}`}>
+      <span className="pf-today-k">{t('pf.today.title')}</span>
+      <span className="pf-today-v">{today > 0 ? fmtDuration(today) : '–'}</span>
+      <span className="pf-today-d">{today > 0 && diff !== 0 && <span aria-hidden>{diff > 0 ? '▲ ' : '▼ '}</span>}{text}</span>
+    </div>
+  );
+}
+
+/** a compact summary for the overview tab: the 30-day numbers and today against yesterday, no charts */
+export function StatsSummary({ data }: { data: MyStats | null | undefined }) {
   if (data === null) return null;
   return (
     <Section title={t('pf.sum.title')} description={t('pf.sum.desc')} actions={<a href="/profile/player" className="text-sm font-extrabold text-link hover:underline">{t('pf.sum.more')}</a>}>
-      {data ? <StatTiles s={data} compact /> : <div className="skeleton h-20 rounded-2xl bg-soft" />}
+      {data ? <><TodayBlock byDay={data.byDay ?? []} /><StatTiles s={data} compact /></> : <div className="skeleton h-20 rounded-2xl bg-soft" />}
     </Section>
   );
 }
@@ -54903,6 +55001,7 @@ import ru from '../../locales/ru';
 import { fmtDate, Section } from '../../ui';
 import { VR_RANKS, rankById } from '../../vrisingRanks';
 import { isArray, isObject, useFetched } from './useFetched';
+import { AchBrowser, AchFlag } from './Achievements';
 
 /** rank name in the interface language (the ladder module keeps the Russian one) */
 export function rankName(r: { id: string; name: string }): string {
@@ -54946,7 +55045,7 @@ export function RankHeaderBadge() {
   if (!data || !data.nick) return null;
   return (
     <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" style={{ color: data.rank.color }} title={t('vr.rank.title')}>
-      <RankEmblem rank={data.rank} size={28} />
+      <RankEmblem rank={data.rank} size={36} />
       {rankName(data.rank)}
     </span>
   );
@@ -54965,12 +55064,13 @@ export function RankCard() {
 }
 
 function RankBody({ d }: { d: MyRank }) {
+  const [pick, setPick] = useState<string | null>(null);
   const curIdx = Math.max(0, VR_RANKS.findIndex((r) => r.id === d.rank.id));
   const left = d.next ? Math.max(0, d.next.minHours - d.hours) : 0;
   return (
     <div className="space-y-4">
       <div className="vr-rank">
-        <RankEmblem rank={d.rank} size={96} />
+        <RankEmblem rank={d.rank} size={112} />
         <div className="vr-rank-main">
           <div className="wrap-break-word text-xl font-black leading-tight" style={{ color: d.rank.color }}>{rankName(d.rank)}</div>
           <div className="mt-0.5 text-sm font-semibold text-mute">
@@ -54980,7 +55080,7 @@ function RankBody({ d }: { d: MyRank }) {
             <div className="mt-3">
               <div className="flex items-baseline justify-between gap-3 text-sm font-extrabold">
                 <span className="min-w-0 truncate">{t('vr.rank.next', { name: rankName(d.next) })}</span>
-                <span className="shrink-0 text-mute">{t('vr.rank.left', { hours: fmtH(left) })}</span>
+                <span className="shrink-0 text-mute">{Math.round(d.progress * 100)}% · {t('vr.rank.left', { hours: fmtH(left) })}</span>
               </div>
               <div className="pf-bar mt-2" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(d.progress * 100)} aria-label={t('vr.rank.title')}>
                 <i style={{ width: `${Math.round(d.progress * 100)}%`, background: d.next.color }} />
@@ -54993,16 +55093,22 @@ function RankBody({ d }: { d: MyRank }) {
       </div>
       <ul className="vr-ladder" aria-label={t('vr.rank.ladder')}>
         {VR_RANKS.map((r, i) => (
-          <li
-            key={r.id}
-            className={i < curIdx ? 'is-got' : i === curIdx ? 'is-cur' : ''}
-            style={{ ['--vr-c' as string]: r.color }}
-            title={t('vr.rank.tip', { name: rankName(r), hours: r.minHours })}
-          >
-            <RankEmblem rank={r} size={36} />
+          <li key={r.id} className={i < curIdx ? 'is-got' : i === curIdx ? 'is-cur' : ''} style={{ ['--vr-c' as string]: r.color }}>
+            <button type="button" aria-pressed={(pick ?? d.rank.id) === r.id} aria-label={t('vr.rank.tip', { name: rankName(r), hours: r.minHours })} onClick={() => setPick(r.id)}>
+              <RankEmblem rank={r} size={36} />
+            </button>
           </li>
         ))}
       </ul>
+      {(() => {
+        const sel = VR_RANKS.find((x) => x.id === (pick ?? d.rank.id)) ?? d.rank;
+        return (
+          <p className="text-sm font-bold" style={{ color: sel.color }} aria-live="polite">
+            {t('vr.rank.tip', { name: rankName(sel), hours: 'minHours' in sel ? sel.minHours : d.rank.minHours })}
+            {sel.id === d.rank.id && <span className="pf-here"> · {t('vr.rank.here')}</span>}
+          </p>
+        );
+      })()}
     </div>
   );
 }
@@ -55017,6 +55123,7 @@ function Card({ a }: { a: VrAchievement }) {
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
       <span className="pf-ach-ico">
         {!failed && <img className="vr-ach-img" src={src} width={44} height={44} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />}
+        <AchFlag earned={a.earned} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{title}</div>
@@ -55046,7 +55153,7 @@ export function VrAchievementsGrid() {
   return (
     <Section title={t('vr.ach.title')} description={data ? t('pf.ach.count', { done, total: list.length }) : undefined}>
       {data === undefined && <div className="skeleton h-32 rounded-2xl bg-soft" />}
-      {data && list.length > 0 && <ul className="pf-ach-grid">{list.map((a) => <Card key={a.id} a={a} />)}</ul>}
+      {data && list.length > 0 && <AchBrowser list={list} render={(a) => <Card key={a.id} a={a} />} />}
     </Section>
   );
 }
@@ -55077,6 +55184,55 @@ export function bannerStyle(url: string | null | undefined, preset: string | nul
   if (url) return { backgroundImage: `url(${JSON.stringify(url)})` };
   const p = BANNER_PRESETS.find((x) => x.id === preset);
   return { backgroundImage: p ? p.css : DEFAULT_BANNER };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/bits.tsx" << '__COREGSM_EOF__'
+import { useState, type ReactNode } from 'react';
+import { Icon } from '../../icons';
+import { t } from '../../i18n';
+import { toast } from '../../ui';
+
+export const IcoClock = () => <Icon size={18}><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></Icon>;
+export const IcoPlay = () => <Icon size={18}><path d="m5 3 14 9-14 9V3Z" /></Icon>;
+export const IcoFlame = () => <Icon size={18}><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z" /></Icon>;
+export const IcoTimer = () => <Icon size={18}><path d="M10 2h4M12 14l3-3" /><circle cx="12" cy="14" r="8" /></Icon>;
+export const IcoHeart = () => <Icon size={18}><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z" /></Icon>;
+export const IcoCalendar = () => <Icon size={16}><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></Icon>;
+export const IcoGamepad = () => <Icon size={16}><path d="M6 12h4M8 10v4M15 13h.01M18 11h.01" /><rect x="2" y="6" width="20" height="12" rx="5" /></Icon>;
+export const IcoDiscord = () => <Icon size={16}><path d="M5 5a14 14 0 0 1 14 0c1.5 3.5 2 7 1.5 11-1.5 1-3 1.7-4.5 2l-1-2a9 9 0 0 1-9 0l-1 2c-1.5-.3-3-1-4.500-2C3 12 3.500 8.500 5 5Z" /><path d="M9 12h.01M15 12h.01" /></Icon>;
+export const IcoLogout = () => <Icon size={18}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></Icon>;
+export const IcoShare = () => <Icon size={18}><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" /></Icon>;
+export const IcoLock = () => <Icon size={12}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></Icon>;
+export const IcoCheck = () => <Icon size={12}><path d="M20 6 9 17l-5-5" /></Icon>;
+export const IcoHome = () => <Icon size={16}><path d="m3 11 9-8 9 8" /><path d="M5 10v10h14V10" /></Icon>;
+export const IcoSliders = () => <Icon size={16}><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></Icon>;
+export const IcoShield = () => <Icon size={16}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /></Icon>;
+
+/** a stat tile: icon, value and label; `hot` tints the icon (a streak of a week or more) */
+export function StatTile({ value, label, icon, hot = false }: { value: string; label: string; icon?: ReactNode; hot?: boolean }) {
+  return (
+    <div className="pf-tile">
+      {icon && <span className={`pf-tile-ico ${hot ? 'is-hot' : ''}`} aria-hidden>{icon}</span>}
+      <div className="pf-tile-v">{value}</div>
+      <div className="pf-tile-l">{label}</div>
+    </div>
+  );
+}
+
+/** copies the address of the public profile */
+export function ShareButton({ username }: { username: string }) {
+  const [busy, setBusy] = useState(false);
+  const copy = async () => {
+    setBusy(true);
+    try { await navigator.clipboard.writeText(`${window.location.origin}/u/${encodeURIComponent(username)}`); toast(t('pf.share.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
+    setBusy(false);
+  };
+  return (
+    <button type="button" className="btn btn-soft btn-sm pf-icon-btn" onClick={() => void copy()} disabled={busy} title={t('pf.share')} aria-label={t('pf.share')}>
+      <IcoShare /><span className="max-sm:sr-only">{t('pf.share')}</span>
+    </button>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
@@ -63303,6 +63459,35 @@ const en: Record<keyof typeof ru, string> = {
   'nw.hints.maintenance.t': 'When a server will be down and why',
   'nw.codeCopy': 'Copy',
   'nw.codeCopied': 'Code copied',
+  'pf.greet.night': 'Good night, {name}',
+  'pf.greet.morning': 'Good morning, {name}',
+  'pf.greet.day': 'Good afternoon, {name}',
+  'pf.greet.evening': 'Good evening, {name}',
+  'pf.greet.seen': 'Last in the game: {when}',
+  'pf.today.title': 'Today',
+  'pf.today.none': 'You have not played today yet',
+  'pf.today.same': 'the same as yesterday',
+  'pf.today.up': '{d} more than yesterday',
+  'pf.today.down': '{d} less than yesterday',
+  'pf.share': 'Share profile',
+  'pf.share.copied': 'Profile link copied',
+  'pf.you': 'This is you',
+  'pf.you.edit': 'Edit',
+  'pf.stats.peak': 'You play most often at {h}',
+  'pf.stats.share': '{p}%',
+  'pf.stats.empty': 'No play in {days} days',
+  'pf.stats.emptyText': 'Join a server: statistics appear after your first session.',
+  'pf.stats.emptyBtn': 'To the servers',
+  'vr.rank.here': 'you are here',
+  'pf.ach.f.all': 'All',
+  'pf.ach.f.earned': 'Earned',
+  'pf.ach.f.progress': 'In progress',
+  'pf.ach.fNone': 'Nothing here yet',
+  'pf.ach.ringOf': '{done} of {total}',
+  'pf.ach.left': '{n} to go',
+  'pub.more': '{k} more',
+  'pub.less': 'Show less',
+  'pf.tab.alert': 'New sign-in from an unknown device',
 };
 
 export default en;
@@ -64458,6 +64643,35 @@ const ru = {
   'nw.hints.maintenance.t': 'Когда сервер будет недоступен и почему',
   'nw.codeCopy': 'Копировать',
   'nw.codeCopied': 'Код скопирован',
+  'pf.greet.night': 'Доброй ночи, {name}',
+  'pf.greet.morning': 'Доброе утро, {name}',
+  'pf.greet.day': 'Добрый день, {name}',
+  'pf.greet.evening': 'Добрый вечер, {name}',
+  'pf.greet.seen': 'Последний раз в игре: {when}',
+  'pf.today.title': 'Сегодня',
+  'pf.today.none': 'Сегодня вы ещё не играли',
+  'pf.today.same': 'столько же, сколько вчера',
+  'pf.today.up': 'на {d} больше, чем вчера',
+  'pf.today.down': 'на {d} меньше, чем вчера',
+  'pf.share': 'Поделиться профилем',
+  'pf.share.copied': 'Ссылка на профиль скопирована',
+  'pf.you': 'Это вы',
+  'pf.you.edit': 'Редактировать',
+  'pf.stats.peak': 'Чаще всего вы играете в {h}',
+  'pf.stats.share': '{p}%',
+  'pf.stats.empty': 'За {days} дн. вы не играли',
+  'pf.stats.emptyText': 'Зайдите на сервер: статистика появится после первой сессии.',
+  'pf.stats.emptyBtn': 'К серверам',
+  'vr.rank.here': 'вы здесь',
+  'pf.ach.f.all': 'Все',
+  'pf.ach.f.earned': 'Получены',
+  'pf.ach.f.progress': 'В процессе',
+  'pf.ach.fNone': 'Здесь пока ничего нет',
+  'pf.ach.ringOf': '{done} из {total}',
+  'pf.ach.left': 'Осталось {n}',
+  'pub.more': 'Ещё {k}',
+  'pub.less': 'Свернуть',
+  'pf.tab.alert': 'Новый вход с незнакомого устройства',
 };
 
 export default ru;
@@ -69102,7 +69316,7 @@ export default function PlayerPage({ name }: { name: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Profile.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api, getToken, type Server, type Session } from '../api';
 import EmailVerifyState from '../components/EmailVerifyState';
 import { useAuth } from '../auth';
@@ -69114,24 +69328,26 @@ import { AvatarEditor } from '../components/profile/AvatarEditor';
 import { BannerEditor } from '../components/profile/BannerEditor';
 import { bannerStyle } from '../components/profile/banner';
 import { AchievementsGrid, AchievementsPreview } from '../components/profile/Achievements';
-import { RankCard, RankHeaderBadge, VrAchievementsGrid } from '../components/profile/VrRank';
+import { RankCard, RankHeaderBadge, VrAchievementsGrid, useMyRank } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
-import { StatsPanel, StatsSummary } from '../components/profile/Stats';
+import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
+import { IcoDiscord, IcoGamepad, IcoHome, IcoLogout, IcoShield, IcoSliders } from '../components/profile/bits';
+import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
-const TABS: { id: Tab; label: TKey }[] = [
-  { id: 'overview', label: 'pf.tab.overview' },
-  { id: 'player', label: 'pf.tab.player' },
-  { id: 'look', label: 'pf.tab.look' },
-  { id: 'security', label: 'pf.tab.security' },
+const TABS: { id: Tab; label: TKey; icon: ReactNode }[] = [
+  { id: 'overview', label: 'pf.tab.overview', icon: <IcoHome /> },
+  { id: 'player', label: 'pf.tab.player', icon: <IcoGamepad /> },
+  { id: 'look', label: 'pf.tab.look', icon: <IcoSliders /> },
+  { id: 'security', label: 'pf.tab.security', icon: <IcoShield /> },
 ];
 
 /** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (/profile/security). */
@@ -69140,6 +69356,7 @@ export default function ProfilePage() {
   const { sub } = useRoute();
   useI18n();
   if (!me) return null;
+  const newLogin = !!me.newDevice && !isNewDeviceDismissed(me.newDevice.ts);
   const first = sub.split('/')[0];
   const tab: Tab = TABS.some((x) => x.id === first) ? (first as Tab) : 'overview';
 
@@ -69150,7 +69367,10 @@ export default function ProfilePage() {
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>
           {TABS.map((x) => (
-            <a key={x.id} href={`/profile/${x.id}`} className="seg-item" aria-current={tab === x.id ? 'page' : undefined}>{t(x.label)}</a>
+            <a key={x.id} href={`/profile/${x.id}`} className="seg-item pf-tab" aria-current={tab === x.id ? 'page' : undefined}>
+              {x.icon}{t(x.label)}
+              {x.id === 'security' && newLogin && <span className="pf-tab-dot" title={t('pf.tab.alert')}><span className="sr-only">{t('pf.tab.alert')}</span></span>}
+            </a>
           ))}
         </nav>
       </div>
@@ -69168,6 +69388,8 @@ function OverviewTab() {
   const { me, isAdmin, logout, reload } = useAuth();
   const [favs, setFavs] = useState<Server[] | null>(null);
   const [editBanner, setEditBanner] = useState(false);
+  const stats = useMyStats(30);
+  const rank = useMyRank().data;
 
   useEffect(() => {
     Promise.all([api<number[]>('/favorites'), api<Server[]>('/servers')])
@@ -69181,6 +69403,7 @@ function OverviewTab() {
   return (
     <div className="space-y-5">
       <NewDeviceBanner />
+      <Greeting name={me.username} lastSeen={stats.data?.lastSeenAt ?? null} />
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
           <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={() => setEditBanner((v) => !v)}>
@@ -69188,22 +69411,24 @@ function OverviewTab() {
           </button>
         </div>
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><AvatarEditor onChanged={reload} /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={rank && rank.nick ? { ['--ring' as string]: rank.rank.color } : undefined}><AvatarEditor onChanged={reload} size={96} /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
-              {me.discordName && <span className="text-sm font-bold text-mute">Discord: {me.discordName}</span>}
               <RankHeaderBadge />
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {me.discordName && <span className="pf-meta"><IcoDiscord />{me.discordName}</span>}
+            </div>
           </div>
-          <button className="btn btn-soft mt-3" onClick={logout}>{t('hdr.logout')}</button>
+          <button className="btn btn-soft btn-sm pf-icon-btn mt-3" onClick={logout} title={t('hdr.logout')} aria-label={t('hdr.logout')}><IcoLogout /><span className="max-sm:sr-only">{t('hdr.logout')}</span></button>
         </div>
       </div>
 
       {editBanner && <BannerEditor onChanged={reload} />}
 
-      <StatsSummary />
+      <StatsSummary data={stats.data} />
 
       <div className="grid items-start gap-5 lg:grid-cols-2">
         <div className="space-y-5">
@@ -69226,6 +69451,18 @@ function OverviewTab() {
       {isAdmin && (
         <Section title={t('pf.tour.title')} description={t('pf.tour.text')} actions={<button className="btn btn-soft" onClick={() => restartTour(me.username)}>{t('pf.tour.again')}</button>} />
       )}
+    </div>
+  );
+}
+
+/** «Добрый день, имя» and when the player was last in the game */
+function Greeting({ name, lastSeen }: { name: string; lastSeen: number | null }) {
+  const h = new Date().getHours();
+  const key = h < 5 ? 'pf.greet.night' : h < 12 ? 'pf.greet.morning' : h < 18 ? 'pf.greet.day' : 'pf.greet.evening';
+  return (
+    <div className="pf-greet">
+      <h2>{t(key, { name })}</h2>
+      {lastSeen ? <p>{t('pf.greet.seen', { when: ago(lastSeen) })}</p> : null}
     </div>
   );
 }
@@ -69486,10 +69723,12 @@ function SessionsCard() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/PublicProfile.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, type PublicProfile } from '../api';
 import { useAuth } from '../auth';
 import { AchievementArt } from '../components/profile/icons';
+import { IcoCalendar, IcoClock, IcoFlame, IcoGamepad, IcoHeart, IcoPlay, ShareButton, StatTile } from '../components/profile/bits';
+import { NotFoundArt } from '../components/Illustrations';
 import { RankEmblem, rankName, vrAchText } from '../components/profile/VrRank';
 import { bannerStyle } from '../components/profile/banner';
 import { fmtDuration } from '../components/profile/format';
@@ -69498,12 +69737,19 @@ import { Empty, fmtDate, Section, UserAvatar } from '../ui';
 
 type State = { kind: 'loading' } | { kind: 'ok'; p: PublicProfile } | { kind: 'missing' } | { kind: 'error'; text: string };
 
-function Tile({ value, label }: { value: string; label: string }) {
+/** the first `limit` items; a button opens the rest */
+function Folded({ items, limit = 8 }: { items: ReactNode[]; limit?: number }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, limit);
   return (
-    <div className="pf-tile">
-      <div className="pf-tile-v">{value}</div>
-      <div className="pf-tile-l">{label}</div>
-    </div>
+    <>
+      <ul className="flex flex-wrap gap-2">{shown}</ul>
+      {items.length > limit && (
+        <button type="button" className="btn btn-soft btn-sm mt-3" onClick={() => setAll((v) => !v)} aria-expanded={all}>
+          {all ? t('pub.less') : t('pub.more', { k: items.length - limit })}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -69530,8 +69776,17 @@ export default function PublicProfilePage({ username }: { username: string }) {
   if (state.kind === 'loading') {
     return (
       <div className="space-y-5" role="status" aria-label={t('hdr.loading')}>
-        <div className="skeleton h-48 rounded-ui-xl bg-soft" />
-        <div className="skeleton h-28 rounded-ui-xl bg-soft" />
+        <div className="panel pf-hero">
+          <div className="pf-banner skeleton" />
+          <div className="pf-hero-body">
+            <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><div className="skeleton h-24 w-24 rounded-3xl bg-soft" /></div></div>
+            <div className="min-w-0 flex-1 basis-56 space-y-2 pt-3">
+              <div className="skeleton h-7 w-48 rounded-full bg-soft" />
+              <div className="skeleton h-5 w-64 max-w-full rounded-full bg-soft" />
+            </div>
+          </div>
+        </div>
+        <div className="pf-tiles">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-24 rounded-2xl bg-soft" />)}</div>
       </div>
     );
   }
@@ -69539,7 +69794,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
   if (state.kind !== 'ok') {
     const missing = state.kind === 'missing';
     return (
-      <Empty title={missing ? t('pub.missingTitle') : t('pub.errorTitle')} text={missing ? t('pub.missingText') : state.text}>
+      <Empty title={missing ? t('pub.missingTitle') : t('pub.errorTitle')} text={missing ? t('pub.missingText') : state.text} art={missing ? <NotFoundArt /> : undefined}>
         <a href={me ? '/profile' : '/servers'} className="btn mt-2">{t('pub.back')}</a>
       </Empty>
     );
@@ -69548,6 +69803,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
   const p = state.p;
   const since = p.memberSince != null ? new Date(p.memberSince).getTime() : NaN;
   const role = p.role === 'admin' ? t('pf.role.admin') : p.role === 'moderator' ? t('pf.role.moderator') : t('pf.role.player');
+  const mine = me?.username === p.username;
   const s = p.stats ?? { totalSeconds: 0, sessions: 0, streakDays: 0, favouriteServerName: null };
 
   return (
@@ -69555,20 +69811,27 @@ export default function PublicProfilePage({ username }: { username: string }) {
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(p.bannerUrl, p.bannerPreset)} />
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><UserAvatar name={p.username} url={p.avatarUrl} size={88} tone="brand" className="rounded-3xl!" /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={p.rank ? { ['--ring' as string]: p.rank.color } : undefined}><UserAvatar name={p.username} url={p.avatarUrl} size={96} tone="brand" className="rounded-3xl!" /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <h1 className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{p.username}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className={`pill ${p.role === 'admin' ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
               {p.rank && (
                 <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" style={{ color: p.rank.color }}>
-                  <RankEmblem rank={p.rank} size={28} />
+                  <RankEmblem rank={p.rank} size={36} />
                   {rankName(p.rank)}
                 </span>
               )}
-              {p.gameNick && <span className="text-sm font-bold text-mute">{t('pub.nick', { nick: p.gameNick })}</span>}
-              {Number.isFinite(since) && <span className="text-sm font-bold text-mute">{t('pub.since', { date: fmtDate(since) })}</span>}
+              {mine && <span className="pill pill-ok">{t('pf.you')}</span>}
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {p.gameNick && <span className="pf-meta"><IcoGamepad />{t('pub.nick', { nick: p.gameNick })}</span>}
+              {Number.isFinite(since) && <span className="pf-meta"><IcoCalendar />{t('pub.since', { date: fmtDate(since) })}</span>}
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {mine && <a href="/profile" className="btn btn-sm">{t('pf.you.edit')}</a>}
+            <ShareButton username={p.username} />
           </div>
         </div>
       </div>
@@ -69581,36 +69844,32 @@ export default function PublicProfilePage({ username }: { username: string }) {
 
       <Section title={t('pub.stats')}>
         <div className="pf-tiles">
-          <Tile value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
-          <Tile value={String(s.sessions)} label={t('pf.stats.sessions')} />
-          <Tile value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
-          <Tile value={s.favouriteServerName || '–'} label={t('pf.stats.favourite')} />
+          <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
+          <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
+          <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
+          <StatTile icon={<IcoHeart />} value={s.favouriteServerName || '–'} label={t('pf.stats.favourite')} />
         </div>
       </Section>
 
       {p.vrAchievements && p.vrAchievements.length > 0 && (
         <Section title={t('vr.ach.title')}>
-          <ul className="flex flex-wrap gap-2">
-            {p.vrAchievements.map((a) => (
-              <li key={a.id} className="pf-ach-mini">
-                <span><img src={a.image} width={26} height={26} alt="" loading="lazy" draggable={false} style={{ width: 26, height: 26, objectFit: 'contain' }} /></span>
-                <span className="pr-1">{vrAchText(a.id, 't', a.title)}</span>
-              </li>
-            ))}
-          </ul>
+          <Folded items={p.vrAchievements.map((a) => (
+            <li key={a.id} className="pf-ach-mini">
+              <span><img src={a.image} width={26} height={26} alt="" loading="lazy" draggable={false} style={{ width: 26, height: 26, objectFit: 'contain' }} /></span>
+              <span className="pr-1">{vrAchText(a.id, 't', a.title)}</span>
+            </li>
+          ))} />
         </Section>
       )}
 
       {p.achievements && p.achievements.length > 0 && (
         <Section title={t('pf.ach.title')}>
-          <ul className="flex flex-wrap gap-2">
-            {p.achievements.map((a) => (
-              <li key={a.id} className="pf-ach-mini">
-                <span><AchievementArt id={a.id} slug={a.icon} size={26} /></span>
-                <span className="pr-1">{a.title}</span>
-              </li>
-            ))}
-          </ul>
+          <Folded items={p.achievements.map((a) => (
+            <li key={a.id} className="pf-ach-mini">
+              <span><AchievementArt id={a.id} slug={a.icon} size={26} /></span>
+              <span className="pr-1">{a.title}</span>
+            </li>
+          ))} />
         </Section>
       )}
     </div>
@@ -74982,6 +75241,10 @@ __COREGSM_EOF__
   background-position: center;
 }
 @media (min-width: 640px) { .pf-banner { height: 11rem; } }
+@media (max-width: 639px) { .pf-banner { height: 6.5rem; } }
+/* the bottom of the banner fades to the card so the avatar and the name stay readable on any picture */
+.pf-banner::after { content: ''; position: absolute; inset: auto 0 0 0; height: 55%; pointer-events: none; background: linear-gradient(to bottom, transparent, rgb(var(--card) / .55)); }
+.pf-banner-btn { z-index: 1; }
 .pf-banner-btn {
   position: absolute; right: .75rem; bottom: .75rem;
   display: inline-flex; align-items: center; gap: .4rem;
@@ -74991,8 +75254,8 @@ __COREGSM_EOF__
 .pf-banner-btn:hover { background: rgb(0 0 0 / .66); }
 @media (max-width: 639px) { .pf-banner-btn { min-height: 44px; } }
 .pf-hero-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem 1.25rem; padding: 0 1.25rem 1.25rem; }
-.pf-hero-avatar { margin-top: -2.75rem; }
-.pf-avatar-ring { border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: 0 0 0 4px rgb(var(--card)); }
+.pf-hero-avatar { margin-top: -3.25rem; position: relative; z-index: 1; }
+.pf-avatar-ring { border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: 0 0 0 4px rgb(var(--card)), 0 0 0 7px var(--ring, rgb(var(--card))); }
 .pf-drop-on { box-shadow: 0 0 0 3px rgb(var(--brand)), 0 0 0 7px rgb(var(--brand) / .25); }
 .pf-banner-ratio { aspect-ratio: 3 / 1; width: 100%; background-size: cover; background-position: center; border-radius: var(--r-lg); background-color: rgb(var(--soft)); }
 
@@ -75020,7 +75283,9 @@ __COREGSM_EOF__
 
 /* ---------- statistics ---------- */
 .pf-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: .6rem; }
-.pf-tile { background: rgb(var(--soft)); border-radius: var(--r-lg); padding: .75rem .9rem; min-width: 0; }
+.pf-tile { position: relative; background: rgb(var(--soft)); border-radius: var(--r-lg); padding: .75rem .9rem; min-width: 0; }
+.pf-tile-ico { display: inline-grid; place-items: center; width: 2rem; height: 2rem; margin-bottom: .45rem; border-radius: var(--r-pill); background: rgb(var(--brand) / .14); color: rgb(var(--link)); }
+.pf-tile-ico.is-hot { background: rgb(var(--warn) / .18); color: rgb(var(--warn)); }
 .pf-tile-v { font-size: 1.35rem; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .pf-tile-l { margin-top: .15rem; font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
 
@@ -75028,28 +75293,38 @@ __COREGSM_EOF__
 .pf-bar > i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--brand-2))); }
 .pf-bar-lg { height: .625rem; }
 
-.pf-cal-wrap { overflow-x: auto; padding-bottom: .25rem; }
+.pf-cal-outer { display: flex; gap: .5rem; align-items: flex-start; }
+.pf-cal-days { display: grid; grid-template-rows: repeat(7, 14px); gap: 4px; margin-top: 20px; font-size: 10px; font-weight: 650; line-height: 14px; color: rgb(var(--mute)); }
+.pf-cal-wrap { min-width: 0; overflow-x: auto; padding-bottom: .25rem; }
+.pf-cal-months { display: grid; gap: 4px; height: 16px; margin-bottom: 4px; font-size: 10px; font-weight: 650; line-height: 16px; color: rgb(var(--mute)); }
+.pf-cal-months > span { white-space: nowrap; overflow: visible; }
+.pf-cal-body { position: relative; padding: 12px 0; margin: -12px 0; }
+.pf-cal-tip { position: absolute; z-index: 3; display: grid; gap: 1px; padding: 6px 9px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-2); font-size: 12px; white-space: nowrap; pointer-events: none; transform: translateY(-50%); }
+.pf-cal-tip.is-left { transform: translate(-100%, -50%); }
+.pf-cal-tip span { color: rgb(var(--mute)); font-weight: 650; }
+.pf-cell.is-hover { box-shadow: 0 0 0 2px rgb(var(--ink) / .7); }
 .pf-cal { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 14px); grid-auto-columns: 14px; gap: 4px; width: max-content; }
-.pf-cell { width: 14px; height: 14px; border-radius: 4px; background: rgb(var(--soft)); }
-.pf-cell.pf-pad { background: transparent; }
-.pf-l1 { background: rgb(var(--brand) / .25); }
-.pf-l2 { background: rgb(var(--brand) / .45); }
-.pf-l3 { background: rgb(var(--brand) / .7); }
-.pf-l4 { background: rgb(var(--brand)); }
+.pf-cell { width: 14px; height: 14px; border-radius: 4px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.pf-cell.pf-pad { background: transparent; box-shadow: none; }
+.pf-l1 { background: rgb(var(--brand) / .32); box-shadow: none; }
+.pf-l2 { background: rgb(var(--brand) / .55); box-shadow: none; }
+.pf-l3 { background: rgb(var(--brand) / .78); box-shadow: none; }
+.pf-l4 { background: rgb(var(--brand)); box-shadow: none; }
+.pf-cell.is-hover { box-shadow: 0 0 0 2px rgb(var(--ink) / .7); }
 .pf-legend { display: inline-flex; align-items: center; gap: 4px; }
 .pf-legend .pf-cell { width: 12px; height: 12px; }
 
 .pf-hours { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 3px; align-items: end; height: 6rem; }
 .pf-hours > i { display: block; min-height: 3px; border-radius: 4px 4px 0 0; background: rgb(var(--brand) / .75); }
 .pf-hours > i.pf-peak { background: rgb(var(--brand)); }
-.pf-hours-axis { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: .35rem; font-size: .75rem; font-weight: 650; color: rgb(var(--mute)); }
+.pf-hours-axis { display: grid; grid-template-columns: repeat(8, 1fr); margin-top: .35rem; font-size: .75rem; font-weight: 650; color: rgb(var(--mute)); }
 .pf-hours-axis span:last-child { text-align: right; }
 
 /* ---------- achievements ---------- */
 .pf-ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: .75rem; }
 .pf-ach { display: flex; gap: .75rem; padding: .85rem; border-radius: var(--r-lg); background: rgb(var(--soft)); min-width: 0; }
 .pf-ach-ico {
-  flex: none; display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: var(--r-lg);
+  position: relative; flex: none; display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: var(--r-lg);
   background: transparent; color: rgb(var(--mute));
 }
 .pf-ach.is-on { background: rgb(var(--brand) / .1); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .25); }
@@ -75094,6 +75369,34 @@ __COREGSM_EOF__
 @media (prefers-reduced-motion: reduce) {
   .pf-banner-btn, .pf-chip, .pf-zone { transition: none; }
 }
+
+/* ---------- additions: greeting, today, meta chips, tabs, ring, flags ---------- */
+.pf-greet h2 { font-size: 1.25rem; font-weight: 800; line-height: 1.2; }
+.pf-greet p { margin-top: .1rem; font-size: .875rem; font-weight: 650; color: rgb(var(--mute)); }
+.pf-meta { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .65rem; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
+.pf-meta svg { flex: none; }
+.pf-icon-btn { display: inline-flex; align-items: center; gap: .4rem; }
+@media (max-width: 639px) { .pf-icon-btn { min-width: 44px; min-height: 44px; justify-content: center; } }
+.pf-today { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .75rem; padding: .7rem .9rem; border-radius: var(--r-lg); background: rgb(var(--brand) / .1); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .2); }
+.pf-today-k { font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
+.pf-today-v { font-size: 1.35rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.pf-today-d { font-size: .875rem; font-weight: 650; color: rgb(var(--mute)); }
+.pf-today.is-up .pf-today-d { color: rgb(var(--ok)); }
+.pf-lead { color: rgb(var(--warn)); }
+.pf-tab { display: inline-flex; align-items: center; gap: .4rem; position: relative; }
+.pf-tab-dot { width: .5rem; height: .5rem; border-radius: 50%; background: rgb(var(--bad)); }
+
+.pf-ach-head { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.25rem; }
+.pf-ring { --p: 0deg; display: grid; place-items: center; width: 4.25rem; height: 4.25rem; flex: none; border-radius: 50%; background: conic-gradient(rgb(var(--brand)) var(--p), rgb(var(--soft)) 0); }
+.pf-ring > span { display: grid; place-items: center; width: calc(100% - 10px); height: calc(100% - 10px); border-radius: 50%; background: rgb(var(--card)); font-size: .75rem; font-weight: 650; color: rgb(var(--mute)); text-align: center; line-height: 1; }
+.pf-ring b { display: block; font-size: 1.15rem; font-weight: 800; color: rgb(var(--ink)); }
+.pf-ach-flag { position: absolute; right: -.2rem; bottom: -.2rem; display: grid; place-items: center; width: 1.2rem; height: 1.2rem; border-radius: 50%; background: rgb(var(--card)); color: rgb(var(--mute)); box-shadow: 0 0 0 1px rgb(var(--line)); }
+.pf-ach-flag.is-on { background: rgb(var(--ok)); color: rgb(var(--card)); box-shadow: none; }
+.pf-ach.is-on { box-shadow: inset 0 0 0 1px rgb(var(--ok) / .45); }
+.pf-next { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+
+.vr-ladder li button { display: grid; place-items: center; width: 100%; height: 100%; border-radius: inherit; background: transparent; }
+.pf-here { color: rgb(var(--ok)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/servers.css" << '__COREGSM_EOF__'
