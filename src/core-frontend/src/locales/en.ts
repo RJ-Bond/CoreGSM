@@ -925,6 +925,9 @@ const en: Record<keyof typeof ru, string> = {
   'adm.com.toBest': '☆ Add to the best',
   'adm.com.unpublished': 'Screenshot unpublished',
   'adm.com.take': 'Unpublish',
+  'srv.empty.now': 'Nobody online right now',
+  'srv.addr.copy': 'Copy the address',
+  'srv.addr.copied': 'Address copied',
 };
 
 export default en;

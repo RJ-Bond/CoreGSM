@@ -4,6 +4,7 @@ import type { Server } from '../../api';
 import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
+import { toast } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -165,14 +166,14 @@ const Bar = ({ w, h = 12, className = '' }: { w: number | string; h?: number; cl
 
 function SkeletonHero() {
   return (
-    <div className="srv-hero tile flex min-h-[280px] flex-col gap-3 p-5 lg:p-6">
+    <div className="srv-hero srv-hero-skel tile flex min-h-[280px] flex-col gap-3 p-5 lg:p-6">
       <div className="flex items-start gap-3">
         <div className="skeleton h-12 w-12 shrink-0 rounded-2xl" />
         <div className="flex-1 space-y-2 pt-1"><Bar w="62%" h={18} /><Bar w="38%" /></div>
         <Bar w={84} h={26} />
       </div>
       <div className="flex items-end gap-3 pt-4"><Bar w={130} h={64} className="rounded-2xl!" /><Bar w={90} h={18} className="mb-2" /></div>
-      <div className="skeleton mt-auto h-20 w-full rounded-2xl" />
+      <div className="skeleton skel-chart mt-auto h-20 w-full rounded-2xl" />
       <div className="flex justify-between"><Bar w={70} /><Bar w={90} /><Bar w={80} /></div>
     </div>
   );
@@ -222,5 +223,21 @@ export function ListSkeleton() {
         </div>
       ))}
     </div>
+  );
+}
+
+/** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
+export function AddrCopy({ address, className = '' }: { address: string; className?: string }) {
+  useI18n();
+  const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try { await navigator.clipboard.writeText(address); toast(t('srv.addr.copied')); } catch { /* the address stays on screen */ }
+  };
+  return (
+    <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
+      <span className={className}>{address}</span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
+    </button>
   );
 }
