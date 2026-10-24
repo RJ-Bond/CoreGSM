@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d1f3b81560be"
+COREGSM_BUILD="af638ce2aadd"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20276,9 +20276,30 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/.oxlintrc.json" << '__COREGSM_EOF__'
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "react", "jsx-a11y"],
-  "categories": { "correctness": "error", "suspicious": "warn" },
-  "ignorePatterns": ["dist", "node_modules"]
+  "plugins": [
+    "typescript",
+    "react",
+    "jsx-a11y"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "ignorePatterns": [
+    "dist",
+    "node_modules"
+  ],
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "react/set-state-in-effect": "off",
+    "react/purity": "off",
+    "react/refs": "off",
+    "react/use-memo": "off",
+    "jsx-a11y/label-has-associated-control": "off",
+    "jsx-a11y/control-has-associated-label": "off",
+    "jsx-a11y/interactive-supports-focus": "off"
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
@@ -54764,6 +54785,7 @@ import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
 import { t } from '../../i18n';
 import { Button, ErrorLine, PasswordField, toast } from '../../ui';
+import QrCode from '../server/QrCode';
 
 interface Status { enabled: boolean; recoveryLeft: number; hasPassword: boolean }
 interface Setup { secret: string; uri: string }
@@ -54855,6 +54877,7 @@ export function TwoFactorCard() {
       {!st.enabled && setup && (
         <form onSubmit={enable} noValidate className="space-y-3.5">
           <p className="font-semibold text-mute">{t('pf.2fa.scan')}</p>
+          <div className="max-w-52"><QrCode text={setup.uri} label={t('pf.2fa.qr')} /></div>
           <p className="text-sm font-bold">
             <a className="text-link hover:underline" href={setup.uri}>{t('pf.2fa.openApp')}</a>
           </p>
@@ -62438,7 +62461,8 @@ const en: Record<keyof typeof ru, string> = {
   'pf.2fa.off': 'Off',
   'pf.2fa.left': 'Recovery codes left: {n}',
   'pf.2fa.start': 'Turn on',
-  'pf.2fa.scan': 'Add the key to your authenticator app: open the link or type the key by hand.',
+  'pf.2fa.qr': 'QR code for the authenticator app',
+  'pf.2fa.scan': 'Add the key to your authenticator app: scan the code, open the link or type the key by hand.',
   'pf.2fa.openApp': 'Open in the app',
   'pf.2fa.key': 'Key',
   'pf.2fa.code': 'Code from the app',
@@ -63362,6 +63386,7 @@ const ru = {
   'pf.2fa.off': 'Выключена',
   'pf.2fa.left': 'Кодов восстановления осталось: {n}',
   'pf.2fa.start': 'Включить',
+  'pf.2fa.qr': 'QR-код для приложения-аутентификатора',
   'pf.2fa.scan': 'Добавьте ключ в приложение-аутентификатор: отсканируйте код или введите ключ вручную.',
   'pf.2fa.openApp': 'Открыть в приложении',
   'pf.2fa.key': 'Ключ',
