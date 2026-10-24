@@ -97,13 +97,13 @@ export function JournalCard({ onRevoked }: { onRevoked?: () => void }) {
                   <li key={String(r.id)}>
                     <span className={`pf-dot ${bad ? 'is-bad' : ''}`} aria-hidden><JournalIcon kind={r.kind} /></span>
                     <div className="min-w-0 flex-1 pt-0.5">
-                      <div className="break-words font-extrabold">{label ? t(label) : r.kind}</div>
-                      <div className="break-words text-sm font-semibold text-mute">
+                      <div className="wrap-break-word font-extrabold">{label ? t(label) : r.kind}</div>
+                      <div className="wrap-break-word text-sm font-semibold text-mute">
                         {[device, r.ip].filter(Boolean).join(' · ') || t('pf.journal.noDevice')}
                         {' · '}
                         <span title={fmtDateTime(r.ts)}>{ago(r.ts)}</span>
                       </div>
-                      {r.detail && <div className="mt-0.5 break-words text-sm font-semibold text-mute">{r.detail}</div>}
+                      {r.detail && <div className="mt-0.5 wrap-break-word text-sm font-semibold text-mute">{r.detail}</div>}
                     </div>
                   </li>
                 );

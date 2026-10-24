@@ -188,14 +188,14 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-3 pt-[8dvh] backdrop-blur-sm sm:pt-[12dvh]" {...bd}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-3 pt-[8dvh] backdrop-blur-xs sm:pt-[12dvh]" {...bd}>
       <div
         ref={box}
         role="dialog"
         aria-modal="true"
         aria-label="Поиск по панели"
         tabIndex={-1}
-        className="pop panel w-full max-w-xl overflow-hidden outline-none"
+        className="pop panel w-full max-w-xl overflow-hidden outline-hidden"
       >
         <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0 text-mute">
@@ -216,7 +216,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             placeholder="Найти сервер или раздел…"
             autoComplete="off"
             spellCheck={false}
-            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-[16px] focus-visible:ring-0 font-bold text-ink outline-none placeholder:font-semibold placeholder:text-mute"
+            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-[16px] focus-visible:ring-0 font-bold text-ink outline-hidden placeholder:font-semibold placeholder:text-mute"
           />
           <button
             type="button"

@@ -15,7 +15,7 @@ export function AchievementCard({ a }: { a: Achievement }) {
     <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
       <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /></span>
       <div className="min-w-0 flex-1">
-        <div className="pf-ach-title break-words font-extrabold leading-tight">{a.title}</div>
+        <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{a.title}</div>
         {a.description && <div className="mt-0.5 text-sm font-semibold text-mute">{a.description}</div>}
         {a.earned ? (
           <div className="mt-1.5 text-sm font-extrabold text-ok">

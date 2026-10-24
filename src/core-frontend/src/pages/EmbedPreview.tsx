@@ -105,7 +105,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
             </Part>
           )}
           {e.title && (
-            <Part part="title" embed={index} onPick={onPick} bad={bad('title')} className="mb-1 break-words text-base font-bold">
+            <Part part="title" embed={index} onPick={onPick} bad={bad('title')} className="mb-1 wrap-break-word text-base font-bold">
               {embedUrl ? <a href={embedUrl} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: theme.link }}>{e.title}</a> : <span style={{ color: theme.title }}>{e.title}</span>}
             </Part>
           )}
@@ -188,7 +188,7 @@ export function EmbedView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 text-[15px] leading-tight">
                   <span className="font-bold" style={{ color: t.title }}>{botName}</span>
-                  <span className="rounded px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
+                  <span className="rounded-sm px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
                   <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
                 </div>
                 {content && (

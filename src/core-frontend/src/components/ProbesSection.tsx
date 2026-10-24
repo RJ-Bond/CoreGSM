@@ -14,7 +14,7 @@ function Copyable({ label, text }: { label: string; text: string }) {
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="label !mb-0">{label}</span>
+        <span className="label mb-0!">{label}</span>
         <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast('Скопировано'))}><IconCopy size={14} /> Копировать</button>
       </div>
       <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-soft px-3 py-2 font-mono text-[12.5px] font-semibold">{text}</pre>

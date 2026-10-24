@@ -72,8 +72,8 @@ function SeasonsAdmin() {
     <>
       <Section title="Новый сезон" description="Начните сезон, например, в день вайпа. Таблица сезона на странице «Сообщество» считает часы с его начала, а когда начнётся следующий, тройка лучших попадёт в зал славы и получит достижения.">
         <form onSubmit={create} className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[12rem] flex-1"><Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={`Сезон ${count + 1}`} /></Field></div>
-          <div className="min-w-[12rem]"><Field label="Начало"><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
+          <div className="min-w-48 flex-1"><Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder={`Сезон ${count + 1}`} /></Field></div>
+          <div className="min-w-48"><Field label="Начало"><input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} required /></Field></div>
           <Button loading={busy}>Начать сезон</Button>
         </form>
         <ErrorLine text={error} />

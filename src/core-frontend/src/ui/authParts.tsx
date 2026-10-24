@@ -47,10 +47,10 @@ function AuthDecor() {
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden p-4 pt-20 sm:p-8">
+    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden p-4 pt-20 sm:p-8">
       <AuthDecor />
       <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
-      <div className="relative z-[1] grid w-full max-w-6xl items-center justify-items-center gap-10 xl:grid-cols-[minmax(0,1fr)_24rem_minmax(0,1fr)]">
+      <div className="relative z-1 grid w-full max-w-6xl items-center justify-items-center gap-10 xl:grid-cols-[minmax(0,1fr)_24rem_minmax(0,1fr)]">
         <AuthShowcase side="left" />
         {children}
         <AuthShowcase side="right" />
@@ -64,7 +64,7 @@ export function AuthBrand({ subtitle }: { subtitle?: string }) {
   return (
     <div className="mb-5 flex flex-col items-center text-center">
       <Logo size={64} alt="" />
-      <Wordmark className="mt-2 max-w-full break-words text-3xl" />
+      <Wordmark className="mt-2 max-w-full wrap-break-word text-3xl" />
       {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
     </div>
   );
@@ -78,7 +78,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
     { id: 'register', label: t('auth.register') },
   ] as const;
   return (
-    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur sm:p-7">
+    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur-sm sm:p-7">
       <AuthBrand subtitle={mode === 'login' ? t('auth.subLogin') : t('auth.subRegister')} />
       {access.registration && (
         <nav className="seg mb-5 flex w-full" aria-label={t('auth.switchAria')}>
@@ -164,7 +164,7 @@ export const PasswordField = forwardRef<
         <input
           id={id}
           ref={ref}
-          className="input !pr-12 max-sm:!pr-14"
+          className="input pr-12! max-sm:pr-14!"
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -245,7 +245,7 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   return (
     <span
       aria-hidden
-      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-gradient-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
+      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-linear-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
       style={{ width: size, height: size, fontSize: size * 0.48 }}
     >
       {name.slice(0, 1).toUpperCase()}
@@ -263,7 +263,7 @@ export const IconDiscordLogo = ({ size = 20 }: { size?: number }) => (
 export function DiscordBadge({ name }: { name: string }) {
   return (
     <span
-      className="inline-flex max-w-[11rem] items-center gap-1.5 rounded-full bg-[#5865f2]/15 py-0.5 pl-1.5 pr-2.5 text-xs font-bold text-[#7983f5]"
+      className="inline-flex max-w-44 items-center gap-1.5 rounded-full bg-[#5865f2]/15 py-0.5 pl-1.5 pr-2.5 text-xs font-bold text-[#7983f5]"
       title={`Привязан аккаунт Discord: ${name}`}
     >
       <IconDiscordLogo size={14} />

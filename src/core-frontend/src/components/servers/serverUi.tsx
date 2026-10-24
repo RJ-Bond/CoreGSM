@@ -171,7 +171,7 @@ function SkeletonHero() {
         <div className="flex-1 space-y-2 pt-1"><Bar w="62%" h={18} /><Bar w="38%" /></div>
         <Bar w={84} h={26} />
       </div>
-      <div className="flex items-end gap-3 pt-4"><Bar w={130} h={64} className="!rounded-2xl" /><Bar w={90} h={18} className="mb-2" /></div>
+      <div className="flex items-end gap-3 pt-4"><Bar w={130} h={64} className="rounded-2xl!" /><Bar w={90} h={18} className="mb-2" /></div>
       <div className="skeleton mt-auto h-20 w-full rounded-2xl" />
       <div className="flex justify-between"><Bar w={70} /><Bar w={90} /><Bar w={80} /></div>
     </div>
@@ -193,7 +193,7 @@ function SkeletonSmall() {
     <div className="tile flex min-h-[270px] flex-col gap-2 p-3 pb-4">
       <div className="skeleton h-[88px] rounded-[18px]" />
       <div className="space-y-2 px-1.5 pt-1"><Bar w="75%" h={15} /><Bar w="40%" /></div>
-      <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="!rounded-lg" /><Bar w={34} /></div>
+      <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="rounded-lg!" /><Bar w={34} /></div>
       <div className="px-1.5"><Bar w="100%" h={6} /></div>
       <div className="mt-auto flex justify-between px-1.5"><Bar w="45%" /><Bar w="20%" /></div>
     </div>

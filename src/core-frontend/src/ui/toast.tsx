@@ -110,7 +110,7 @@ export function Toaster() {
       className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
     >
       <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>
-      <span className="min-w-0 flex-1 break-words py-1">{t.text}</span>
+      <span className="min-w-0 flex-1 wrap-break-word py-1">{t.text}</span>
       {t.action?.href && <a href={t.action.href} target="_blank" rel="noreferrer" className="btn-ghost btn-tone btn-xs shrink-0">{t.action.label}</a>}
       {t.action?.onClick && (
         <button
@@ -132,7 +132,7 @@ export function Toaster() {
     </div>
   );
   return (
-    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-[90] flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-90 flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
       <div aria-live="polite" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind !== 'err').map(item)}</div>
       <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
     </div>

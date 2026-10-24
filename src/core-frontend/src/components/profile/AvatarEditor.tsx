@@ -79,7 +79,7 @@ export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) 
         aria-label={t('pf.avatar.upload')}
         className={`group relative rounded-3xl ${drop.over ? 'pf-drop-on' : ''}`}
       >
-        <UserAvatar name={me.username} url={me.avatarUrl} size={80} tone="brand" className="!rounded-3xl" />
+        <UserAvatar name={me.username} url={me.avatarUrl} size={80} tone="brand" className="rounded-3xl!" />
         <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
@@ -89,8 +89,8 @@ export function AvatarEditor({ onChanged }: { onChanged: () => Promise<void> }) 
         <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>
         {me.avatarSource === 'custom' && <button type="button" className="btn-link-danger" onClick={() => void remove()} disabled={busy}>{me.discordName ? t('pf.avatar.fromDiscord') : t('common.remove')}</button>}
       </div>
-      <p className="max-w-[12rem] text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>
-      {error && <p className="max-w-[12rem] text-center text-xs font-bold text-bad" role="alert">{error}</p>}
+      <p className="max-w-48 text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>
+      {error && <p className="max-w-48 text-center text-xs font-bold text-bad" role="alert">{error}</p>}
     </div>
   );
 }
