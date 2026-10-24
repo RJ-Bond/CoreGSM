@@ -9,6 +9,7 @@ import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONC
 
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
 import { queryServer, type QueryResult } from './query.js';
+import { log } from './logger.js';
 
 const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
@@ -162,20 +163,20 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
     if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
     else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {
-    console.error('player/uptime bookkeeping failed', (e as Error).message);
+    log.error('player/uptime bookkeeping failed', (e as Error).message);
   }
   try {
     trackAlerts(s.id, d.online, r.error);
     // smart alerts measure a working server; planned work is not a symptom
     if (!maint) trackSmart(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers, ping: r.ping }, ts);
   } catch (e) {
-    console.error('alerts failed', (e as Error).message);
+    log.error('alerts failed', (e as Error).message);
   }
   try {
     // planned work: nobody is told that the server went down (free-slot notices still make sense, back_online follows the window)
     if (!(!d.online && maintenanceNow(s.id))) onPollResult(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers });
   } catch (e) {
-    console.error('subscriptions failed', (e as Error).message);
+    log.error('subscriptions failed', (e as Error).message);
   }
   return outcome;
 }
@@ -249,7 +250,7 @@ export async function pollAll(): Promise<void> {
         if (o && !o.polledOnline) failures++;
       } catch (e) {
         failures++;
-        console.error(`poll of server ${s.id} failed`, (e as Error).message);
+        log.error(`poll of server ${s.id} failed`, (e as Error).message);
       }
     });
     const durationMs = Date.now() - t0;
@@ -257,7 +258,7 @@ export async function pollAll(): Promise<void> {
     pollCount++;
     // quiet when all is well: the first poll, slow polls, polls with failures and every 20th
     if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
-      console.log(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
+      log.info(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
     }
     // old rows are deleted once an hour, not after every 30-second cycle; set before the work so a failure is not retried at once
     if (pruneDue(Date.now(), lastPrune)) {
@@ -266,7 +267,7 @@ export async function pollAll(): Promise<void> {
     }
   } catch (e) {
     // a database or disk error must not become an unhandled rejection (the timer calls pollAll with `void`)
-    console.error('poll cycle failed', (e as Error).message);
+    log.error('poll cycle failed', (e as Error).message);
   } finally {
     running = false;
   }

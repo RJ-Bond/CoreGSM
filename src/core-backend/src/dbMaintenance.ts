@@ -7,6 +7,7 @@
  * exclusive lock; `coregsm backup` and the migrations already make consistent copies with VACUUM INTO.
  */
 import { db } from './db.js';
+import { log } from './logger.js';
 
 export interface MaintenanceResult {
   /** frames the checkpoint wrote; null when the checkpoint could not run */
@@ -20,7 +21,7 @@ export function checkpointWal(): MaintenanceResult {
     const r = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number; checkpointed: number }[];
     return { checkpointed: r[0]?.checkpointed ?? 0, busy: !!r[0]?.busy };
   } catch (e) {
-    console.error('wal checkpoint failed', (e as Error).message);
+    log.error('wal checkpoint failed', (e as Error).message);
     return { checkpointed: null, busy: false };
   }
 }
@@ -30,7 +31,7 @@ export function optimizeDb(): boolean {
     db.pragma('optimize');
     return true;
   } catch (e) {
-    console.error('db optimize failed', (e as Error).message);
+    log.error('db optimize failed', (e as Error).message);
     return false;
   }
 }

@@ -13,6 +13,7 @@ import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addColumn, hasTable } from './schema.js';
+import { log } from './logger.js';
 
 type Db = InstanceType<typeof Database>;
 
@@ -147,7 +148,7 @@ export function prunePreMigrate(dir: string, keep = 5): void {
  */
 export function runMigrations(db: Db, opts: { dataDir: string; existing: boolean; list?: Migration[]; log?: (m: string) => void }): MigrationResult {
   const list = opts.list ?? MIGRATIONS;
-  const log = opts.log ?? ((m: string) => console.log(m));
+  const log = opts.log ?? ((m: string) => log.info(m));
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)');
   const done = new Set((db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map((r) => r.version));
   const pending = list.filter((m) => !done.has(m.version)).sort((a, b) => a.version - b.version);
