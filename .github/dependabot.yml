@@ -7,33 +7,54 @@ updates:
   - package-ecosystem: npm
     directory: /src/core-backend
     schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 5
     groups:
       minor-and-patch: { update-types: [minor, patch] }
   - package-ecosystem: npm
     directory: /src/core-bot
     schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 5
     groups:
       minor-and-patch: { update-types: [minor, patch] }
   - package-ecosystem: npm
     directory: /src/core-frontend
     schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 5
     groups:
       minor-and-patch: { update-types: [minor, patch] }
   - package-ecosystem: docker
     directory: /src/core-backend
     schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: docker
     directory: /src/core-bot
     schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: docker
     directory: /src/core-frontend
     schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: docker
     directory: /src/nginx
     schedule: { interval: weekly, day: monday }
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: docker-compose
     directory: /src
     schedule: { interval: weekly, day: monday }
