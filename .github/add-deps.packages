@@ -1,2 +1,2 @@
-core-frontend -D eslint @eslint/js typescript-eslint eslint-plugin-jsx-a11y eslint-plugin-react-hooks globals @testing-library/react @testing-library/dom happy-dom
+core-frontend -D oxlint @testing-library/react @testing-library/dom happy-dom
 core-frontend @fontsource-variable/jetbrains-mono
