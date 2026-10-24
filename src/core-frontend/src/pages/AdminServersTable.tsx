@@ -1,17 +1,20 @@
 // The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
 // server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { GameAvatar, IconEdit, IconRefresh, IconTrash, MiniSpark, StatusPill, ago, isLag } from '../ui';
+import { GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
 import { countServers, filterServers, type ServerFilter } from './adminServersLogic';
 
 export interface TableActions {
   isAdmin: boolean;
   busyId: number | null;
   uptime: Map<number, number>;
+  /** Discord channels bound to each server */
+  bindings: Map<number, number>;
+  onMaintenance: (s: Server) => void;
   onRefresh: (s: Server) => void;
   onEdit: (s: Server) => void;
   onRemove: (s: Server) => void;
@@ -29,6 +32,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<number[]>([]);
   const counts = useMemo(() => countServers(servers), [servers]);
   const rows = useMemo(() => filterServers(servers, filter, query), [servers, filter, query]);
   const shownIds = rows.map((s) => s.id);
@@ -36,6 +40,11 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const allOn = rows.length > 0 && shownIds.every((id) => sel.includes(id));
   const toggle = (id: number) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
   const toggleAll = () => setSel((l) => (allOn ? l.filter((id) => !shownIds.includes(id)) : [...new Set([...l, ...shownIds])]));
+
+  const flip = (id: number) => setOpen((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const copy = async (s: Server) => {
+    try { await navigator.clipboard.writeText(`${s.host}:${s.port}`); toast(t('adm.tbl.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
 
   const many = async (fn: (list: Server[]) => Promise<void>) => {
     setBusy(true);
@@ -78,7 +87,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       ) : (
         <>
           {/* wide screens: a table */}
-          <div className="tile hidden overflow-x-auto p-1.5 md:block">
+          <div className="tile adm-tablewrap hidden p-1.5 md:block">
             <table className="adm-table">
               <thead>
                 <tr>
@@ -94,15 +103,17 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
               </thead>
               <tbody>
                 {rows.map((s) => (
-                  <tr key={s.id} data-selected={sel.includes(s.id) ? 'true' : undefined} className="cursor-pointer" onClick={(e) => { if (!(e.target as HTMLElement).closest('a, button, input, label')) a.onEdit(s); }}>
+                  <Fragment key={s.id}>
+                  <tr data-state={s.maintenance ? 'maint' : !s.online && s.hasStatus ? 'off' : isLag(s) ? 'lag' : 'on'} data-selected={sel.includes(s.id) ? 'true' : undefined} className="cursor-pointer" onClick={(e) => { if (!(e.target as HTMLElement).closest('a, button, input, label')) a.onEdit(s); }}>
                     <td><input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`${t('adm.tbl.select')}: ${s.name}`} /></td>
                     <td>
                       <div className="flex min-w-0 items-center gap-3">
+                        <button type="button" className="adm-expand" aria-expanded={open.includes(s.id)} aria-label={`${t('adm.tbl.details')}: ${s.name}`} title={t('adm.tbl.details')} onClick={() => flip(s.id)}><span aria-hidden>{open.includes(s.id) ? '▾' : '▸'}</span></button>
                         <GameAvatar game={s.game} size={38} />
                         <div className="min-w-0">
                           <a href={`/servers/${s.id}`} className="block max-w-50 xl:max-w-60 truncate font-extrabold leading-tight hover:text-link" title={s.name}>{s.name}</a>
                           <div className="max-w-50 xl:max-w-60 truncate text-xs font-semibold text-mute" title={s.displayAddress ? t('adm.tbl.shownAs', { a: s.displayAddress }) : undefined}>
-                            {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
+                            {gameLabel(s.game)} · <button type="button" className="adm-copy font-mono" title={t('adm.tbl.copy')} onClick={() => void copy(s)}>{s.host}:{s.port}</button>
                           </div>
                         </div>
                       </div>
@@ -120,11 +131,28 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                         <button type="button" className="row-act" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
                           <IconRefresh spinning={a.busyId === s.id} />
                         </button>
+                        <button type="button" className={`row-act ${s.maintenance ? 'is-on' : ''}`} title={s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')} aria-label={`${s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')}: ${s.name}`} aria-pressed={!!s.maintenance} onClick={() => a.onMaintenance(s)}><IconWrench /></button>
                         <button type="button" className="row-act" title={t('adm.tbl.edit')} aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
                         {a.isAdmin && <button type="button" className="row-act row-act-danger" title={t('adm.srv.delete')} aria-label={`${t('adm.srv.delete')}: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
                       </div>
                     </td>
                   </tr>
+                  {open.includes(s.id) && (
+                    <tr className="adm-detail">
+                      <td colSpan={8}>
+                        <dl className="adm-detail-grid">
+                          <div><dt>{t('adm.tbl.d.addr')}</dt><dd className="font-mono">{s.host}:{s.port}</dd></div>
+                          <div><dt>{t('adm.tbl.d.query')}</dt><dd className="font-mono">{s.queryPort ?? '—'}</dd></div>
+                          <div><dt>{t('adm.tbl.d.shown')}</dt><dd>{s.displayAddress || '—'}</dd></div>
+                          <div><dt>{t('adm.tbl.d.game')}</dt><dd>{gameLabel(s.game)}</dd></div>
+                          <div><dt>{t('adm.tbl.d.channels')}</dt><dd><a href="/admin/discord" className="text-link hover:underline">{a.bindings.get(s.id) ?? 0}</a></dd></div>
+                          <div><dt>{t('adm.tbl.d.updated')}</dt><dd>{ago(s.updatedAt)}</dd></div>
+                          {s.maintenance && <div><dt>{t('adm.tbl.d.maint')}</dt><dd>{s.maintenance.name}</dd></div>}
+                        </dl>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
