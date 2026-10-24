@@ -933,6 +933,19 @@ const en: Record<keyof typeof ru, string> = {
   'spark.min': 'min',
   'srv.sub.live': 'Players now: {n} · servers online: {s} of {total}',
   'srv.sub.empty': 'The state of your game servers in real time',
+  'nw.today': 'today, {time}',
+  'nw.yesterday': 'yesterday, {time}',
+  'nw.edit': 'Edit',
+  'nw.liveHint': '{n} players · {s} online',
+  'nw.hints.title': 'What will appear here',
+  'nw.hints.update': 'Updates',
+  'nw.hints.update.t': 'What changed in the game and on the servers',
+  'nw.hints.event': 'Events',
+  'nw.hints.event.t': 'Announcements with a countdown',
+  'nw.hints.maintenance': 'Maintenance',
+  'nw.hints.maintenance.t': 'When a server will be down and why',
+  'nw.codeCopy': 'Copy',
+  'nw.codeCopied': 'Code copied',
 };
 
 export default en;

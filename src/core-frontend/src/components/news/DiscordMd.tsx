@@ -1,4 +1,6 @@
 import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
+import { t } from '../../i18n';
+import { toast } from '../../ui';
 
 /**
  * Discord markdown for the message preview, in Discord's own dark and light colours:
@@ -193,7 +195,7 @@ export function DiscordMd({ text }: { text: string }) {
         i++;
         while (i < lines.length && !lines[i].trim().startsWith('```')) body.push(lines[i++]);
       }
-      out.push(<pre key={i} className="my-1 overflow-x-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[13px]" style={{ background: t.code, borderColor: t.embedBorder }}>{body.join('\n')}</pre>);
+      out.push(<CodeBlock key={i} text={body.join('\n')} background={t.code} border={t.embedBorder} />);
       continue;
     }
     if (line.startsWith('>>> ')) {
@@ -239,4 +241,16 @@ export function DiscordMd({ text }: { text: string }) {
 function Quote({ children }: { children: ReactNode }) {
   const t = useContext(ThemeCtx);
   return <div className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${t.quote}` }}>{children}</div>;
+}
+
+function CodeBlock({ text, background, border }: { text: string; background: string; border: string }) {
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); toast(t('nw.codeCopied')); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
+  return (
+    <div className="nw-code">
+      <pre className="my-1 overflow-x-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[13px]" style={{ background, borderColor: border }}>{text}</pre>
+      <button type="button" className="nw-code-copy" onClick={() => void copy()} aria-label={t('nw.codeCopy')} title={t('nw.codeCopy')}>{t('nw.codeCopy')}</button>
+    </div>
+  );
 }

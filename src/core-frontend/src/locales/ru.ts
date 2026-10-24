@@ -934,6 +934,19 @@ const ru = {
   'spark.min': 'мин',
   'srv.sub.live': 'Игроков сейчас: {n} · серверов онлайн: {s} из {total}',
   'srv.sub.empty': 'Состояние ваших игровых серверов в реальном времени',
+  'nw.today': 'сегодня, {time}',
+  'nw.yesterday': 'вчера, {time}',
+  'nw.edit': 'Изменить',
+  'nw.liveHint': '{n} игроков · {s} онлайн',
+  'nw.hints.title': 'Что здесь появится',
+  'nw.hints.update': 'Обновления',
+  'nw.hints.update.t': 'Что изменилось в игре и на серверах',
+  'nw.hints.event': 'Ивенты',
+  'nw.hints.event.t': 'Анонсы с таймером до начала',
+  'nw.hints.maintenance': 'Технические работы',
+  'nw.hints.maintenance.t': 'Когда сервер будет недоступен и почему',
+  'nw.codeCopy': 'Копировать',
+  'nw.codeCopied': 'Код скопирован',
 };
 
 export default ru;

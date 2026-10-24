@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c140028019f3"
+COREGSM_BUILD="f2a0a6530eaf"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -50757,6 +50757,8 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/DiscordMd.tsx" << '__COREGSM_EOF__'
 import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
+import { t } from '../../i18n';
+import { toast } from '../../ui';
 
 /**
  * Discord markdown for the message preview, in Discord's own dark and light colours:
@@ -50951,7 +50953,7 @@ export function DiscordMd({ text }: { text: string }) {
         i++;
         while (i < lines.length && !lines[i].trim().startsWith('```')) body.push(lines[i++]);
       }
-      out.push(<pre key={i} className="my-1 overflow-x-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[13px]" style={{ background: t.code, borderColor: t.embedBorder }}>{body.join('\n')}</pre>);
+      out.push(<CodeBlock key={i} text={body.join('\n')} background={t.code} border={t.embedBorder} />);
       continue;
     }
     if (line.startsWith('>>> ')) {
@@ -50997,6 +50999,18 @@ export function DiscordMd({ text }: { text: string }) {
 function Quote({ children }: { children: ReactNode }) {
   const t = useContext(ThemeCtx);
   return <div className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${t.quote}` }}>{children}</div>;
+}
+
+function CodeBlock({ text, background, border }: { text: string; background: string; border: string }) {
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); toast(t('nw.codeCopied')); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
+  return (
+    <div className="nw-code">
+      <pre className="my-1 overflow-x-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[13px]" style={{ background, borderColor: border }}>{text}</pre>
+      <button type="button" className="nw-code-copy" onClick={() => void copy()} aria-label={t('nw.codeCopy')} title={t('nw.codeCopy')}>{t('nw.codeCopy')}</button>
+    </div>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
@@ -51878,13 +51892,21 @@ export const IconCopyLink = ({ size = 16 }: { size?: number }) => (
     <path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1" />
   </Icon>
 );
+
+export function IconEditPen({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/NewsParts.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
 import { api, type NewsAction, type NewsCategory, type NewsChange, type NewsReaction, type Server } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { GameAvatar, StatusPill, UserAvatar, toast, usePoll } from '../../ui';
+import { Burst, GameAvatar, StatusPill, UserAvatar, toast, usePoll } from '../../ui';
 import { IconClose } from '../../icons';
 import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
 import { CategoryIcon, ChangeIcon, PinIcon } from './NewsIcons';
@@ -52179,10 +52201,12 @@ export function Reactions({
   onChange: (r: NewsReaction[]) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [pop, setPop] = useState<{ e: string; k: number } | null>(null);
   const list = fullReactions(reactions);
   const click = async (emoji: string) => {
     if (!canReact || busy) return;
     const prev = list;
+    if (!prev.find((r) => r.emoji === emoji)?.mine) setPop({ e: emoji, k: Date.now() });
     const { list: opt, next } = toggleReaction(prev, emoji);
     onChange(opt);
     setBusy(true);
@@ -52204,6 +52228,7 @@ export function Reactions({
           <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} disabled={!canReact} onClick={() => void click(r.emoji)}>
             <span aria-hidden className="nw-react-emoji">{r.emoji}</span>
             <span className="tabular-nums">{r.count}</span>
+            {pop?.e === r.emoji && <Burst key={pop.k} count={6} radius={20} />}
           </button>
         ))}
       </div>
@@ -52265,7 +52290,7 @@ function useWorks(): Works {
   return works;
 }
 
-function AsideSection({ id, title, wide, children, className = '' }: { id: string; title: string; wide: boolean; children: ReactNode; className?: string }) {
+function AsideSection({ id, title, wide, children, className = '', hint }: { id: string; title: string; wide: boolean; children: ReactNode; className?: string; hint?: string }) {
   const [open, setOpen] = useState(false);
   const shown = wide || open;
   return (
@@ -52275,6 +52300,7 @@ function AsideSection({ id, title, wide, children, className = '' }: { id: strin
       ) : (
         <button type="button" className="nw-side-toggle" aria-expanded={open} aria-controls={`nw-side-${id}`} onClick={() => setOpen((v) => !v)}>
           <span>{title}</span>
+          {hint && !open && <span className="nw-side-hint">{hint}</span>}
           <span aria-hidden>{open ? '−' : '+'}</span>
         </button>
       )}
@@ -52286,13 +52312,12 @@ function AsideSection({ id, title, wide, children, className = '' }: { id: strin
 function FeedSkeleton() {
   return (
     <div className="nw-skel" aria-busy="true" aria-label={t('nw.loading')}>
-      <div className="skeleton nw-skel-hero" />
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="nw-skel-row">
-          <div className="skeleton nw-skel-thumb" />
+      {[0, 1].map((i) => (
+        <div key={i} className="nw-skel-entry">
+          <div className="skeleton nw-skel-banner" />
           <div className="nw-skel-lines">
-            <div className="skeleton h-3 w-24 rounded-full" />
-            <div className="skeleton h-5 w-4/5 rounded-full" />
+            <div className="skeleton h-4 w-full rounded-full" />
+            <div className="skeleton h-4 w-11/12 rounded-full" />
             <div className="skeleton h-4 w-3/5 rounded-full" />
           </div>
         </div>
@@ -52387,6 +52412,7 @@ export function NewsListPage() {
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
           {!loaded && <FeedSkeleton />}
           {loaded && !error && ordered.length === 0 && (
+            <>
             <StateView
               kind="empty"
               art={<NewsArt />}
@@ -52394,6 +52420,16 @@ export function NewsListPage() {
               text={t('nw.empty.text')}
               action={canWrite ? <a href="/admin/news/new" className="btn">{t('nw.empty.write')}</a> : <a href="/servers" className="btn btn-soft">{t('nw.empty.servers')}</a>}
             />
+            <ul className="nw-hints" aria-label={t('nw.hints.title')}>
+              {(['update', 'event', 'maintenance'] as const).map((c) => (
+                <li key={c} className={`nw-hint nw-tone-${c}`}>
+                  <span className="nw-hint-ico"><CategoryIcon category={c} size={20} /></span>
+                  <b>{t(`nw.hints.${c}` as const)}</b>
+                  <span>{t(`nw.hints.${c}.t` as const)}</span>
+                </li>
+              ))}
+            </ul>
+            </>
           )}
           {loaded && ordered.length > 0 && shown.length === 0 && (
             <StateView
@@ -52428,7 +52464,7 @@ export function NewsListPage() {
               </AsideSection>
             )}
             {liveServers.length > 0 && (
-              <AsideSection id="live" title={t('nw.liveNow')} wide={wide}>
+              <AsideSection id="live" title={t('nw.liveNow')} wide={wide} hint={t('nw.liveHint', { n: liveServers.reduce((a, sv) => a + (sv.online ? sv.players : 0), 0), s: liveServers.filter((sv) => sv.online).length })}>
                 <ul className="nw-side-list nw-live">
                   {liveServers.map((sv: Server) => (
                     <li key={sv.id}>
@@ -52656,11 +52692,12 @@ __COREGSM_EOF__
 import type { CSSProperties } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
-import { fmtDate } from '../../ui';
+import { fmtDate, fmtTime, toast } from '../../ui';
+import { useAuth } from '../../auth';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
-import { CategoryIcon } from './NewsIcons';
+import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
 import {
-  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt,
+  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
 } from './newsLogic';
 
 export { PANEL_THEME } from './NewsParts';
@@ -52686,6 +52723,17 @@ export interface Card {
   statusIds: number[];
   game: string;
   reactions: NewsReaction[];
+}
+
+/** «сегодня, 14:30» / «вчера, 09:05» for the last two days, the date otherwise */
+export function newsWhen(at: number): string {
+  const d = new Date(at);
+  const now = new Date();
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86_400_000);
+  if (diff === 0) return t('nw.today', { time: fmtTime(at) });
+  if (diff === 1) return t('nw.yesterday', { time: fmtTime(at) });
+  return fmtDate(at);
 }
 
 const hex = (n: number | undefined) => `#${(n ?? 0x5b4fe0).toString(16).padStart(6, '0')}`;
@@ -52745,7 +52793,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
         <div className="nw-cover-chips">
           {c.pinned && <PinChip />}
           <CategoryChip category={c.category} />
-          {c.at && <span className="nw-chip nw-chip-date">{fmtDate(c.at)}</span>}
+          {c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
         </div>
         <H className="nw-cover-title">{href ? <a href={href}>{c.title}</a> : c.title}</H>
       </div>
@@ -52768,25 +52816,37 @@ function monthFormatter(lang: 'ru' | 'en') {
 function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
+  const { me } = useAuth();
+  const canEdit = me?.role === 'admin' || !!me?.perms?.includes('news');
+  const minutes = readingMinutes(c.text);
+  const long = c.text.length > 700 || c.text.split('\n').length > 9;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(`${window.location.origin}/n/${c.id}`); toast(t('nw.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
   return (
-    <article className="nb" style={{ ['--nf-accent' as string]: c.accent }}>
+    <article className={`nb ${c.pinned ? 'is-pinned' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
       <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
-            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()}>{fmtDate(c.at)}</time>}
+            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
           </span>
           <h3 className="nb-title">{c.title}</h3>
         </span>
       </a>
       <div className="nb-body">
-        {(c.text || c.fields.length > 0) && <div className="nb-text"><NewsText text={c.text} fields={c.fields} /></div>}
+        {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
         {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
         <div className="nb-foot">
           {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
-          <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+          <span className="nb-tools">
+            {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
+            {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
+            <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+          </span>
         </div>
       </div>
     </article>
@@ -52805,7 +52865,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         <div className="nw-chips">
           {c.pinned && <PinChip />}
           <CategoryChip category={c.category} />
-          {c.at && <span className="nw-date">{fmtDate(c.at)}</span>}
+          {c.at && <span className="nw-date">{newsWhen(c.at)}</span>}
         </div>
         <h3 className="nf-item-title"><a href={href}>{c.title}</a></h3>
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
@@ -63230,6 +63290,19 @@ const en: Record<keyof typeof ru, string> = {
   'spark.min': 'min',
   'srv.sub.live': 'Players now: {n} · servers online: {s} of {total}',
   'srv.sub.empty': 'The state of your game servers in real time',
+  'nw.today': 'today, {time}',
+  'nw.yesterday': 'yesterday, {time}',
+  'nw.edit': 'Edit',
+  'nw.liveHint': '{n} players · {s} online',
+  'nw.hints.title': 'What will appear here',
+  'nw.hints.update': 'Updates',
+  'nw.hints.update.t': 'What changed in the game and on the servers',
+  'nw.hints.event': 'Events',
+  'nw.hints.event.t': 'Announcements with a countdown',
+  'nw.hints.maintenance': 'Maintenance',
+  'nw.hints.maintenance.t': 'When a server will be down and why',
+  'nw.codeCopy': 'Copy',
+  'nw.codeCopied': 'Code copied',
 };
 
 export default en;
@@ -64372,6 +64445,19 @@ const ru = {
   'spark.min': 'мин',
   'srv.sub.live': 'Игроков сейчас: {n} · серверов онлайн: {s} из {total}',
   'srv.sub.empty': 'Состояние ваших игровых серверов в реальном времени',
+  'nw.today': 'сегодня, {time}',
+  'nw.yesterday': 'вчера, {time}',
+  'nw.edit': 'Изменить',
+  'nw.liveHint': '{n} игроков · {s} онлайн',
+  'nw.hints.title': 'Что здесь появится',
+  'nw.hints.update': 'Обновления',
+  'nw.hints.update.t': 'Что изменилось в игре и на серверах',
+  'nw.hints.event': 'Ивенты',
+  'nw.hints.event.t': 'Анонсы с таймером до начала',
+  'nw.hints.maintenance': 'Технические работы',
+  'nw.hints.maintenance.t': 'Когда сервер будет недоступен и почему',
+  'nw.codeCopy': 'Копировать',
+  'nw.codeCopied': 'Код скопирован',
 };
 
 export default ru;
@@ -74757,6 +74843,19 @@ __COREGSM_EOF__
 .nw-soon { display: grid; gap: .35rem; padding: .35rem 0 .6rem; color: inherit; text-decoration: none; }
 .nw-soon b { font-weight: 650; overflow-wrap: anywhere; }
 .nw-soon:hover b { text-decoration: underline; }
+
+.nw-hints { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; list-style: none; padding: 0; margin: 18px 0 0; }
+.nw-hint { display: grid; gap: 4px; padding: 14px; border-radius: 14px; border: 1px dashed rgb(var(--line)); font-size: 13px; }
+.nw-hint b { font-size: 14px; }
+.nw-hint > span:last-child { opacity: .7; }
+.nw-hint-ico { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: color-mix(in srgb, currentColor 10%, transparent); }
+.nw-side-hint { margin-left: auto; margin-right: 8px; font-size: 12px; font-weight: 500; opacity: .65; }
+.nw-gallery-3 > li:first-child, .nw-gallery-5 > li:first-child { grid-column: span 2; grid-row: span 2; }
+.nw-gallery-6 > li:first-child { grid-column: span 2; grid-row: span 2; }
+.nw-react-btn { position: relative; }
+.nw-skel-entry { border-radius: 16px; overflow: hidden; border: 1px solid rgb(var(--line)); margin-bottom: 14px; }
+.nw-skel-banner { height: 120px; border-radius: 0; }
+.nw-skel-entry .nw-skel-lines { display: grid; gap: 10px; padding: 16px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'
@@ -74848,6 +74947,25 @@ __COREGSM_EOF__
 .nb-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .35rem 1rem; }
 .nb:focus-within { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
 @media (max-width: 560px) { .nb-banner { min-height: 8rem; padding: 1rem 1.1rem; } .nb-body { padding: 1rem 1.1rem 1.15rem; } .nb-text { font-size: 1rem; } }
+
+/* feed cards: pinned ring, long-text fade, tools */
+.nb.is-pinned { box-shadow: 0 0 0 1.5px color-mix(in srgb, rgb(var(--brand)) 55%, transparent), var(--shadow-2); }
+.nb-text { position: relative; }
+.nb-text.is-long::after { content: ''; position: absolute; inset: auto 0 0 0; height: 2.6em; pointer-events: none; background: linear-gradient(to bottom, transparent, rgb(var(--card))); }
+.nb-text .nw-prose > p:first-child { font-size: 1.06em; line-height: 1.55; }
+.nb-tools { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.nb-tool { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--muted, #6b7280); background: transparent; border: 0; cursor: pointer; }
+.nb-tool:hover { background: color-mix(in srgb, currentColor 12%, transparent); color: inherit; }
+.nw-read { font-size: 12px; opacity: .7; white-space: nowrap; }
+.nw-code { position: relative; }
+.nw-code-copy { position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1px solid currentColor; background: transparent; opacity: 0; cursor: pointer; }
+.nw-code:hover .nw-code-copy, .nw-code-copy:focus-visible { opacity: .75; }
+@media (hover: none) { .nw-code-copy { opacity: .6; } }
+@media (max-width: 560px) {
+  .nb { border-radius: 0; margin-inline: -16px; }
+  .nb-banner, .nb-body { padding-inline: 16px; }
+  .nb-read { display: none; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
