@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo } from '../api';
+import { api, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { gameLabel } from '../games';
 import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, usePoll, navigate } from '../ui';
-import { ADMIN_GROUPS, ADMIN_SECTIONS, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
-import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
+import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
+import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
+import AdminOverview from './AdminOverview';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
@@ -22,6 +23,28 @@ import SettingsPage, { UsersTab } from './Settings';
 
 export { ADMIN_SECTIONS };
 import SystemPage from './System';
+
+interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
+
+/** the small counters on the sidebar: servers that do not answer, people waiting for approval */
+function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadge> {
+  const [b, setB] = useState<Record<string, NavBadge>>({});
+  usePoll(async () => {
+    const out: Record<string, NavBadge> = {};
+    if (isAdmin || perms.includes('servers')) {
+      const list = await api<Server[]>('/servers').catch(() => null);
+      const down = list ? list.filter((s) => !s.online && s.hasStatus && !s.maintenance).length : 0;
+      if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
+    }
+    if (isAdmin) {
+      const users = await api<UserRow[]>('/users').catch(() => null);
+      const wait = users ? users.filter((u) => u.status === 'pending').length : 0;
+      if (wait > 0) out.users = { n: wait, tone: 'warn', label: t('adm.badge.pending', { k: wait }) };
+    }
+    setB(out);
+  }, 30_000);
+  return b;
+}
 
 /** The administrator's area: everything that changes the panel lives here. */
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
@@ -55,6 +78,19 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     setPins(r.pins);
     writeIds(PINS_KEY, r.pins);
   };
+  const badges = useNavBadges(isAdmin, me?.perms ?? []);
+  // the sidebar scrolls sideways on a phone: keep the current section in view
+  useEffect(() => {
+    if (!window.matchMedia('(max-width: 767px)').matches) return;
+    document.querySelector('.adm-link[aria-current="page"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [current]);
+  // pinned sections can be dragged (or moved with Alt+↑/↓) to change their order
+  const dragId = useRef<string | null>(null);
+  const reorder = (id: string, to: number) => {
+    const n = movePin(pins, id, to);
+    setPins(n);
+    writeIds(PINS_KEY, n);
+  };
   const byId = (id: string) => ADMIN_SECTIONS.find((x) => x.id === id);
   const pinned = pins.map(byId).filter((x): x is AdminSection => !!x);
   const recents = recent.filter((id) => id !== current && !pins.includes(id)).map(byId).filter((x): x is AdminSection => !!x);
@@ -63,7 +99,23 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const item = (s: AdminSection, scope = '') => {
     const on = pins.includes(s.id);
     return (
-      <div key={`${scope}${s.id}`} className="adm-item" data-current={current === s.id ? 'true' : undefined} data-pinned={on ? 'true' : undefined}>
+      <div
+        key={`${scope}${s.id}`}
+        className="adm-item"
+        data-current={current === s.id ? 'true' : undefined}
+        data-pinned={on ? 'true' : undefined}
+        draggable={scope === 'p-' || undefined}
+        title={scope === 'p-' ? t('adm.pinMove') : undefined}
+        onDragStart={scope === 'p-' ? (e) => { dragId.current = s.id; e.dataTransfer.effectAllowed = 'move'; } : undefined}
+        onDragOver={scope === 'p-' ? (e) => { if (dragId.current) e.preventDefault(); } : undefined}
+        onDrop={scope === 'p-' ? (e) => { e.preventDefault(); if (dragId.current && dragId.current !== s.id) reorder(dragId.current, pins.indexOf(s.id)); dragId.current = null; } : undefined}
+        onDragEnd={scope === 'p-' ? () => { dragId.current = null; } : undefined}
+        onKeyDown={scope === 'p-' ? (e) => {
+          if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+          e.preventDefault();
+          reorder(s.id, pins.indexOf(s.id) + (e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 1));
+        } : undefined}
+      >
         {link(s, true)}
         <button
           type="button"
@@ -87,9 +139,12 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
+      {badges[s.id] && <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>}
       {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
     </a>
   );
+  const first = tail.split('/')[0];
+  const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
@@ -97,7 +152,13 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
         {isAdmin ? (
           <>
+            <button type="button" className="adm-find max-md:hidden" onClick={() => window.dispatchEvent(new Event('coregsm:palette'))}>
+              <span aria-hidden>⌕</span>
+              <span className="min-w-0 flex-1 truncate text-left">{t('adm.nav.search')}</span>
+              <kbd>Ctrl K</kbd>
+            </button>
             {link(START_SECTION)}
+            {link(OVERVIEW_SECTION)}
             <SetupProgress />
             {pinned.length > 0 && (
               <div className="contents md:block">
@@ -134,9 +195,21 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         )}
       </nav>
       <div className="min-w-0 space-y-5">
-        {isAdmin && updateAvailable && current !== 'settings' && <UpdateBanner />}
-        {isAdmin && <CertWarning />}
+        {isAdmin && (
+          <div className="space-y-2 empty:hidden">
+            {updateAvailable && current !== 'settings' && <UpdateBanner />}
+            <CertWarning />
+          </div>
+        )}
+        {!home && crumb && (
+          <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
+            <a href={`/admin/${current}`}>{byId(current)?.label}</a>
+            <span aria-hidden>›</span>
+            <span aria-current="page">{crumb}</span>
+          </nav>
+        )}
         {home && <AdminHome />}
+        {!home && current === 'overview' && <AdminOverview />}
         {!home && current === 'start' && <AdminStart />}
         {!home && current === 'servers' && <ServersManage sub={tail} />}
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
@@ -159,6 +232,7 @@ function UpdateBanner() {
   useI18n();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [offline, setOffline] = useState(false);
+  const [hidden, setHidden] = useState(() => { try { return sessionStorage.getItem('coregsm_update_banner_hidden') === '1'; } catch { return false; } });
   const wasRunning = useRef(false);
   usePoll(
     () =>
@@ -180,6 +254,7 @@ function UpdateBanner() {
   const failed = info?.job?.state === "error" && info.available;
   // nothing to install any more (or the status is not known yet): no banner
   if (!running && info && !info.available) return null;
+  if (hidden && !running && !failed) return null;
   const pct = typeof info?.job?.progress === "number" ? Math.max(0, Math.min(100, Math.round(info.job.progress))) : null;
   const latest = info?.latest ?? null;
   return (
@@ -208,6 +283,11 @@ function UpdateBanner() {
         )}
       </div>
       <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
+      {!running && !failed && (
+        <button type="button" className="btn-icon-ghost btn-icon-sm relative text-white" aria-label={t('adm.stack.hide')} title={t('adm.stack.hide')} onClick={() => { try { sessionStorage.setItem('coregsm_update_banner_hidden', '1'); } catch { /* not remembered */ } setHidden(true); }}>
+          <IconClose size={14} />
+        </button>
+      )}
     </div>
   );
 }

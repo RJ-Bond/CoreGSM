@@ -28,6 +28,15 @@ export function togglePin(pins: string[], id: string, max = PINS_MAX): { pins: s
   return { pins: [...pins, id], full: false };
 }
 
+/** moves `id` to position `to` (clamped); an unknown id leaves the list as it was */
+export function movePin(pins: string[], id: string, to: number): string[] {
+  const from = pins.indexOf(id);
+  if (from < 0) return pins;
+  const rest = pins.filter((x) => x !== id);
+  rest.splice(Math.max(0, Math.min(rest.length, to)), 0, id);
+  return rest;
+}
+
 export function readIds(key: string, valid: readonly string[], max: number): string[] {
   try {
     const raw = localStorage.getItem(key);

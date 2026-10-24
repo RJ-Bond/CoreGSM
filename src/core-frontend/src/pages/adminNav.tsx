@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Perm } from '../api';
 import { t } from '../i18n';
+import { Icon } from '../icons';
 import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
@@ -20,6 +21,14 @@ export const START_SECTION: AdminSection = {
   icon: IconStart,
   get desc() { return t('adm.d.start'); },
   keywords: 'старт начало первые шаги чек-лист помощь с чего начать новичок',
+};
+
+export const OVERVIEW_SECTION: AdminSection = {
+  id: 'overview',
+  get label() { return t('adm.s.overview'); },
+  icon: () => <Icon size={22}><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></Icon>,
+  get desc() { return t('adm.d.overview'); },
+  keywords: 'сводка обзор дашборд главная состояние внимание быстрые действия панель',
 };
 
 const S = {
@@ -49,7 +58,7 @@ export const ADMIN_GROUPS: AdminGroup[] = [
 ];
 
 /** every section in the order of the sidebar, «Начало работы» first */
-export const ADMIN_SECTIONS: AdminSection[] = [START_SECTION, ...ADMIN_GROUPS.flatMap((g) => g.sections)];
+export const ADMIN_SECTIONS: AdminSection[] = [START_SECTION, OVERVIEW_SECTION, ...ADMIN_GROUPS.flatMap((g) => g.sections)];
 
 export const SETTINGS_TABS = [
   { id: 'bot', get label() { return t('adm.tab.bot'); }, keywords: 'токен бот прокси proxy вход через discord client secret redirect oauth пригласить' },
