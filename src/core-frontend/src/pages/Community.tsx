@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { busiestText, FeedItem, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
+import { busiestText, FeedItem, HeatLegend, MiniHeat, useCommunity } from '../components/servers/CommunityBento';
 import { AnimatedNumber, GameAvatar, PageHead, fmtDate, fmtDateTime, plural, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
@@ -144,6 +144,7 @@ export default function CommunityPage() {
       <section className="tile p-4 sm:p-5">
         <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
         <MiniHeat cells={c.heatmap.cells} big />
+        <HeatLegend />
         <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам.</p>
       </section>
 

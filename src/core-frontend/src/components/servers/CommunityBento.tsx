@@ -46,6 +46,15 @@ export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; b
   );
 }
 
+/** the colour scale of the heat map: lighter = fewer players */
+export function HeatLegend() {
+  return (
+    <p className="cm-heat-scale" aria-hidden>
+      меньше {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} больше
+    </p>
+  );
+}
+
 export function busiestText(b: Community['heatmap']['busiest']) {
   return b ? `Больше всего игроков ${DOW_IN[b.dow]} около ${String(b.hour).padStart(2, '0')}:00` : 'Данных пока мало';
 }
