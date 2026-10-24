@@ -26,9 +26,13 @@ jobs:
           cache-dependency-path: src/core-backend/package-lock.json
       - run: npm ci --no-audit --no-fund
       - name: Typecheck
-        run: npm run typecheck
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee /tmp/typecheck.log || { echo "::error title=backend typecheck::$(head -c 1500 /tmp/typecheck.log | tr '\n' ' ')"; exit 1; }
       - name: API and embed tests
-        run: npm test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee /tmp/test.log || { echo "::error title=backend tests::$(grep -E '^\s*(not ok|# Subtest|error:|expected|actual|\+|-) |AssertionError|Error:' /tmp/test.log | head -c 1800 | tr '\n' ' ')"; exit 1; }
 
   frontend:
     runs-on: ubuntu-latest

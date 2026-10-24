@@ -24,6 +24,11 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   const [passErr, setPassErr] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
+  // second factor: set once the server says the account has it; the code field then appears
+  const [needCode, setNeedCode] = useState(false);
+  const [code, setCode] = useState('');
+  const [codeErr, setCodeErr] = useState('');
+  const codeRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [lockUntil, setLockUntil] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -55,8 +60,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy || locked) return;
-    setUserErr(''); setPassErr(''); setError(''); setPending(false);
+    setUserErr(''); setPassErr(''); setCodeErr(''); setError(''); setPending(false);
     const name = username.trim();
+    if (needCode && !code.trim()) { setCodeErr(t('login.enterCode')); codeRef.current?.focus(); shake(); return; }
     if (!name || !password) {
       if (!name) setUserErr(t('login.enterUser'));
       if (!password) setPassErr(t('login.enterPass'));
@@ -66,7 +72,13 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
     }
     setBusy(true);
     try {
-      const r = await api<{ token: string }>('/auth/login', 'POST', { username: name, password });
+      const r = await api<{ token?: string; twoFactor?: boolean }>('/auth/login', 'POST', needCode ? { username: name, password, code: code.trim() } : { username: name, password });
+      if (!r.token) {
+        // the password was right and the account asks for a code
+        setNeedCode(true);
+        setTimeout(() => codeRef.current?.focus(), 0);
+        return;
+      }
       writeName(remember ? name : '');
       setToken(r.token);
       onDone();
@@ -79,6 +91,11 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         setNow(Date.now());
       } else if (status === 403 && data.pending) {
         setPending(true);
+      } else if (status === 401 && data.twoFactor) {
+        const n = typeof data.attemptsLeft === 'number' ? data.attemptsLeft : null;
+        setCodeErr(`${(err as Error).message}${n !== null ? t('login.attempts', { n }) : ''}`);
+        codeRef.current?.focus();
+        codeRef.current?.select();
       } else if (status === 401) {
         const n = typeof data.attemptsLeft === 'number' ? data.attemptsLeft : null;
         setPassErr(`${(err as Error).message}${n !== null ? t('login.attempts', { n }) : ''}`);
@@ -136,6 +153,29 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         error={passErr}
         disabled={locked}
       />
+
+      {needCode && (
+        <div>
+          <label htmlFor="login-code" className="label">{t('login.code')}</label>
+          <input
+            id="login-code"
+            ref={codeRef}
+            className="input tracking-widest"
+            value={code}
+            onChange={(e) => { setCode(e.target.value); setCodeErr(''); }}
+            inputMode="text"
+            autoComplete="one-time-code"
+            autoCapitalize="none"
+            spellCheck={false}
+            maxLength={16}
+            disabled={locked}
+            aria-invalid={codeErr ? true : undefined}
+            aria-describedby="login-code-hint"
+          />
+          <p id="login-code-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('login.codeHint')}</p>
+          <FieldError id="login-code-err" text={codeErr} />
+        </div>
+      )}
 
       <label className="flex cursor-pointer items-center gap-2.5 text-sm font-bold text-mute">
         <input type="checkbox" className="h-4 w-4 accent-brand" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
