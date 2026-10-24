@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7f2430b25a41"
+COREGSM_BUILD="ebc1e469bc00"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -58967,7 +58967,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
   const maint = overview?.maintenance ?? [];
   const bodyId = 'srv-whatsnew-body';
   return (
-    <aside className="panel srv-new" aria-label={t('srv.new.title')}>
+    <aside className={`panel srv-new ${open && news === null && maint.length === 0 ? 'srv-new-compact' : ''}`} aria-label={t('srv.new.title')}>
       <h2 className="m-0">
         <button type="button" className="srv-new-head" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
           <span className="font-black">{t('srv.new.title')}</span>
@@ -59143,6 +59143,7 @@ import type { Server } from '../../api';
 import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
+import { toast } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -59304,14 +59305,14 @@ const Bar = ({ w, h = 12, className = '' }: { w: number | string; h?: number; cl
 
 function SkeletonHero() {
   return (
-    <div className="srv-hero tile flex min-h-[280px] flex-col gap-3 p-5 lg:p-6">
+    <div className="srv-hero srv-hero-skel tile flex min-h-[280px] flex-col gap-3 p-5 lg:p-6">
       <div className="flex items-start gap-3">
         <div className="skeleton h-12 w-12 shrink-0 rounded-2xl" />
         <div className="flex-1 space-y-2 pt-1"><Bar w="62%" h={18} /><Bar w="38%" /></div>
         <Bar w={84} h={26} />
       </div>
       <div className="flex items-end gap-3 pt-4"><Bar w={130} h={64} className="rounded-2xl!" /><Bar w={90} h={18} className="mb-2" /></div>
-      <div className="skeleton mt-auto h-20 w-full rounded-2xl" />
+      <div className="skeleton skel-chart mt-auto h-20 w-full rounded-2xl" />
       <div className="flex justify-between"><Bar w={70} /><Bar w={90} /><Bar w={80} /></div>
     </div>
   );
@@ -59361,6 +59362,22 @@ export function ListSkeleton() {
         </div>
       ))}
     </div>
+  );
+}
+
+/** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
+export function AddrCopy({ address, className = '' }: { address: string; className?: string }) {
+  useI18n();
+  const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try { await navigator.clipboard.writeText(address); toast(t('srv.addr.copied')); } catch { /* the address stays on screen */ }
+  };
+  return (
+    <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
+      <span className={className}>{address}</span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
+    </button>
   );
 }
 __COREGSM_EOF__
@@ -60844,7 +60861,7 @@ __COREGSM_EOF__
     --au1: 0.18;
     --au2: 0.12;
     --hex: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97' fill='none' stroke='%23463c8c'><path d='M28 0 L56 16 V48 L28 64 L0 48 V16Z'/><path d='M28 64 V97 M0 48 V81 M56 48 V81'/></svg>");
-    --hex-a: 0.1;
+    --hex-a: 0.16;
     --glass-a: 0.84;
     --glass-sheen: none;
     --wash-a: rgb(var(--brand) / 0.15);
@@ -61869,7 +61886,7 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 
 .srv-tabbar { transition: background-color .2s ease, box-shadow .2s ease; }
 .srv-tabbar.is-stuck { background: rgb(var(--page) / 0.78); -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3); box-shadow: 0 1px 0 rgb(var(--line)); }
-.spark-axis { position: absolute; left: 8px; padding: 1px 6px; border-radius: 6px; background: rgb(0 0 0 / .38); color: rgb(255 255 255 / .92); font-size: 12px; font-weight: 700; line-height: 1.3; pointer-events: none; font-variant-numeric: tabular-nums; }
+.spark-axis { position: absolute; left: 8px; padding: 1px 6px; border-radius: 6px; background: rgb(0 0 0 / .2); color: rgb(255 255 255 / .78); font-size: 11px; font-weight: 600; line-height: 1.3; pointer-events: none; font-variant-numeric: tabular-nums; }
 .no-scrollbar { scrollbar-width: none; }
 /* a row that scrolls sideways fades out at the edge that still has content (browsers without scroll-driven animations show no fade) */
 @property --fl { syntax: '<length>'; inherits: false; initial-value: 0px; }
@@ -63199,6 +63216,9 @@ const en: Record<keyof typeof ru, string> = {
   'adm.com.toBest': '☆ Add to the best',
   'adm.com.unpublished': 'Screenshot unpublished',
   'adm.com.take': 'Unpublish',
+  'srv.empty.now': 'Nobody online right now',
+  'srv.addr.copy': 'Copy the address',
+  'srv.addr.copied': 'Address copied',
 };
 
 export default en;
@@ -64333,6 +64353,9 @@ const ru = {
   'adm.com.toBest': '☆ В лучшие',
   'adm.com.unpublished': 'Скриншот снят с публикации',
   'adm.com.take': 'Снять',
+  'srv.empty.now': 'Сейчас никого',
+  'srv.addr.copy': 'Скопировать адрес',
+  'srv.addr.copied': 'Адрес скопирован',
 };
 
 export default ru;
@@ -70551,7 +70574,8 @@ import { coverBackground, emblemStyle, gameBackdrop } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useDepth, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
-import { CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
+import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { AttentionStrip } from '../components/servers/AttentionStrip';
@@ -70587,7 +70611,7 @@ function FavButton({ on, name, onClick, className = '', glass = false }: { on: b
   return (
     <button
       onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
-      className={glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'}
+      className={`${glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'} ${on ? '' : 'star-quiet'}`}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`В избранное: ${name}`}
       aria-pressed={on}
@@ -70751,8 +70775,10 @@ function ServerList() {
         subtitle={me ? `${greeting(me.username)}. Серверы в реальном времени` : 'Состояние ваших игровых серверов в реальном времени'}
         icon={<IconServers />}
       >
-        <LiveBadge at={updatedAt} />
-        {isAdmin && <a className="btn btn-soft" href="/admin/servers" data-magnetic>Управление серверами</a>}
+        <span className="srv-head-actions">
+          <LiveBadge at={updatedAt} />
+          {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>Управление серверами</a>}
+        </span>
       </PageHead>
 
       {loaded && servers.length > 0 && (
@@ -70779,7 +70805,7 @@ function ServerList() {
           ) : <span />}
           <div className="srv-bar-tools flex items-center gap-2.5">
             {canSelect && (
-              <button type="button" className="btn btn-soft" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
+              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
               </button>
             )}
@@ -70961,6 +70987,8 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
 
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps }) {
   const [c1, c2] = gameGradient(s.game);
+  // the accent is taken from the cover picture, so two games of the same colour family still look different
+  const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
   const lag = isLag(s);
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
@@ -70968,11 +70996,12 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
     <article
       className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
-      style={{ ...stagger(idx), ['--gc' as string]: gameColor(s.game), ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
+      style={{ ...stagger(idx), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`${emb.className} flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${gameColor(s.game)}` }}>
+      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${accent}` }}>
+        <span aria-hidden className="cover-scrim" />
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
@@ -70995,8 +71024,10 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
             <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
             <span className="ml-auto text-[13px] font-bold text-mute">{s.ping != null ? `${s.ping} мс` : ''}</span>
           </div>
-          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
-          <div className="px-1.5"><Spark serverId={s.id} color={gameColor(s.game)} /></div>
+          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
+          {s.players === 0
+            ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
+            : <div className="px-1.5"><Spark serverId={s.id} color={accent} /></div>}
         </>
       ) : (
         s.hasStatus ? (
@@ -71010,7 +71041,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
-        <span className="truncate font-mono" title={s.address}>{s.address}</span>
+        <AddrCopy address={s.address} className="truncate font-mono" />
         <span className="shrink-0">{s.online ? (s.map || (s.updatedAt != null && Date.now() - s.updatedAt > 60_000 ? ago(s.updatedAt) : '')) : ago(s.updatedAt)}</span>
       </div>
     </article>
@@ -74925,7 +74956,7 @@ __COREGSM_EOF__
    no outline styling, no backdrop-filter / will-change / masks. */
 
 /* ---------- capacity bar ---------- */
-.srv-cap { flex: 1 1 auto; min-width: 0; height: 6px; border-radius: var(--r-pill); background: rgb(var(--soft)); overflow: hidden; }
+.srv-cap { flex: 1 1 auto; min-width: 0; height: 8px; border-radius: var(--r-pill); background: rgb(var(--soft)); overflow: hidden; }
 .srv-cap.big { height: 14px; }
 .srv-cap > i { display: block; height: 100%; border-radius: var(--r-pill); background: var(--cap, rgb(var(--brand))); transition: width .8s cubic-bezier(.2, .8, .2, 1), background-color .4s ease; }
 .srv-cap.warm > i { background: rgb(var(--warn)); }
@@ -74934,14 +74965,14 @@ __COREGSM_EOF__
 .srv-cap.on-dark > i { background: #fff; }
 .srv-cap.on-dark.warm > i { background: #fbbf24; }
 .srv-cap.on-dark.hot > i { background: #f87171 repeating-linear-gradient(135deg, rgb(255 255 255 / .45) 0 4px, transparent 4px 8px); }
-.srv-pct { flex: none; min-width: 2.6em; text-align: right; font-size: 12px; font-weight: 650; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; transition: color .3s ease; }
+.srv-pct { flex: none; min-width: 2.6em; text-align: right; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; transition: color .3s ease; }
 .srv-pct.warm { color: rgb(var(--warn)); }
 .srv-pct.hot { color: rgb(var(--bad)); }
 .srv-pct.on-dark { color: rgb(255 255 255 / .9); }
 .srv-pct.on-dark.warm { color: #fde68a; }
 .srv-pct.on-dark.hot { color: #fecaca; }
 .srv-pct.big { font-size: clamp(16px, 1.5vw, 26px); }
-.srv-slots { font-size: 12.5px; font-weight: 650; line-height: 1.2; color: rgb(var(--mute)); }
+.srv-slots { font-size: 13.5px; font-weight: 700; line-height: 1.2; color: rgb(var(--mute)); }
 .srv-slots.almost { color: rgb(var(--warn)); }
 .srv-slots.full { color: rgb(var(--bad)); }
 .srv-slots.on-dark { color: rgb(255 255 255 / .9); }
@@ -75095,9 +75126,9 @@ __COREGSM_EOF__
 .pulse-icon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: var(--r-lg); color: rgb(var(--pulse)); background: rgb(var(--card) / .7); }
 .pulse-title { font-size: 17px; font-weight: 650; line-height: 1.2; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .pulse-sub { margin-top: 2px; font-size: 13px; font-weight: 600; color: rgb(var(--mute)); overflow-wrap: anywhere; }
-.pulse-nums { display: grid; grid-template-columns: repeat(4, auto); gap: 4px 22px; margin: 0; }
-.pulse-nums dt { font-size: 12px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
-.pulse-nums dd { margin: 2px 0 0; font-size: 22px; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pulse-nums { display: grid; grid-template-columns: repeat(4, auto); gap: 6px 32px; margin: 0; }
+.pulse-nums dt { font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); white-space: nowrap; }
+.pulse-nums dd { margin: 3px 0 0; font-size: 24px; font-weight: 650; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pulse-nums dd small { font-size: .62em; font-weight: 600; color: rgb(var(--mute)); letter-spacing: 0; }
 .pulse-chart { margin: 0; min-width: 0; color: rgb(var(--pulse)); }
 .pulse-plot { position: relative; height: 56px; }
@@ -75119,7 +75150,7 @@ __COREGSM_EOF__
   .pulse-title { font-size: 15px; }
   .pulse-sub { font-size: 12px; }
   .pulse-nums { grid-row: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-  .pulse-nums dt { font-size: 9.5px; letter-spacing: .02em; white-space: normal; line-height: 1.15; }
+  .pulse-nums dt { font-size: 10.5px; letter-spacing: .02em; white-space: normal; line-height: 1.15; }
   .pulse-nums dd { font-size: 17px; }
   .pulse-chart { display: none; }
 }
@@ -75208,7 +75239,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-hero.is-split .sh-actions { position: absolute; top: 20px; right: 20px; z-index: 3; }
   .srv-hero.is-split .sh-head h2 { font-size: 1.5rem; }
   /* a scrim under the curve keeps it readable over a busy cover */
-  .srv-hero.is-split > .sh-chart { position: relative; border-radius: var(--r-lg); background: linear-gradient(180deg, rgb(0 0 0 / .08), rgb(0 0 0 / .32)); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .1); padding: 10px 6px 0; }
+  .srv-hero.is-split > .sh-chart { position: relative; border-radius: var(--r-lg); background: linear-gradient(180deg, rgb(8 10 20 / .30), rgb(8 10 20 / .55)); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12); padding: 10px 6px 0; }
 }
 /* a server that is down has no player numbers to show: a full-width row of its own height instead of a big empty card */
 .srv-grid > .srv-hero.is-down { grid-column: 1 / -1; grid-row: auto; }
@@ -75291,6 +75322,33 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 /* outage marks on the big curve: a low glow with a thin line, not a column up to the top */
 .srv-hero .chart-down { top: auto; height: 46%; }
 .srv-hero .chart-down::after { height: 2px; }
+
+/* 8: a soft shade at the top of a tile cover keeps the avatar, the status and the star readable over any picture */
+.srv-tile .cover-scrim { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: linear-gradient(180deg, rgb(0 0 0 / .42), rgb(0 0 0 / 0) 58%); }
+.srv-tile .cover-scrim ~ * { position: relative; }
+/* the star of a card that is not a favourite is quiet until the card is hovered or focused (mouse devices only) */
+@media (hover: hover) {
+  .srv-tile .star-quiet { opacity: .45; transition: opacity .15s ease; }
+  .srv-tile:hover .star-quiet, .srv-tile:focus-within .star-quiet, .star-quiet:focus-visible { opacity: 1; }
+}
+/* 3: a server with nobody on it says so instead of drawing a flat line */
+.srv-empty-now { display: flex; align-items: center; gap: 8px; margin: 0 6px; padding: 9px 12px; border-radius: var(--r-md); background: rgb(var(--soft) / .7); color: rgb(var(--mute)); font-size: 13px; font-weight: 700; }
+.srv-empty-now i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .5; }
+/* 10: the address copies with one tap */
+.srv-addr-copy { display: inline-flex; min-width: 0; align-items: center; gap: 6px; padding: 2px 6px; margin: -2px -6px; border-radius: var(--r-sm); font: inherit; color: inherit; background: transparent; transition: background-color .12s ease; }
+.srv-addr-copy:hover, .srv-addr-copy:focus-visible { background: rgb(var(--soft)); }
+.srv-addr-copy svg { flex: none; opacity: 0; transition: opacity .12s ease; }
+.srv-addr-copy:hover svg, .srv-addr-copy:focus-visible svg { opacity: .8; }
+@media (hover: none) { .srv-addr-copy svg { opacity: .55; } }
+/* 12: «What's new» with nothing new is one quiet line */
+.srv-new-compact { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; }
+.srv-new-compact h2 { flex: none; }
+.srv-new-compact .srv-new-quiet { padding: 0 14px 0 0; flex: 1 1 14rem; min-width: 0; }
+.srv-new-compact .srv-new-head { width: auto; gap: 14px; }
+/* 13: the loading card has the shape of the hero: figures on the left, the curve on the right */
+@media (min-width: 900px) { .srv-hero-skel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); column-gap: 32px; } .srv-hero-skel > .skel-chart { grid-column: 2; grid-row: 1 / span 4; min-height: 190px; } }
+/* 5: the status and the admin link of the heading sit together */
+.srv-head-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
@@ -76327,7 +76385,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   return hero
     ? (
       <div className="relative">
-        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.4} strokeWidth={2.6} className="h-[130px]" label={label} />
+        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2.3} className="h-[130px]" label={label} />
         {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
         <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
         <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
