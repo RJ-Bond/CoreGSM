@@ -14,6 +14,7 @@ import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '
 import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security.js';
 import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../site.js';
 import { unreadNotifications } from '../subscriptions.js';
+import { log } from '../logger.js';
 
 export const router = express.Router();
 
@@ -130,7 +131,7 @@ router.post(
       return res.status(409).json({ error: 'Панель уже настроена. Войдите под своим логином.' });
     }
     resetAttempts(req.ip);
-    console.log(`setup completed, admin "${b.data.username}" created`);
+    log.info(`setup completed, admin "${b.data.username}" created`);
     const token = issueToken({ id: userId, username: b.data.username }, req);
     setSessionCookie(req, res, token);
     noteLogin(req, userId, brand().name);

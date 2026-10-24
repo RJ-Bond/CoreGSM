@@ -16,6 +16,7 @@ import { incidentsSince } from './incidents.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
+import { log } from './logger.js';
 
 const { Canvas } = skia;
 const DAY = 86_400_000;
@@ -291,7 +292,7 @@ export function startDigestTimer(): void {
     try {
       if (digestDue()) sendDigest();
     } catch (e) {
-      console.error('weekly digest failed:', (e as Error).message);
+      log.error('weekly digest failed:', (e as Error).message);
     }
   }, 10 * 60_000);
   timer.unref();
