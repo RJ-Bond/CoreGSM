@@ -107,7 +107,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
             <span className="font-extrabold">{r.mine ? 'Изменить отзыв' : 'Как вам сервер?'}</span>
             <StarPicker value={stars} onChange={setStars} />
           </div>
-          <textarea className="input min-h-[5rem]" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
+          <textarea className="input min-h-20" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
           <ErrorLine text={error} />
           <div className="flex justify-end gap-2">
             {editing && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>}

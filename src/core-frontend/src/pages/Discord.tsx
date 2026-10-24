@@ -233,7 +233,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                   {shown.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
-                    <div className="line-clamp-2 break-words font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
+                    <div className="line-clamp-2 wrap-break-word font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
                     <div className="truncate text-sm font-bold text-mute" title={`ID канала ${b.channelId}`}>
                       {b.channelName ? `# ${b.channelName}${b.guildName ? ` · ${b.guildName}` : ''}` : `Канал ${b.channelId}`}
                     </div>
@@ -264,7 +264,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                   src={`/api/card/${b.serverId}.png?v=${s?.updatedAt ?? 0}`}
                   alt={`Карточка: ${s?.name ?? ''}`}
                   loading="lazy"
-                  className="aspect-[5/2] w-full rounded-2xl bg-soft object-cover"
+                  className="aspect-5/2 w-full rounded-2xl bg-soft object-cover"
                 />
               )}
 

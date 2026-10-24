@@ -315,7 +315,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : accent} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
       )}
       {points.some((p) => !p.online) && stats.samples >= 2 && (
-        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
     </SectionCard>
   );
@@ -435,7 +435,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="relative flex items-start gap-3.5 sm:gap-4">
           <GameAvatar game={s.game} size={64} glass vtId={s.id} />
           <div className="min-w-0 flex-1">
-            <h1 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
+            <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
               <span className="chip-glass">{gameLabel(s.game)}</span>

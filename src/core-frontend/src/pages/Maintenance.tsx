@@ -102,11 +102,11 @@ export default function MaintenancePage() {
             <li key={w.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
               <div className="min-w-0 flex-1 basis-60">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="min-w-0 break-words font-extrabold">{w.name}</span>
+                  <span className="min-w-0 wrap-break-word font-extrabold">{w.name}</span>
                   <span className={CHIP[st].cls}>{CHIP[st].text}</span>
                   {w.repeat !== 'none' && st !== 'repeat' && <span className="pill pill-mute">{REPEAT_LABEL[w.repeat]}</span>}
                 </div>
-                <div className="mt-0.5 break-words text-sm font-semibold text-mute">
+                <div className="mt-0.5 wrap-break-word text-sm font-semibold text-mute">
                   {w.serverId == null ? 'Все серверы' : w.serverName ?? `Сервер №${w.serverId}`}
                   {' · '}
                   {rangeLabel(w.startTs, w.endTs)}

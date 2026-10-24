@@ -71,7 +71,7 @@ export default function CardsPage() {
           <div key={s.id} className="panel space-y-3 p-5">
             <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="min-w-0 break-words font-black">{s.name}</span>
+              <span className="min-w-0 wrap-break-word font-black">{s.name}</span>
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(s)}>
                   <span className="copy-ico" data-done={copied === s.id} aria-hidden>

@@ -83,7 +83,7 @@ export default function DeliveryList() {
       title="Доставка"
       description="Очередь сообщений в Discord: новости, оповещения и карточки статуса. Неудачные попытки повторяются сами, до 8 раз."
       actions={(
-        <select className="input !w-auto" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label="Тип сообщений">
+        <select className="input w-auto!" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label="Тип сообщений">
           <option value="">Все типы</option>
           {(Object.keys(KIND_LABEL) as DeliveryKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
         </select>
@@ -114,14 +114,14 @@ export default function DeliveryList() {
                 {KIND_ICON[it.kind]()}
               </span>
               <div className="min-w-0 flex-1 basis-56">
-                <div className="break-words font-extrabold">{it.summary || KIND_LABEL[it.kind]}</div>
+                <div className="wrap-break-word font-extrabold">{it.summary || KIND_LABEL[it.kind]}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-mute">
                   <span className={STATUS_PILL[it.status]}>{STATUS_LABEL[it.status]}</span>
                   <span>попытки {attemptsText(it.attempts)}</span>
                   {it.status === 'sent' && it.sentAt ? <span>{ago(it.sentAt)}</span> : <span>создано {ago(it.createdAt)}</span>}
                   {it.nextTryAt != null && it.status !== 'sent' && it.status !== 'dead' && <span>следующая попытка {countdownText(it.nextTryAt, now)}</span>}
                 </div>
-                {it.lastError && it.status !== 'sent' && <p className="mt-1 break-words rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad">{it.lastError}</p>}
+                {it.lastError && it.status !== 'sent' && <p className="mt-1 wrap-break-word rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad">{it.lastError}</p>}
               </div>
               {canRetry(it.status) && (
                 <button type="button" className="btn btn-soft btn-sm" disabled={busy.includes(it.id)} onClick={() => void retry(it.id)}>

@@ -81,7 +81,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       key={s.id}
       href={`/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
-      className={`adm-link flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] py-1.5 pl-1.5 pr-3.5 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'is-on bg-gradient-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
+      className={`adm-link flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-[14px] py-1.5 pl-1.5 pr-3.5 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'is-on bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
@@ -126,7 +126,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         ) : (
           <>
-            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-[0.1em] text-mute md:block">Админка</div>
+            <div className="hidden px-3 pb-1 pt-1.5 text-xs font-extrabold uppercase tracking-widest text-mute md:block">Админка</div>
             {sections.map((s) => link(s))}
           </>
         )}

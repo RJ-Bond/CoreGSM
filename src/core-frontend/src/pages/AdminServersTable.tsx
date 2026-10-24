@@ -98,8 +98,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                       <div className="flex min-w-0 items-center gap-3">
                         <GameAvatar game={s.game} size={38} />
                         <div className="min-w-0">
-                          <a href={`/servers/${s.id}`} className="block max-w-[12.5rem] xl:max-w-[15rem] truncate font-extrabold leading-tight hover:text-link" title={s.name}>{s.name}</a>
-                          <div className="max-w-[12.5rem] xl:max-w-[15rem] truncate text-xs font-semibold text-mute" title={s.displayAddress ? `Показывается как ${s.displayAddress}` : undefined}>
+                          <a href={`/servers/${s.id}`} className="block max-w-50 xl:max-w-60 truncate font-extrabold leading-tight hover:text-link" title={s.name}>{s.name}</a>
+                          <div className="max-w-50 xl:max-w-60 truncate text-xs font-semibold text-mute" title={s.displayAddress ? `Показывается как ${s.displayAddress}` : undefined}>
                             {gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span>
                           </div>
                         </div>
@@ -135,7 +135,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                 <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`Выбрать: ${s.name}`} />
                 <GameAvatar game={s.game} size={40} />
                 <div className="min-w-0 flex-1 basis-40">
-                  <a href={`/servers/${s.id}`} className="block break-words font-extrabold leading-tight">{s.name}</a>
+                  <a href={`/servers/${s.id}`} className="block wrap-break-word font-extrabold leading-tight">{s.name}</a>
                   <div className="truncate text-xs font-semibold text-mute">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
                 </div>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />

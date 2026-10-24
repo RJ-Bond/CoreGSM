@@ -142,7 +142,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
                     <>
                       <span aria-hidden className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-transparent' : 'bg-brand'}`} />
                       <span className="min-w-0 flex-1">
-                        <span className={`block break-words text-sm leading-snug ${n.read ? 'font-semibold text-mute' : 'font-extrabold'}`}>
+                        <span className={`block wrap-break-word text-sm leading-snug ${n.read ? 'font-semibold text-mute' : 'font-extrabold'}`}>
                           {!n.read && <span className="sr-only">{t('bell.unreadMark')} </span>}
                           {n.text}
                         </span>

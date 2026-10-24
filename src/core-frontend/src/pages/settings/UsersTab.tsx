@@ -121,7 +121,7 @@ function UsersTabInner() {
             <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
             <div className="pl-8">
               <label htmlFor="reg-mode" className="label">Режим регистрации</label>
-              <select id="reg-mode" className="input !w-auto max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
+              <select id="reg-mode" className="input w-auto! max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
                 <option value="open">Открытая: сразу</option>
                 <option value="approval">По заявке: после одобрения администратором</option>
               </select>
@@ -185,7 +185,7 @@ function UsersTabInner() {
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
-              <select className="input !w-auto !py-1.5" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
+              <select className="input w-auto! py-1.5!" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
                 <option value="player">Игрок</option>
                 <option value="moderator">Модератор</option>
                 <option value="admin">Администратор</option>

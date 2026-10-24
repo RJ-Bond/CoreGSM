@@ -358,7 +358,7 @@ export default function HistoryChart({
     <div className={`transition-opacity duration-300 ${loading ? 'opacity-60' : ''}`}>
       {(sparse || late) && points.length > 0 && (
         <p className="mb-2 flex items-center gap-2 rounded-xl bg-soft px-3 py-1.5 text-sm font-bold text-mute">
-          <span aria-hidden className="live-dot !bg-warn" />
+          <span aria-hidden className="live-dot bg-warn!" />
           {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
         </p>
       )}

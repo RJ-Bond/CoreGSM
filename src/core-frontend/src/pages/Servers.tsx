@@ -360,7 +360,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
       <div className="sh-head relative flex items-start gap-3">
         <GameAvatar game={s.game} size={48} glass vtId={s.id} />
         <div className="min-w-0 flex-1">
-          <h2 className="line-clamp-2 break-words text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
+          <h2 className="line-clamp-2 wrap-break-word text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
             <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
           </h2>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
@@ -435,7 +435,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
       </div>
 
       <div className="px-1.5">
-        <h3 className="line-clamp-2 break-words text-[16.5px] font-extrabold leading-tight" title={s.name}>
+        <h3 className="line-clamp-2 wrap-break-word text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}</div>

@@ -166,7 +166,7 @@ export function BrandCard() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
-            <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-gradient-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
+            <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-linear-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
               <IconCheck size={18} />
             </span>
           </div>

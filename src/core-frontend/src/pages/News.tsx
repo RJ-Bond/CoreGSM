@@ -145,7 +145,7 @@ function NewsList() {
     >
       {error && list.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
-      <Strip className="!justify-start">
+      <Strip className="justify-start!">
         <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
         {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${t.id}`}>{t.label}</a>)}
       </Strip>
@@ -215,8 +215,8 @@ function NewsList() {
                 </div>
                 <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
               </div>
-              <h3 className="line-clamp-2 break-words text-lg font-black leading-tight">{n.title}</h3>
-              {excerpt(n) && <p className="line-clamp-3 break-words text-sm font-semibold text-mute">{excerpt(n)}</p>}
+              <h3 className="line-clamp-2 wrap-break-word text-lg font-black leading-tight">{n.title}</h3>
+              {excerpt(n) && <p className="line-clamp-3 wrap-break-word text-sm font-semibold text-mute">{excerpt(n)}</p>}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>Изменить</a>

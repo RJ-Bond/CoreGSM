@@ -7,7 +7,7 @@ export function BannerSkeleton() {
 }
 
 export function TabBarSkeleton() {
-  return <div className="skeleton h-[44px] w-full max-w-[26rem] rounded-full sm:h-[38px]" />;
+  return <div className="skeleton h-[44px] w-full max-w-104 rounded-full sm:h-[38px]" />;
 }
 
 /** the same blocks as the loaded tab, so nothing jumps when the data arrives */
@@ -15,12 +15,12 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
   if (tab === 'players') {
     return (
       <div className={`${sk} p-5`}>
-        <div className="skeleton skel-line mb-4 !h-6 w-40" />
+        <div className="skeleton skel-line mb-4 h-6! w-40" />
         {Array.from({ length: 6 }, (_, i) => (
           <div key={i} className="flex items-center gap-3 py-2">
             <div className="skeleton h-9 w-9 rounded-xl" />
-            <div className="skeleton skel-line !h-4 flex-1" />
-            <div className="skeleton skel-line !h-4 w-16" />
+            <div className="skeleton skel-line h-4! flex-1" />
+            <div className="skeleton skel-line h-4! w-16" />
           </div>
         ))}
       </div>
