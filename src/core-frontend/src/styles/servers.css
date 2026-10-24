@@ -421,3 +421,6 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 8px 0 4px; font-size: 13px; font-weight: 650; color: rgb(var(--mute)); }
 .srv-foot a { color: inherit; }
 .srv-foot a:hover, .srv-foot a:focus-visible { color: rgb(var(--link)); text-decoration: underline; }
+/* the end dot and the peak caption of the banner chart stay inside the card */
+.pulse-chart { padding: 8px 10px 0 0; }
+.pulse-nums > div { border-left-color: rgb(var(--ink) / .14); }
