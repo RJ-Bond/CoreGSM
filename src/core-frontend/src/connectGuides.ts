@@ -20,7 +20,6 @@ export function splitAddress(address: string): { host: string; port: string } {
 }
 
 const SOURCE_CONSOLE = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
-const STEAM_LINK = new Set([...SOURCE_CONSOLE, 'rust', 'ase', 'dayz', 'unturned']);
 
 export function connectGuide(game: string, address: string): ConnectGuide {
   const addr = address.trim();

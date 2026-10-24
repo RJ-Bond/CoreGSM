@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f63b13792de5"
+COREGSM_BUILD="a7c82d86d9a1"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -59638,7 +59638,6 @@ export function splitAddress(address: string): { host: string; port: string } {
 }
 
 const SOURCE_CONSOLE = new Set(['counterstrike2', 'csgo', 'counterstrike16', 'css', 'teamfortress2', 'garrysmod', 'l4d2']);
-const STEAM_LINK = new Set([...SOURCE_CONSOLE, 'rust', 'ase', 'dayz', 'unturned']);
 
 export function connectGuide(game: string, address: string): ConnectGuide {
   const addr = address.trim();
