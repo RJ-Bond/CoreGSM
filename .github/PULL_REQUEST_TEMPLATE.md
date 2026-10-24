@@ -1,0 +1,8 @@
+## Что изменено
+
+
+## Как проверено
+
+- [ ] `npm test` и `npm run typecheck` в затронутых частях
+- [ ] если менялись `src/**`, `tools/**` или скрипт установки: `bash tools/build-installer.sh` и закоммичены `install.sh` и `version.txt`
+- [ ] новые тексты ошибок API добавлены в `errors.ts` и `locales/errors.en.ts`; новые строки интерфейса есть в `ru.ts` и `en.ts`

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Уязвимость
+    url: https://github.com/RJ-Bond/CoreGSM/security/advisories/new
+    about: О проблемах безопасности пишите приватно (см. SECURITY.md), не в публичный issue.
