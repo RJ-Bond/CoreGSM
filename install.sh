@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a234a89353bd"
+COREGSM_BUILD="afa4fc6d7df7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19163,13 +19163,13 @@ __COREGSM_EOF__
         "@fontsource-variable/golos-text": "^5.3.0",
         "@fontsource-variable/literata": "^5.3.0",
         "qrcode-generator": "^2.0.4",
-        "react": "^18.3.1",
-        "react-dom": "^18.3.1"
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1"
       },
       "devDependencies": {
         "@tailwindcss/postcss": "^4.3.3",
-        "@types/react": "^18.3.12",
-        "@types/react-dom": "^18.3.1",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.2",
         "autoprefixer": "^10.4.20",
         "postcss": "^8.5.31",
@@ -19858,32 +19858,24 @@ __COREGSM_EOF__
       "dev": true,
       "license": "MIT"
     },
-    "node_modules/@types/prop-types": {
-      "version": "15.7.15",
-      "resolved": "https://registry.npmjs.org/@types/prop-types/-/prop-types-15.7.15.tgz",
-      "integrity": "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==",
-      "dev": true,
-      "license": "MIT"
-    },
     "node_modules/@types/react": {
-      "version": "18.3.31",
-      "resolved": "https://registry.npmjs.org/@types/react/-/react-18.3.31.tgz",
-      "integrity": "sha512-vfEqpXTvwT91yhmwdfouStN2hSKwTvyRs8qpLfADyrq/kxDw0hZM7Wk9Ug1FELj8hIby+S/+kQCSRFF32nv2Qw==",
+      "version": "19.3.0",
+      "resolved": "https://registry.npmjs.org/@types/react/-/react-19.3.0.tgz",
+      "integrity": "sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==",
       "dev": true,
       "license": "MIT",
       "dependencies": {
-        "@types/prop-types": "*",
         "csstype": "^3.2.2"
       }
     },
     "node_modules/@types/react-dom": {
-      "version": "18.3.7",
-      "resolved": "https://registry.npmjs.org/@types/react-dom/-/react-dom-18.3.7.tgz",
-      "integrity": "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ==",
+      "version": "19.3.0",
+      "resolved": "https://registry.npmjs.org/@types/react-dom/-/react-dom-19.3.0.tgz",
+      "integrity": "sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==",
       "dev": true,
       "license": "MIT",
       "peerDependencies": {
-        "@types/react": "^18.0.0"
+        "@types/react": "^19.3.0"
       }
     },
     "node_modules/@vitejs/plugin-react": {
@@ -20228,12 +20220,6 @@ __COREGSM_EOF__
         "jiti": "lib/jiti-cli.mjs"
       }
     },
-    "node_modules/js-tokens": {
-      "version": "4.0.0",
-      "resolved": "https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz",
-      "integrity": "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==",
-      "license": "MIT"
-    },
     "node_modules/lightningcss": {
       "version": "1.32.0",
       "resolved": "https://registry.npmjs.org/lightningcss/-/lightningcss-1.32.0.tgz",
@@ -20507,18 +20493,6 @@ __COREGSM_EOF__
         "url": "https://opencollective.com/parcel"
       }
     },
-    "node_modules/loose-envify": {
-      "version": "1.4.0",
-      "resolved": "https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz",
-      "integrity": "sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==",
-      "license": "MIT",
-      "dependencies": {
-        "js-tokens": "^3.0.0 || ^4.0.0"
-      },
-      "bin": {
-        "loose-envify": "cli.js"
-      }
-    },
     "node_modules/magic-string": {
       "version": "0.30.21",
       "resolved": "https://registry.npmjs.org/magic-string/-/magic-string-0.30.21.tgz",
@@ -20635,28 +20609,24 @@ __COREGSM_EOF__
       "license": "MIT"
     },
     "node_modules/react": {
-      "version": "18.3.1",
-      "resolved": "https://registry.npmjs.org/react/-/react-18.3.1.tgz",
-      "integrity": "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ==",
+      "version": "19.3.1",
+      "resolved": "https://registry.npmjs.org/react/-/react-19.3.1.tgz",
+      "integrity": "sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==",
       "license": "MIT",
-      "dependencies": {
-        "loose-envify": "^1.1.0"
-      },
       "engines": {
         "node": ">=0.10.0"
       }
     },
     "node_modules/react-dom": {
-      "version": "18.3.1",
-      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-18.3.1.tgz",
-      "integrity": "sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw==",
+      "version": "19.3.1",
+      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.3.1.tgz",
+      "integrity": "sha512-Y0bARz53lhEC1NMCASs0/j+faB/zqt3R8hpvg1e8+61ZVJ4UL0UdC4cBbXfZMcIuhrfgeILTLe+ZeBCavQPtKQ==",
       "license": "MIT",
       "dependencies": {
-        "loose-envify": "^1.1.0",
-        "scheduler": "^0.23.2"
+        "scheduler": "^0.28.0"
       },
       "peerDependencies": {
-        "react": "^18.3.1"
+        "react": "^19.3.1"
       }
     },
     "node_modules/rolldown": {
@@ -20694,13 +20664,10 @@ __COREGSM_EOF__
       }
     },
     "node_modules/scheduler": {
-      "version": "0.23.2",
-      "resolved": "https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz",
-      "integrity": "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==",
-      "license": "MIT",
-      "dependencies": {
-        "loose-envify": "^1.1.0"
-      }
+      "version": "0.28.0",
+      "resolved": "https://registry.npmjs.org/scheduler/-/scheduler-0.28.0.tgz",
+      "integrity": "sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==",
+      "license": "MIT"
     },
     "node_modules/source-map-js": {
       "version": "1.2.2",
@@ -21299,13 +21266,13 @@ __COREGSM_EOF__
     "@fontsource-variable/golos-text": "^5.3.0",
     "@fontsource-variable/literata": "^5.3.0",
     "qrcode-generator": "^2.0.4",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.5.31",
@@ -45139,7 +45106,7 @@ export default function ConfigTransfer() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/DeliveryList.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { api, ApiError } from '../api';
 import {
   KIND_LABEL, STATUS_LABEL, attemptsText, canRetry, countdownText,
@@ -48712,7 +48679,7 @@ import {
 } from './NewsParts';
 
 /** a thin bar under the top edge that fills while the article is read */
-function ReadProgress({ target }: { target: React.RefObject<HTMLElement> }) {
+function ReadProgress({ target }: { target: React.RefObject<HTMLElement | null> }) {
   const [p, setP] = useState(0);
   useEffect(() => {
     let raf = 0;
@@ -55307,7 +55274,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/PulseStrip.tsx" << '__COREGSM_EOF__'
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
-import { useId } from 'react';
+import { useId, type JSX } from 'react';
 import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
@@ -55463,7 +55430,7 @@ const fmtUp = (v: number) => `${num(v)}%`;
 /** copies the address; the button shows a check mark for a moment */
 function CopyAddress({ text, className = '' }: { text: string; className?: string }) {
   const [done, setDone] = useState(false);
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -56260,7 +56227,7 @@ let scrollLocks = 0;
  * Focus management for a modal dialog: moves focus inside, keeps Tab in the dialog, closes on Escape (only the topmost dialog),
  * locks page scroll and gives focus back to the element that opened the dialog.
  */
-export function useDialogFocus(box: RefObject<HTMLElement>, onEscape: () => void, initialFocus?: () => HTMLElement | null | undefined) {
+export function useDialogFocus(box: RefObject<HTMLElement | null>, onEscape: () => void, initialFocus?: () => HTMLElement | null | undefined) {
   const esc = useRef(onEscape);
   esc.current = onEscape;
   const init = useRef(initialFocus);
@@ -62475,7 +62442,7 @@ export default function CardsPage() {
   const [forced, setForced] = useState(0);
   const [copied, setCopied] = useState<number | null>(null);
   const [error, setError] = useState('');
-  const copyTimer = useRef<number>();
+  const copyTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   const load = () =>
@@ -71903,7 +71870,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
 /** returns a class to put on an element and a function that plays the shake once */
 export function useShake(): [string, () => void] {
   const [on, setOn] = useState(false);
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const shake = () => {
     setOn(false);
@@ -72302,7 +72269,7 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
 export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
   const [done, setDone] = useState(false);
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = async () => {
     try {
