@@ -26,7 +26,19 @@ function writeOpen(v: boolean) {
   try { localStorage.setItem(FOLD_KEY, v ? '1' : '0'); } catch { /* private mode */ }
 }
 
-const PP_TONE = { ok: 'pp-tone-ok', warn: 'pp-tone-warn', bad: 'pp-tone-bad' } as const;
+/** five bars: a lower ping lights more of them */
+const pingBars = (ms: number) => (ms <= 30 ? 5 : ms <= 60 ? 4 : ms <= 100 ? 3 : ms <= 150 ? 2 : 1);
+
+function Chip({ k, icon, children }: { k: string; icon: ReactNode; children: ReactNode }) {
+  return (
+    <li className="pp-chip" title={k}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{icon}</svg>
+      <span className="sr-only">{k}: </span>
+      <span className="truncate">{children}</span>
+    </li>
+  );
+}
+
 
 function Item({ k, wide, children }: { k: string; wide?: boolean; children: ReactNode }) {
   return (
@@ -54,14 +66,26 @@ export default function Passport({ d }: { d: PassportData }) {
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
-      <dl className="pp pp-main">
-        <Item k="Игра"><span>{d.game}</span></Item>
+      <ul className="pp-ribbon">
+        <Chip k="Игра" icon={<path d="M6 12h4M8 10v4M15 11.5h.01M18 13.5h.01M7 7h10a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4h-1.5l-2-2h-3l-2 2H7a4 4 0 0 1-4-4v-2a4 4 0 0 1 4-4z" />}>{d.game}</Chip>
         {/* a fact the server does not report is left out instead of showing a dash */}
-        {d.map && d.online && <Item k="Карта"><span title={d.map}>{d.map}</span></Item>}
-        {d.version && <Item k="Версия"><span>{`v${d.version.replace(/^v/i, '')}`}</span></Item>}
-        {d.country && <Item k="Страна"><span>{`${d.flag} ${d.country}`.trim()}</span></Item>}
-        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}><AnimatedNumber value={d.ping} /> мс · {pt.label}</span></Item>}
-      </dl>
+        {d.map && d.online && <Chip k="Карта" icon={<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.500C5 14.800 12 21 12 21zM12 12a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5z" />}>{d.map}</Chip>}
+        {d.version && <Chip k="Версия" icon={<path d="M3 12V4h8l10 10-8 8L3 12zM7.500 8h.01" />}>{`v${d.version.replace(/^v/i, '')}`}</Chip>}
+        {d.country && (
+          <li className="pp-chip" title={`Страна: ${d.country}`}>
+            <span className="pp-flag" aria-hidden>{d.flag}</span>
+            <span className="sr-only">Страна: </span>
+            <span className="truncate">{d.country}</span>
+          </li>
+        )}
+        {pt && d.ping != null && (
+          <li className="pp-chip pp-ping" data-tone={pt.tone} title={`Пинг: ${pt.label}`}>
+            <span className="pp-bars" aria-hidden data-n={pingBars(d.ping)}>{[1, 2, 3, 4, 5].map((i) => <i key={i} className={i <= pingBars(d.ping as number) ? 'on' : ''} style={{ height: 4 + i * 2.600 }} />)}</span>
+            <span className="sr-only">Пинг: </span>
+            <span><AnimatedNumber value={d.ping} /> мс</span>
+          </li>
+        )}
+      </ul>
       <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
         {open ? t('srv.pp.less') : t('srv.pp.more')}
         <svg className="pp-more-chev" data-open={open} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9l6 6 6-6" /></svg>
@@ -78,12 +102,12 @@ export default function Passport({ d }: { d: PassportData }) {
             </button>
           </Item>
           <Item k="Режим"><span>{d.mode ?? '–'}</span></Item>
-          <Item k="Добавлен">
+          <Item k="На панели" wide>
             <span title={d.createdAt ? fmtDateTime(d.createdAt) : undefined}>
-              {d.createdAt ? new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : '–'}
+              {d.createdAt ? `с ${new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'дата неизвестна'}
+              {d.lastSeen ? ` · опрос ${ago(d.lastSeen)}` : ''}
             </span>
           </Item>
-          <Item k="Последний опрос"><span title={d.lastSeen ? fmtDateTime(d.lastSeen) : undefined}>{d.lastSeen ? ago(d.lastSeen) : '–'}</span></Item>
           {d.discord.length > 0 && (
             <Item k="Discord" wide>
               {d.discord.map((x, i) => (

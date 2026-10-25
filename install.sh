@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="20f3f6a51959"
+COREGSM_BUILD="f2ff12139bcd"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -56253,6 +56253,8 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
+const MARK_RU: Record<Ev['type'], string> = { up: 'возврат', down: 'сбой', peak: 'пик', maintenance: 'тех. работы' };
+
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   if (e.type === 'up') return 'Сервер вернулся';
   if (e.type === 'peak') return `Пик игроков: ${e.players ?? '–'}`;
@@ -56261,7 +56263,7 @@ function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   return stillDown ? 'Сервер упал · недоступен до сих пор' : 'Сервер упал';
 }
 
-export default function EventsFeed({ events, online, limit, moreHref }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string }) {
+export default function EventsFeed({ events, online, limit, moreHref, uptimePct, windowLabel }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string; uptimePct?: number | null; windowLabel?: string }) {
   useI18n();
   const [filter, setFilter] = useState<EventFilter>('all');
 
@@ -56282,8 +56284,17 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
   const shown = limit ? list.slice(0, limit) : list;
   const groups = groupByDay(shown).map((g) => ({ ...g, title: dayTitle(g.kind, g.ts) }));
 
+  const outages = events.filter((e) => e.type === 'down').length;
+  const downTotal = [...downFor.values()].reduce((a, b) => a + b, 0);
   return (
     <div>
+      {!limit && events.length > 0 && (
+        <div className="ev-sum">
+          <div className="ev-sum-c"><b>{outages}</b><span>{plural(outages, ['сбой', 'сбоя', 'сбоев'])}</span></div>
+          <div className="ev-sum-c"><b>{downTotal ? fmtDuration(downTotal) : '0'}</b><span>суммарный простой</span></div>
+          {uptimePct != null && <div className="ev-sum-c"><b>{Math.round(uptimePct * 10) / 10}%</b><span>доступность{windowLabel ? ` ${windowLabel}` : ''}</span></div>}
+        </div>
+      )}
       {!limit && (
         <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label={t('srv.ev.filter')}>
           {EVENT_FILTERS.map((k) => (
@@ -56315,7 +56326,10 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d={ic.path} /></svg>
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className={`ev-type ev-${e.type}`}>{MARK_RU[e.type]}</span>
+                          <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
+                        </span>
                         <time dateTime={new Date(e.ts).toISOString()} title={absTime(e.ts)} className="text-sm font-semibold text-mute">
                           {ago(e.ts)} · {clock(e.ts)}
                         </time>
@@ -56339,22 +56353,125 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/Hero.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber } from '../../ui';
-import { IconBell } from '../../ui';
+import { AnimatedNumber, Burst, IconBell, plural } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
-import { CapacityBar } from '../servers/serverUi';
 import NickPic from '../NickPic';
-import { nickHue, nickInitial } from './helpers';
+import { capLevel, capacityPct, slotsInfo } from '../servers/capacity';
+import { nickHue, nickInitial, NEWBIE_MS, VETERAN_MS, playedFor } from './helpers';
+import { useKnownNicks } from './useKnownNicks';
 
 export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
+export interface Who { name: string; since: number | null }
+
+/** the fill bar cut into slots (one per place, at most 40), the record place marked; the free-places pill under it */
+function SlotBar({ players, max, peak }: { players: number; max: number; peak: number | null }) {
+  const pct = capacityPct(players, max);
+  const level = capLevel(pct);
+  const segs = Math.max(1, Math.min(max, 40));
+  const filled = players > 0 ? Math.max(1, Math.round((players / max) * segs)) : 0;
+  const peakAt = peak != null && peak > players ? Math.min(segs - 1, Math.max(0, Math.round((peak / max) * segs) - 1)) : -1;
+  const info = slotsInfo(players, max);
+  const text = !info ? '' : info.kind === 'full' ? t('srv.slots.full') : info.kind === 'almost' ? t('srv.slots.almost') : t('srv.slots.free', { n: info.free });
+  return (
+    <div className="srv-hero-bar">
+      <div className="flex items-center gap-2.5">
+        <div
+          className={`srv-slots-bar ${level}`}
+          role="meter"
+          aria-label={t('srv.cap.label')}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          title={level === 'hot' ? t('srv.cap.nearFull', { pct }) : t('srv.cap.taken', { pct })}
+        >
+          {Array.from({ length: segs }, (_, i) => (
+            <i key={i} className={`${i < filled ? 'on' : ''} ${i === peakAt ? 'is-peak' : ''}`} style={{ ['--d' as string]: `${i * 16}ms` }} title={i === peakAt ? `Пик за период: ${peak}` : undefined} />
+          ))}
+        </div>
+        <span className={`srv-pct on-dark big ${level}`}>{pct}%</span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {info && <span className={`srv-slotpill ${info.kind}`}>{text}</span>}
+        {peak != null && peak > 0 && <span className="srv-peaknote">пик за период: {peak}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** players over the last two hours, a tiny line with the change in words */
+function HeroSpark({ values }: { values: number[] }) {
+  if (values.length < 4) return null;
+  const hi = Math.max(...values, 1);
+  const pts = values.map((y, i) => `${((i / (values.length - 1)) * 100).toFixed(1)},${(20 - (y / hi) * 18).toFixed(1)}`).join(' ');
+  const d = values[values.length - 1] - values[0];
+  return (
+    <div className="srv-hero-trend" title="Игроки за последние 2 часа">
+      <svg viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden>
+        <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <span>{d === 0 ? 'за 2 ч без изменений' : `за 2 ч ${d > 0 ? '+' : '−'}${Math.abs(d)}`}</span>
+    </div>
+  );
+}
+
+/** the players now on the server: a stack of avatars (a ring marks newcomers and veterans), a card on tap */
+function WhoStack({ who, players, href, now }: { who: Who[]; players: number; href?: string; now: number }) {
+  const [sel, setSel] = useState<string | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const known = useKnownNicks();
+  useEffect(() => {
+    if (!sel) return;
+    const off = (e: Event) => { if (!box.current?.contains(e.target as Node)) setSel(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setSel(null); };
+    document.addEventListener('pointerdown', off);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('pointerdown', off); document.removeEventListener('keydown', esc); };
+  }, [sel]);
+  const shown = who.slice(0, 6);
+  const rest = Math.max(0, players - shown.length);
+  const cur = sel ? who.find((w) => w.name === sel) : null;
+  const place = cur ? known.get(cur.name.toLowerCase()) : undefined;
+  return (
+    <div className="srv-who" ref={box}>
+      <div className="srv-who-row">
+        <span className="srv-who-stack">
+          {shown.map((w) => {
+            const dur = w.since != null ? now - w.since : null;
+            const ring = dur == null ? '' : dur < NEWBIE_MS ? 'ring-new' : dur >= VETERAN_MS ? 'ring-vet' : '';
+            return (
+              <button key={w.name} type="button" className={`srv-who-av ${ring}`} aria-expanded={sel === w.name} aria-label={w.name} onClick={() => setSel(sel === w.name ? null : w.name)}>
+                <NickPic name={w.name} size={32} className="rounded-full">
+                  <i className="avatar-hue" style={{ ['--h' as string]: nickHue(w.name) }}>{nickInitial(w.name)}</i>
+                </NickPic>
+              </button>
+            );
+          })}
+          {rest > 0 && <span className="srv-who-more-n">+{rest}</span>}
+        </span>
+        <a className="srv-who-link" href={href}>{plural(players, ['игрок', 'игрока', 'игроков'])} в игре →</a>
+      </div>
+      {cur && (
+        <div className="srv-who-pop" role="dialog" aria-label={cur.name}>
+          <b className="block truncate text-base">{cur.name}</b>
+          <span className="text-sm font-semibold opacity-85">{cur.since != null ? `в игре ${playedFor(cur.since, now)}` : 'в сети сейчас'}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-2">
+            {place != null && place > 0 && <span className="pl-place-chip" title="Место в рейтинге недели">#{place}</span>}
+            {place != null && <a className="srv-who-prof" href={`/player/${encodeURIComponent(cur.name)}`}>Профиль →</a>}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
- * The state of the server at a glance (inside the banner): a big player counter, the fill bar with «Свободно N мест»,
- * the maintenance chip, and, when the server is full, «Сообщить, когда будет место».
+ * The state of the server at a glance (inside the banner): a big player counter with the two-hour trend, the slot bar,
+ * the maintenance chip, who is playing, and, when the server is full, «Сообщить, когда будет место».
  */
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -56363,11 +56480,28 @@ export default function Hero({
   maintenance?: { name: string; until: number | null } | null;
   freeSlot: FreeSlotState;
   onNotify: () => void;
-  /** nicks of the players now on the server (a stack of avatars under the counter) */
-  who?: string[];
+  who?: Who[];
   whoHref?: string;
+  /** the highest online of the shown period (a mark on the bar; beating it while the page is open starts a small celebration) */
+  peak?: number | null;
+  /** players over the last two hours */
+  recent?: number[];
+  now: number;
 }) {
   useI18n();
+  // a new record while the page is open
+  const base = useRef<number | null>(null);
+  const [boom, setBoom] = useState(0);
+  useEffect(() => {
+    if (!online) return;
+    if (base.current == null) { base.current = Math.max(peak ?? 0, players); return; }
+    base.current = Math.max(base.current, peak ?? 0);
+    if (players > base.current) {
+      base.current = players;
+      if (players >= 3) setBoom((k) => k + 1);
+    }
+  }, [players, peak, online]);
+
   return (
     <section className="srv-hero relative" aria-label={t('srv.hero.label')}>
       <div className="srv-hero-top">
@@ -56375,7 +56509,7 @@ export default function Hero({
           {online ? (
             <>
               <span className="srv-hero-n"><AnimatedNumber value={players} delta /></span>
-              {max > 0 && <span className="srv-hero-max">/{max}</span>}
+              {max > 0 && <span className="srv-hero-max"><small>из</small> {max}</span>}
               <span className="srv-hero-unit">{t('srv.hero.players')}</span>
             </>
           ) : (
@@ -56384,26 +56518,18 @@ export default function Hero({
               <span className="srv-hero-unit">{hasStatus ? t('srv.hero.offline') : t('srv.hero.waiting')}</span>
             </>
           )}
+          {boom > 0 && (
+            <span key={boom} className="srv-record" role="status">
+              <Burst count={10} radius={30} />
+              🏆 Новый рекорд
+            </span>
+          )}
         </div>
         {maintenance && <MaintenanceChip m={maintenance} glass />}
       </div>
-      {online && max > 0 && <CapacityBar className="srv-hero-bar mt-2.5" players={players} max={max} color="#fff" onDark big />}
-      {online && who.length > 0 && (
-        <a className="srv-who" href={whoHref} aria-label={`${t('srv.hero.players')}: ${players}`}>
-          <span className="srv-who-stack" aria-hidden>
-            {who.slice(0, 7).map((n) => (
-              <b key={n} className="srv-who-av">
-                <NickPic name={n} size={28} className="rounded-full">
-                  <i className="avatar-hue" style={{ ['--h' as string]: nickHue(n) }}>{nickInitial(n)}</i>
-                </NickPic>
-              </b>
-            ))}
-          </span>
-          <span className="srv-who-more">
-            {who.slice(0, 3).join(', ')}{players > Math.min(3, who.length) ? ` и ещё ${players - Math.min(3, who.length)}` : ''}
-          </span>
-        </a>
-      )}
+      {online && <HeroSpark values={recent} />}
+      {online && max > 0 && <SlotBar players={players} max={max} peak={peak} />}
+      {online && who.length > 0 && <WhoStack who={who} players={players} href={whoHref} now={now} />}
       {freeSlot !== 'hidden' && (
         <div className="srv-hero-free mt-3">
           {freeSlot === 'subscribed' ? (
@@ -56886,7 +57012,7 @@ export default function HistoryChart({
               <g key={i}>
                 {seg.length === 1 && <circle cx={pts[0][0]} cy={pts[0][1]} r="3.5" style={{ fill: color }} />}
                 {seg.length > 1 && <path d={`${d} L${pts[pts.length - 1][0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z`} fill={`url(#${gid})`} />}
-                {seg.length > 1 && <path d={d} fill="none" style={{ stroke: color }} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
+                {seg.length > 1 && <path d={d} fill="none" className="hc-line" pathLength={1} style={{ stroke: color }} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
               </g>
             );
           })}
@@ -57259,7 +57385,19 @@ function writeOpen(v: boolean) {
   try { localStorage.setItem(FOLD_KEY, v ? '1' : '0'); } catch { /* private mode */ }
 }
 
-const PP_TONE = { ok: 'pp-tone-ok', warn: 'pp-tone-warn', bad: 'pp-tone-bad' } as const;
+/** five bars: a lower ping lights more of them */
+const pingBars = (ms: number) => (ms <= 30 ? 5 : ms <= 60 ? 4 : ms <= 100 ? 3 : ms <= 150 ? 2 : 1);
+
+function Chip({ k, icon, children }: { k: string; icon: ReactNode; children: ReactNode }) {
+  return (
+    <li className="pp-chip" title={k}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{icon}</svg>
+      <span className="sr-only">{k}: </span>
+      <span className="truncate">{children}</span>
+    </li>
+  );
+}
+
 
 function Item({ k, wide, children }: { k: string; wide?: boolean; children: ReactNode }) {
   return (
@@ -57287,14 +57425,26 @@ export default function Passport({ d }: { d: PassportData }) {
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
     <section className="relative mt-3.5" aria-label="Паспорт сервера">
-      <dl className="pp pp-main">
-        <Item k="Игра"><span>{d.game}</span></Item>
+      <ul className="pp-ribbon">
+        <Chip k="Игра" icon={<path d="M6 12h4M8 10v4M15 11.5h.01M18 13.5h.01M7 7h10a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4h-1.5l-2-2h-3l-2 2H7a4 4 0 0 1-4-4v-2a4 4 0 0 1 4-4z" />}>{d.game}</Chip>
         {/* a fact the server does not report is left out instead of showing a dash */}
-        {d.map && d.online && <Item k="Карта"><span title={d.map}>{d.map}</span></Item>}
-        {d.version && <Item k="Версия"><span>{`v${d.version.replace(/^v/i, '')}`}</span></Item>}
-        {d.country && <Item k="Страна"><span>{`${d.flag} ${d.country}`.trim()}</span></Item>}
-        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}><AnimatedNumber value={d.ping} /> мс · {pt.label}</span></Item>}
-      </dl>
+        {d.map && d.online && <Chip k="Карта" icon={<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.500C5 14.800 12 21 12 21zM12 12a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5z" />}>{d.map}</Chip>}
+        {d.version && <Chip k="Версия" icon={<path d="M3 12V4h8l10 10-8 8L3 12zM7.500 8h.01" />}>{`v${d.version.replace(/^v/i, '')}`}</Chip>}
+        {d.country && (
+          <li className="pp-chip" title={`Страна: ${d.country}`}>
+            <span className="pp-flag" aria-hidden>{d.flag}</span>
+            <span className="sr-only">Страна: </span>
+            <span className="truncate">{d.country}</span>
+          </li>
+        )}
+        {pt && d.ping != null && (
+          <li className="pp-chip pp-ping" data-tone={pt.tone} title={`Пинг: ${pt.label}`}>
+            <span className="pp-bars" aria-hidden data-n={pingBars(d.ping)}>{[1, 2, 3, 4, 5].map((i) => <i key={i} className={i <= pingBars(d.ping as number) ? 'on' : ''} style={{ height: 4 + i * 2.600 }} />)}</span>
+            <span className="sr-only">Пинг: </span>
+            <span><AnimatedNumber value={d.ping} /> мс</span>
+          </li>
+        )}
+      </ul>
       <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
         {open ? t('srv.pp.less') : t('srv.pp.more')}
         <svg className="pp-more-chev" data-open={open} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9l6 6 6-6" /></svg>
@@ -57311,12 +57461,12 @@ export default function Passport({ d }: { d: PassportData }) {
             </button>
           </Item>
           <Item k="Режим"><span>{d.mode ?? '–'}</span></Item>
-          <Item k="Добавлен">
+          <Item k="На панели" wide>
             <span title={d.createdAt ? fmtDateTime(d.createdAt) : undefined}>
-              {d.createdAt ? new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) : '–'}
+              {d.createdAt ? `с ${new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'дата неизвестна'}
+              {d.lastSeen ? ` · опрос ${ago(d.lastSeen)}` : ''}
             </span>
           </Item>
-          <Item k="Последний опрос"><span title={d.lastSeen ? fmtDateTime(d.lastSeen) : undefined}>{d.lastSeen ? ago(d.lastSeen) : '–'}</span></Item>
           {d.discord.length > 0 && (
             <Item k="Discord" wide>
               {d.discord.map((x, i) => (
@@ -57334,13 +57484,13 @@ export default function Passport({ d }: { d: PassportData }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/PlayersList.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
 import NickPic from '../NickPic';
 import { t, useI18n } from '../../i18n';
 import { fmtDateTime, plural, toast } from '../../ui';
-import { useCommunity } from '../servers/CommunityBento';
+import { useKnownNicks } from './useKnownNicks';
 import { sortPlayers, type PlayerSort } from './serverLogic';
 import { rankById } from '../../vrisingRanks';
 import { RankEmblem, rankName } from '../profile/VrRank';
@@ -57389,11 +57539,11 @@ function useLongPress(name: string) {
   };
 }
 
-function NickButton({ name, className, onClick, expanded, children }: { name: string; className: string; onClick: () => void; expanded?: boolean; children: ReactNode }) {
+function NickButton({ name, className, style, onClick, expanded, children }: { name: string; className: string; style?: CSSProperties; onClick: () => void; expanded?: boolean; children: ReactNode }) {
   const lp = useLongPress(name);
   const { swallow, ...handlers } = lp;
   return (
-    <button type="button" className={className} aria-expanded={expanded} {...handlers} onClick={() => { if (!swallow()) onClick(); }}>
+    <button type="button" className={className} style={style} aria-expanded={expanded} {...handlers} onClick={() => { if (!swallow()) onClick(); }}>
       {children}
     </button>
   );
@@ -57414,8 +57564,8 @@ const joinedAt = (ts: number, now: number) => {
  * Full mode: a count header, search, sort, and every row expands into a small card.
  */
 export default function PlayersList({
-  online, players, names, list, fresh, limit, moreHref,
-}: { online: boolean; players: number; names: string[]; list: PlayerNow[]; fresh: Set<string>; limit?: number; moreHref?: string }) {
+  online, players, names, list, fresh, limit, moreHref, onSubscribe,
+}: { online: boolean; players: number; names: string[]; list: PlayerNow[]; fresh: Set<string>; limit?: number; moreHref?: string; onSubscribe?: () => void }) {
   const now = useNow(30_000);
   useI18n();
   const stickyTop = useStickyTop();
@@ -57424,15 +57574,7 @@ export default function PlayersList({
   const [open, setOpen] = useState<string | null>(null);
   const [view, setView] = useState<'list' | 'tiles'>(readView);
   const setViewSaved = (v: 'list' | 'tiles') => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode */ } };
-  const community = useCommunity();
-  // nicks known to the community ratings: they get a place chip and a link to the profile
-  const known = useMemo(() => {
-    const m = new Map<string, number>();
-    if (!community) return m;
-    community.top.week.forEach((p, i) => m.set(p.name.toLowerCase(), i + 1));
-    for (const k of ['month', 'all', 'day'] as const) community.top[k].forEach((p) => { if (!m.has(p.name.toLowerCase())) m.set(p.name.toLowerCase(), 0); });
-    return m;
-  }, [community]);
+  const known = useKnownNicks();
 
   const total = list.length || names.length;
   const hiddenCount = Math.max(0, players - total);
@@ -57469,6 +57611,23 @@ export default function PlayersList({
 
   if (!online) {
     return <StateView kind="offline" bare compact title={t('srv.pl.offline')} text={t('srv.pl.offlineText')} />;
+  }
+  if (total === 0 && players === 0) {
+    return (
+      <div className="pl-empty">
+        <svg width="132" height="96" viewBox="0 0 132 96" fill="none" aria-hidden>
+          <circle cx="66" cy="54" r="34" fill="currentColor" opacity=".08" />
+          <path d="M84 40a24 24 0 1 1-26-26 18 18 0 0 0 26 26z" fill="currentColor" opacity=".35" />
+          <circle cx="30" cy="22" r="2.500" fill="currentColor" opacity=".5" />
+          <circle cx="104" cy="30" r="2" fill="currentColor" opacity=".4" />
+          <circle cx="98" cy="72" r="3" fill="currentColor" opacity=".3" />
+          <circle cx="24" cy="66" r="2" fill="currentColor" opacity=".4" />
+        </svg>
+        <p className="pl-empty-t">{t('srv.pl.none')}</p>
+        <p className="pl-empty-x">{t('srv.pl.noneText')}</p>
+        {onSubscribe && !limit && <button type="button" className="btn btn-soft btn-sm" onClick={onSubscribe}>Подписаться на уведомления</button>}
+      </div>
+    );
   }
   if (total === 0) {
     return (
@@ -57569,7 +57728,7 @@ export default function PlayersList({
                       {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok px-2! py-0! text-xs">новичок</span>}
                       {rank && (
                         <span className="inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
-                          <RankEmblem rank={rank} size={20} />
+                          <RankEmblem rank={rank} size={26} />
                           {rankName(rank)}
                         </span>
                       )}
@@ -57591,9 +57750,9 @@ export default function PlayersList({
             return (
               <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 {expandable ? (
-                  <NickButton name={p.name} className="pl-row" expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
+                  <NickButton name={p.name} className={`pl-row ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined} expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
                 ) : (
-                  <div className="flex min-w-0 items-center gap-3 rounded-xl py-2">{inner}</div>
+                  <div className={`flex min-w-0 items-center gap-3 rounded-xl py-2 ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined}>{inner}</div>
                 )}
                 {isOpen && (
                   <dl className="pl-more">
@@ -57682,6 +57841,33 @@ export function PlayerFacts({ peak, peakAt, avg, windowLabel, list }: { peak: nu
           <span className="pl-fact-h truncate" title={longest.name}>{longest.name}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+/** how long the players on the server have been in the game: a small bar chart in six steps */
+export function SessionSpread({ list, now }: { list: PlayerNow[]; now: number }) {
+  const withTime = list.filter((p) => p.since != null);
+  if (withTime.length < 3) return null;
+  const steps: [string, number][] = [['<10 м', 10], ['10–30 м', 30], ['30–60 м', 60], ['1–2 ч', 120], ['2–4 ч', 240], ['4 ч+', Infinity]];
+  const counts = steps.map(() => 0);
+  for (const p of withTime) {
+    const min = (now - (p.since as number)) / 60_000;
+    counts[steps.findIndex(([, hi]) => min < hi)] += 1;
+  }
+  const top = Math.max(...counts, 1);
+  return (
+    <div className="pl-spread" role="img" aria-label={`Время в игре: ${steps.map(([l], i) => `${l} ${counts[i]}`).join(', ')}`}>
+      <span className="pl-spread-k">Сколько уже играют</span>
+      <div className="pl-spread-bars">
+        {steps.map(([label], i) => (
+          <span key={label} className="pl-spread-c" title={`${label}: ${counts[i]}`}>
+            <i style={{ height: `${Math.max(counts[i] ? 12 : 3, Math.round((counts[i] / top) * 100))}%` }} data-on={counts[i] ? '1' : undefined} />
+            <small>{label}</small>
+            <b>{counts[i] || ''}</b>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -58857,6 +59043,23 @@ describe('downsample', () => {
     expect(d[9]).toBe(99);
   });
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/useKnownNicks.ts" << '__COREGSM_EOF__'
+import { useMemo } from 'react';
+import { useCommunity } from '../servers/CommunityBento';
+
+/** nicks of the community ratings: lower-case nick -> place in the week's top (0: in a rating, but not in the week's top) */
+export function useKnownNicks(): Map<string, number> {
+  const community = useCommunity();
+  return useMemo(() => {
+    const m = new Map<string, number>();
+    if (!community) return m;
+    community.top.week.forEach((p, i) => m.set(p.name.toLowerCase(), i + 1));
+    for (const k of ['month', 'all', 'day'] as const) community.top[k].forEach((p) => { if (!m.has(p.name.toLowerCase())) m.set(p.name.toLowerCase(), 0); });
+    return m;
+  }, [community]);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/AttentionStrip.tsx" << '__COREGSM_EOF__'
@@ -72207,7 +72410,7 @@ import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 import HistoryChart, { type Series } from '../components/server/HistoryChart';
-import PlayersList, { PlayerFacts } from '../components/server/PlayersList';
+import PlayersList, { PlayerFacts, SessionSpread } from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import SubscribeMenu from '../components/server/SubscribeMenu';
@@ -72266,9 +72469,9 @@ function LiveBadge({ at }: { at: number | null }) {
   useNow(5000);
   if (!at) return null;
   return (
-    <span className="chip-glass" title="Страница обновляется сама">
+    <span className="chip-glass srv-live" title={`Страница обновляется сама · обновлено ${ago(at)}`}>
       <span className="live-dot" aria-hidden />
-      обновлено {ago(at)}
+      <span className="srv-live-t">обновлено {ago(at)}</span>
     </span>
   );
 }
@@ -72279,8 +72482,8 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
   return (
     <button
       type="button"
-      onClick={() => { if (!on) setPops((n) => n + 1); onClick(); }}
-      className="btn-icon-glass shrink-0"
+      onClick={() => { if (!on) { setPops((n) => n + 1); try { navigator.vibrate?.(14); } catch { /* no vibration */ } } onClick(); }}
+      className={`btn-icon-glass shrink-0 ${on ? 'is-fav' : ''}`}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`${on ? 'Убрать из избранного' : 'В избранное'}: ${name}`}
       aria-pressed={on}
@@ -72357,6 +72560,7 @@ function readTabs(): Record<string, string> {
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const swipe = useTabSwipe(tab, id);
+  const nowTs = useNow(30_000);
   const { me, isAdmin } = useAuth();
   // editing a server: administrators and moderators given «Серверы»
   const canEdit = isAdmin || !!me?.perms?.includes('servers');
@@ -72460,6 +72664,35 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
 
+  // the cover moves slower than the page: a few pixels of parallax (not with reduced motion)
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce') return;
+    let raf = 0;
+    const tick = () => {
+      raf = 0;
+      document.querySelector<HTMLElement>('.srv-banner')?.style.setProperty('--par', String(Math.min(36, Math.max(0, Math.round(window.scrollY * 0.22)))));
+    };
+    const onScroll = () => { if (!raf) raf = window.requestAnimationFrame(tick); };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('scroll', onScroll); if (raf) window.cancelAnimationFrame(raf); };
+  }, []);
+
+  // once, on a touch screen: a hint that the tabs can be swiped
+  const [swipeHint, setSwipeHint] = useState(false);
+  useEffect(() => {
+    let seen = true;
+    try { seen = localStorage.getItem('coregsm_swipe_hint') === '1'; } catch { /* private mode */ }
+    if (seen || !window.matchMedia?.('(pointer: coarse)').matches) return;
+    const on = window.setTimeout(() => setSwipeHint(true), 1800);
+    const off = window.setTimeout(() => { setSwipeHint(false); try { localStorage.setItem('coregsm_swipe_hint', '1'); } catch { /* private mode */ } }, 7500);
+    return () => { window.clearTimeout(on); window.clearTimeout(off); };
+  }, []);
+  useEffect(() => {
+    if (!swipeHint) return;
+    setSwipeHint(false);
+    try { localStorage.setItem('coregsm_swipe_hint', '1'); } catch { /* private mode */ }
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // the tab is remembered per server: «/servers/5» reopens the tab the user left it on (the overview is a choice too)
   const tabSeen = useRef(false);
   useEffect(() => {
@@ -72515,6 +72748,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
   const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
   const chartLoading = data.hours !== hours;
+  const recent = points.filter((p) => p.online && p.ts >= nowTs - 2 * 3600_000).map((p) => p.players);
+  const hourNow = new Date(nowTs).getHours();
+  const tod = hourNow >= 5 && hourNow < 10 ? 'morning' : hourNow >= 17 && hourNow < 21 ? 'dusk' : hourNow >= 21 || hourNow < 5 ? 'night' : 'day';
+  const coverBg = coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game });
 
   const discordLinks = (data.discord ?? []).map((b) => {
     const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
@@ -72603,13 +72840,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
   const playerCountBadge = s.online ? <span className="ml-2 inline-block shrink-0 whitespace-nowrap rounded-full bg-soft px-2.5 py-0.5 text-center text-xs font-extrabold tabular-nums leading-5 text-link">{s.players}</span> : null;
 
+  const canSubNow = !!me && !subs.unavailable && subs.list !== null;
   let panel: ReactNode;
   if (tab === 'players') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
         <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
         {s.online && <PlayerFacts peak={stats.peakPlayers ?? null} peakAt={stats.peakAt ?? null} avg={stats.avgPlayers ?? null} windowLabel={windowLabel} list={data.playersNow ?? []} />}
-        <PlayersList {...playersProps} />
+        {s.online && <SessionSpread list={data.playersNow ?? []} now={nowTs} />}
+        <PlayersList {...playersProps} onSubscribe={canSubNow ? () => openSub(null) : undefined} />
       </section>
     );
   } else if (tab === 'history') {
@@ -72629,7 +72868,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
         <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
-        <EventsFeed events={events} online={s.online} />
+        <EventsFeed events={events} online={s.online} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel} />
       </section>
     );
   } else if (tab === 'connect') {
@@ -72689,12 +72928,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <article
         className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
-        style={{ ...emblemStyle(s.coverUrl, s.game).style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
+        style={emblemStyle(s.coverUrl, s.game).style}
         {...depth}
       >
         {emblemStyle(s.coverUrl, s.game).className && <span aria-hidden className="emblem-layer" />}
         {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
         <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
+          <span className="srv-cover" style={{ background: coverBg }} />
+          <span className="srv-tod" data-tod={tod} />
           <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
           <span className="depth-l2 absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
         </span>
@@ -72704,7 +72945,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
         {/* title row: name, status, game */}
         <div className="relative flex items-start gap-3.5 sm:gap-4">
-          <GameAvatar game={s.game} size={64} glass vtId={s.id} />
+          <span className="srv-ico"><GameAvatar game={s.game} size={72} glass vtId={s.id} /></span>
           <div className="min-w-0 flex-1">
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -72725,8 +72966,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           maintenance={s.maintenance}
           freeSlot={freeSlot}
           onNotify={() => openSub('free_slot')}
-          who={(data.playersNow?.length ? data.playersNow.map((p) => p.name) : s.playerNames).filter(Boolean)}
+          who={(data.playersNow?.length ? data.playersNow.map((p) => ({ name: p.name, since: p.since as number | null })) : s.playerNames.map((n) => ({ name: n, since: null }))).filter((w) => w.name)}
           whoHref={tabHref(id, 'players')}
+          peak={stats.peakPlayers ?? null}
+          recent={recent}
+          now={nowTs}
         />
 
         <Passport
@@ -72754,18 +72998,23 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
             (and «Подписаться») floats above the bottom navigation. */}
         <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
-          <a className="btn-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>{connectLabel}</a>
-          <CopyButton text={s.address} label={s.address} tone="glass" className="srv-addr-btn" />
-          {/* hidden on phones by a wrapper: the glass button's own CSS would win over a hidden utility on the button itself */}
-          {canSub && (
-            <span className="contents max-sm:hidden">
-              <button type="button" className="btn-glass" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
-                <IconBell size={18} />
-                {subLabel}
-              </button>
-            </span>
-          )}
-          <MoreMenu items={moreItems} />
+          <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
+            <span>{connectLabel}</span>
+            <small className="srv-cta-addr">{s.address}</small>
+          </a>
+          <CopyButton text={s.address} label={t('srv.cn.copy')} tone="glass" className="srv-addr-btn" />
+          <div className="srv-act-group">
+            {/* hidden on phones by a wrapper: the glass button's own CSS would win over a hidden utility on the button itself */}
+            {canSub && (
+              <span className="contents max-sm:hidden">
+                <button type="button" className="btn-glass" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+                  <IconBell size={18} />
+                  {subLabel}
+                </button>
+              </span>
+            )}
+            <MoreMenu items={moreItems} />
+          </div>
         </div>
       </article>
       <ErrorLine text={error} />
@@ -72783,6 +73032,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           </span>
         )}
       />
+
+      {swipeHint && <p className="srv-swipe-hint" role="status">← Смахните вбок, чтобы переключить вкладку →</p>}
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
@@ -77510,6 +77761,153 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
   .pl-tile:hover { transform: none; }
 }
 html[data-motion='reduce'] :is(.tab-slide-r, .tab-slide-l) { animation: none; }
+
+/* ======================================================================
+   server card, pass 3: cover layer, slots, who is playing, ribbon passport, action group, players and events
+   ====================================================================== */
+
+/* the cover is a layer of its own: it moves a little slower than the page; the time of day tints it */
+.srv-cover { position: absolute; inset: -40px 0; transform: translate3d(0, calc(var(--par, 0) * 1px), 0); will-change: transform; }
+.srv-tod { position: absolute; inset: 0; transition: background .8s ease; }
+.srv-tod[data-tod='morning'] { background: linear-gradient(180deg, rgb(255 224 150 / .16), transparent 65%); }
+.srv-tod[data-tod='dusk'] { background: linear-gradient(180deg, rgb(255 140 70 / .2), rgb(190 60 120 / .06) 70%, transparent); }
+.srv-tod[data-tod='night'] { background: linear-gradient(180deg, rgb(30 50 140 / .3), rgb(10 14 50 / .12) 75%, transparent); }
+
+/* chips of the title row stay on one line on a phone: «обновлено» shrinks to its dot */
+@media (max-width: 639px) {
+  .srv-live { padding-inline: 9px; }
+  .srv-live-t { display: none; }
+}
+
+/* the game icon: a glow in the page's accent that breathes while the server is online */
+.srv-ico { position: relative; flex: none; isolation: isolate; border-radius: 22px; }
+.srv-ico::before { content: ''; position: absolute; inset: -12px; z-index: -1; border-radius: 40%; background: radial-gradient(closest-side, var(--srv-acc, rgb(var(--brand))), transparent); opacity: .0; filter: blur(12px); }
+.srv-ok .srv-ico::before { opacity: .5; animation: srv-breathe 3.8s ease-in-out infinite; }
+@keyframes srv-breathe { 0%, 100% { opacity: .32; transform: scale(.94); } 50% { opacity: .62; transform: scale(1.06); } }
+
+/* the favourite star: lit gold when it is on */
+.btn-icon-glass.is-fav { color: #fde047; background: rgb(250 204 21 / .26); box-shadow: inset 0 0 0 1px rgb(250 204 21 / .55), 0 0 18px rgb(250 204 21 / .32); }
+
+/* the hero: no dark box, the cover shows through and fades to dark under the numbers */
+.srv-hero { background: linear-gradient(180deg, transparent, rgb(8 10 20 / .4)); box-shadow: none; padding: 16px 4px 4px; }
+.srv-hero-n { text-shadow: 0 2px 24px rgb(0 0 0 / .45); }
+.srv-hero-max small { font-size: .55em; font-weight: 600; opacity: .8; }
+.srv-record { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; padding: 3px 12px; border-radius: 99px; font-size: 13px; font-weight: 800; color: #1a1300; background: linear-gradient(135deg, #fde047, #f59e0b); animation: srv-record 6s ease both; }
+@keyframes srv-record { 0% { transform: scale(.6); opacity: 0; } 8% { transform: scale(1.08); opacity: 1; } 14% { transform: none; } 88% { opacity: 1; } 100% { opacity: 0; } }
+.srv-hero-trend { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; font-weight: 650; color: rgb(255 255 255 / .85); }
+.srv-hero-trend > svg { width: 84px; height: 20px; color: #fff; opacity: .9; }
+
+/* in the wide two-column hero the new rows take the whole width */
+.srv-hero > :is(.srv-hero-trend, .srv-who) { grid-column: 1 / -1; }
+
+/* slots */
+.srv-hero-bar { margin-top: 12px; }
+.srv-slots-bar { display: flex; flex: 1; min-width: 0; gap: 2px; height: 16px; }
+.srv-slots-bar > i { position: relative; flex: 1 1 0; min-width: 0; border-radius: 3px; background: rgb(255 255 255 / .2); transition: background-color .3s ease; }
+.srv-slots-bar > i.on { background: #fff; animation: slot-on .5s ease both; animation-delay: var(--d, 0ms); }
+.srv-slots-bar.warm > i.on { background: #fbbf24; }
+.srv-slots-bar.hot > i.on { background: #f87171; }
+.srv-slots-bar > i.is-peak { background: rgb(255 255 255 / .2); box-shadow: inset 0 -3px 0 #fde047; }
+.srv-slots-bar > i.is-peak::after { content: ''; position: absolute; left: 50%; top: -6px; width: 0; height: 0; margin-left: -4px; border: 4px solid transparent; border-top-color: #fde047; }
+@keyframes slot-on { from { transform: scaleY(.35); opacity: 0; } to { transform: none; opacity: 1; } }
+.srv-slotpill { display: inline-flex; align-items: center; padding: 3px 12px; border-radius: 99px; font-size: 13.5px; font-weight: 750; background: rgb(74 222 128 / .22); color: #bbf7d0; box-shadow: inset 0 0 0 1px rgb(74 222 128 / .45); }
+.srv-slotpill.almost { background: rgb(251 191 36 / .22); color: #fde68a; box-shadow: inset 0 0 0 1px rgb(251 191 36 / .5); }
+.srv-slotpill.full { background: rgb(248 113 113 / .24); color: #fecaca; box-shadow: inset 0 0 0 1px rgb(248 113 113 / .55); }
+.srv-peaknote { font-size: 12.5px; font-weight: 650; color: rgb(255 255 255 / .8); }
+
+/* who is playing: replaces the old plain link */
+.srv-who { position: relative; margin-top: 12px; }
+.srv-who-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.srv-who-stack { display: flex; align-items: center; flex: none; }
+.srv-who-av { display: block; box-sizing: border-box; width: 34px; height: 34px; margin-left: -8px; padding: 0; overflow: hidden; border-radius: 50%; border: 2px solid rgb(30 30 40 / .9); cursor: pointer; transition: transform .15s ease; }
+.srv-who-av:first-child { margin-left: 0; }
+.srv-who-av:hover, .srv-who-av[aria-expanded='true'] { transform: translateY(-3px); z-index: 2; }
+.srv-who-av.ring-new { border-color: #4ade80; }
+.srv-who-av.ring-vet { border-color: #fbbf24; }
+.srv-who-av > i { display: grid; place-items: center; width: 100%; height: 100%; font-style: normal; font-size: 13px; font-weight: 800; }
+.srv-who-av > img { width: 100% !important; height: 100% !important; }
+.srv-who-more-n { margin-left: 6px; font-size: 13.5px; font-weight: 800; color: #fff; }
+.srv-who-link { font-size: 13.5px; font-weight: 700; color: rgb(255 255 255 / .92); text-decoration: none; }
+.srv-who-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.srv-who-pop { position: absolute; left: 0; top: calc(100% + 8px); z-index: 12; display: flex; min-width: 190px; max-width: min(88vw, 280px); flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--r-lg); background: rgb(14 16 28 / .96); color: #fff; box-shadow: 0 0 0 1px rgb(255 255 255 / .16), 0 18px 40px -12px rgb(0 0 0 / .7); animation: srv-pop .15s ease both; }
+@keyframes srv-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.srv-who-prof { font-size: 13.5px; font-weight: 800; color: #c4b5fd; text-decoration: none; }
+.srv-who-prof:hover { text-decoration: underline; }
+.srv-who-pop .pl-place-chip { color: #fff; }
+
+/* passport: a ribbon of icons and values */
+.pp-ribbon { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.pp-chip { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 99px; font-size: 14px; font-weight: 650; color: #fff; background: rgb(8 10 20 / .34); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16); }
+.pp-chip > svg { flex: none; opacity: .85; }
+.pp-flag { font-size: 20px; line-height: 1; filter: drop-shadow(0 1px 3px rgb(0 0 0 / .5)); }
+.pp-ping[data-tone='ok'] { --tone: #4ade80; }
+.pp-ping[data-tone='warn'] { --tone: #facc15; }
+.pp-ping[data-tone='bad'] { --tone: #f87171; }
+.pp-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 17px; }
+.pp-bars > i { width: 3px; border-radius: 1px; background: rgb(255 255 255 / .28); }
+.pp-bars > i.on { background: var(--tone); box-shadow: 0 0 6px var(--tone); }
+
+/* actions: «Подписаться» and «Ещё» as one capsule; the main button shows the address */
+.srv-act-group { display: inline-flex; align-items: stretch; border-radius: var(--r-pill); background: rgb(255 255 255 / .12); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .28); }
+.srv-act-group :is(.btn-glass, .srv-more > button) { --b-bg: transparent; --b-bg-h: rgb(255 255 255 / .18); --b-bg-a: rgb(255 255 255 / .12); --b-ring: inset 0 0 0 0 transparent; }
+.srv-act-group .srv-more { border-left: 1px solid rgb(255 255 255 / .22); }
+.srv-act-group > :first-child:not(.srv-more) .btn-glass, .srv-act-group > .srv-more:first-child > button { border-radius: var(--r-pill) 0 0 var(--r-pill); }
+.srv-act-group > .srv-more > button { border-radius: 0 var(--r-pill) var(--r-pill) 0; }
+.srv-act-group > .srv-more:first-child { border-left: 0; }
+.srv-act-group > .srv-more:first-child > button { border-radius: var(--r-pill); }
+.srv-banner .srv-cta { position: relative; overflow: hidden; flex-direction: column; gap: 0; padding-block: .4rem; line-height: 1.15; --b-img: linear-gradient(135deg, #fff 0%, color-mix(in srgb, var(--srv-acc, #fff) 28%, #fff) 100%); }
+.srv-cta-addr { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; opacity: .7; }
+.srv-banner .srv-cta::after { content: ''; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 35%, rgb(255 255 255 / .8) 50%, transparent 65%); transform: translateX(-130%); transition: transform .7s ease; pointer-events: none; }
+.srv-banner .srv-cta:hover::after { transform: translateX(130%); }
+
+/* a one-off hint on touch screens */
+.srv-swipe-hint { margin: -4px 0 0; text-align: center; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); animation: srv-hint 5.5s ease both; }
+@keyframes srv-hint { 0% { opacity: 0; transform: translateY(-4px); } 12% { opacity: 1; transform: none; } 85% { opacity: 1; } 100% { opacity: 0; } }
+
+/* tab icons pop when their tab opens */
+.srv-tabs > .seg-item.on .srv-tab-i { animation: tab-i-pop .45s cubic-bezier(.2, .9, .3, 1.4) both; }
+@keyframes tab-i-pop { 0% { transform: scale(.6) rotate(-14deg); } 100% { transform: none; } }
+
+/* the page keeps a free strip at the bottom: the last block is never hidden under the phone navigation */
+@media (max-width: 639px) { .srv-page { padding-bottom: 5.5rem; } }
+
+/* players: a rank colours the left edge of the row; session spread; empty state */
+.pl-row.has-rank, .has-rank { box-shadow: inset 3px 0 0 var(--rk); border-top-left-radius: 4px; border-bottom-left-radius: 4px; padding-left: 10px; }
+.pl-spread { margin-bottom: 14px; padding: 10px 12px 8px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.pl-spread-k { font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); }
+.pl-spread-bars { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+.pl-spread-c { position: relative; display: flex; height: 76px; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; }
+.pl-spread-c > i { display: block; width: 100%; max-width: 34px; border-radius: 5px 5px 2px 2px; background: rgb(var(--ink) / .1); transform-origin: bottom; animation: bar-up .5s ease both; }
+.pl-spread-c > i[data-on] { background: var(--srv-acc, rgb(var(--brand))); }
+.pl-spread-c > b { position: absolute; top: 0; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.pl-spread-c > small { font-size: 10.5px; font-weight: 650; color: rgb(var(--mute)); white-space: nowrap; }
+@keyframes bar-up { from { transform: scaleY(0); } to { transform: none; } }
+.pl-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 8px 8px; text-align: center; color: rgb(var(--mute)); }
+.pl-empty > svg { color: var(--srv-acc, rgb(var(--brand))); }
+.pl-empty-t { font-size: 17px; font-weight: 800; color: rgb(var(--ink)); }
+.pl-empty-x { max-width: 34ch; font-weight: 600; }
+
+/* events: summary of the period and a coloured type before each title */
+.ev-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.ev-sum-c { display: flex; flex-direction: column; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.ev-sum-c > b { font-size: 21px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.ev-sum-c > span { font-size: 12.5px; font-weight: 650; color: rgb(var(--mute)); }
+.ev-type { padding: 0 8px; border-radius: 99px; font-size: 11.5px; font-weight: 800; line-height: 19px; letter-spacing: .02em; text-transform: uppercase; }
+.ev-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+.ev-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.ev-peak, .ev-maintenance { background: rgb(var(--soft)); color: rgb(var(--link)); }
+
+/* the chart line draws itself once */
+.hc-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: hc-draw 1.1s ease both; }
+@keyframes hc-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .srv-ok .srv-ico::before, .srv-record, .srv-swipe-hint, .srv-slots-bar > i.on, .pl-spread-c > i, .hc-line,
+  .srv-tabs > .seg-item.on .srv-tab-i { animation: none; }
+  .srv-cover { transform: none; }
+  .srv-banner .srv-cta::after { display: none; }
+}
+html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.on, .pl-spread-c > i, .hc-line) { animation: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
