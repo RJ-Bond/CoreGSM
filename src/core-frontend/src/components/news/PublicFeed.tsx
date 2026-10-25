@@ -138,7 +138,7 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
-            {isFresh(c.at, seen) && <span className="nw-new">Новое</span>}
+            {isFresh(c.at, seen) && <span className="nw-new">{t('nw.new')}</span>}
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
             {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}

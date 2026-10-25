@@ -1,5 +1,6 @@
 import { createElement, useEffect, useState } from 'react';
 import { api, type PublicNews } from '../../api';
+import { t } from '../../i18n';
 import { unreadCount } from './newsLogic';
 
 const KEY = 'coregsm_news_seen';
@@ -44,5 +45,5 @@ export function useNewsUnread(enabled: boolean): number {
 export function NewsUnreadDot({ className = '' }: { className?: string }) {
   const n = useNewsUnread(true);
   if (n <= 0) return null;
-  return createElement('span', { className: `nw-unread ${className}`, title: `Непрочитанных новостей: ${n}`, role: 'img', 'aria-label': `Непрочитанных новостей: ${n}` }, n > 9 ? '9+' : String(n));
+  return createElement('span', { className: `nw-unread ${className}`, title: t('nw.unread', { n }), role: 'img', 'aria-label': t('nw.unread', { n }) }, n > 9 ? '9+' : String(n));
 }
