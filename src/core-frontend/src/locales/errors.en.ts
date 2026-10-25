@@ -123,6 +123,11 @@ const errorsEn: Record<string, string> = {
   check_filter: 'Check the filter parameters',
 
   // ---- maintenance windows ----
+  review_not_found: 'Review not found',
+  review_own_flag: 'You cannot flag your own review',
+  review_reply_long: 'The reply is limited to 600 characters',
+  notice_long: 'The notice is limited to 500 characters',
+  sub_test_wait: 'Wait a few seconds before the next check',
   maintenance_not_found: 'Maintenance window not found',
   bad_date: 'Invalid date',
   title_required: 'Enter a title',
