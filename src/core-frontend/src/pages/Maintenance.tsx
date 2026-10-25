@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import RestartPlans from '../components/RestartPlans';
+import WipeScenarios from '../components/WipeScenarios';
 import { StateView } from '../components/StateView';
 import {
   REPEAT_LABEL, fromLocalInput, presetNow, presetTonight, rangeLabel, toLocalInput, untilLabel, validateWindow, windowState,
@@ -124,6 +125,7 @@ export default function MaintenancePage() {
       )}
 
       <RestartPlans servers={servers} />
+      <WipeScenarios servers={servers} />
 
       {draft && <WindowModal draft={draft} servers={servers} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); void load(); }} />}
     </AdminPage>
