@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
-import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
+import { AdminPage, Burst, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -215,7 +215,7 @@ export default function AdminStart() {
         <>
           {allDone ? (
             <div className="tile fade-in flex flex-wrap items-center gap-4 p-5" role="status">
-              <span className="pop grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-okbg text-ok"><Check size={30} /></span>
+              <span className="pop relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-okbg text-ok"><Check size={30} /><Burst count={12} radius={38} /></span>
               <div className="min-w-0 flex-1 basis-60">
                 <h2 className="text-xl font-extrabold leading-tight">{t('start.allDone')}</h2>
                 <p className="font-semibold text-mute">{t('start.allDoneText')}</p>
