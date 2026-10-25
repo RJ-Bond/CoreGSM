@@ -16,6 +16,7 @@
  */
 import express from 'express';
 import { viewer } from '../auth.js';
+import { avatarFor } from '../avatars.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../localTime.js';
 import { playAchievements, vrRankIdFor } from '../profile.js';
@@ -210,4 +211,26 @@ router.get('/api/players/:name', viewer, (req, res) => {
   const card = playerCard(nick);
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
   res.json(card);
+});
+
+/**
+ * GET /api/avatars-by-nick?n=<nick>&n=<nick>...   pictures of the panel accounts that linked these game nicks
+ * (the uploaded picture, else the Discord one). {lower-case nick: url}; nicks without a picture are left out.
+ */
+router.get('/api/avatars-by-nick', viewer, (req, res) => {
+  const raw = req.query.n;
+  const nicks = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((x) => String(x).slice(0, 64)).filter(Boolean).slice(0, 100);
+  const out: Record<string, string> = {};
+  if (nicks.length) {
+    const rows = db
+      .prepare("SELECT p.game_nick, u.id, u.discord_id, u.discord_avatar FROM user_player p JOIN users u ON u.id = p.user_id WHERE p.game_nick <> '' AND u.status = 'active'")
+      .all() as { game_nick: string; id: number; discord_id: string | null; discord_avatar: string | null }[];
+    const by = new Map(rows.map((r) => [r.game_nick.trim().toLowerCase(), r]));
+    for (const n of nicks) {
+      const r = by.get(n.trim().toLowerCase());
+      const url = r ? avatarFor(r) : null;
+      if (url) out[n.toLowerCase()] = url;
+    }
+  }
+  res.set('Cache-Control', 'private, max-age=60').json(out);
 });

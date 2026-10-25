@@ -311,8 +311,10 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .srv-who { display: inline-flex; max-width: 100%; align-items: center; gap: 10px; margin-top: 12px; padding: 4px 14px 4px 4px; border-radius: var(--r-pill); background: rgb(0 0 0 / .22); color: #fff; text-decoration: none; transition: background-color .15s ease; }
 .srv-who:hover { background: rgb(0 0 0 / .34); }
 .srv-who-stack { display: flex; flex: none; }
-.srv-who-stack > i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: -8px; border-radius: 50%; border: 2px solid rgb(30 30 40 / .9); font-style: normal; font-size: 12px; font-weight: 800; }
-.srv-who-stack > i:first-child { margin-left: 0; }
+.srv-who-stack > b { display: block; box-sizing: border-box; width: 28px; height: 28px; margin-left: -8px; overflow: hidden; border-radius: 50%; border: 2px solid rgb(30 30 40 / .9); }
+.srv-who-stack > b:first-child { margin-left: 0; }
+.srv-who-stack > b > i { display: grid; place-items: center; width: 100%; height: 100%; font-style: normal; font-size: 12px; font-weight: 800; }
+.srv-who-stack > b > img { width: 100% !important; height: 100% !important; }
 .srv-who-more { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; }
 
 /* metrics: sparkline and a trend arrow */

@@ -2,6 +2,7 @@
  * The top of the main page: the community at a glance. Players online now against the 30-day record (a new record
  * gets a small celebration), when the community usually plays, and the latest arrivals.
  */
+import NickPic from '../NickPic';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll, num } from '../../ui';
@@ -46,7 +47,7 @@ export function PlayerAvatar({ name, size = 30, online = false }: { name: string
   for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return (
     <span className="cm-ava" style={{ width: size, height: size, fontSize: size * 0.46, ['--h' as string]: h }} aria-hidden>
-      {name.slice(0, 1).toUpperCase()}
+      <NickPic name={name} size={size} className="cm-ava-img">{name.slice(0, 1).toUpperCase()}</NickPic>
       {online && <i className="cm-ava-on" />}
     </span>
   );
