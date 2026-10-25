@@ -7,13 +7,17 @@ import { api } from '../../api';
 import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll, num } from '../../ui';
 import '../../styles/community.css';
 
+export interface TopPlayer { name: string; hours: number; servers: number; online: boolean; prev: number | null }
+
 export interface Community {
   now: { players: number; online: number; servers: number };
   record: { players: number; at: number } | null;
   heatmap: { cells: (number | null)[][]; busiest: { dow: number; hour: number; avg: number } | null };
-  players: { day: number; week: number; month: number; newWeek: number };
+  players: { day: number; week: number; month: number; newWeek: number; prev: { day: number; week: number; month: number; newWeek: number } };
+  /** players on all servers over the last 24 h, 30-minute steps */
+  series: { ts: number; players: number }[];
   feed: { name: string; serverId: number; serverName: string; game: string; at: number; online: boolean; newcomer: boolean }[];
-  top: { week: { name: string; hours: number; servers: number }[]; month: { name: string; hours: number; servers: number }[] };
+  top: Record<'day' | 'week' | 'month' | 'all', TopPlayer[]>;
   servers: { id: number; name: string; game: string; online: boolean; players: number; maxPlayers: number }[];
 }
 
@@ -21,14 +25,35 @@ export const DOW_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'
 const DOW_IN = ['по понедельникам', 'по вторникам', 'по средам', 'по четвергам', 'по пятницам', 'по субботам', 'по воскресеньям'];
 const RECORD_KEY = 'coregsm_record_seen';
 
-export function useCommunity(): Community | null {
+/** the community data with the time of the last answer and a way to ask again at once */
+export function useCommunityLive(): { data: Community | null; at: number; busy: boolean; refresh: () => void } {
   const [data, setData] = useState<Community | null>(null);
-  usePoll(() => api<Community>('/community').then(setData).catch(() => undefined), 30_000);
-  return data;
+  const [at, setAt] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const load = () => api<Community>('/community').then((d) => { setData(d); setAt(Date.now()); }).catch(() => undefined);
+  usePoll(load, 30_000);
+  const refresh = () => { setBusy(true); void load().finally(() => setTimeout(() => setBusy(false), 400)); };
+  return { data, at, busy, refresh };
+}
+
+export function useCommunity(): Community | null {
+  return useCommunityLive().data;
+}
+
+/** a round «avatar» of a player: the first letter on a colour taken from the nick (the panel has no pictures of game nicks) */
+export function PlayerAvatar({ name, size = 30, online = false }: { name: string; size?: number; online?: boolean }) {
+  let h = 0;
+  for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return (
+    <span className="cm-ava" style={{ width: size, height: size, fontSize: size * 0.46, ['--h' as string]: h }} aria-hidden>
+      {name.slice(0, 1).toUpperCase()}
+      {online && <i className="cm-ava-on" />}
+    </span>
+  );
 }
 
 /** weekday x hour of the whole community, small */
-export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; big?: boolean }) {
+export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[][]; big?: boolean; now?: { dow: number; hour: number } }) {
   const max = Math.max(1, ...cells.flat().map((v) => v ?? 0));
   return (
     <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label="Когда играет сообщество: по дням недели и часам">
@@ -36,7 +61,7 @@ export function MiniHeat({ cells, big = false }: { cells: (number | null)[][]; b
         <div key={d} className="contents">
           <span className="cm-heat-d">{DOW_SHORT[d]}</span>
           {row.map((v, h) => (
-            <span key={h} className="cm-heat-c" style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${num(v)}`} />
+            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${num(v)}`} />
           ))}
         </div>
       ))}
@@ -62,7 +87,10 @@ export function busiestText(b: Community['heatmap']['busiest']) {
 export function FeedItem({ f }: { f: Community['feed'][number] }) {
   return (
     <li className="cm-feed-i">
-      <GameAvatar game={f.game} size={30} />
+      <span className="relative shrink-0">
+        <PlayerAvatar name={f.name} size={32} online={f.online} />
+        <span className="cm-ava-game"><GameAvatar game={f.game} size={16} /></span>
+      </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">
           <a href={`/player/${encodeURIComponent(f.name)}`} className="font-extrabold hover:text-link">{f.name}</a>
