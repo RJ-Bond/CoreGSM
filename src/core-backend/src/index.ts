@@ -44,6 +44,7 @@ import { router as reviewsRouter } from './reviews.js';
 import { router as reportsRouter } from './reports.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
+import { router as wipesRouter, startWipeTimer, stopWipeTimer } from './wipes.js';
 import { router as probesRouter } from './probes.js';
 import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
@@ -106,6 +107,7 @@ app.use(reviewsRouter);
 app.use(reportsRouter);
 app.use(galleryRouter);
 app.use(restartsRouter);
+app.use(wipesRouter);
 app.use(probesRouter);
 app.use(configRouter);
 app.use(pushRouter);
@@ -194,10 +196,12 @@ const server = app.listen(PORT, () => {
   startBackupTimer();
   startDigestTimer();
   startRestartTimer();
+  startWipeTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 onShutdown('restarts', stopRestartTimer);
+onShutdown('wipes', stopWipeTimer);
 installShutdown(server);
 registerShutdownServer(server);
 
