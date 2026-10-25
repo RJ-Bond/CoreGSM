@@ -151,7 +151,22 @@ export class ApiError extends Error {
   }
 }
 
+/** how many requests of the panel are in flight (the progress strip under the header listens) */
+let inflight = 0;
+const busyListeners = new Set<(n: number) => void>();
+export const onBusy = (fn: (n: number) => void): (() => void) => { busyListeners.add(fn); return () => { busyListeners.delete(fn); }; };
+const busy = (d: number) => { inflight = Math.max(0, inflight + d); busyListeners.forEach((f) => f(inflight)); };
+
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  busy(1);
+  try {
+    return await request<T>(path, method, body);
+  } finally {
+    busy(-1);
+  }
+}
+
+async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch('/api' + path, {
     method,
     headers: {

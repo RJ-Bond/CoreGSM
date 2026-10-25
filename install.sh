@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5459793b964c"
+COREGSM_BUILD="ed2aee23217c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -45822,6 +45822,7 @@ import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInf
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
+import { AppFooter, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -45923,12 +45924,6 @@ const IconSearch = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="11" cy="11" r="7" />
     <path d="M21 21l-4.3-4.3" />
-  </svg>
-);
-
-const IconLogout = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
   </svg>
 );
 
@@ -46122,16 +46117,22 @@ export default function App() {
         : page === 'admin'
           ? (ADMIN_TITLES[adminSection] ? `${t('nav.admin')} · ${ADMIN_TITLES[adminSection]}` : t('nav.admin'))
           : (() => { const d = PAGES.find((p) => p.id === page); return d ? t(d.label) : ''; })();
+  // players now in the tab title and a dot on the icon (only where the panel is shown)
+  const livePlayers = usePanelPulse(shellOk.current && access.publicPanel !== false);
   useEffect(() => {
-    document.title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
-  }, [boot.ready, sectionTitle, access.brand.name]);
+    const title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
+    document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
+  }, [boot.ready, sectionTitle, access.brand.name, livePlayers]);
+  useScrollMemory();
+  const navHidden = useHideOnScroll();
 
   const routeKey = `${page}/${page === 'servers' || page === 'admin' ? adminSection : ''}`;
   const firstRoute = useRef(true);
   useEffect(() => {
     if (!boot.ready) return;
     if (firstRoute.current) { firstRoute.current = false; return; }
-    window.scrollTo(0, 0);
+    // «Back» returns to where the page was left, any other step starts at the top
+    if (!restoreScroll()) window.scrollTo(0, 0);
     // a dialog (the tour, a confirmation) keeps the focus it has
     if (document.querySelector('[aria-modal="true"]')) return;
     mainRef.current?.focus({ preventScroll: true });
@@ -46224,6 +46225,8 @@ export default function App() {
       >
         {t('nav.skip')}
       </a>
+      <RouteProgress routeKey={routeKey} />
+      <Tooltips />
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
@@ -46256,24 +46259,7 @@ export default function App() {
             <ThemeToggle />
             {me ? (
               <>
-                <a
-                  href="/profile"
-                  aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-44 sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
-                  title={t('hdr.profileOf', { name: me.username })}
-                  aria-label={t('hdr.profileOf', { name: me.username })}
-                >
-                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-                  <span className="hidden truncate sm:inline">{me.username}</span>
-                </a>
-                <button
-                  onClick={() => void logout()}
-                  className="btn-icon-ghost max-sm:hidden!"
-                  aria-label={t('hdr.logout')}
-                  title={t('hdr.logout')}
-                >
-                  <IconLogout />
-                </button>
+                <ProfileMenu me={me} isStaff={isStaff} logout={() => void logout()} active={page === 'profile'} />
               </>
             ) : (
               <>
@@ -46307,8 +46293,10 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
+        <AppFooter brand={access.brand.name} />
+
         <nav
-          className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"
+          className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden ${navHidden ? 'is-hidden' : ''}`}
           style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
           aria-label={t('nav.sections')}
         >
@@ -46671,7 +46659,22 @@ export class ApiError extends Error {
   }
 }
 
+/** how many requests of the panel are in flight (the progress strip under the header listens) */
+let inflight = 0;
+const busyListeners = new Set<(n: number) => void>();
+export const onBusy = (fn: (n: number) => void): (() => void) => { busyListeners.add(fn); return () => { busyListeners.delete(fn); }; };
+const busy = (d: number) => { inflight = Math.max(0, inflight + d); busyListeners.forEach((f) => f(inflight)); };
+
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  busy(1);
+  try {
+    return await request<T>(path, method, body);
+  } finally {
+    busy(-1);
+  }
+}
+
+async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch('/api' + path, {
     method,
     headers: {
@@ -49395,6 +49398,18 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
   const openRef = useRef(false);
   const popId = useId();
   openRef.current = open;
+  // a new notification: the bell rings once
+  const [ring, setRing] = useState(false);
+  const prevUnread = useRef(unread);
+  useEffect(() => {
+    if (unread > prevUnread.current) {
+      setRing(true);
+      const id = window.setTimeout(() => setRing(false), 1300);
+      prevUnread.current = unread;
+      return () => window.clearTimeout(id);
+    }
+    prevUnread.current = unread;
+  }, [unread]);
 
   // /me brings a fresh number on every reload of the session; keep the larger knowledge of the two out of the way
   useEffect(() => { setUnread(Math.max(0, initialUnread)); }, [initialUnread]);
@@ -49473,7 +49488,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
         ref={btn}
         type="button"
         onClick={toggle}
-        className="btn-icon relative"
+        className={`btn-icon relative ${ring ? 'bell-ring' : ''}`}
         aria-label={label}
         title={t('bell.title')}
         aria-haspopup="dialog"
@@ -50004,6 +50019,303 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
       </div>
     </Modal>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ShellExtras.tsx" << '__COREGSM_EOF__'
+/**
+ * The extras of the app shell: the progress strip under the header, the live title and favicon, the footer, the
+ * profile menu, the breadcrumbs, the «hide the bottom bar while scrolling down» hook, the scroll memory of the
+ * «Back» button and the tooltips of icon buttons (also on a long press on a phone).
+ */
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { api, onBusy, type Me } from '../api';
+import { t } from '../i18n';
+import { UserAvatar } from '../ui';
+import '../styles/shell.css';
+
+// ---------- progress strip ----------
+/** a thin strip: grows while the page is changing, finishes when the page and its first requests are in */
+export function RouteProgress({ routeKey }: { routeKey: string }) {
+  const [phase, setPhase] = useState<'idle' | 'run' | 'done'>('idle');
+  const first = useRef(true);
+  const started = useRef(0);
+  const inflight = useRef(0);
+  useEffect(() => onBusy((n) => { inflight.current = n; }), []);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    started.current = Date.now();
+    setPhase('run');
+    const tick = window.setInterval(() => {
+      const spent = Date.now() - started.current;
+      if ((inflight.current === 0 && spent > 350) || spent > 2500) {
+        window.clearInterval(tick);
+        setPhase('done');
+        window.setTimeout(() => setPhase('idle'), 350);
+      }
+    }, 120);
+    return () => window.clearInterval(tick);
+  }, [routeKey]);
+  if (phase === 'idle') return null;
+  return <div className={`route-progress is-${phase}`} role="progressbar" aria-label={t('hdr.loading')} aria-busy={phase === 'run'}><span /></div>;
+}
+
+// ---------- title and favicon ----------
+let baseIcon: { href: string; el: HTMLLinkElement } | null = null;
+
+function paintFavicon(state: 'ok' | 'bad' | null) {
+  const el = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
+  if (!el) return;
+  if (!baseIcon) baseIcon = { href: el.href, el };
+  if (!state) { baseIcon.el.href = baseIcon.href; return; }
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    if (!g || !baseIcon) return;
+    g.drawImage(img, 0, 0, 64, 64);
+    g.beginPath();
+    g.arc(50, 50, 13, 0, Math.PI * 2);
+    g.fillStyle = state === 'ok' ? '#22c55e' : '#ef4444';
+    g.strokeStyle = '#fff';
+    g.lineWidth = 4;
+    g.fill();
+    g.stroke();
+    try { baseIcon.el.href = c.toDataURL('image/png'); } catch { /* the plain icon stays */ }
+  };
+  img.src = baseIcon.href;
+}
+
+interface Pulse { now: { players: number; online: number; servers: number } }
+
+/** players now (for «(12) Серверы · CoreGSM») and a dot on the favicon: green when everything is up, red when something is down */
+export function usePanelPulse(enabled: boolean): number {
+  const [players, setPlayers] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    let stop = false;
+    const load = () => {
+      if (document.hidden) return;
+      api<Pulse>('/community').then((c) => {
+        if (stop) return;
+        setPlayers(c.now.players);
+        paintFavicon(c.now.servers === 0 ? null : c.now.online === c.now.servers ? 'ok' : 'bad');
+      }).catch(() => undefined);
+    };
+    load();
+    const id = window.setInterval(load, 60_000);
+    const vis = () => { if (!document.hidden) load(); };
+    document.addEventListener('visibilitychange', vis);
+    return () => { stop = true; window.clearInterval(id); document.removeEventListener('visibilitychange', vis); paintFavicon(null); };
+  }, [enabled]);
+  return players;
+}
+
+// ---------- footer ----------
+export function AppFooter({ brand }: { brand: string }) {
+  return (
+    <footer className="app-foot">
+      <span className="font-extrabold">{brand}</span>
+      <nav aria-label={t('nav.sections')}>
+        <a href="/servers">{t('nav.servers')}</a>
+        <a href="/news">{t('nav.news')}</a>
+        <a href="/status">{t('nav.status')}</a>
+        <a href="/community">{t('nav.community')}</a>
+        <a href="/gallery">Галерея</a>
+      </nav>
+    </footer>
+  );
+}
+
+// ---------- breadcrumbs ----------
+export function Crumbs({ items }: { items: [href: string, label: ReactNode][] }) {
+  return (
+    <nav className="crumbs" aria-label="Хлебные крошки">
+      <ol>
+        {items.map(([href, label], i) => (
+          <li key={href + i}>
+            {i < items.length - 1 ? <a href={href}>{label}</a> : <span aria-current="page">{label}</span>}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+// ---------- profile menu ----------
+export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: boolean; logout: () => void; active: boolean }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); box.current?.querySelector<HTMLElement>('button')?.focus(); } };
+    document.addEventListener('pointerdown', down);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('pointerdown', down); document.removeEventListener('keydown', key); };
+  }, [open]);
+  const link = 'pm-item';
+  return (
+    <div className="pm" ref={box}>
+      <button
+        type="button"
+        className={`pm-btn ${active ? 'is-active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={t('hdr.profileOf', { name: me.username })}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
+        <span className="hidden truncate sm:inline">{me.username}</span>
+      </button>
+      {open && (
+        <div className="pm-menu panel panel-raised" role="menu" onClick={() => setOpen(false)}>
+          <div className="pm-head">
+            <UserAvatar name={me.username} url={me.avatarUrl} size={40} tone="grad" className="rounded-full!" />
+            <div className="min-w-0">
+              <div className="truncate font-extrabold">{me.username}</div>
+              <div className="text-xs font-bold text-mute">{me.role === 'admin' ? 'Администратор' : me.role === 'moderator' ? 'Модератор' : 'Игрок'}</div>
+            </div>
+          </div>
+          <a role="menuitem" className={link} href="/profile">{t('hdr.profile')}</a>
+          <a role="menuitem" className={link} href="/gallery">Моя галерея</a>
+          {isStaff && <a role="menuitem" className={link} href="/admin">{t('nav.admin')}</a>}
+          <button type="button" role="menuitem" className={`${link} is-danger`} onClick={logout}>{t('hdr.logout')}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- bottom bar: hidden while scrolling down ----------
+export function useHideOnScroll(): boolean {
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    let last = window.scrollY;
+    let raf = 0;
+    const f = () => {
+      raf = 0;
+      const y = window.scrollY;
+      const d = y - last;
+      const nearEnd = window.innerHeight + y >= document.documentElement.scrollHeight - 80;
+      if (y < 120 || nearEnd || d < -6) setHidden(false);
+      else if (d > 10) setHidden(true);
+      last = y;
+    };
+    const on = () => { if (!raf) raf = requestAnimationFrame(f); };
+    window.addEventListener('scroll', on, { passive: true });
+    return () => { window.removeEventListener('scroll', on); if (raf) cancelAnimationFrame(raf); };
+  }, []);
+  return hidden;
+}
+
+// ---------- scroll memory of «Back» ----------
+const places = new Map<string, number>();
+let here = '';
+let popped = false;
+let installed = false;
+const keyOf = () => location.pathname + location.search;
+
+function installScrollMemory() {
+  if (installed) return;
+  installed = true;
+  here = keyOf();
+  try { history.scrollRestoration = 'manual'; } catch { /* the browser decides */ }
+  const push = history.pushState.bind(history);
+  const replace = history.replaceState.bind(history);
+  history.pushState = (...a: Parameters<History['pushState']>) => { places.set(here, window.scrollY); push(...a); here = keyOf(); popped = false; };
+  history.replaceState = (...a: Parameters<History['replaceState']>) => { replace(...a); here = keyOf(); };
+  window.addEventListener('popstate', () => { places.set(here, window.scrollY); here = keyOf(); popped = true; });
+}
+
+/** after a step «Back» / «Forward»: scrolls to where the page was left, waiting until it is tall enough; false on a normal navigation */
+export function restoreScroll(): boolean {
+  installScrollMemory();
+  if (!popped) return false;
+  popped = false;
+  const y = places.get(here);
+  if (!y) return false;
+  let tries = 0;
+  const go = () => {
+    window.scrollTo(0, y);
+    if (Math.abs(window.scrollY - y) > 4 && tries++ < 30) window.setTimeout(go, 50);
+  };
+  go();
+  return true;
+}
+
+export function useScrollMemory() {
+  useEffect(() => { installScrollMemory(); }, []);
+}
+
+// ---------- tooltips of icon buttons ----------
+/** the name of an icon-only button (no text of its own): data-tip, title or aria-label */
+function tipOf(target: EventTarget | null): { el: HTMLElement; text: string } | null {
+  const el = (target as Element | null)?.closest?.<HTMLElement>('button, a, [role="button"]');
+  if (!el || el.textContent?.trim()) return null;
+  const text = el.getAttribute('data-tip') || el.getAttribute('title') || el.getAttribute('aria-label');
+  return text ? { el, text } : null;
+}
+
+export function Tooltips() {
+  const [tip, setTip] = useState<{ text: string; x: number; y: number; below: boolean } | null>(null);
+  useEffect(() => {
+    let timer = 0;
+    let hold: { el: HTMLElement; title: string | null } | null = null;
+    let swallow = false;
+    const hide = () => {
+      window.clearTimeout(timer);
+      if (hold?.title != null) hold.el.setAttribute('title', hold.title);
+      hold = null;
+      setTip(null);
+    };
+    const show = (el: HTMLElement, text: string) => {
+      const r = el.getBoundingClientRect();
+      const below = r.top < 48;
+      setTip({ text, x: Math.max(12, Math.min(window.innerWidth - 12, r.left + r.width / 2)), y: below ? r.bottom + 8 : r.top - 8, below });
+    };
+    const arm = (e: PointerEvent, delay: number) => {
+      hide();
+      const f = tipOf(e.target);
+      if (!f) return;
+      // our bubble replaces the native one (no two tips at once); the title comes back on hide
+      hold = { el: f.el, title: f.el.getAttribute('title') };
+      if (hold.title != null) f.el.removeAttribute('title');
+      timer = window.setTimeout(() => {
+        show(f.el, f.text);
+        if (e.pointerType !== 'mouse') swallow = true;
+      }, delay);
+    };
+    const over = (e: PointerEvent) => { if (e.pointerType === 'mouse') arm(e, 350); };
+    const down = (e: PointerEvent) => { if (e.pointerType !== 'mouse') arm(e, 450); };
+    const up = (e: PointerEvent) => { if (e.pointerType !== 'mouse') window.setTimeout(hide, 1200); };
+    const click = (e: MouseEvent) => { if (swallow) { e.preventDefault(); e.stopPropagation(); swallow = false; } hide(); };
+    const ctx = (e: Event) => { if (swallow) e.preventDefault(); };
+    window.addEventListener('pointerover', over);
+    window.addEventListener('pointerout', hide);
+    window.addEventListener('pointerdown', down);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', hide);
+    window.addEventListener('click', click, true);
+    window.addEventListener('contextmenu', ctx);
+    window.addEventListener('scroll', hide, { passive: true });
+    window.addEventListener('keydown', hide);
+    return () => {
+      hide();
+      window.removeEventListener('pointerover', over);
+      window.removeEventListener('pointerout', hide);
+      window.removeEventListener('pointerdown', down);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', hide);
+      window.removeEventListener('click', click, true);
+      window.removeEventListener('contextmenu', ctx);
+      window.removeEventListener('scroll', hide);
+      window.removeEventListener('keydown', hide);
+    };
+  }, []);
+  if (!tip) return null;
+  return <div className={`tip-bubble ${tip.below ? 'is-below' : ''}`} style={{ left: tip.x, top: tip.y }} role="tooltip">{tip.text}</div>;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -70294,6 +70606,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
+import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
@@ -70340,7 +70653,7 @@ export default function PlayerPage({ name }: { name: string }) {
   const maxS = Math.max(1, ...p.servers.map((s) => s.hours));
   return (
     <div className="space-y-5">
-      <a href="/community" className="ml-1 inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Сообщество</a>
+      <Crumbs items={[['/community', 'Сообщество'], [`/player/${encodeURIComponent(p.name)}`, p.name]]} />
       <section className="tile pl-hero fade-in">
         <span className="pl-ava" aria-hidden>{p.name.slice(0, 1).toUpperCase()}</span>
         <div className="min-w-0 flex-1">
@@ -71289,6 +71602,7 @@ import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
+import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
@@ -71502,7 +71816,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (missing) return <NotFound kind="server" />;
 
-  const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
+  const back = <Crumbs items={[['/servers', t('nav.servers')], [`/servers/${id}`, data?.server.name ?? '…']]} />;
 
   if (!data) {
     return (
@@ -72466,15 +72780,6 @@ function ServerList() {
           </div>
           <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />
         </div>
-      )}
-
-      {servers.length > 0 && (
-        <footer className="srv-foot">
-          <span>CoreGSM</span>
-          <a href="/status">{t('nav.status')}</a>
-          <a href="/community">{t('nav.community')}</a>
-          <a href="/news">{t('nav.news')}</a>
-        </footer>
       )}
 
       <ScrollTop />
@@ -77542,6 +77847,65 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 }
 :root[data-theme='dark'] .srv-hero::before { background: linear-gradient(180deg, rgb(0 0 0 / .42) 0%, rgb(0 0 0 / .16) 35%, rgb(0 0 0 / .62) 100%); }
 :root[data-theme='dark'] .sh-chip { background: rgb(0 0 0 / .35); }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'
+/* the app shell: progress strip, footer, crumbs, profile menu, tooltips, bottom bar, print */
+.route-progress { position: fixed; top: 0; left: 0; right: 0; z-index: 80; height: 3px; pointer-events: none; }
+.route-progress > span { display: block; height: 100%; width: 0; border-radius: 0 3px 3px 0; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); box-shadow: 0 0 10px rgb(var(--brand) / .6); }
+.route-progress.is-run > span { width: 82%; transition: width 2.2s cubic-bezier(.1, .7, .2, 1); }
+.route-progress.is-done > span { width: 100%; transition: width .2s ease, opacity .3s ease .15s; opacity: 0; }
+
+.app-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; margin-top: 36px; padding: 18px 0 4px; border-top: 1px solid rgb(var(--line)); font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+.app-foot nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.app-foot a:hover { color: rgb(var(--link)); }
+
+.crumbs { margin-left: 4px; font-size: 14px; font-weight: 800; }
+.crumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; }
+.crumbs li { display: inline-flex; align-items: center; min-width: 0; }
+.crumbs li + li::before { content: '›'; margin: 0 8px; color: rgb(var(--mute)); font-weight: 600; }
+.crumbs a { color: rgb(var(--link)); }
+.crumbs a:hover { text-decoration: underline; }
+.crumbs [aria-current] { color: rgb(var(--ink)); max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pm { position: relative; }
+.pm-btn { display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-pill); font-weight: 800; transition: background-color .15s ease; height: 44px; width: 44px; }
+@media (min-width: 640px) { .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; } }
+.pm-btn:hover, .pm-btn[aria-expanded='true'] { background: rgb(var(--soft)); }
+.pm-btn.is-active { background: rgb(var(--brand) / .14); color: rgb(var(--link)); }
+.pm-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; width: 14rem; padding: 6px; display: grid; gap: 2px; }
+.pm-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px; margin-bottom: 4px; border-bottom: 1px solid rgb(var(--line)); }
+.pm-item { display: block; width: 100%; padding: 9px 12px; border-radius: var(--r-md); text-align: left; font-size: 14px; font-weight: 700; }
+.pm-item:hover, .pm-item:focus-visible { background: rgb(var(--soft)); }
+.pm-item.is-danger { color: rgb(var(--bad)); }
+
+.nav-bottom { transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
+.nav-bottom.is-hidden { transform: translateY(160%); opacity: 0; pointer-events: none; }
+html[data-motion='reduce'] .nav-bottom { transition: none; }
+
+.tip-bubble { position: fixed; z-index: 120; transform: translate(-50%, -100%); max-width: min(18rem, calc(100vw - 24px)); padding: 5px 10px; border-radius: var(--r-md); background: rgb(var(--ink)); color: rgb(var(--page)); font-size: 12.5px; font-weight: 700; line-height: 1.3; pointer-events: none; box-shadow: var(--shadow-2); animation: tip-in .12s ease-out both; }
+.tip-bubble.is-below { transform: translate(-50%, 0); }
+@keyframes tip-in { from { opacity: 0; } }
+
+.bell-ring svg { transform-origin: 50% 3px; animation: bell-ring 1.1s ease-in-out both; }
+@keyframes bell-ring { 0%, 100% { transform: rotate(0); } 12% { transform: rotate(16deg); } 28% { transform: rotate(-14deg); } 44% { transform: rotate(10deg); } 60% { transform: rotate(-7deg); } 76% { transform: rotate(3deg); } }
+@media (prefers-reduced-motion: reduce) { .bell-ring svg, .route-progress > span { animation: none; transition: none; } }
+html[data-motion='reduce'] .bell-ring svg { animation: none; }
+
+/* a system that asks for less transparency gets solid surfaces */
+@media (prefers-reduced-transparency: reduce) {
+  .glass { background-image: none; background: rgb(var(--card)); }
+  .pill-glass, .chip-glass { background: rgb(12 14 26); }
+}
+
+/* print: the content only, on white */
+@media print {
+  header.glass, nav.glass, .toaster, .route-progress, .tip-bubble, .app-foot, .srv-top, .skip-link, .cm-nav, .srv-pull { display: none !important; }
+  html, body { background: #fff !important; color: #000 !important; }
+  .tile, .panel { box-shadow: none !important; border: 1px solid #ccc; break-inside: avoid; background: #fff !important; }
+  a { color: inherit; text-decoration: none; }
+  * { animation: none !important; transition: none !important; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'

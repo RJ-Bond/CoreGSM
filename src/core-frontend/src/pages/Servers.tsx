@@ -401,15 +401,6 @@ function ServerList() {
         </div>
       )}
 
-      {servers.length > 0 && (
-        <footer className="srv-foot">
-          <span>CoreGSM</span>
-          <a href="/status">{t('nav.status')}</a>
-          <a href="/community">{t('nav.community')}</a>
-          <a href="/news">{t('nav.news')}</a>
-        </footer>
-      )}
-
       <ScrollTop />
       {pull > 0 && <div className="srv-pull" style={{ height: pull }} aria-hidden>{pull >= PULL_AT ? 'Отпустите, чтобы обновить' : 'Потяните вниз'}</div>}
 
