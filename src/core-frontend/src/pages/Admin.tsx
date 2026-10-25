@@ -40,6 +40,10 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
       const down = list ? list.filter((s) => !s.online && s.hasStatus && !s.maintenance).length : 0;
       if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
     }
+    if (isAdmin || perms.includes('moderation')) {
+      const rep = await api<{ open: number }>('/reports/count').catch(() => null);
+      if (rep && rep.open > 0) out.community = { n: rep.open, tone: 'warn', label: `Жалоб на игроков: ${rep.open}` };
+    }
     if (isAdmin) {
       const [bot, sys] = await Promise.all([
         api<{ state?: string }>('/bot/status').catch(() => null),

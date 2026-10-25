@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a651fe442eda"
+COREGSM_BUILD="baf2d2dcbc88"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7551,6 +7551,14 @@ export const ERRORS = {
   notice_long: 'Текст объявления — до 500 символов',
   sub_test_wait: 'Подождите несколько секунд перед следующей проверкой',
 
+  // ---- reports on players ----
+  report_bad: 'Выберите причину; описание — до 500 символов',
+  report_dup: 'Ваша жалоба на этого игрока уже на рассмотрении',
+  report_limit: 'Не больше {n} жалоб в сутки',
+  report_verdict_bad: 'Укажите решение; комментарий — до 300 символов',
+  report_not_found: 'Жалоба не найдена',
+  report_closed: 'Жалоба уже рассмотрена',
+
   // ---- following a player ----
   follow_nick_missing: 'Укажите ник игрока',
   follow_limit: 'Можно следить не больше чем за {n} игроками',
@@ -8882,6 +8890,7 @@ import { router as communityRouter } from './routes/community.js';
 import { router as discordExtrasRouter } from './routes/discordExtras.js';
 import { router as seasonsRouter } from './seasons.js';
 import { router as reviewsRouter } from './reviews.js';
+import { router as reportsRouter } from './reports.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as probesRouter } from './probes.js';
@@ -8943,6 +8952,7 @@ app.use(communityRouter);
 app.use(discordExtrasRouter);
 app.use(seasonsRouter);
 app.use(reviewsRouter);
+app.use(reportsRouter);
 app.use(galleryRouter);
 app.use(restartsRouter);
 app.use(probesRouter);
@@ -11346,6 +11356,7 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/update\/rollback$/, label: 'Запущен откат панели' },
   { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
   { m: 'PUT', re: /^\/api\/backups\/settings$/, label: 'Изменены настройки резервного копирования', detail: (r) => ['schedule', 'keep', 'remoteUrl', 'passphrase'].filter((k) => r.body?.[k] !== undefined).map((k) => (k === 'schedule' ? `расписание: ${s(r.body?.schedule, 10)}` : k === 'keep' ? `хранить: ${Number(r.body?.keep) || ''}` : k === 'remoteUrl' ? 'внешняя копия' : 'шифрование')).join(', ') },
+  { m: 'PATCH', re: /^\/api\/reports\/(\d+)$/, label: 'Обработана жалоба на игрока', pre: (id) => `#${id}`, detail: (r) => s(r.body?.status, 12) },
   { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
   { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
   { m: 'PUT', re: /^\/api\/maintenance\/(\d+)$/, label: 'Изменено окно обслуживания', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name)}`.trim() },
@@ -13498,6 +13509,133 @@ export function rconCommand(host: string, port: number, password: string, comman
     });
   });
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/reports.ts" << '__COREGSM_EOF__'
+/**
+ * Reports on players: a signed-in user complains about a game nick (cheating, abuse, griefing, other) with a few
+ * words; the staff with the «Модерация» permission work through the queue and close each report as done or
+ * dismissed, with an optional note. The reporter is told how it ended (the in-panel inbox).
+ *   POST  /api/players/:nick/report   send a report (5 per day per user, one open report per user and nick)
+ *   GET   /api/reports                the queue (?status=open|closed, default open) (staff)
+ *   GET   /api/reports/count          how many are open (staff; the badge of the admin menu)
+ *   PATCH /api/reports/:id            close: { status: 'resolved' | 'dismissed', note? } (staff)
+ */
+import express from 'express';
+import { z } from 'zod';
+import { allow, auth, type AuthedRequest } from './auth.js';
+import { db } from './db.js';
+import { param } from './http.js';
+
+export const router = express.Router();
+const staff = allow('moderation');
+
+export const REPORT_REASONS = ['cheating', 'abuse', 'griefing', 'other'] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number];
+export const REPORTS_PER_DAY = 5;
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS player_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nick TEXT NOT NULL,
+  nick_key TEXT NOT NULL,
+  server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
+  reason TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at INTEGER NOT NULL,
+  handled_by TEXT,
+  handled_at INTEGER,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON player_reports(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_reports_nick ON player_reports(nick_key, status);
+`);
+
+export const VERDICT_TEXT: Record<'resolved' | 'dismissed', string> = {
+  resolved: 'Жалоба рассмотрена: меры приняты',
+  dismissed: 'Жалоба рассмотрена: нарушений не найдено',
+};
+
+/** the message to the reporter when the report is closed */
+export function verdictText(status: 'resolved' | 'dismissed', nick: string, note: string): string {
+  return `${status === 'resolved' ? '✅' : 'ℹ️'} ${VERDICT_TEXT[status]} (${nick}).${note ? ` Комментарий: ${note}` : ''}`;
+}
+
+interface Row {
+  id: number; reporter_id: number; nick: string; server_id: number | null; reason: ReportReason; text: string; status: string;
+  created_at: number; handled_by: string | null; handled_at: number | null; note: string; reporter: string; server_name: string | null;
+  others: number;
+}
+
+const out = (r: Row) => ({
+  id: r.id,
+  nick: r.nick,
+  reason: r.reason,
+  text: r.text,
+  reporter: r.reporter,
+  serverId: r.server_id,
+  serverName: r.server_name,
+  status: r.status,
+  createdAt: r.created_at,
+  handledBy: r.handled_by,
+  handledAt: r.handled_at,
+  note: r.note,
+  // other open reports on the same nick: a pile of them is a signal
+  others: r.others,
+});
+
+router.post('/api/players/:nick/report', auth, (req: AuthedRequest, res) => {
+  const nick = String(req.params.nick ?? '').trim();
+  if (nick.length < 1 || nick.length > 64) return res.status(400).json({ error: 'Укажите ник игрока' });
+  const b = z
+    .object({ reason: z.enum(REPORT_REASONS), text: z.string().trim().max(500).default(''), serverId: z.number().int().positive().optional() })
+    .safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Выберите причину; описание — до 500 символов' });
+  const uid = req.user!.id;
+  const key = nick.toLowerCase();
+  const now = Date.now();
+  if (db.prepare("SELECT 1 FROM player_reports WHERE reporter_id = ? AND nick_key = ? AND status = 'open'").get(uid, key)) {
+    return res.status(409).json({ error: 'Ваша жалоба на этого игрока уже на рассмотрении' });
+  }
+  const today = (db.prepare('SELECT COUNT(*) AS n FROM player_reports WHERE reporter_id = ? AND created_at > ?').get(uid, now - 86_400_000) as { n: number }).n;
+  if (today >= REPORTS_PER_DAY) return res.status(429).json({ error: `Не больше ${REPORTS_PER_DAY} жалоб в сутки` });
+  const serverId = b.data.serverId && db.prepare('SELECT 1 FROM servers WHERE id = ?').get(b.data.serverId) ? b.data.serverId : null;
+  const r = db
+    .prepare('INSERT INTO player_reports (reporter_id, nick, nick_key, server_id, reason, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(uid, nick, key, serverId, b.data.reason, b.data.text, now);
+  res.status(201).json({ id: Number(r.lastInsertRowid) });
+});
+
+const SELECT = `SELECT p.*, u.username AS reporter, s.name AS server_name,
+  (SELECT COUNT(*) FROM player_reports o WHERE o.nick_key = p.nick_key AND o.status = 'open' AND o.id <> p.id) AS others
+  FROM player_reports p JOIN users u ON u.id = p.reporter_id LEFT JOIN servers s ON s.id = p.server_id`;
+
+router.get('/api/reports', staff, (req, res) => {
+  const closed = req.query.status === 'closed';
+  const rows = db
+    .prepare(`${SELECT} WHERE p.status ${closed ? "<> 'open'" : "= 'open'"} ORDER BY ${closed ? 'p.handled_at DESC' : 'p.created_at ASC'} LIMIT 200`)
+    .all() as Row[];
+  res.json(rows.map(out));
+});
+
+router.get('/api/reports/count', staff, (_req, res) => {
+  res.json({ open: (db.prepare("SELECT COUNT(*) AS n FROM player_reports WHERE status = 'open'").get() as { n: number }).n });
+});
+
+router.patch('/api/reports/:id', param('id'), staff, (req: AuthedRequest, res) => {
+  const b = z.object({ status: z.enum(['resolved', 'dismissed']), note: z.string().trim().max(300).default('') }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Укажите решение; комментарий — до 300 символов' });
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT reporter_id, nick, status FROM player_reports WHERE id = ?').get(id) as { reporter_id: number; nick: string; status: string } | undefined;
+  if (!row) return res.status(404).json({ error: 'Жалоба не найдена' });
+  if (row.status !== 'open') return res.status(409).json({ error: 'Жалоба уже рассмотрена' });
+  const now = Date.now();
+  db.prepare('UPDATE player_reports SET status = ?, handled_by = ?, handled_at = ?, note = ? WHERE id = ?').run(b.data.status, req.user!.username, now, b.data.note, id);
+  db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, NULL, ?)').run(row.reporter_id, now, 'report_done', verdictText(b.data.status, row.nick, b.data.note));
+  res.json({ ok: true });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/restartLogic.ts" << '__COREGSM_EOF__'
@@ -55600,6 +55738,76 @@ export function PushCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/ReportButton.tsx" << '__COREGSM_EOF__'
+/** «Пожаловаться» on a player's page: a reason and a few words go to the moderators' queue. */
+import { useState, type FormEvent } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { Button, ErrorLine, Field, Modal, toast } from '../../ui';
+
+export const REASONS = [
+  { id: 'cheating', label: 'Читы или нечестная игра' },
+  { id: 'abuse', label: 'Оскорбления, токсичность' },
+  { id: 'griefing', label: 'Грифинг, порча чужого' },
+  { id: 'other', label: 'Другое' },
+] as const;
+
+export function ReportButton({ nick }: { nick: string }) {
+  const { me } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState<(typeof REASONS)[number]['id']>('cheating');
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!me) return null;
+
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/players/${encodeURIComponent(nick)}/report`, 'POST', { reason, text: text.trim() });
+      toast('Жалоба отправлена модераторам. Ответ придёт в уведомления');
+      setOpen(false);
+      setText('');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <>
+      <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(true)}>⚑ Пожаловаться</Button>
+      {open && (
+        <Modal title={`Жалоба на игрока ${nick}`} onClose={() => setOpen(false)}>
+          <form onSubmit={send} className="space-y-3.5">
+            <fieldset className="space-y-1.5">
+              <legend className="label">Причина</legend>
+              {REASONS.map((r) => (
+                <label key={r.id} className="flex cursor-pointer items-center gap-2.5 font-bold">
+                  <input type="radio" name="report-reason" className="h-4 w-4 accent-brand" checked={reason === r.id} onChange={() => setReason(r.id)} />
+                  {r.label}
+                </label>
+              ))}
+            </fieldset>
+            <Field label="Что произошло (необязательно)">
+              <textarea className="input min-h-24" maxLength={500} value={text} onChange={(e) => setText(e.target.value)} placeholder="Сервер, время, что именно сделал игрок" />
+            </Field>
+            <p className="text-sm font-semibold text-mute">Жалобу увидят только модераторы. Не больше 5 жалоб в сутки.</p>
+            <ErrorLine text={error} />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Отмена</Button>
+              <Button type="submit" loading={busy}>Отправить</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/Stats.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { StatTile, IcoClock, IcoFlame, IcoHeart, IcoPlay, IcoTimer } from './bits';
@@ -65154,6 +65362,7 @@ const en: Record<keyof typeof ru, string> = {
   'start.quick': 'Quick actions',
   'start.map': 'Where things are',
   'start.mapText': 'The menu on the left is split into four groups. Expand for a description of each section.',
+  'adm.com.reports': 'Reports',
   'adm.com.seasons': 'Seasons',
   'adm.com.reviews': 'Reviews',
   'adm.com.gallery': 'Gallery',
@@ -65457,6 +65666,12 @@ const errorsEn: Record<string, string> = {
   review_reply_long: 'The reply is limited to 600 characters',
   notice_long: 'The notice is limited to 500 characters',
   sub_test_wait: 'Wait a few seconds before the next check',
+  report_bad: 'Choose a reason; the description is limited to 500 characters',
+  report_dup: 'Your report on this player is already being reviewed',
+  report_limit: 'No more than {n} reports a day',
+  report_verdict_bad: 'Choose a decision; the comment is limited to 300 characters',
+  report_not_found: 'Report not found',
+  report_closed: 'The report has already been handled',
   follow_nick_missing: 'Enter the player\'s nick',
   follow_limit: 'You can follow at most {n} players',
   maintenance_not_found: 'Maintenance window not found',
@@ -66420,6 +66635,7 @@ const ru = {
   'start.map': 'Где что находится',
   'start.mapText': 'Меню слева разделено на четыре группы. Развернуть описание разделов.',
   'adm.com.seasons': 'Сезоны',
+  'adm.com.reports': 'Жалобы',
   'adm.com.reviews': 'Отзывы',
   'adm.com.gallery': 'Галерея',
   'adm.com.subtitle': 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов',
@@ -66954,6 +67170,10 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
       const down = list ? list.filter((s) => !s.online && s.hasStatus && !s.maintenance).length : 0;
       if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
     }
+    if (isAdmin || perms.includes('moderation')) {
+      const rep = await api<{ open: number }>('/reports/count').catch(() => null);
+      if (rep && rep.open > 0) out.community = { n: rep.open, tone: 'warn', label: `Жалоб на игроков: ${rep.open}` };
+    }
     if (isAdmin) {
       const [bot, sys] = await Promise.all([
         api<{ state?: string }>('/bot/status').catch(() => null),
@@ -67487,6 +67707,7 @@ export const COMMUNITY_TABS = [
   { id: 'seasons', get label() { return t('adm.com.seasons'); }, admin: true },
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
   { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
+  { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
 ] as const;
 
 export default function AdminCommunity({ sub = '' }: { sub?: string }) {
@@ -67504,6 +67725,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
       {tab === 'seasons' && <SeasonsAdmin />}
       {tab === 'reviews' && <ReviewsAdmin />}
       {tab === 'gallery' && <GalleryAdmin />}
+      {tab === 'reports' && <ReportsAdmin />}
     </AdminPage>
   );
 }
@@ -67624,6 +67846,57 @@ function ReviewsAdmin() {
               </span>
               <button type="button" className="row-act" aria-label={r.hidden ? t('adm.com.show') : t('adm.com.hide')} title={r.hidden ? t('adm.com.show') : t('adm.com.hide')} onClick={() => void hide(r.id, !r.hidden)}>{r.hidden ? <IconEye /> : <IconEyeOff />}</button>
               <button type="button" className="row-act row-act-danger" aria-label={t('adm.srv.delete')} title={t('adm.srv.delete')} onClick={() => void del(r.id)}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+const REASON_LABEL: Record<string, string> = { cheating: 'Читы', abuse: 'Оскорбления', griefing: 'Грифинг', other: 'Другое' };
+interface ReportRow { id: number; nick: string; reason: string; text: string; reporter: string; serverId: number | null; serverName: string | null; status: string; createdAt: number; handledBy: string | null; handledAt: number | null; note: string; others: number }
+
+/** the queue of reports on players: the oldest first; a closed one tells who handled it */
+function ReportsAdmin() {
+  const [closed, setClosed] = useState(false);
+  const [list, setList] = useState<ReportRow[] | null>(null);
+  const [error, setError] = useState('');
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const load = () => api<ReportRow[]>(`/reports?status=${closed ? 'closed' : 'open'}`).then((l) => { setList(l); setError(''); }).catch((e: Error) => setError(e.message));
+  useEffect(() => { setList(null); void load(); }, [closed]);
+  const close = (id: number, status: 'resolved' | 'dismissed') =>
+    api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim() })
+      .then(() => { toast(status === 'resolved' ? 'Жалоба закрыта: меры приняты' : 'Жалоба отклонена'); void load(); })
+      .catch((e: Error) => setError(e.message));
+  return (
+    <Section
+      title="Жалобы на игроков"
+      description={closed ? 'Рассмотренные жалобы, новые сверху' : list ? (list.length ? `Ждут решения: ${list.length}. Старые сверху` : 'Новых жалоб нет') : undefined}
+      actions={<div className="seg" role="group" aria-label="Какие жалобы"><button type="button" className="seg-item" aria-current={!closed ? "true" : undefined} onClick={() => setClosed(false)}>Открытые</button><button type="button" className="seg-item" aria-current={closed ? "true" : undefined} onClick={() => setClosed(true)}>Рассмотренные</button></div>}
+    >
+      <ErrorLine text={error} />
+      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{closed ? 'Пока ничего не рассматривали.' : 'Очередь пуста.'}</p> : (
+        <ul className="grid gap-2.5">
+          {list.map((r) => (
+            <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <a href={`/player/${encodeURIComponent(r.nick)}`} className="font-extrabold hover:text-link">{r.nick}</a>
+                <span className="pill pill-warn">{REASON_LABEL[r.reason] ?? r.reason}</span>
+                {r.others > 0 && <span className="pill pill-bad" title="Других открытых жалоб на этого игрока">ещё жалоб: {r.others}</span>}
+                <span className="ml-auto text-xs font-bold text-mute">{r.reporter} · {ago(r.createdAt)}</span>
+              </div>
+              {r.text && <p className="mt-1.5 whitespace-pre-line text-sm font-semibold">{r.text}</p>}
+              {r.serverName && <p className="mt-1 text-xs font-bold text-mute">Сервер: <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
+              {r.status === 'open' ? (
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  <input className="input min-w-48 flex-1" maxLength={300} placeholder="Комментарий для автора жалобы (необязательно)" aria-label="Комментарий" value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
+                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>Меры приняты</button>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>Отклонить</button>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? '✅ Меры приняты' : 'ℹ️ Отклонена'} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
+              )}
             </li>
           ))}
         </ul>
@@ -72473,6 +72746,7 @@ import NickPic from '../components/NickPic';
 import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
 import { FollowButton } from '../components/profile/Follows';
+import { ReportButton } from '../components/profile/ReportButton';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
 import '../styles/community.css';
@@ -72547,7 +72821,7 @@ export default function PlayerPage({ name }: { name: string }) {
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>впервые {fmtDateTime(p.firstSeen)}</span>
           </p>
-          <div className="mt-2"><FollowButton nick={p.name} /></div>
+          <div className="mt-2 flex flex-wrap items-center gap-2"><FollowButton nick={p.name} /><ReportButton nick={p.name} /></div>
         </div>
         {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (
           <div className="pl-places basis-full" aria-label="Места среди игроков">
