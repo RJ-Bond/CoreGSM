@@ -9,6 +9,7 @@ import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
+import { NewsStatsModal } from '../components/news/NewsStats';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
@@ -45,6 +46,7 @@ function NewsList() {
   const list = items.filter((n) => !hidden.includes(n.id));
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [stats, setStats] = useState<{ id: number; title: string } | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
@@ -278,6 +280,7 @@ function NewsList() {
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
                 <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? 'Открепить' : 'Закрепить'}</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
+                {['sent', 'edit_queued'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => setStats({ id: n.id, title: n.title })}>Статистика</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <span className="ml-auto flex items-center gap-1.5">
                   <button type="button" className="row-act" title="Дублировать" aria-label="Дублировать" onClick={() => void copy(n)}><IconCopyPlus /></button>
@@ -288,6 +291,7 @@ function NewsList() {
           );
         })}
       </div>
+      {stats && <NewsStatsModal id={stats.id} title={stats.title} onClose={() => setStats(null)} />}
     </AdminPage>
   );
 }
