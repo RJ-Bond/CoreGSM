@@ -463,7 +463,7 @@ export default function HistoryChart({
               <g key={i}>
                 {seg.length === 1 && <circle cx={pts[0][0]} cy={pts[0][1]} r="3.5" style={{ fill: color }} />}
                 {seg.length > 1 && <path d={`${d} L${pts[pts.length - 1][0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z`} fill={`url(#${gid})`} />}
-                {seg.length > 1 && <path d={d} fill="none" style={{ stroke: color }} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
+                {seg.length > 1 && <path d={d} fill="none" className="hc-line" pathLength={1} style={{ stroke: color }} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />}
               </g>
             );
           })}

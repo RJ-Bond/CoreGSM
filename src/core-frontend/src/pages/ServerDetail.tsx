@@ -15,7 +15,7 @@ import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 import HistoryChart, { type Series } from '../components/server/HistoryChart';
-import PlayersList, { PlayerFacts } from '../components/server/PlayersList';
+import PlayersList, { PlayerFacts, SessionSpread } from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import SubscribeMenu from '../components/server/SubscribeMenu';
@@ -74,9 +74,9 @@ function LiveBadge({ at }: { at: number | null }) {
   useNow(5000);
   if (!at) return null;
   return (
-    <span className="chip-glass" title="Страница обновляется сама">
+    <span className="chip-glass srv-live" title={`Страница обновляется сама · обновлено ${ago(at)}`}>
       <span className="live-dot" aria-hidden />
-      обновлено {ago(at)}
+      <span className="srv-live-t">обновлено {ago(at)}</span>
     </span>
   );
 }
@@ -87,8 +87,8 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
   return (
     <button
       type="button"
-      onClick={() => { if (!on) setPops((n) => n + 1); onClick(); }}
-      className="btn-icon-glass shrink-0"
+      onClick={() => { if (!on) { setPops((n) => n + 1); try { navigator.vibrate?.(14); } catch { /* no vibration */ } } onClick(); }}
+      className={`btn-icon-glass shrink-0 ${on ? 'is-fav' : ''}`}
       title={on ? 'Убрать из избранного' : 'В избранное'}
       aria-label={`${on ? 'Убрать из избранного' : 'В избранное'}: ${name}`}
       aria-pressed={on}
@@ -165,6 +165,7 @@ function readTabs(): Record<string, string> {
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const swipe = useTabSwipe(tab, id);
+  const nowTs = useNow(30_000);
   const { me, isAdmin } = useAuth();
   // editing a server: administrators and moderators given «Серверы»
   const canEdit = isAdmin || !!me?.perms?.includes('servers');
@@ -268,6 +269,35 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
 
+  // the cover moves slower than the page: a few pixels of parallax (not with reduced motion)
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce') return;
+    let raf = 0;
+    const tick = () => {
+      raf = 0;
+      document.querySelector<HTMLElement>('.srv-banner')?.style.setProperty('--par', String(Math.min(36, Math.max(0, Math.round(window.scrollY * 0.22)))));
+    };
+    const onScroll = () => { if (!raf) raf = window.requestAnimationFrame(tick); };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('scroll', onScroll); if (raf) window.cancelAnimationFrame(raf); };
+  }, []);
+
+  // once, on a touch screen: a hint that the tabs can be swiped
+  const [swipeHint, setSwipeHint] = useState(false);
+  useEffect(() => {
+    let seen = true;
+    try { seen = localStorage.getItem('coregsm_swipe_hint') === '1'; } catch { /* private mode */ }
+    if (seen || !window.matchMedia?.('(pointer: coarse)').matches) return;
+    const on = window.setTimeout(() => setSwipeHint(true), 1800);
+    const off = window.setTimeout(() => { setSwipeHint(false); try { localStorage.setItem('coregsm_swipe_hint', '1'); } catch { /* private mode */ } }, 7500);
+    return () => { window.clearTimeout(on); window.clearTimeout(off); };
+  }, []);
+  useEffect(() => {
+    if (!swipeHint) return;
+    setSwipeHint(false);
+    try { localStorage.setItem('coregsm_swipe_hint', '1'); } catch { /* private mode */ }
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // the tab is remembered per server: «/servers/5» reopens the tab the user left it on (the overview is a choice too)
   const tabSeen = useRef(false);
   useEffect(() => {
@@ -323,6 +353,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
   const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
   const chartLoading = data.hours !== hours;
+  const recent = points.filter((p) => p.online && p.ts >= nowTs - 2 * 3600_000).map((p) => p.players);
+  const hourNow = new Date(nowTs).getHours();
+  const tod = hourNow >= 5 && hourNow < 10 ? 'morning' : hourNow >= 17 && hourNow < 21 ? 'dusk' : hourNow >= 21 || hourNow < 5 ? 'night' : 'day';
+  const coverBg = coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game });
 
   const discordLinks = (data.discord ?? []).map((b) => {
     const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
@@ -411,13 +445,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const playersProps = { online: s.online, players: s.players, names: s.playerNames, list: data.playersNow ?? [], fresh };
   const playerCountBadge = s.online ? <span className="ml-2 inline-block shrink-0 whitespace-nowrap rounded-full bg-soft px-2.5 py-0.5 text-center text-xs font-extrabold tabular-nums leading-5 text-link">{s.players}</span> : null;
 
+  const canSubNow = !!me && !subs.unavailable && subs.list !== null;
   let panel: ReactNode;
   if (tab === 'players') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
         <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
         {s.online && <PlayerFacts peak={stats.peakPlayers ?? null} peakAt={stats.peakAt ?? null} avg={stats.avgPlayers ?? null} windowLabel={windowLabel} list={data.playersNow ?? []} />}
-        <PlayersList {...playersProps} />
+        {s.online && <SessionSpread list={data.playersNow ?? []} now={nowTs} />}
+        <PlayersList {...playersProps} onSubscribe={canSubNow ? () => openSub(null) : undefined} />
       </section>
     );
   } else if (tab === 'history') {
@@ -437,7 +473,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
         <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
-        <EventsFeed events={events} online={s.online} />
+        <EventsFeed events={events} online={s.online} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel} />
       </section>
     );
   } else if (tab === 'connect') {
@@ -497,12 +533,14 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <article
         className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
-        style={{ ...emblemStyle(s.coverUrl, s.game).style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game }) }}
+        style={emblemStyle(s.coverUrl, s.game).style}
         {...depth}
       >
         {emblemStyle(s.coverUrl, s.game).className && <span aria-hidden className="emblem-layer" />}
         {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
         <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
+          <span className="srv-cover" style={{ background: coverBg }} />
+          <span className="srv-tod" data-tod={tod} />
           <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
           <span className="depth-l2 absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
         </span>
@@ -512,7 +550,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
         {/* title row: name, status, game */}
         <div className="relative flex items-start gap-3.5 sm:gap-4">
-          <GameAvatar game={s.game} size={64} glass vtId={s.id} />
+          <span className="srv-ico"><GameAvatar game={s.game} size={72} glass vtId={s.id} /></span>
           <div className="min-w-0 flex-1">
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -533,8 +571,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           maintenance={s.maintenance}
           freeSlot={freeSlot}
           onNotify={() => openSub('free_slot')}
-          who={(data.playersNow?.length ? data.playersNow.map((p) => p.name) : s.playerNames).filter(Boolean)}
+          who={(data.playersNow?.length ? data.playersNow.map((p) => ({ name: p.name, since: p.since as number | null })) : s.playerNames.map((n) => ({ name: n, since: null }))).filter((w) => w.name)}
           whoHref={tabHref(id, 'players')}
+          peak={stats.peakPlayers ?? null}
+          recent={recent}
+          now={nowTs}
         />
 
         <Passport
@@ -562,18 +603,23 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
             (and «Подписаться») floats above the bottom navigation. */}
         <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
-          <a className="btn-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>{connectLabel}</a>
-          <CopyButton text={s.address} label={s.address} tone="glass" className="srv-addr-btn" />
-          {/* hidden on phones by a wrapper: the glass button's own CSS would win over a hidden utility on the button itself */}
-          {canSub && (
-            <span className="contents max-sm:hidden">
-              <button type="button" className="btn-glass" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
-                <IconBell size={18} />
-                {subLabel}
-              </button>
-            </span>
-          )}
-          <MoreMenu items={moreItems} />
+          <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
+            <span>{connectLabel}</span>
+            <small className="srv-cta-addr">{s.address}</small>
+          </a>
+          <CopyButton text={s.address} label={t('srv.cn.copy')} tone="glass" className="srv-addr-btn" />
+          <div className="srv-act-group">
+            {/* hidden on phones by a wrapper: the glass button's own CSS would win over a hidden utility on the button itself */}
+            {canSub && (
+              <span className="contents max-sm:hidden">
+                <button type="button" className="btn-glass" onClick={() => openSub(null)} aria-haspopup="dialog" aria-label={`${subLabel}: ${s.name}`}>
+                  <IconBell size={18} />
+                  {subLabel}
+                </button>
+              </span>
+            )}
+            <MoreMenu items={moreItems} />
+          </div>
         </div>
       </article>
       <ErrorLine text={error} />
@@ -591,6 +637,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           </span>
         )}
       />
+
+      {swipeHint && <p className="srv-swipe-hint" role="status">← Смахните вбок, чтобы переключить вкладку →</p>}
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
