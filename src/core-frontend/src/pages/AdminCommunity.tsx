@@ -15,6 +15,7 @@ export const COMMUNITY_TABS = [
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
   { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
   { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
+  { id: 'comments', get label() { return t('adm.com.comments'); }, admin: false },
 ] as const;
 
 export default function AdminCommunity({ sub = '' }: { sub?: string }) {
@@ -33,6 +34,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
       {tab === 'reviews' && <ReviewsAdmin />}
       {tab === 'gallery' && <GalleryAdmin />}
       {tab === 'reports' && <ReportsAdmin />}
+      {tab === 'comments' && <CommentsAdmin />}
     </AdminPage>
   );
 }
@@ -204,6 +206,72 @@ function ReportsAdmin() {
               ) : (
                 <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? '✅ Меры приняты' : 'ℹ️ Отклонена'} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
               )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+interface QueueRow { id: number; newsId: number; title: string; author: string; text: string; status: string; hideReason: string; createdAt: number; flags: number }
+
+/** complained-about and hidden comments under the news; the switch of the comments for the whole site */
+function CommentsAdmin() {
+  const { me } = useAuth();
+  const canSwitch = me?.role === 'admin' || !!me?.perms?.includes('news');
+  const [rows, setRows] = useState<QueueRow[] | null>(null);
+  const [picked, setPicked] = useState<number[]>([]);
+  const [on, setOn] = useState<boolean | null>(null);
+  const [error, setError] = useState('');
+  const load = () => api<QueueRow[]>('/news/comments/queue').then((l) => { setRows(l); setPicked((p) => p.filter((id) => l.some((r) => r.id === id))); setError(''); }).catch((e: Error) => setError(e.message));
+  useEffect(() => {
+    void load();
+    if (canSwitch) api<{ enabled: boolean }>('/news/comments/settings').then((s) => setOn(s.enabled)).catch(() => undefined);
+  }, []);
+  const flip = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const run = (ids: number[], action: 'approve' | 'hide' | 'delete', reason?: string) =>
+    api('/news/comments/bulk', 'POST', { ids, action, ...(reason ? { reason } : {}) }).then(() => { toast('Готово'); void load(); }).catch((e: Error) => setError(e.message));
+  const hideMany = async (ids: number[]) => {
+    const reason = await promptDialog({ title: 'Скрыть комментарии', label: 'Причина (её увидит автор)', confirmLabel: 'Скрыть', placeholder: 'Например: оскорбления' });
+    if (reason !== null) void run(ids, 'hide', reason);
+  };
+  const delMany = async (ids: number[]) => {
+    if (await confirmDialog({ title: `Удалить комментариев: ${ids.length}?`, text: 'Это нельзя отменить.', confirmLabel: 'Удалить', danger: true })) void run(ids, 'delete');
+  };
+  const switchSite = (v: boolean) => api<{ enabled: boolean }>('/news/comments/settings', 'PUT', { enabled: v }).then((s) => { setOn(s.enabled); toast(s.enabled ? 'Комментарии включены' : 'Комментарии выключены'); }).catch((e: Error) => setError(e.message));
+  return (
+    <Section
+      title="Комментарии к новостям"
+      description={rows ? (rows.length ? `В очереди: ${rows.length}. Сначала те, на кого пожаловались` : 'Жалоб и скрытых комментариев нет') : undefined}
+      actions={canSwitch && on !== null ? <label className="flex cursor-pointer items-center gap-2 font-bold"><input type="checkbox" className="h-4 w-4 accent-brand" checked={on} onChange={(e) => void switchSite(e.target.checked)} />Комментарии включены</label> : undefined}
+    >
+      <ErrorLine text={error} />
+      {picked.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">
+          <b>Выбрано: {picked.length}</b>
+          <button type="button" className="btn btn-success btn-sm" onClick={() => void run(picked, 'approve')}>Оставить</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void hideMany(picked)}>Скрыть</button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => void delMany(picked)}>Удалить</button>
+        </div>
+      )}
+      {rows === null ? <div className="skeleton h-24 rounded-2xl" /> : rows.length === 0 ? <p className="text-sm font-semibold text-mute">Очередь пуста.</p> : (
+        <ul className="grid gap-2.5">
+          {rows.map((r) => (
+            <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(r.id)} onChange={() => flip(r.id)} aria-label={`Выбрать комментарий ${r.author}`} />
+                <b>{r.author}</b>
+                {r.status === 'hidden' ? <span className="pill pill-mute">скрыт{r.hideReason ? `: ${r.hideReason}` : ''}</span> : <span className="pill pill-bad">жалоб: {r.flags}</span>}
+                <a href={`/news/${r.newsId}#c-${r.id}`} className="min-w-0 truncate text-sm font-bold text-mute hover:text-link">{r.title}</a>
+                <span className="ml-auto text-xs font-bold text-mute">{ago(r.createdAt)}</span>
+              </div>
+              <p className="mt-1.5 whitespace-pre-line wrap-break-word text-sm font-semibold">{r.text}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className="btn btn-success btn-xs" onClick={() => void run([r.id], 'approve')}>{r.status === 'hidden' ? 'Показать' : 'Оставить'}</button>
+                {r.status !== 'hidden' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void hideMany([r.id])}>Скрыть</button>}
+                <button type="button" className="btn btn-danger btn-xs" onClick={() => void delMany([r.id])}>Удалить</button>
+              </div>
             </li>
           ))}
         </ul>

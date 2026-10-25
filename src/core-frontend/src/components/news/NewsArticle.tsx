@@ -4,6 +4,7 @@ import { t } from '../../i18n';
 import { ago, fmtDateTime, toast } from '../../ui';
 import { cardOf, NewsCover, Row } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
+import { Comments } from './Comments';
 import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
 import {
   ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
@@ -152,6 +153,7 @@ export function NewsArticle({
           </>
         )}
       </div>
+      {!preview && <div className="nw-article-in"><Comments newsId={item.id} /></div>}
       {!preview && related.length > 0 && (
         <section className="nw-related" aria-label={t('nw.related')}>
           <h2 className="nw-h2">{t('nw.related')}</h2>

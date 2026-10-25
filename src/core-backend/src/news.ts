@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { commentCount } from './newsComments.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
@@ -631,6 +632,7 @@ export function registerNews(deps: {
       pinned: full.pinned,
       authorRole: full.authorRole,
       reactions: full.reactions,
+      comments: commentCount(full.id),
     };
   };
   const isPublished = (r: { status: string }) => r.status === 'sent' || r.status === 'edit_queued';
