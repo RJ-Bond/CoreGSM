@@ -65,6 +65,7 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/update\/rollback$/, label: 'Запущен откат панели' },
   { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
   { m: 'PUT', re: /^\/api\/backups\/settings$/, label: 'Изменены настройки резервного копирования', detail: (r) => ['schedule', 'keep', 'remoteUrl', 'passphrase'].filter((k) => r.body?.[k] !== undefined).map((k) => (k === 'schedule' ? `расписание: ${s(r.body?.schedule, 10)}` : k === 'keep' ? `хранить: ${Number(r.body?.keep) || ''}` : k === 'remoteUrl' ? 'внешняя копия' : 'шифрование')).join(', ') },
+  { m: 'PATCH', re: /^\/api\/reports\/(\d+)$/, label: 'Обработана жалоба на игрока', pre: (id) => `#${id}`, detail: (r) => s(r.body?.status, 12) },
   { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
   { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
   { m: 'PUT', re: /^\/api\/maintenance\/(\d+)$/, label: 'Изменено окно обслуживания', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name)}`.trim() },
