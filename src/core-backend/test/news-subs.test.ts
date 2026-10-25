@@ -1,7 +1,7 @@
 /** Subscriptions to the rubrics of the news and the statistics of one item. */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { newsNoticeText, normRubric } from '../src/newsSubs.ts';
+import { newsNoticeText, normRubric } from '../src/newsSubsLogic.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 const channelId = '123456789012345678';
