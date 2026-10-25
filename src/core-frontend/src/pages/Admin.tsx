@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
@@ -8,6 +8,8 @@ import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, Load
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminOverview from './AdminOverview';
+import AdminStatusBar from '../components/AdminStatusBar';
+import { CHORDS, chordOf } from './adminLogic';
 import { ServersArt } from '../components/Illustrations';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
@@ -25,6 +27,7 @@ import SettingsPage, { UsersTab } from './Settings';
 export { ADMIN_SECTIONS };
 import SystemPage from './System';
 
+/** n = 0 draws a bare dot (a state, not a count) */
 interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
 
 /** the small counters on the sidebar: servers that do not answer, people waiting for approval */
@@ -38,6 +41,13 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
       if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
     }
     if (isAdmin) {
+      const [bot, sys] = await Promise.all([
+        api<{ state?: string }>('/bot/status').catch(() => null),
+        api<{ cert?: { daysLeft: number | null } }>('/system').catch(() => null),
+      ]);
+      if (bot?.state === 'error') out.discord = { n: 0, tone: 'bad', label: 'Бот Discord в ошибке' };
+      const days = sys?.cert?.daysLeft;
+      if (days != null && days <= 14) out.system = { n: 0, tone: days <= 0 ? 'bad' : 'warn', label: days <= 0 ? 'Сертификат истёк' : `Сертификат истекает через ${days} дн.` };
       const users = await api<UserRow[]>('/users').catch(() => null);
       const wait = users ? users.filter((u) => u.status === 'pending').length : 0;
       if (wait > 0) out.users = { n: wait, tone: 'warn', label: t('adm.badge.pending', { k: wait }) };
@@ -142,17 +152,48 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
-      {badges[s.id] && <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>}
+      {badges[s.id] && (badges[s.id].n === 0
+        ? <span className={`adm-dot is-${badges[s.id].tone}`} title={badges[s.id].label} role="img" aria-label={badges[s.id].label} />
+        : <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>)}
       {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
     </a>
   );
+  // the sliding indicator under the current link
+  const navRef = useRef<HTMLElement>(null);
+  const [ind, setInd] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const nav = navRef.current;
+      const el = nav?.querySelector<HTMLElement>('.adm-link[aria-current="page"]');
+      if (!nav || !el || home) { setInd(null); return; }
+      setInd({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [current, home, pins, recent, badges, isAdmin]);
+  // «g» then a letter: go to a section (not while typing)
+  useEffect(() => {
+    if (!isAdmin) return;
+    let armed = 0;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.ctrlKey || e.metaKey || e.altKey || el?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === 'g') { armed = Date.now(); return; }
+      if (armed && Date.now() - armed < 1200 && CHORDS[e.key]) { armed = 0; navigate(`/admin/${CHORDS[e.key]}`); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isAdmin]);
+  const [menu, setMenu] = useState(false);
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
     <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]" data-density={dense ? 'compact' : undefined}>
-      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
+      <nav ref={navRef} className={`adm-nav ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
+        {ind && <span className="adm-ind" aria-hidden style={{ transform: `translate(${ind.x}px, ${ind.y}px)`, width: ind.w, height: ind.h }} />}
         {isAdmin ? (
           <>
             <button type="button" className="adm-find max-md:hidden" onClick={() => window.dispatchEvent(new Event('coregsm:palette'))}>
@@ -207,11 +248,26 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             <CertWarning />
           </div>
         )}
-        {!home && crumb && (
+        {!home && isAdmin && <AdminStatusBar />}
+        {!home && current !== 'start' && current !== 'overview' && (
           <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
-            <a href={`/admin/${current}`}>{byId(current)?.label}</a>
+            <a href="/admin/overview">Админка</a>
             <span aria-hidden>›</span>
-            <span aria-current="page">{crumb}</span>
+            <span className="adm-crumb-menu">
+              <button type="button" className="font-extrabold text-ink hover:text-link" aria-expanded={menu} onClick={() => setMenu((v) => !v)} onBlur={(e) => { if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) setMenu(false); }}>
+                {byId(current)?.label} <span aria-hidden>▾</span>
+              </button>
+              {menu && (
+                <div className="adm-crumb-pop" role="menu">
+                  {sections.map((s) => (
+                    <a key={s.id} role="menuitem" href={`/admin/${s.id}`} onClick={() => setMenu(false)}>
+                      <span className="adm-ic" aria-hidden>{s.icon()}</span>{s.label}{isAdmin && chordOf(s.id) && <kbd>g {chordOf(s.id)}</kbd>}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </span>
+            {crumb && <><span aria-hidden>›</span><span aria-current="page">{crumb}</span></>}
           </nav>
         )}
         {home && <AdminHome />}

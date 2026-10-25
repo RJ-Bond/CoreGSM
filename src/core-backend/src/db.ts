@@ -329,6 +329,8 @@ export interface StatusRow {
   player_names: string;
   error: string | null;
   updated_at: number;
+  /** when the server entered its current state (online/offline) */
+  state_since: number | null;
 }
 
 export interface BindingRow {

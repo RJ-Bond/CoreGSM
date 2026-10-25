@@ -118,6 +118,12 @@ CREATE TABLE IF NOT EXISTS smart_state (
       addColumn(db, 'users', 'totp_step', 'INTEGER NOT NULL DEFAULT 0');
     },
   },
+  {
+    version: 10,
+    name: 'status.state_since',
+    // when the server entered its current state (online / offline); NULL = not known yet
+    up: (db) => addColumn(db, 'status', 'state_since', 'INTEGER'),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
