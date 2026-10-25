@@ -23,6 +23,18 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
   const openRef = useRef(false);
   const popId = useId();
   openRef.current = open;
+  // a new notification: the bell rings once
+  const [ring, setRing] = useState(false);
+  const prevUnread = useRef(unread);
+  useEffect(() => {
+    if (unread > prevUnread.current) {
+      setRing(true);
+      const id = window.setTimeout(() => setRing(false), 1300);
+      prevUnread.current = unread;
+      return () => window.clearTimeout(id);
+    }
+    prevUnread.current = unread;
+  }, [unread]);
 
   // /me brings a fresh number on every reload of the session; keep the larger knowledge of the two out of the way
   useEffect(() => { setUnread(Math.max(0, initialUnread)); }, [initialUnread]);
@@ -101,7 +113,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
         ref={btn}
         type="button"
         onClick={toggle}
-        className="btn-icon relative"
+        className={`btn-icon relative ${ring ? 'bell-ring' : ''}`}
         aria-label={label}
         title={t('bell.title')}
         aria-haspopup="dialog"
