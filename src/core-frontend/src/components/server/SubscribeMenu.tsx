@@ -8,7 +8,14 @@ import { SUB_KINDS, normalizeKinds, toggleKind, useSubscriptions, type SubKind, 
 const KIND_KEY: Record<SubKind, TKey> = { free_slot: 'sub.free_slot', back_online: 'sub.back_online', went_down: 'sub.went_down' };
 
 /** the choice of kinds: checkboxes and, when there is no linked Discord, a note about where the messages go */
-export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub' }: { kinds: SubKind[]; onChange: (k: SubKind[]) => void; discordLinked: boolean; idPrefix?: string }) {
+/** what the message will look like (the address is an example) */
+const PREVIEW: Record<SubKind, (n: string) => string> = {
+  free_slot: (n) => `🟢 На сервере «${n}» освободилось место (39/40). Адрес: play.example.com:27015`,
+  back_online: (n) => `✅ Сервер «${n}» снова в сети. Адрес: play.example.com:27015`,
+  went_down: (n) => `🔴 Сервер «${n}» недоступен. Адрес: play.example.com:27015`,
+};
+
+export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub', serverName }: { kinds: SubKind[]; onChange: (k: SubKind[]) => void; discordLinked: boolean; idPrefix?: string; serverName?: string }) {
   return (
     <div className="space-y-3">
       <p className="font-semibold text-mute">{t('sub.text')}</p>
@@ -19,6 +26,7 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
               <input id={`${idPrefix}-${k}`} type="checkbox" checked={kinds.includes(k)} onChange={() => onChange(toggleKind(kinds, k))} />
               {t(KIND_KEY[k])}
             </label>
+            {serverName && kinds.includes(k) && <p className="sub-preview" aria-label="Так будет выглядеть сообщение">{PREVIEW[k](serverName)}</p>}
           </li>
         ))}
       </ul>
@@ -57,6 +65,7 @@ export default function SubscribeMenu({
   const setOpen = (v: boolean) => { setInnerOpen(v); onOpenChange?.(v); };
   const [draft, setDraft] = useState<SubKind[]>([]);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
 
   const current = normalizeKinds(subs.list?.find((s) => s.serverId === serverId)?.kinds);
@@ -70,6 +79,18 @@ export default function SubscribeMenu({
 
   if (!me || subs.unavailable || subs.list === null) return null;
   const on = current.length > 0;
+
+  const sendTest = async () => {
+    setTesting(true);
+    try {
+      const r = await api<{ dm: boolean; discordLinked: boolean }>(`/servers/${serverId}/subscription/test`, 'POST');
+      toast(r.dm ? 'Тест отправлен: смотрите колокольчик и личные сообщения Discord' : r.discordLinked ? 'Тест в колокольчике. Бот сейчас не в сети, в Discord не отправлено' : 'Тест в колокольчике. Привяжите Discord, чтобы получать и в личные сообщения');
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -98,9 +119,12 @@ export default function SubscribeMenu({
       {open && (
         <Modal title={t('sub.title')} onClose={() => setOpen(false)}>
           <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-            <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} />
+            <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} serverName={serverName} />
             <ErrorLine text={error} />
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button type="button" className="btn btn-soft mr-auto" disabled={testing} onClick={() => void sendTest()} title="Пришлёт в панель, в Discord и на устройства сообщение-образец">
+                {testing ? 'Отправляю…' : 'Тестовое сообщение'}
+              </button>
               <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
               <Button loading={busy}>{t('sub.save')}</Button>
             </div>

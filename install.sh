@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f2ff12139bcd"
+COREGSM_BUILD="e6ab5f1796b5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -13661,6 +13661,7 @@ import { avatarFor } from './avatars.js';
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
+import { addColumn } from './schema.js';
 import { param } from './http.js';
 
 export const router = express.Router();
@@ -13678,13 +13679,26 @@ CREATE TABLE IF NOT EXISTS server_reviews (
   UNIQUE (server_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_server ON server_reviews(server_id, hidden);
+-- «useful»: one vote of a user for a review of somebody else
+CREATE TABLE IF NOT EXISTS review_votes (
+  review_id INTEGER NOT NULL REFERENCES server_reviews(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (review_id, user_id)
+);
 `);
+// the answer of the server's staff under a review
+addColumn(db, 'server_reviews', 'reply', "TEXT NOT NULL DEFAULT ''");
+addColumn(db, 'server_reviews', 'reply_at', 'INTEGER');
 
-interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; username: string; discord_id: string | null; discord_avatar: string | null }
+interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; reply?: string; reply_at?: number | null; votes?: number; voted?: number; username: string; discord_id: string | null; discord_avatar: string | null }
 
-const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar FROM server_reviews r JOIN users u ON u.id = r.user_id`;
+/** `?` in the first slot is the viewer's id (0 for a guest): `voted` says whether they found the review useful */
+const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar,
+  (SELECT COUNT(*) FROM review_votes v WHERE v.review_id = r.id) AS votes,
+  (SELECT COUNT(*) FROM review_votes v WHERE v.review_id = r.id AND v.user_id = ?) AS voted
+  FROM server_reviews r JOIN users u ON u.id = r.user_id`;
 const avatar = (r: Row) => avatarFor({ id: r.user_id, discord_id: r.discord_id, discord_avatar: r.discord_avatar });
-const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at });
+const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at, votes: r.votes ?? 0, voted: !!r.voted, reply: r.reply || null, replyAt: r.reply ? r.reply_at ?? null : null });
 
 /** the score of a server: the average of the shown reviews and how many gave each number of stars */
 export function scoreOf(serverId: number): { avg: number | null; count: number; dist: number[] } {
@@ -13701,8 +13715,9 @@ const serverExists = (id: number) => Number.isInteger(id) && !!db.prepare('SELEC
 router.get('/api/servers/:id/reviews', param('id'), viewer, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
-  const items = (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.hidden = 0 ORDER BY r.updated_at DESC LIMIT 50`).all(id) as Row[]).map(out);
-  const mine = req.user ? (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user.id) as Row | undefined) : undefined;
+  const uid = req.user?.id ?? 0;
+  const items = (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.hidden = 0 ORDER BY r.updated_at DESC LIMIT 50`).all(uid, id) as Row[]).map(out);
+  const mine = req.user ? (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(uid, id, req.user.id) as Row | undefined) : undefined;
   res.json({ ...scoreOf(id), items, mine: mine ? out(mine) : null });
 });
 
@@ -13717,7 +13732,7 @@ router.put('/api/servers/:id/reviews', param('id'), auth, rateLimit(20), (req: A
     `INSERT INTO server_reviews (server_id, user_id, stars, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(server_id, user_id) DO UPDATE SET stars = excluded.stars, text = excluded.text, updated_at = excluded.updated_at`,
   ).run(id, req.user!.id, b.data.stars, b.data.text, now, now);
-  const mine = db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user!.id) as Row;
+  const mine = db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(req.user!.id, id, req.user!.id) as Row;
   res.json({ ...scoreOf(id), mine: out(mine) });
 });
 
@@ -13728,7 +13743,7 @@ router.delete('/api/servers/:id/reviews/mine', param('id'), auth, (req: AuthedRe
 
 router.get('/api/reviews', staff, (_req, res) => {
   const rows = db
-    .prepare(`SELECT r.*, u.username, u.discord_id, u.discord_avatar, ${EFFECTIVE_NAME} AS server_name FROM server_reviews r JOIN users u ON u.id = r.user_id JOIN servers s ON s.id = r.server_id LEFT JOIN status st ON st.server_id = s.id ORDER BY r.updated_at DESC LIMIT 200`)
+    .prepare(`SELECT r.*, 0 AS votes, 0 AS voted, u.username, u.discord_id, u.discord_avatar, ${EFFECTIVE_NAME} AS server_name FROM server_reviews r JOIN users u ON u.id = r.user_id JOIN servers s ON s.id = r.server_id LEFT JOIN status st ON st.server_id = s.id ORDER BY r.updated_at DESC LIMIT 200`)
     .all() as (Row & { server_name: string })[];
   res.json(rows.map((r) => ({ ...out(r), serverName: r.server_name })));
 });
@@ -13744,6 +13759,32 @@ router.patch('/api/reviews/:id', param('id'), staff, (req, res) => {
 router.delete('/api/reviews/:id', param('id'), staff, (req, res) => {
   db.prepare('DELETE FROM server_reviews WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
+});
+
+// useful: one vote per user, not for one's own review
+router.put('/api/reviews/:id/vote', param('id'), auth, rateLimit(60), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT user_id, hidden FROM server_reviews WHERE id = ?').get(id) as { user_id: number; hidden: number } | undefined;
+  if (!r || r.hidden) return res.status(404).json({ error: 'Отзыв не найден' });
+  if (r.user_id === req.user!.id) return res.status(400).json({ error: 'Свой отзыв отмечать нельзя' });
+  db.prepare('INSERT OR IGNORE INTO review_votes (review_id, user_id) VALUES (?, ?)').run(id, req.user!.id);
+  res.json({ votes: (db.prepare('SELECT COUNT(*) AS n FROM review_votes WHERE review_id = ?').get(id) as { n: number }).n, voted: true });
+});
+
+router.delete('/api/reviews/:id/vote', param('id'), auth, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  db.prepare('DELETE FROM review_votes WHERE review_id = ? AND user_id = ?').run(id, req.user!.id);
+  res.json({ votes: (db.prepare('SELECT COUNT(*) AS n FROM review_votes WHERE review_id = ?').get(id) as { n: number }).n, voted: false });
+});
+
+// the answer of the staff who manage servers
+const replyStaff = allow('servers');
+router.put('/api/reviews/:id/reply', param('id'), replyStaff, (req, res) => {
+  const b = z.object({ text: z.string().trim().max(600) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Ответ — до 600 символов' });
+  const r = db.prepare('UPDATE server_reviews SET reply = ?, reply_at = ? WHERE id = ?').run(b.data.text, b.data.text ? Date.now() : null, Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json({ reply: b.data.text || null });
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
@@ -15178,6 +15219,17 @@ import { baseOf, brand, publicBase } from '../site.js';
 
 export const router = express.Router();
 
+// a pinned note of the staff on the overview of a server (rules, the next wipe, working hours)
+db.exec(`
+CREATE TABLE IF NOT EXISTS server_notices (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  tone TEXT NOT NULL DEFAULT 'info',
+  updated_at INTEGER NOT NULL
+);
+`);
+const NOTICE_TONES = ['info', 'ok', 'warn', 'bad'] as const;
+
 // ---------- servers ----------
 const serverSchema = z.object({
   // optional: when empty the title is taken from the game server's own reply
@@ -15351,6 +15403,10 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
     hours,
     createdAt,
     discord,
+    notice: (() => {
+      const n = db.prepare('SELECT text, tone, updated_at FROM server_notices WHERE server_id = ?').get(id) as { text: string; tone: string; updated_at: number } | undefined;
+      return n ? { text: n.text, tone: n.tone, updatedAt: n.updated_at } : null;
+    })(),
     playersNow,
     points,
     stats: {
@@ -15365,6 +15421,20 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
     // shown period, so the chart can show where today is unusual; null where there is not enough history
     baseline: hours <= 168 ? usualWeek(id, since) : null,
   });
+});
+
+router.put('/api/servers/:id/notice', param('id'), allow('servers'), (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ text: z.string().trim().max(500), tone: z.enum(NOTICE_TONES).default('info') }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Текст объявления — до 500 символов' });
+  if (!b.data.text) {
+    db.prepare('DELETE FROM server_notices WHERE server_id = ?').run(id);
+    return res.json({ notice: null });
+  }
+  const now = Date.now();
+  db.prepare('INSERT INTO server_notices (server_id, text, tone, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET text = excluded.text, tone = excluded.tone, updated_at = excluded.updated_at').run(id, b.data.text, b.data.tone, now);
+  res.json({ notice: { text: b.data.text, tone: b.data.tone, updatedAt: now } });
 });
 
 function usualWeek(serverId: number, before: number): (number | null)[] {
@@ -17289,6 +17359,27 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
       }
     })();
     res.json({ serverId: sid, kinds: kindsOf(uid, sid) });
+  });
+
+  // a test: the same message a real event would bring, to the inbox, to Discord and to the devices (once per 20 s)
+  const lastTest = new Map<number, number>();
+  app.post('/api/servers/:id/subscription/test', auth, (req, res) => {
+    const sid = Number(req.params.id);
+    const info = Number.isInteger(sid)
+      ? (db.prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(sid) as { n: string; display_address: string; host: string; port: number } | undefined)
+      : undefined;
+    if (!info) return res.status(404).json({ error: 'Сервер не найден' });
+    const uid = userId(req);
+    const now = Date.now();
+    if (now - (lastTest.get(uid) ?? 0) < 20_000) return res.status(429).json({ error: 'Подождите несколько секунд перед следующей проверкой' });
+    lastTest.set(uid, now);
+    const text = `🧪 Проверка уведомлений. ${notificationText('back_online', info.n, info.display_address || `${info.host}:${info.port}`, 0, 0)}`;
+    db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, ?, ?)').run(uid, now, 'test', sid, text);
+    const u = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(uid) as { discord_id: string | null } | undefined;
+    const dm = !!u?.discord_id && canDm();
+    if (dm) enqueueDelivery({ kind: 'dm', refId: null, target: u!.discord_id as string, payload: { content: text, summary: text.slice(0, 120) } });
+    pushLater(uid, { title: info.n, body: text, url: `/servers/${sid}`, tag: `srv-${sid}-test` });
+    res.json({ inbox: true, dm, discordLinked: !!u?.discord_id });
   });
 
   app.get('/api/me/notifications', auth, (req, res) => {
@@ -55834,6 +55925,8 @@ import '../../styles/analytics.css';
 import { api } from '../../api';
 import { rankById } from '../../vrisingRanks';
 import { ago, ErrorLine, fmtDate, plural, num } from '../../ui';
+import NickPic from '../NickPic';
+import { nickHue, nickInitial } from './helpers';
 
 interface Analytics {
   days: number;
@@ -56009,31 +56102,48 @@ function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
   );
 }
 
+type TopSort = 'hours' | 'visits' | 'recent';
+const TOP_SORTS: [TopSort, string][] = [['hours', 'По часам'], ['visits', 'По визитам'], ['recent', 'По давности']];
+
 function TopPlayers({ top }: { top: Analytics['top'] }) {
-  const max = Math.max(1, ...top.map((p) => p.hours));
+  const [sort, setSort] = useState<TopSort>('hours');
+  const list = useMemo(
+    () => [...top].sort((a, b) => (sort === 'visits' ? b.visits - a.visits || b.hours - a.hours : sort === 'recent' ? (b.lastSeen ?? Infinity) - (a.lastSeen ?? Infinity) : b.hours - a.hours)),
+    [top, sort],
+  );
+  const max = Math.max(1, ...top.map((p) => (sort === 'visits' ? p.visits : p.hours)));
   if (!top.length) return <p className="text-sm font-semibold text-mute">За этот период никто не играл.</p>;
   return (
-    <ol className="an-top">
-      {top.map((p, i) => {
-        const rank = p.rankId ? rankById(p.rankId) : null;
-        return (
-          <li key={p.name}>
-            <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-baseline gap-2">
-                <span className="truncate font-extrabold">{p.name}</span>
-                {rank && <span className="truncate text-xs font-bold text-mute">{rank.name}</span>}
+    <div className="space-y-3">
+      <div className="seg" role="group" aria-label="Порядок">
+        {TOP_SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>)}
+      </div>
+      <ol className="an-top">
+        {list.map((p, i) => {
+          const rank = p.rankId ? rankById(p.rankId) : null;
+          const value = sort === 'visits' ? p.visits : p.hours;
+          return (
+            <li key={p.name}>
+              <span className={`an-top-n ${i < 3 && sort !== 'recent' ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+              <NickPic name={p.name} size={32} className="rounded-full">
+                <span className="avatar-hue grid shrink-0 place-items-center rounded-full font-extrabold" style={{ ['--h' as string]: nickHue(p.name), width: 32, height: 32, fontSize: 13 }} aria-hidden>{nickInitial(p.name)}</span>
+              </NickPic>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  <a className="truncate font-extrabold hover:underline" href={`/player/${encodeURIComponent(p.name)}`}>{p.name}</a>
+                  {rank && <span className="truncate text-xs font-bold text-mute">{rank.name}</span>}
+                </span>
+                <span className="an-top-bar"><span style={{ width: `${(value / max) * 100}%` }} /></span>
               </span>
-              <span className="an-top-bar"><span style={{ width: `${(p.hours / max) * 100}%` }} /></span>
-            </span>
-            <span className="shrink-0 text-right">
-              <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
-              <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
-            </span>
-          </li>
-        );
-      })}
-    </ol>
+              <span className="shrink-0 text-right">
+                <span className="block font-extrabold tabular-nums">{sort === 'visits' ? `${p.visits} ${plural(p.visits, ['визит', 'визита', 'визитов'])}` : `${num(p.hours)} ч`}</span>
+                <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 
@@ -57237,7 +57347,7 @@ export const uptimeLevel = (pct: number | null): 'good' | 'warm' | 'hot' | undef
 export default function Metrics({ d, withSamples = false }: { d: MetricsData; withSamples?: boolean }) {
   useI18n();
   return (
-    <div className={`srv-metrics ${withSamples ? 'has-4' : ''}`}>
+    <div className={`srv-metrics no-scrollbar ${withSamples ? 'has-4' : ''}`}>
       <Cell
         k="Пик"
         v={d.peak == null ? '–' : String(d.peak)}
@@ -57352,6 +57462,76 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
         </Popover.Content>
       </div>
     </Popover.Root>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/Notice.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../../api';
+import { ago, toast } from '../../ui';
+
+export interface ServerNotice { text: string; tone: string; updatedAt: number }
+
+const TONES: [string, string][] = [['info', 'Информация'], ['ok', 'Хорошая новость'], ['warn', 'Важно'], ['bad', 'Срочно']];
+const ICON: Record<string, string> = { info: 'ℹ️', ok: '✅', warn: '⚠️', bad: '🚨' };
+
+/**
+ * A pinned note of the staff at the top of the overview (rules, the next wipe, working hours). Everybody reads it;
+ * those who manage servers get «Закрепить объявление» / «Изменить» and a small form.
+ */
+export default function PinnedNotice({ serverId, notice, canEdit, onChange }: { serverId: number; notice: ServerNotice | null; canEdit: boolean; onChange: (n: ServerNotice | null) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const [tone, setTone] = useState('info');
+  const [busy, setBusy] = useState(false);
+
+  const open = () => { setText(notice?.text ?? ''); setTone(notice?.tone ?? 'info'); setEditing(true); };
+  const save = async (value: string) => {
+    setBusy(true);
+    try {
+      const r = await api<{ notice: ServerNotice | null }>(`/servers/${serverId}/notice`, 'PUT', { text: value, tone });
+      onChange(r.notice);
+      setEditing(false);
+      toast(r.notice ? 'Объявление закреплено' : 'Объявление снято');
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <form className="srv-notice-form" onSubmit={(e) => { e.preventDefault(); void save(text); }}>
+        <label className="font-extrabold" htmlFor="srv-notice-text">Объявление для игроков</label>
+        <textarea id="srv-notice-text" className="input min-h-20" value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="Например: вайп в пятницу в 18:00 по Москве. Правила: без читов." autoFocus />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="seg" role="group" aria-label="Важность">
+            {TONES.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={tone === k} onClick={() => setTone(k)}>{label}</button>)}
+          </div>
+          <span className="ml-auto text-xs font-bold text-mute">{text.length}/500</span>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          {notice && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void save('')}>Снять</button>}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>
+          <button className="btn btn-sm" disabled={busy || !text.trim()}>Закрепить</button>
+        </div>
+      </form>
+    );
+  }
+  if (!notice) {
+    return canEdit ? <button type="button" className="srv-notice-add" onClick={open}>📌 Закрепить объявление</button> : null;
+  }
+  return (
+    <aside className={`srv-notice is-${notice.tone}`} role="note">
+      <span className="srv-notice-i" aria-hidden>{ICON[notice.tone] ?? ICON.info}</span>
+      <div className="min-w-0 flex-1">
+        <p className="whitespace-pre-line font-bold leading-snug">{notice.text}</p>
+        <p className="mt-1 text-xs font-bold opacity-70">закреплено {ago(notice.updatedAt)}</p>
+      </div>
+      {canEdit && <button type="button" className="btn-link btn-xs shrink-0" onClick={open}>Изменить</button>}
+    </aside>
   );
 }
 __COREGSM_EOF__
@@ -57973,40 +58153,58 @@ import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { Button, ErrorLine, UserAvatar, ago, plural, toast, num } from '../../ui';
 
-export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number }
+export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number; votes?: number; voted?: boolean; reply?: string | null; replyAt?: number | null }
 interface Reviews { avg: number | null; count: number; dist: number[]; items: Review[]; mine: Review | null }
 
-export function Stars({ value, size = 16 }: { value: number; size?: number }) {
+/** `exact`: the stars are filled in parts (4.3 lights the fifth star by a third); otherwise the value is rounded */
+export function Stars({ value, size = 16, exact = false }: { value: number; size?: number; exact?: boolean }) {
   return (
     <span className="rv-stars" role="img" aria-label={`${value} из 5`} style={{ fontSize: size }}>
-      {[1, 2, 3, 4, 5].map((n) => <span key={n} className={n <= Math.round(value) ? 'on' : ''} aria-hidden>★</span>)}
+      {[1, 2, 3, 4, 5].map((n) => {
+        const f = exact ? Math.min(1, Math.max(0, value - (n - 1))) : n <= Math.round(value) ? 1 : 0;
+        return <span key={n} className={f >= 1 ? 'on' : f > 0 ? 'fr' : ''} style={f > 0 && f < 1 ? { ['--f' as string]: f } : undefined} aria-hidden>★</span>;
+      })}
     </span>
   );
 }
 
+const WORDS = ['', 'Ужасно', 'Плохо', 'Нормально', 'Хорошо', 'Отлично'];
+type Sort = 'new' | 'useful' | 'high' | 'low';
+const SORTS: [Sort, string][] = [['new', 'Новые'], ['useful', 'Полезные'], ['high', 'Высокие'], ['low', 'Низкие']];
+
 function StarPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const [hover, setHover] = useState(0);
+  const [pops, setPops] = useState(0);
   const shown = hover || value;
   return (
-    <span className="rv-pick" role="radiogroup" aria-label="Оценка" onMouseLeave={() => setHover(0)}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <button
-          key={n}
-          type="button"
-          role="radio"
-          aria-checked={value === n}
-          aria-label={`${n} из 5`}
-          className={n <= shown ? 'on' : ''}
-          onMouseEnter={() => setHover(n)}
-          onClick={() => onChange(n)}
-        >★</button>
-      ))}
+    <span className="inline-flex flex-wrap items-center gap-x-3">
+      <span className="rv-pick" role="radiogroup" aria-label="Оценка" onMouseLeave={() => setHover(0)}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={`${n}-${n <= value ? pops : 0}`}
+            type="button"
+            role="radio"
+            aria-checked={value === n}
+            aria-label={`${n} из 5`}
+            className={`${n <= shown ? 'on' : ''} ${n <= value && pops > 0 ? 'is-pop' : ''}`}
+            style={{ ['--i' as string]: n }}
+            onMouseEnter={() => setHover(n)}
+            onClick={() => { setPops((k) => k + 1); onChange(n); }}
+          >★</button>
+        ))}
+      </span>
+      <span className="rv-word" aria-live="polite">{WORDS[shown]}</span>
     </span>
   );
 }
 
 export default function ServerReviews({ serverId }: { serverId: number }) {
-  const { me } = useAuth();
+  const { me, isAdmin } = useAuth();
+  const canReply = isAdmin || !!me?.perms?.includes('servers');
+  const [sort, setSort] = useState<Sort>('new');
+  const [starFilter, setStarFilter] = useState(0);
+  const [replyFor, setReplyFor] = useState<number | null>(null);
+  const [replyText, setReplyText] = useState('');
   const [r, setR] = useState<Reviews | null>(null);
   const [stars, setStars] = useState(0);
   const [text, setText] = useState('');
@@ -58033,10 +58231,25 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
     await api(`/servers/${serverId}/reviews/mine`, 'DELETE').then(() => { toast('Отзыв удалён'); setEditing(false); void load(); }).catch((err: Error) => setError(err.message));
   };
 
+  const vote = async (x: Review) => {
+    if (!me) return;
+    const was = !!x.voted;
+    const res = await api<{ votes: number; voted: boolean }>(`/reviews/${x.id}/vote`, was ? 'DELETE' : 'PUT').catch((err: Error) => { toast(err.message, 'err'); return null; });
+    if (res) setR((cur) => (cur ? { ...cur, items: cur.items.map((i) => (i.id === x.id ? { ...i, votes: res.votes, voted: res.voted } : i)) } : cur));
+  };
+  const saveReply = async (x: Review) => {
+    const res = await api<{ reply: string | null }>(`/reviews/${x.id}/reply`, 'PUT', { text: replyText }).catch((err: Error) => { toast(err.message, 'err'); return null; });
+    if (!res) return;
+    setReplyFor(null);
+    setR((cur) => (cur ? { ...cur, items: cur.items.map((i) => (i.id === x.id ? { ...i, reply: res.reply, replyAt: res.reply ? Date.now() : null } : i)) } : cur));
+  };
+
   if (!r) return <div className="skeleton h-28 rounded-2xl" aria-busy="true" />;
   const empty = r.count === 0;
   const formOpen = !!me && (editing || (!r.mine && (!empty || composing)));
-  const others = r.items.filter((x) => x.id !== r.mine?.id);
+  const recommend = r.count ? Math.round(((r.dist[3] + r.dist[4]) / r.count) * 100) : 0;
+  const filtered = r.items.filter((x) => x.id !== r.mine?.id && (!starFilter || x.stars === starFilter));
+  const others = [...filtered].sort((a, b) => (sort === 'useful' ? (b.votes ?? 0) - (a.votes ?? 0) || b.updatedAt - a.updatedAt : sort === 'high' ? b.stars - a.stars || b.updatedAt - a.updatedAt : sort === 'low' ? a.stars - b.stars || b.updatedAt - a.updatedAt : b.updatedAt - a.updatedAt));
   return (
     <div className="rv">
       {empty && (
@@ -58048,15 +58261,18 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
       {!empty && <div className="rv-score">
         <div className="text-center">
           <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
-          <Stars value={r.avg ?? 0} size={18} />
+          <Stars value={r.avg ?? 0} size={22} exact />
           <div className="mt-1 text-sm font-bold text-mute">{r.count} {plural(r.count, ['отзыв', 'отзыва', 'отзывов'])}</div>
+          <div className="rv-reco" title="Оценки 4 и 5">{recommend}% рекомендуют</div>
         </div>
         <ul className="rv-dist" aria-label="Оценки">
           {[5, 4, 3, 2, 1].map((n) => (
             <li key={n}>
-              <span className="w-3 text-right">{n}</span>
-              <span className="rv-dist-bar"><span style={{ width: `${r.count ? (r.dist[n - 1] / r.count) * 100 : 0}%` }} /></span>
-              <span className="w-6 text-right tabular-nums">{r.dist[n - 1]}</span>
+              <button type="button" className={`rv-dist-row ${starFilter === n ? 'is-on' : ''}`} aria-pressed={starFilter === n} disabled={!r.dist[n - 1]} title={starFilter === n ? 'Показать все отзывы' : `Только отзывы на ${n} из 5`} onClick={() => setStarFilter(starFilter === n ? 0 : n)}>
+                <span className="w-3 text-right">{n}</span>
+                <span className="rv-dist-bar"><span style={{ width: `${r.count ? (r.dist[n - 1] / r.count) * 100 : 0}%` }} /></span>
+                <span className="w-6 text-right tabular-nums">{r.dist[n - 1]}</span>
+              </button>
             </li>
           ))}
         </ul>
@@ -58093,6 +58309,14 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
       )}
       {!me && <p className="text-sm font-semibold text-mute"><a href="/login" className="font-extrabold text-link hover:underline">Войдите</a>, чтобы оставить отзыв.</p>}
 
+      {r.items.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="seg" role="group" aria-label="Порядок отзывов">
+            {SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>)}
+          </div>
+          {starFilter > 0 && <button type="button" className="chip-filter on" onClick={() => setStarFilter(0)}>{starFilter} ★ ✕</button>}
+        </div>
+      )}
       {others.length > 0 && (
         <ul className="grid gap-2.5">
           {others.map((x) => (
@@ -58104,6 +58328,31 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
                 <span className="ml-auto text-xs font-bold text-mute">{ago(x.updatedAt)}</span>
               </div>
               {x.text && <p className="mt-1.5 whitespace-pre-line font-semibold">{x.text}</p>}
+              {x.reply && replyFor !== x.id && (
+                <div className="rv-reply">
+                  <span className="rv-reply-k">Ответ администрации{x.replyAt ? ` · ${ago(x.replyAt)}` : ''}</span>
+                  <p className="whitespace-pre-line font-semibold">{x.reply}</p>
+                </div>
+              )}
+              {replyFor === x.id && (
+                <form className="rv-reply-form" onSubmit={(e) => { e.preventDefault(); void saveReply(x); }}>
+                  <textarea className="input min-h-16" value={replyText} onChange={(e) => setReplyText(e.target.value)} maxLength={600} placeholder="Ответ увидят все. Пустой ответ удалит прежний." autoFocus />
+                  <div className="flex justify-end gap-2">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplyFor(null)}>Отмена</button>
+                    <button className="btn btn-sm">Ответить</button>
+                  </div>
+                </form>
+              )}
+              <div className="rv-actions">
+                {(me || (x.votes ?? 0) > 0) && (
+                  <button type="button" className={`rv-vote ${x.voted ? 'is-on' : ''}`} aria-pressed={!!x.voted} disabled={!me} title={me ? 'Отзыв полезен' : 'Войдите, чтобы отметить'} onClick={() => void vote(x)}>
+                    <span aria-hidden>👍</span> Полезно{(x.votes ?? 0) > 0 ? ` · ${x.votes}` : ''}
+                  </button>
+                )}
+                {canReply && replyFor !== x.id && (
+                  <button type="button" className="btn-link btn-xs" onClick={() => { setReplyFor(x.id); setReplyText(x.reply ?? ''); }}>{x.reply ? 'Изменить ответ' : 'Ответить'}</button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -58489,7 +58738,14 @@ import { SUB_KINDS, normalizeKinds, toggleKind, useSubscriptions, type SubKind, 
 const KIND_KEY: Record<SubKind, TKey> = { free_slot: 'sub.free_slot', back_online: 'sub.back_online', went_down: 'sub.went_down' };
 
 /** the choice of kinds: checkboxes and, when there is no linked Discord, a note about where the messages go */
-export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub' }: { kinds: SubKind[]; onChange: (k: SubKind[]) => void; discordLinked: boolean; idPrefix?: string }) {
+/** what the message will look like (the address is an example) */
+const PREVIEW: Record<SubKind, (n: string) => string> = {
+  free_slot: (n) => `🟢 На сервере «${n}» освободилось место (39/40). Адрес: play.example.com:27015`,
+  back_online: (n) => `✅ Сервер «${n}» снова в сети. Адрес: play.example.com:27015`,
+  went_down: (n) => `🔴 Сервер «${n}» недоступен. Адрес: play.example.com:27015`,
+};
+
+export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub', serverName }: { kinds: SubKind[]; onChange: (k: SubKind[]) => void; discordLinked: boolean; idPrefix?: string; serverName?: string }) {
   return (
     <div className="space-y-3">
       <p className="font-semibold text-mute">{t('sub.text')}</p>
@@ -58500,6 +58756,7 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
               <input id={`${idPrefix}-${k}`} type="checkbox" checked={kinds.includes(k)} onChange={() => onChange(toggleKind(kinds, k))} />
               {t(KIND_KEY[k])}
             </label>
+            {serverName && kinds.includes(k) && <p className="sub-preview" aria-label="Так будет выглядеть сообщение">{PREVIEW[k](serverName)}</p>}
           </li>
         ))}
       </ul>
@@ -58538,6 +58795,7 @@ export default function SubscribeMenu({
   const setOpen = (v: boolean) => { setInnerOpen(v); onOpenChange?.(v); };
   const [draft, setDraft] = useState<SubKind[]>([]);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
 
   const current = normalizeKinds(subs.list?.find((s) => s.serverId === serverId)?.kinds);
@@ -58551,6 +58809,18 @@ export default function SubscribeMenu({
 
   if (!me || subs.unavailable || subs.list === null) return null;
   const on = current.length > 0;
+
+  const sendTest = async () => {
+    setTesting(true);
+    try {
+      const r = await api<{ dm: boolean; discordLinked: boolean }>(`/servers/${serverId}/subscription/test`, 'POST');
+      toast(r.dm ? 'Тест отправлен: смотрите колокольчик и личные сообщения Discord' : r.discordLinked ? 'Тест в колокольчике. Бот сейчас не в сети, в Discord не отправлено' : 'Тест в колокольчике. Привяжите Discord, чтобы получать и в личные сообщения');
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -58579,9 +58849,12 @@ export default function SubscribeMenu({
       {open && (
         <Modal title={t('sub.title')} onClose={() => setOpen(false)}>
           <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-            <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} />
+            <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} serverName={serverName} />
             <ErrorLine text={error} />
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button type="button" className="btn btn-soft mr-auto" disabled={testing} onClick={() => void sendTest()} title="Пришлёт в панель, в Discord и на устройства сообщение-образец">
+                {testing ? 'Отправляю…' : 'Тестовое сообщение'}
+              </button>
               <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
               <Button loading={busy}>{t('sub.save')}</Button>
             </div>
@@ -72417,6 +72690,7 @@ import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
 import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
+import PinnedNotice, { type ServerNotice } from '../components/server/Notice';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
@@ -72437,6 +72711,7 @@ export { SERVER_TABS } from '../components/server/helpers';
 /** details + the additive fields: when the server was added and (admins only) its Discord message */
 type ServerDetails = BaseDetails & {
   createdAt?: number | null;
+  notice?: ServerNotice | null;
   discord?: { channelId: string; channelName: string | null; guildName: string | null; guildId: string | null; messageId: string | null; enabled: boolean }[];
 };
 
@@ -72876,6 +73151,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else {
     panel = (
       <div className="space-y-3.5">
+        <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
         <SectionCard id="ov-stats" state={sections} style={stagger(0)} title="Показатели">
           {metrics(false)}
         </SectionCard>
@@ -77908,6 +78184,50 @@ html[data-motion='reduce'] :is(.tab-slide-r, .tab-slide-l) { animation: none; }
   .srv-banner .srv-cta::after { display: none; }
 }
 html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.on, .pl-spread-c > i, .hc-line) { animation: none; }
+
+/* ======================================================================
+   server tabs, pass 4: reviews, subscription preview, pinned notice, phone metrics
+   ====================================================================== */
+
+/* the metrics are one swipeable row on a phone: the next card peeks in */
+@media (max-width: 559px) {
+  .srv-metrics { display: flex; overflow-x: auto; gap: 8px; margin-inline: -4px; padding: 2px 4px 4px; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; }
+  .srv-metrics > .srv-metric, .srv-metrics > .srv-metric:last-child:nth-child(odd) { flex: 0 0 62%; scroll-snap-align: start; }
+}
+
+/* reviews */
+.rv-stars .fr { background: linear-gradient(90deg, #f6b73c calc(var(--f) * 100%), rgb(var(--line)) calc(var(--f) * 100%)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+.rv-reco { margin-top: 6px; display: inline-block; padding: 1px 10px; border-radius: 99px; font-size: 12.5px; font-weight: 800; background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.rv-dist-row { display: flex; width: 100%; align-items: center; gap: 8px; padding: 1px 4px; margin: 0 -4px; border-radius: 8px; text-align: left; font: inherit; color: inherit; transition: background-color .15s ease; }
+.rv-dist-row:not(:disabled):hover { background: rgb(var(--soft)); }
+.rv-dist-row:disabled { opacity: .55; cursor: default; }
+.rv-dist-row.is-on { background: color-mix(in srgb, #f6b73c 20%, transparent); }
+.rv-word { min-width: 6.5em; font-size: 14px; font-weight: 800; color: rgb(var(--mute)); }
+.rv-pick button.is-pop { animation: rv-star .32s cubic-bezier(.2, .9, .3, 1.5) both; animation-delay: calc(var(--i, 1) * 45ms); }
+@keyframes rv-star { 0% { transform: scale(.55) rotate(-18deg); } 100% { transform: none; } }
+.rv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 8px; }
+.rv-vote { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border-radius: 99px; font-size: 13px; font-weight: 750; color: rgb(var(--mute)); background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); transition: background-color .15s ease, color .15s ease; }
+.rv-vote:not(:disabled):hover { color: rgb(var(--ink)); }
+.rv-vote.is-on { color: rgb(var(--ink)); background: color-mix(in srgb, var(--srv-acc, rgb(var(--brand))) 22%, transparent); box-shadow: inset 0 0 0 1px var(--srv-acc, rgb(var(--brand))); }
+.rv-vote:disabled { cursor: default; }
+.rv-reply { margin-top: 8px; padding: 8px 12px; border-radius: var(--r-md); background: rgb(var(--card)); box-shadow: inset 3px 0 0 var(--srv-acc, rgb(var(--brand))); }
+.rv-reply-k { display: block; margin-bottom: 2px; font-size: 12px; font-weight: 800; letter-spacing: .02em; color: rgb(var(--mute)); }
+.rv-reply-form { display: grid; gap: 8px; margin-top: 8px; }
+
+/* a message sample in the subscription dialog */
+.sub-preview { margin: 6px 6px 2px 34px; padding: 8px 12px; border-radius: 4px 14px 14px 14px; font-size: 13.5px; font-weight: 600; line-height: 1.35; color: rgb(var(--ink)); background: rgb(var(--card)); box-shadow: inset 3px 0 0 rgb(var(--brand)); }
+
+/* the pinned note of the staff */
+.srv-notice { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-radius: var(--r-lg); background: rgb(var(--soft)); box-shadow: inset 4px 0 0 rgb(var(--link)); }
+.srv-notice.is-ok { background: rgb(var(--okbg)); box-shadow: inset 4px 0 0 rgb(var(--ok)); }
+.srv-notice.is-warn { background: rgb(var(--warnbg)); box-shadow: inset 4px 0 0 rgb(var(--warn)); }
+.srv-notice.is-bad { background: rgb(var(--badbg)); box-shadow: inset 4px 0 0 rgb(var(--bad)); }
+.srv-notice-i { flex: none; font-size: 20px; line-height: 1.3; }
+.srv-notice-add { align-self: flex-start; padding: 6px 14px; border-radius: 99px; font-size: 13.5px; font-weight: 750; color: rgb(var(--mute)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.srv-notice-add:hover { color: rgb(var(--ink)); background: rgb(var(--soft)); }
+.srv-notice-form { display: grid; gap: 10px; padding: 14px; border-radius: var(--r-lg); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+
+@media (prefers-reduced-motion: reduce) { .rv-pick button.is-pop { animation: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'

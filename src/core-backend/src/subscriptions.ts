@@ -179,6 +179,27 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     res.json({ serverId: sid, kinds: kindsOf(uid, sid) });
   });
 
+  // a test: the same message a real event would bring, to the inbox, to Discord and to the devices (once per 20 s)
+  const lastTest = new Map<number, number>();
+  app.post('/api/servers/:id/subscription/test', auth, (req, res) => {
+    const sid = Number(req.params.id);
+    const info = Number.isInteger(sid)
+      ? (db.prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(sid) as { n: string; display_address: string; host: string; port: number } | undefined)
+      : undefined;
+    if (!info) return res.status(404).json({ error: 'Сервер не найден' });
+    const uid = userId(req);
+    const now = Date.now();
+    if (now - (lastTest.get(uid) ?? 0) < 20_000) return res.status(429).json({ error: 'Подождите несколько секунд перед следующей проверкой' });
+    lastTest.set(uid, now);
+    const text = `🧪 Проверка уведомлений. ${notificationText('back_online', info.n, info.display_address || `${info.host}:${info.port}`, 0, 0)}`;
+    db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, ?, ?)').run(uid, now, 'test', sid, text);
+    const u = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(uid) as { discord_id: string | null } | undefined;
+    const dm = !!u?.discord_id && canDm();
+    if (dm) enqueueDelivery({ kind: 'dm', refId: null, target: u!.discord_id as string, payload: { content: text, summary: text.slice(0, 120) } });
+    pushLater(uid, { title: info.n, body: text, url: `/servers/${sid}`, tag: `srv-${sid}-test` });
+    res.json({ inbox: true, dm, discordLinked: !!u?.discord_id });
+  });
+
   app.get('/api/me/notifications', auth, (req, res) => {
     const uid = userId(req);
     const unreadOnly = req.query.unread === '1' || req.query.unread === 'true';
