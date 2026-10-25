@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="afff56121f97"
+COREGSM_BUILD="b9667133227a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -56285,6 +56285,7 @@ import { AnimatedNumber } from '../../ui';
 import { IconBell } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar } from '../servers/serverUi';
+import { nickHue, nickInitial } from './helpers';
 
 export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
 
@@ -56293,7 +56294,7 @@ export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
  * the maintenance chip, and, when the server is full, «Сообщить, когда будет место».
  */
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -56302,6 +56303,9 @@ export default function Hero({
   maintenance?: { name: string; until: number | null } | null;
   freeSlot: FreeSlotState;
   onNotify: () => void;
+  /** nicks of the players now on the server (a stack of avatars under the counter) */
+  who?: string[];
+  whoHref?: string;
 }) {
   useI18n();
   return (
@@ -56324,6 +56328,18 @@ export default function Hero({
         {maintenance && <MaintenanceChip m={maintenance} glass />}
       </div>
       {online && max > 0 && <CapacityBar className="srv-hero-bar mt-2.5" players={players} max={max} color="#fff" onDark big />}
+      {online && who.length > 0 && (
+        <a className="srv-who" href={whoHref} aria-label={`${t('srv.hero.players')}: ${players}`}>
+          <span className="srv-who-stack" aria-hidden>
+            {who.slice(0, 7).map((n) => (
+              <i key={n} className="avatar-hue" style={{ ['--h' as string]: nickHue(n) }}>{nickInitial(n)}</i>
+            ))}
+          </span>
+          <span className="srv-who-more">
+            {who.slice(0, 3).join(', ')}{players > Math.min(3, who.length) ? ` и ещё ${players - Math.min(3, who.length)}` : ''}
+          </span>
+        </a>
+      )}
       {freeSlot !== 'hidden' && (
         <div className="srv-hero-free mt-3">
           {freeSlot === 'subscribed' ? (
@@ -56976,7 +56992,7 @@ import type { ReactNode } from 'react';
 import { useI18n } from '../../i18n';
 import { fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
-import { metricFill } from './serverLogic';
+import { downsample, metricFill, trendPct } from './serverLogic';
 
 export interface MetricsData {
   online: boolean;
@@ -56990,13 +57006,32 @@ export interface MetricsData {
   samples: number;
   /** «за 24 часа» */
   windowLabel: string;
+  /** player counts over the window: a sparkline and a trend arrow */
+  series?: number[];
 }
 
-function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot' }) {
+function Spark({ values }: { values: number[] }) {
+  const v = downsample(values, 28);
+  const hi = Math.max(...v, 1);
+  const pts = v.map((y, i) => `${((i / (v.length - 1)) * 100).toFixed(1)},${(22 - (y / hi) * 20).toFixed(1)}`).join(' ');
+  return (
+    <svg className="srv-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden>
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function Trend({ pct }: { pct: number }) {
+  if (Math.abs(pct) < 3) return <span className="srv-trend is-flat" title="Без заметных изменений">→ ровно</span>;
+  return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title="Конец периода к его началу">{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
+}
+
+function Cell({ k, v, hint, fill, level, spark, trend }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
   return (
     <div className="srv-metric">
       <div className="stat-k">{k}</div>
-      <div className="srv-metric-v">{v}</div>
+      <div className="srv-metric-v">{v}{trend != null && <Trend pct={trend} />}</div>
+      {spark && spark.length > 3 && <Spark values={spark} />}
       <div className="srv-metric-bar" aria-hidden><i className={level ? `is-${level}` : undefined} style={{ width: `${fill}%` }} /></div>
       {hint != null && <div className="srv-metric-h">{hint}</div>}
     </div>
@@ -57029,6 +57064,8 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
       />
       <Cell
         k="В среднем"
+        spark={d.series}
+        trend={d.series ? trendPct(d.series) : null}
         v={d.avg == null ? '–' : num(d.avg)}
         hint="пока онлайн"
         fill={metricFill(d.avg, d.maxPlayers)}
@@ -57132,7 +57169,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Passport.tsx" << '__COREGSM_EOF__'
 import { useId, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../../i18n';
-import { ago, fmtDateTime, toast } from '../../ui';
+import { AnimatedNumber, ago, fmtDateTime, toast } from '../../ui';
 import { pingTone } from './helpers';
 
 export interface PassportData {
@@ -57192,7 +57229,7 @@ export default function Passport({ d }: { d: PassportData }) {
         {d.map && d.online && <Item k="Карта"><span title={d.map}>{d.map}</span></Item>}
         {d.version && <Item k="Версия"><span>{`v${d.version.replace(/^v/i, '')}`}</span></Item>}
         {d.country && <Item k="Страна"><span>{`${d.flag} ${d.country}`.trim()}</span></Item>}
-        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span></Item>}
+        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}><AnimatedNumber value={d.ping} /> мс · {pt.label}</span></Item>}
       </dl>
       <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
         {open ? t('srv.pp.less') : t('srv.pp.more')}
@@ -57233,11 +57270,12 @@ export default function Passport({ d }: { d: PassportData }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/PlayersList.tsx" << '__COREGSM_EOF__'
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
-import { plural, toast } from '../../ui';
+import { fmtDateTime, plural, toast } from '../../ui';
+import { useCommunity } from '../servers/CommunityBento';
 import { sortPlayers, type PlayerSort } from './serverLogic';
 import { rankById } from '../../vrisingRanks';
 import { RankEmblem, rankName } from '../profile/VrRank';
@@ -57252,6 +57290,45 @@ function Avatar({ name, size = 36 }: { name: string; size?: number }) {
     >
       {nickInitial(name)}
     </span>
+  );
+}
+
+const VIEW_KEY = 'coregsm_pl_view';
+const readView = (): 'list' | 'tiles' => {
+  try { return localStorage.getItem(VIEW_KEY) === 'tiles' ? 'tiles' : 'list'; } catch { return 'list'; }
+};
+
+const copyNick = (name: string) => void navigator.clipboard?.writeText(name).then(() => toast(t('srv.pl.copied')), () => toast(name, 'info', 6000));
+
+/** a press held for half a second copies the nick; the click that follows the release is swallowed */
+function useLongPress(name: string) {
+  const timer = useRef(0);
+  const fired = useRef(false);
+  const cancel = () => window.clearTimeout(timer.current);
+  useEffect(() => cancel, []);
+  return {
+    onPointerDown: (e: { pointerType: string }) => {
+      fired.current = false;
+      if (e.pointerType === 'mouse') return;
+      cancel();
+      timer.current = window.setTimeout(() => { fired.current = true; if (navigator.vibrate) navigator.vibrate(15); copyNick(name); }, 520);
+    },
+    onPointerUp: cancel,
+    onPointerLeave: cancel,
+    onPointerCancel: cancel,
+    onContextMenu: (e: { preventDefault: () => void }) => { if (fired.current) e.preventDefault(); },
+    /** true when this click is the tail of a long press */
+    swallow: () => { const f = fired.current; fired.current = false; return f; },
+  };
+}
+
+function NickButton({ name, className, onClick, expanded, children }: { name: string; className: string; onClick: () => void; expanded?: boolean; children: ReactNode }) {
+  const lp = useLongPress(name);
+  const { swallow, ...handlers } = lp;
+  return (
+    <button type="button" className={className} aria-expanded={expanded} {...handlers} onClick={() => { if (!swallow()) onClick(); }}>
+      {children}
+    </button>
   );
 }
 
@@ -57278,17 +57355,47 @@ export default function PlayersList({
   const [sort, setSort] = useState<PlayerSort>('longest');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<string | null>(null);
+  const [view, setView] = useState<'list' | 'tiles'>(readView);
+  const setViewSaved = (v: 'list' | 'tiles') => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode */ } };
+  const community = useCommunity();
+  // nicks known to the community ratings: they get a place chip and a link to the profile
+  const known = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!community) return m;
+    community.top.week.forEach((p, i) => m.set(p.name.toLowerCase(), i + 1));
+    for (const k of ['month', 'all', 'day'] as const) community.top[k].forEach((p) => { if (!m.has(p.name.toLowerCase())) m.set(p.name.toLowerCase(), 0); });
+    return m;
+  }, [community]);
 
   const total = list.length || names.length;
   const hiddenCount = Math.max(0, players - total);
-  const rows = useMemo(() => {
+  const baseRows = useMemo(() => {
     let r: Row[] = list.map((p, i) => ({ key: `${p.name}-${p.since}-${i}`, name: p.name || 'Без имени', since: p.since as number | null, rankId: p.rankId }));
     if (!r.length) r = names.map((n, i) => ({ key: `${n}-${i}`, name: n || 'Без имени', since: null }));
+    return r;
+  }, [list, names]);
+  const rows = useMemo(() => {
+    let r = baseRows;
     const q = query.trim().toLowerCase();
     if (q) r = r.filter((p) => p.name.toLowerCase().includes(q));
     r = sortPlayers(r, r.every((p) => p.since == null) ? 'alpha' : sort);
     return r;
-  }, [list, names, query, sort]);
+  }, [baseRows, query, sort]);
+
+  // players who have just left stay on the list for a moment and fade out (the full list only)
+  const prevRows = useRef<Row[] | null>(null);
+  const [gone, setGone] = useState<Row[]>([]);
+  useEffect(() => {
+    const prev = prevRows.current;
+    prevRows.current = baseRows;
+    if (limit || !prev || !online) return;
+    const now = new Set(baseRows.map((r) => r.name));
+    const left = prev.filter((r) => !now.has(r.name));
+    if (!left.length) return;
+    setGone((g) => [...g, ...left].slice(-6));
+    window.setTimeout(() => setGone((g) => g.filter((x) => !left.includes(x))), 2600);
+  }, [baseRows, limit, online]);
+  const maxDur = useMemo(() => Math.max(1, ...baseRows.map((r) => (r.since != null ? now - r.since : 0))), [baseRows, now]);
   const shown = limit ? rows.slice(0, limit) : rows;
   const showSearch = !limit && total > 5;
   const hasTimes = list.length > 0;
@@ -57334,6 +57441,16 @@ export default function PlayersList({
                 />
               )}
               {total > 1 && (
+                <div className="seg pl-view" role="group" aria-label="Вид списка">
+                  <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => setViewSaved('list')} title="Список" aria-label="Список">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg>
+                  </button>
+                  <button type="button" className="seg-item" aria-pressed={view === 'tiles'} onClick={() => setViewSaved('tiles')} title="Плитки" aria-label="Плитки">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" aria-hidden><rect x="4" y="4" width="7" height="7" rx="1.5" /><rect x="13" y="4" width="7" height="7" rx="1.5" /><rect x="4" y="13" width="7" height="7" rx="1.5" /><rect x="13" y="13" width="7" height="7" rx="1.5" /></svg>
+                  </button>
+                </div>
+              )}
+              {total > 1 && (
                 <div className="srv-chipset" role="group" aria-label={t('srv.pl.sort')}>
                   {sorts
                     .filter(([k]) => k === 'alpha' || hasTimes)
@@ -57348,6 +57465,22 @@ export default function PlayersList({
       )}
       {shown.length === 0 ? (
         <StateView kind="empty" bare compact title={t('srv.pl.noMatch', { q: query })} text={t('srv.pl.noMatchText')} />
+      ) : !limit && view === 'tiles' ? (
+        <ul className="pl-tiles">
+          {shown.map((p) => {
+            const dur = p.since != null ? now - p.since : null;
+            return (
+              <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
+                <NickButton name={p.name} className="pl-tile" onClick={() => copyNick(p.name)}>
+                  <Avatar name={p.name} size={44} />
+                  <b className="pl-tile-n" title={p.name}>{p.name}</b>
+                  <span className="pl-tile-t">{p.since != null ? playedFor(p.since, now) : 'в сети'}</span>
+                  {dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
+                </NickButton>
+              </li>
+            );
+          })}
+        </ul>
       ) : (
         <ul className="divide-y divide-line">
           {shown.map((p) => {
@@ -57359,7 +57492,10 @@ export default function PlayersList({
               <>
                 <Avatar name={p.name} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-bold" title={p.name}>{p.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate font-bold" title={p.name}>{p.name}</span>
+                    {expandable && (known.get(p.name.toLowerCase()) ?? 0) > 0 && <span className="pl-place-chip" title="Место в рейтинге недели">#{known.get(p.name.toLowerCase())}</span>}
+                  </span>
                   {(dur != null || rank) && (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
@@ -57373,6 +57509,7 @@ export default function PlayersList({
                       {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn px-2! py-0! text-xs">ветеран</span>}
                     </span>
                   )}
+                  {expandable && dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
                 </span>
                 <span className="shrink-0 text-right text-sm font-semibold text-mute">
                   {p.since != null ? playedFor(p.since, now) : expandable ? 'в сети сейчас' : ''}
@@ -57387,7 +57524,7 @@ export default function PlayersList({
             return (
               <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 {expandable ? (
-                  <button type="button" className="pl-row" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</button>
+                  <NickButton name={p.name} className="pl-row" expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
                 ) : (
                   <div className="flex min-w-0 items-center gap-3 rounded-xl py-2">{inner}</div>
                 )}
@@ -57401,6 +57538,12 @@ export default function PlayersList({
                       <dt>Зашёл</dt>
                       <dd>{p.since != null ? clock(p.since) : 'нет данных'}</dd>
                     </div>
+                    {known.has(p.name.toLowerCase()) && (
+                      <div className="col-span-2">
+                        <dt>Профиль</dt>
+                        <dd><a className="font-extrabold text-link hover:underline" href={`/player/${encodeURIComponent(p.name)}`}>Открыть профиль игрока →</a></dd>
+                      </div>
+                    )}
                     <div className="col-span-2">
                       <dt>Ник</dt>
                       <dd className="flex items-center gap-2">
@@ -57419,6 +57562,15 @@ export default function PlayersList({
               </li>
             );
           })}
+          {gone.filter((g) => !query.trim() || g.name.toLowerCase().includes(query.trim().toLowerCase())).map((g) => (
+            <li key={`gone-${g.key}`} className="pl-gone" aria-hidden>
+              <div className="flex min-w-0 items-center gap-3 rounded-xl px-1.5 py-2">
+                <Avatar name={g.name} />
+                <span className="min-w-0 flex-1 truncate font-bold">{g.name}</span>
+                <span className="text-sm font-semibold text-mute">вышел</span>
+              </div>
+            </li>
+          ))}
         </ul>
       )}
       {hiddenCount > 0 && limit && (total > limit || hiddenCount > 0) && moreHref && (
@@ -57430,6 +57582,38 @@ export default function PlayersList({
         <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
           Показать всех {total} →
         </a>
+      )}
+    </div>
+  );
+}
+
+/** three small record cards over the player list: the peak, the average and the longest session on the server now */
+export function PlayerFacts({ peak, peakAt, avg, windowLabel, list }: { peak: number | null; peakAt: number | null; avg: number | null; windowLabel: string; list: PlayerNow[] }) {
+  const now = useNow(30_000);
+  const longest = list.reduce<PlayerNow | null>((a, p) => (p.since != null && (a == null || (a.since as number) > p.since) ? p : a), null);
+  if (peak == null && avg == null && !longest) return null;
+  return (
+    <div className="pl-facts">
+      {peak != null && (
+        <div className="pl-fact">
+          <span className="pl-fact-k">Рекорд онлайна</span>
+          <b className="pl-fact-v">{peak}</b>
+          <span className="pl-fact-h">{peakAt ? fmtDateTime(peakAt) : windowLabel}</span>
+        </div>
+      )}
+      {avg != null && (
+        <div className="pl-fact">
+          <span className="pl-fact-k">В среднем</span>
+          <b className="pl-fact-v">{Math.round(avg * 10) / 10}</b>
+          <span className="pl-fact-h">{windowLabel}</span>
+        </div>
+      )}
+      {longest && longest.since != null && (
+        <div className="pl-fact">
+          <span className="pl-fact-k">Дольше всех в игре</span>
+          <b className="pl-fact-v">{playedFor(longest.since, now)}</b>
+          <span className="pl-fact-h truncate" title={longest.name}>{longest.name}</span>
+        </div>
       )}
     </div>
   );
@@ -57677,7 +57861,7 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/Sections.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Component, useCallback, useEffect, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from 'react';
 import { IconChevronDown } from '../../icons';
 
 /**
@@ -57718,6 +57902,27 @@ export interface SectionDef {
   label: string;
   /** folded by default on phones */
   secondary?: boolean;
+}
+
+/** a failure inside one block shows a small notice with «Повторить» in that block; the rest of the page keeps working */
+export class BlockBoundary extends Component<{ children: ReactNode; label?: string }, { error: Error | null; n: number }> {
+  state: { error: Error | null; n: number } = { error: null, n: 0 };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[coregsm] block error', this.props.label ?? '', error, info.componentStack);
+  }
+  render() {
+    if (!this.state.error) return <div key={this.state.n} className="contents">{this.props.children}</div>;
+    return (
+      <div className="srv-block-err" role="alert">
+        <p className="font-extrabold">Не удалось показать этот блок</p>
+        <p className="text-sm font-semibold text-mute">Остальная страница работает как обычно.</p>
+        <button type="button" className="btn btn-soft btn-sm" onClick={() => this.setState((s) => ({ error: null, n: s.n + 1 }))}>Повторить</button>
+      </div>
+    );
+  }
 }
 
 export const sectionDomId = (id: string) => `srv-s-${id}`;
@@ -57776,7 +57981,7 @@ export function SectionCard({
         </h2>
         {!closed && actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
-      <div id={bodyId} hidden={closed} className="srv-sec-body">{children}</div>
+      <div id={bodyId} hidden={closed} className="srv-sec-body"><BlockBoundary label={id}>{children}</BlockBoundary></div>
     </Tag>
   );
 }
@@ -58539,6 +58744,52 @@ export const isFullNow = (online: boolean, players: number, max: number) => onli
 
 /** width (0..100) of the small static indicator of a metric */
 export const metricFill = (value: number | null | undefined, max: number): number => (value == null || !(max > 0) ? 0 : capacityPct(value, max));
+
+// ---------- trend ----------
+/** change of the mean between the first and the last third of a series, in per cent (null: too little data or no base) */
+export function trendPct(values: number[]): number | null {
+  if (values.length < 6) return null;
+  const k = Math.floor(values.length / 3);
+  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+  const a = mean(values.slice(0, k));
+  const b = mean(values.slice(values.length - k));
+  if (a < 0.5) return null;
+  return Math.round(((b - a) / a) * 100);
+}
+
+/** at most `n` evenly spread values of a series (for a tiny sparkline) */
+export function downsample(values: number[], n: number): number[] {
+  if (values.length <= n) return values;
+  const out: number[] = [];
+  for (let i = 0; i < n; i += 1) out.push(values[Math.round((i * (values.length - 1)) / (n - 1))]);
+  return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/trend.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { downsample, trendPct } from './serverLogic';
+
+describe('trendPct', () => {
+  it('compares the last third with the first third', () => {
+    expect(trendPct([10, 10, 12, 14, 15, 20])).toBe(75);
+    expect(trendPct([20, 20, 15, 12, 10, 10])).toBe(-50);
+  });
+  it('has no answer for short series or an empty base', () => {
+    expect(trendPct([1, 2, 3])).toBeNull();
+    expect(trendPct([0, 0, 0, 0, 5, 5])).toBeNull();
+  });
+});
+
+describe('downsample', () => {
+  it('keeps short series and thins long ones keeping both ends', () => {
+    expect(downsample([1, 2, 3], 5)).toEqual([1, 2, 3]);
+    const d = downsample(Array.from({ length: 100 }, (_, i) => i), 10);
+    expect(d).toHaveLength(10);
+    expect(d[0]).toBe(0);
+    expect(d[9]).toBe(99);
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/AttentionStrip.tsx" << '__COREGSM_EOF__'
@@ -71826,7 +72077,7 @@ import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 import HistoryChart, { type Series } from '../components/server/HistoryChart';
-import PlayersList from '../components/server/PlayersList';
+import PlayersList, { PlayerFacts } from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import SubscribeMenu from '../components/server/SubscribeMenu';
@@ -71838,10 +72089,10 @@ import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { AddrCopy } from '../components/servers/serverUi';
-import { SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
+import { BlockBoundary, SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
-  countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
+  SERVER_TABS, countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
 import { lazyPage, PageFrame } from '../lazyPage';
 
@@ -71953,6 +72204,26 @@ function useTabSwipe(tab: TabId, id: number) {
   };
 }
 
+// what the user picked last time: the chart period and series, and the tab of every server
+const PREFS_KEY = 'coregsm_srv_prefs';
+const TABS_KEY = 'coregsm_srv_tabs';
+function readPrefs(): { hours: number; series: Series } {
+  try {
+    const v = JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null') as { hours?: number; series?: string } | null;
+    return { hours: v && [24, 168, 720].includes(v.hours as number) ? (v.hours as number) : 24, series: v?.series === 'ping' ? 'ping' : 'players' };
+  } catch {
+    return { hours: 24, series: 'players' };
+  }
+}
+function readTabs(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(TABS_KEY) ?? 'null') as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const swipe = useTabSwipe(tab, id);
@@ -71970,8 +72241,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     io.observe(el);
     return () => io.disconnect();
   });
-  const [hours, setHours] = useState(24);
-  const [series, setSeries] = useState<Series>('players');
+  const [prefs] = useState(readPrefs);
+  const [hours, setHours] = useState(prefs.hours);
+  const [series, setSeries] = useState<Series>(prefs.series);
+  useEffect(() => {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ hours, series })); } catch { /* private mode */ }
+  }, [hours, series]);
   const [data, setData] = useState<ServerDetails | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState('');
@@ -72054,6 +72329,24 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     const target = marker.getBoundingClientRect().top + window.scrollY - offset;
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
+
+  // the tab is remembered per server: «/servers/5» reopens the tab the user left it on (the overview is a choice too)
+  const tabSeen = useRef(false);
+  useEffect(() => {
+    const m = readTabs();
+    if (!tabSeen.current) {
+      tabSeen.current = true;
+      const last = m[String(id)] as TabId | undefined;
+      if (!tab && last && (SERVER_TABS as readonly string[]).includes(last)) { navigate(tabHref(id, last), { replace: true }); return; }
+    }
+    m[String(id)] = tab;
+    try { localStorage.setItem(TABS_KEY, JSON.stringify(m)); } catch { /* private mode */ }
+  }, [tab, id]);
+
+  // which way the tab bar moved: the new panel slides in from that side
+  const tabIdx = TAB_LIST.findIndex((x) => x.id === tab);
+  const [slide, setSlide] = useState({ idx: tabIdx, dir: '' });
+  if (slide.idx !== tabIdx) setSlide({ idx: tabIdx, dir: tabIdx > slide.idx ? 'r' : 'l' });
 
   // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
   const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
@@ -72172,6 +72465,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         online: s.online, hasStatus: s.hasStatus, players: s.players, maxPlayers: s.maxPlayers,
         peak: stats.peakPlayers ?? null, peakAt: stats.peakAt ?? null, uptimePct: stats.uptimePct ?? null, avg: stats.avgPlayers ?? null,
         samples: stats.samples, windowLabel,
+        series: points.filter((p) => p.online).map((p) => p.players),
       }}
     />
   );
@@ -72184,6 +72478,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
         <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+        {s.online && <PlayerFacts peak={stats.peakPlayers ?? null} peakAt={stats.peakAt ?? null} avg={stats.avgPlayers ?? null} windowLabel={windowLabel} list={data.playersNow ?? []} />}
         <PlayersList {...playersProps} />
       </section>
     );
@@ -72300,6 +72595,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           maintenance={s.maintenance}
           freeSlot={freeSlot}
           onNotify={() => openSub('free_slot')}
+          who={(data.playersNow?.length ? data.playersNow.map((p) => p.name) : s.playerNames).filter(Boolean)}
+          whoHref={tabHref(id, 'players')}
         />
 
         <Passport
@@ -72357,8 +72654,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         )}
       />
 
-      <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
-        {panel}
+      <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
+        <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
       </div>
 
       {me && (
@@ -77014,6 +77311,70 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .srv-mini b { font-weight: 800; }
 .srv-mini-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--bad)); }
 .srv-mini-dot.on { background: rgb(var(--ok)); }
+
+/* ======================================================================
+   server page, pass 2: who is playing, trends, tiles, record cards, tab slide, block errors
+   ====================================================================== */
+
+/* «Сейчас на сервере»: a stack of avatars in the banner */
+.srv-who { display: inline-flex; max-width: 100%; align-items: center; gap: 10px; margin-top: 12px; padding: 4px 14px 4px 4px; border-radius: var(--r-pill); background: rgb(0 0 0 / .22); color: #fff; text-decoration: none; transition: background-color .15s ease; }
+.srv-who:hover { background: rgb(0 0 0 / .34); }
+.srv-who-stack { display: flex; flex: none; }
+.srv-who-stack > i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: -8px; border-radius: 50%; border: 2px solid rgb(30 30 40 / .9); font-style: normal; font-size: 12px; font-weight: 800; }
+.srv-who-stack > i:first-child { margin-left: 0; }
+.srv-who-more { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; }
+
+/* metrics: sparkline and a trend arrow */
+.srv-spark { display: block; width: 100%; height: 22px; margin-top: 6px; color: var(--srv-acc, rgb(var(--brand))); opacity: .85; }
+.srv-trend { margin-left: 8px; font-size: 12.5px; font-weight: 800; letter-spacing: 0; vertical-align: middle; }
+.srv-trend.is-up { color: rgb(var(--ok)); }
+.srv-trend.is-down { color: rgb(var(--bad)); }
+.srv-trend.is-flat { color: rgb(var(--mute)); }
+
+/* players: view switch, session bar, place chip, tiles, leaving rows, record cards */
+.pl-view { flex: none; }
+.pl-view .seg-item { padding: .4rem .65rem; }
+.pl-bar { display: block; height: 4px; margin-top: 5px; border-radius: 99px; background: rgb(var(--ink) / .08); overflow: hidden; }
+.pl-bar > u { display: block; height: 100%; border-radius: inherit; background: var(--srv-acc, rgb(var(--brand))); opacity: .75; text-decoration: none; transition: width .4s ease; }
+.pl-place-chip { flex: none; padding: 0 7px; border-radius: 99px; font-size: 11.5px; font-weight: 800; line-height: 18px; background: color-mix(in srgb, var(--srv-acc, rgb(var(--brand))) 18%, transparent); color: rgb(var(--ink)); }
+.pl-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+.pl-tile { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px 10px; border-radius: var(--r-lg); background: rgb(var(--soft)); text-align: center; transition: transform .15s ease, background-color .15s ease; -webkit-touch-callout: none; user-select: none; }
+.pl-tile:hover { transform: translateY(-2px); }
+.pl-tile:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgb(var(--brand) / .55); }
+.pl-tile-n { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.pl-tile-t { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+.pl-tile .pl-bar { width: 100%; }
+.pl-row { -webkit-touch-callout: none; }
+.pl-gone { overflow: hidden; color: rgb(var(--mute)); animation: pl-gone 2.6s ease-in both; }
+@keyframes pl-gone { 0% { opacity: .9; max-height: 64px; } 70% { opacity: 0; max-height: 64px; } 100% { opacity: 0; max-height: 0; } }
+.pl-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.pl-fact { display: flex; min-width: 0; flex-direction: column; gap: 1px; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.pl-fact-k { font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); }
+.pl-fact-v { font-size: 22px; font-weight: 800; line-height: 1.15; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.pl-fact-h { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+
+/* a failed block */
+.srv-block-err { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; border-radius: var(--r-lg); background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* the new tab slides in from the side the user moved to */
+@keyframes tab-slide-r { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: none; } }
+@keyframes tab-slide-l { from { opacity: 0; transform: translateX(-22px); } to { opacity: 1; transform: none; } }
+.tab-slide-r { animation: tab-slide-r .28s cubic-bezier(.2, .8, .2, 1) both; }
+.tab-slide-l { animation: tab-slide-l .28s cubic-bezier(.2, .8, .2, 1) both; }
+
+/* the game's accent reaches a few more details */
+.srv-page { accent-color: var(--srv-acc); }
+.srv-page .chip-filter.on { box-shadow: 0 0 0 1.5px var(--srv-acc), 0 2px 6px rgba(40, 50, 80, .08); }
+.srv-page .pl-row:hover { background: color-mix(in srgb, var(--srv-acc) 9%, rgb(var(--soft))); }
+.srv-page ::selection { background: color-mix(in srgb, var(--srv-acc) 35%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-slide-r, .tab-slide-l { animation: none; }
+  .pl-gone { animation: none; display: none; }
+  .pl-tile { transition: none; }
+  .pl-tile:hover { transform: none; }
+}
+html[data-motion='reduce'] :is(.tab-slide-r, .tab-slide-l) { animation: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
