@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
+import NickPic from '../NickPic';
 import { t, useI18n } from '../../i18n';
 import { fmtDateTime, plural, toast } from '../../ui';
 import { useCommunity } from '../servers/CommunityBento';
@@ -11,13 +12,15 @@ import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow, useStic
 
 function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   return (
-    <span
-      className="avatar-hue grid shrink-0 place-items-center rounded-[12px] font-extrabold"
-      style={{ ['--h' as string]: nickHue(name), width: size, height: size, fontSize: size * 0.42 }}
-      aria-hidden
-    >
-      {nickInitial(name)}
-    </span>
+    <NickPic name={name} size={size} className="rounded-[12px]">
+      <span
+        className="avatar-hue grid shrink-0 place-items-center rounded-[12px] font-extrabold"
+        style={{ ['--h' as string]: nickHue(name), width: size, height: size, fontSize: size * 0.42 }}
+        aria-hidden
+      >
+        {nickInitial(name)}
+      </span>
+    </NickPic>
   );
 }
 

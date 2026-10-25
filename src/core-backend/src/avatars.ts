@@ -24,6 +24,11 @@ export function customAvatarUrl(userId: number): string | null {
   }
 }
 
+/** the picture of a user: the uploaded one first, then the linked Discord account's, otherwise null */
+export function avatarFor(u: { id: number; discord_id: string | null; discord_avatar: string | null }): string | null {
+  return customAvatarUrl(u.id) ?? (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+}
+
 export function removeAvatar(userId: number): void {
   fs.rmSync(fileOf(userId), { force: true });
 }

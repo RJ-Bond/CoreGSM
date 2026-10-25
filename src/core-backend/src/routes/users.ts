@@ -3,7 +3,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../auth.js';
-import { removeAvatar } from '../avatars.js';
+import { avatarFor, removeAvatar } from '../avatars.js';
 import { db } from '../db.js';
 import { wrap } from '../http.js';
 import { logAccount, removeBanner } from '../profile.js';
@@ -14,7 +14,7 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
     id: number;
     username: string;
     role: Role;
@@ -22,8 +22,10 @@ router.get('/api/users', admin, (_req, res) => {
     created_at: number | null;
     status: string;
     discord_name: string | null;
+    discord_id: string | null;
+    discord_avatar: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u) })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {

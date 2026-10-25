@@ -677,6 +677,7 @@ export interface UserRow {
   createdAt: number | null;
   status: 'active' | 'pending';
   discordName: string | null;
+  avatarUrl?: string | null;
 }
 
 /** what guests and players get for a posted news item */

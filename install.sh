@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b9667133227a"
+COREGSM_BUILD="20f3f6a51959"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4352,6 +4352,11 @@ export function customAvatarUrl(userId: number): string | null {
   } catch {
     return null;
   }
+}
+
+/** the picture of a user: the uploaded one first, then the linked Discord account's, otherwise null */
+export function avatarFor(u: { id: number; discord_id: string | null; discord_avatar: string | null }): string | null {
+  return customAvatarUrl(u.id) ?? (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
 }
 
 export function removeAvatar(userId: number): void {
@@ -13652,6 +13657,7 @@ __COREGSM_EOF__
 import express from 'express';
 import { z } from 'zod';
 import { allow, auth, type AuthedRequest, rateLimit, viewer } from './auth.js';
+import { avatarFor } from './avatars.js';
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
@@ -13677,7 +13683,7 @@ CREATE INDEX IF NOT EXISTS idx_reviews_server ON server_reviews(server_id, hidde
 interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; username: string; discord_id: string | null; discord_avatar: string | null }
 
 const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar FROM server_reviews r JOIN users u ON u.id = r.user_id`;
-const avatar = (r: Row) => (r.discord_id && r.discord_avatar ? `https://cdn.discordapp.com/avatars/${r.discord_id}/${r.discord_avatar}.png?size=64` : null);
+const avatar = (r: Row) => avatarFor({ id: r.user_id, discord_id: r.discord_id, discord_avatar: r.discord_avatar });
 const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at });
 
 /** the score of a server: the average of the shown reviews and how many gave each number of stars */
@@ -14427,6 +14433,7 @@ __COREGSM_EOF__
  */
 import express from 'express';
 import { viewer } from '../auth.js';
+import { avatarFor } from '../avatars.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../localTime.js';
 import { playAchievements, vrRankIdFor } from '../profile.js';
@@ -14621,6 +14628,28 @@ router.get('/api/players/:name', viewer, (req, res) => {
   const card = playerCard(nick);
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
   res.json(card);
+});
+
+/**
+ * GET /api/avatars-by-nick?n=<nick>&n=<nick>...   pictures of the panel accounts that linked these game nicks
+ * (the uploaded picture, else the Discord one). {lower-case nick: url}; nicks without a picture are left out.
+ */
+router.get('/api/avatars-by-nick', viewer, (req, res) => {
+  const raw = req.query.n;
+  const nicks = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((x) => String(x).slice(0, 64)).filter(Boolean).slice(0, 100);
+  const out: Record<string, string> = {};
+  if (nicks.length) {
+    const rows = db
+      .prepare("SELECT p.game_nick, u.id, u.discord_id, u.discord_avatar FROM user_player p JOIN users u ON u.id = p.user_id WHERE p.game_nick <> '' AND u.status = 'active'")
+      .all() as { game_nick: string; id: number; discord_id: string | null; discord_avatar: string | null }[];
+    const by = new Map(rows.map((r) => [r.game_nick.trim().toLowerCase(), r]));
+    for (const n of nicks) {
+      const r = by.get(n.trim().toLowerCase());
+      const url = r ? avatarFor(r) : null;
+      if (url) out[n.toLowerCase()] = url;
+    }
+  }
+  res.set('Cache-Control', 'private, max-age=60').json(out);
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
@@ -15895,7 +15924,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../auth.js';
-import { removeAvatar } from '../avatars.js';
+import { avatarFor, removeAvatar } from '../avatars.js';
 import { db } from '../db.js';
 import { wrap } from '../http.js';
 import { logAccount, removeBanner } from '../profile.js';
@@ -15906,7 +15935,7 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
     id: number;
     username: string;
     role: Role;
@@ -15914,8 +15943,10 @@ router.get('/api/users', admin, (_req, res) => {
     created_at: number | null;
     status: string;
     discord_name: string | null;
+    discord_id: string | null;
+    discord_avatar: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u) })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {
@@ -47233,6 +47264,7 @@ export interface UserRow {
   createdAt: number | null;
   status: 'active' | 'pending';
   discordName: string | null;
+  avatarUrl?: string | null;
 }
 
 /** what guests and players get for a posted news item */
@@ -49383,6 +49415,33 @@ export default function MaintenanceChip({ m, glass = false, className = '' }: { 
       <IconWrench size={13} />
       <span className="truncate">{chipText(m, Date.now(), (ts) => fmtTime(ts))}</span>
     </span>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/NickPic.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type ReactNode } from 'react';
+import { useNickAvatar } from '../nickAvatars';
+
+/** the picture of the panel account that linked this game nick; `children` (the letter on a colour) while there is none */
+export default function NickPic({ name, size, className = '', children }: { name: string; size: number; className?: string; children: ReactNode }) {
+  const url = useNickAvatar(name);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+  if (!url || failed) return <>{children}</>;
+  return (
+    <img
+      src={url}
+      width={size}
+      height={size}
+      alt=""
+      referrerPolicy="no-referrer"
+      draggable={false}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className={`shrink-0 object-cover ${className}`}
+      style={{ width: size, height: size }}
+    />
   );
 }
 __COREGSM_EOF__
@@ -56285,6 +56344,7 @@ import { AnimatedNumber } from '../../ui';
 import { IconBell } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar } from '../servers/serverUi';
+import NickPic from '../NickPic';
 import { nickHue, nickInitial } from './helpers';
 
 export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
@@ -56332,7 +56392,11 @@ export default function Hero({
         <a className="srv-who" href={whoHref} aria-label={`${t('srv.hero.players')}: ${players}`}>
           <span className="srv-who-stack" aria-hidden>
             {who.slice(0, 7).map((n) => (
-              <i key={n} className="avatar-hue" style={{ ['--h' as string]: nickHue(n) }}>{nickInitial(n)}</i>
+              <b key={n} className="srv-who-av">
+                <NickPic name={n} size={28} className="rounded-full">
+                  <i className="avatar-hue" style={{ ['--h' as string]: nickHue(n) }}>{nickInitial(n)}</i>
+                </NickPic>
+              </b>
             ))}
           </span>
           <span className="srv-who-more">
@@ -57273,6 +57337,7 @@ __COREGSM_EOF__
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
+import NickPic from '../NickPic';
 import { t, useI18n } from '../../i18n';
 import { fmtDateTime, plural, toast } from '../../ui';
 import { useCommunity } from '../servers/CommunityBento';
@@ -57283,13 +57348,15 @@ import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow, useStic
 
 function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   return (
-    <span
-      className="avatar-hue grid shrink-0 place-items-center rounded-[12px] font-extrabold"
-      style={{ ['--h' as string]: nickHue(name), width: size, height: size, fontSize: size * 0.42 }}
-      aria-hidden
-    >
-      {nickInitial(name)}
-    </span>
+    <NickPic name={name} size={size} className="rounded-[12px]">
+      <span
+        className="avatar-hue grid shrink-0 place-items-center rounded-[12px] font-extrabold"
+        style={{ ['--h' as string]: nickHue(name), width: size, height: size, fontSize: size * 0.42 }}
+        aria-hidden
+      >
+        {nickInitial(name)}
+      </span>
+    </NickPic>
   );
 }
 
@@ -58985,6 +59052,7 @@ __COREGSM_EOF__
  * The top of the main page: the community at a glance. Players online now against the 30-day record (a new record
  * gets a small celebration), when the community usually plays, and the latest arrivals.
  */
+import NickPic from '../NickPic';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll, num } from '../../ui';
@@ -59029,7 +59097,7 @@ export function PlayerAvatar({ name, size = 30, online = false }: { name: string
   for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return (
     <span className="cm-ava" style={{ width: size, height: size, fontSize: size * 0.46, ['--h' as string]: h }} aria-hidden>
-      {name.slice(0, 1).toUpperCase()}
+      <NickPic name={name} size={size} className="cm-ava-img">{name.slice(0, 1).toUpperCase()}</NickPic>
       {online && <i className="cm-ava-on" />}
     </span>
   );
@@ -65779,6 +65847,67 @@ export function windowState(w: Pick<MaintenanceWindow, 'active' | 'repeat' | 'en
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/nickAvatars.ts" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from './api';
+
+/**
+ * Pictures of players by their game nick: the panel account that linked a nick brings its uploaded picture or its
+ * Discord avatar. Nicks are asked for in batches, answers are kept for a few minutes, and a nick without a picture
+ * is remembered too, so a list that redraws does not ask again.
+ */
+const TTL = 5 * 60_000;
+const cache = new Map<string, { url: string | null; at: number }>();
+const waiting = new Set<string>();
+const listeners = new Set<() => void>();
+let timer = 0;
+
+const key = (name: string) => name.trim().toLowerCase();
+
+async function flush() {
+  timer = 0;
+  const batch = [...waiting].slice(0, 100);
+  batch.forEach((n) => waiting.delete(n));
+  if (!batch.length) return;
+  let found: Record<string, string> = {};
+  try {
+    found = await api<Record<string, string>>(`/avatars-by-nick?${batch.map((n) => `n=${encodeURIComponent(n)}`).join('&')}`);
+  } catch {
+    /* the pictures are decoration: try again after the next redraw */
+    batch.forEach((n) => cache.delete(key(n)));
+    return;
+  }
+  const at = Date.now();
+  for (const n of batch) cache.set(key(n), { url: found[key(n)] ?? null, at });
+  listeners.forEach((f) => f());
+  if (waiting.size) timer = window.setTimeout(() => void flush(), 30);
+}
+
+function want(name: string) {
+  const k = key(name);
+  if (!k) return;
+  const hit = cache.get(k);
+  if (hit && Date.now() - hit.at < TTL) return;
+  // a placeholder keeps the nick from being queued twice while the answer is on its way
+  if (!hit) cache.set(k, { url: null, at: 0 });
+  waiting.add(name.trim());
+  if (!timer) timer = window.setTimeout(() => void flush(), 30);
+}
+
+/** the picture of one nick (null: none known yet or none at all) */
+export function useNickAvatar(name: string): string | null {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const f = () => bump((n) => n + 1);
+    listeners.add(f);
+    return () => { listeners.delete(f); };
+  }, []);
+  useEffect(() => { want(name); }, [name]);
+  const hit = cache.get(key(name));
+  return hit && hit.at > 0 ? hit.url : null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/notifications.ts" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api, ApiError } from './api';
@@ -71037,6 +71166,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
 import { ActivityStrip } from '../components/profile/Stats';
+import NickPic from '../components/NickPic';
 import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
@@ -71101,7 +71231,7 @@ export default function PlayerPage({ name }: { name: string }) {
     <div className="space-y-5">
       <Crumbs items={[['/community', 'Сообщество'], [`/player/${encodeURIComponent(p.name)}`, p.name]]} />
       <section className="tile pl-hero fade-in">
-        <span className="pl-ava" aria-hidden>{p.name.slice(0, 1).toUpperCase()}</span>
+        <span className="pl-ava" aria-hidden><NickPic name={p.name} size={72} className="pl-ava-img">{p.name.slice(0, 1).toUpperCase()}</NickPic></span>
         <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-black leading-tight">{p.name}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-2 font-bold text-mute">
@@ -75943,7 +76073,7 @@ function UsersTabInner() {
             {pendingUsers.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
                 <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={`Выбрать: ${u.username}`} />
-                <UserAvatar name={u.username} size={32} tone="brand" />
+                <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
                 <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
                   <span className="truncate">{u.username}</span>
                   {u.discordName && <DiscordBadge name={u.discordName} />}
@@ -75971,7 +76101,7 @@ function UsersTabInner() {
         <ul className="divide-y divide-line">
           {listed.map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-              <UserAvatar name={u.username} size={32} tone="brand" />
+              <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
               <span className="min-w-0 flex-1 truncate font-bold">
                 {u.username}{u.username === me?.username ? ' (вы)' : ''}
                 {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
@@ -76945,6 +77075,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 
 /* avatars of players */
 .cm-ava { position: relative; display: inline-grid; place-items: center; flex: none; border-radius: 30%; font-weight: 800; color: #fff; background: linear-gradient(135deg, hsl(var(--h) 62% 48%), hsl(calc(var(--h) + 40) 62% 38%)); }
+.cm-ava-img { position: absolute; inset: 0; border-radius: inherit; }
 .cm-ava-on { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 2px rgb(var(--card)); }
 .cm-ava-game { position: absolute; right: -5px; top: -5px; line-height: 0; border-radius: 50%; box-shadow: 0 0 0 2px rgb(var(--card)); overflow: hidden; }
 
@@ -77004,6 +77135,8 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
   .cm-gal { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .cm-gal li.is-big { grid-column: span 2; grid-row: span 2; aspect-ratio: auto; }
 }
+.pl-ava { overflow: hidden; }
+.pl-ava-img { width: 100% !important; height: 100% !important; border-radius: inherit; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
@@ -77320,8 +77453,10 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .srv-who { display: inline-flex; max-width: 100%; align-items: center; gap: 10px; margin-top: 12px; padding: 4px 14px 4px 4px; border-radius: var(--r-pill); background: rgb(0 0 0 / .22); color: #fff; text-decoration: none; transition: background-color .15s ease; }
 .srv-who:hover { background: rgb(0 0 0 / .34); }
 .srv-who-stack { display: flex; flex: none; }
-.srv-who-stack > i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: -8px; border-radius: 50%; border: 2px solid rgb(30 30 40 / .9); font-style: normal; font-size: 12px; font-weight: 800; }
-.srv-who-stack > i:first-child { margin-left: 0; }
+.srv-who-stack > b { display: block; box-sizing: border-box; width: 28px; height: 28px; margin-left: -8px; overflow: hidden; border-radius: 50%; border: 2px solid rgb(30 30 40 / .9); }
+.srv-who-stack > b:first-child { margin-left: 0; }
+.srv-who-stack > b > i { display: grid; place-items: center; width: 100%; height: 100%; font-style: normal; font-size: 12px; font-weight: 800; }
+.srv-who-stack > b > img { width: 100% !important; height: 100% !important; }
 .srv-who-more { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; }
 
 /* metrics: sparkline and a trend arrow */
