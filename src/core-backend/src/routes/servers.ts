@@ -18,6 +18,17 @@ import { baseOf, brand, publicBase } from '../site.js';
 
 export const router = express.Router();
 
+// a pinned note of the staff on the overview of a server (rules, the next wipe, working hours)
+db.exec(`
+CREATE TABLE IF NOT EXISTS server_notices (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  tone TEXT NOT NULL DEFAULT 'info',
+  updated_at INTEGER NOT NULL
+);
+`);
+const NOTICE_TONES = ['info', 'ok', 'warn', 'bad'] as const;
+
 // ---------- servers ----------
 const serverSchema = z.object({
   // optional: when empty the title is taken from the game server's own reply
@@ -191,6 +202,10 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
     hours,
     createdAt,
     discord,
+    notice: (() => {
+      const n = db.prepare('SELECT text, tone, updated_at FROM server_notices WHERE server_id = ?').get(id) as { text: string; tone: string; updated_at: number } | undefined;
+      return n ? { text: n.text, tone: n.tone, updatedAt: n.updated_at } : null;
+    })(),
     playersNow,
     points,
     stats: {
@@ -205,6 +220,20 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
     // shown period, so the chart can show where today is unusual; null where there is not enough history
     baseline: hours <= 168 ? usualWeek(id, since) : null,
   });
+});
+
+router.put('/api/servers/:id/notice', param('id'), allow('servers'), (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = z.object({ text: z.string().trim().max(500), tone: z.enum(NOTICE_TONES).default('info') }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Текст объявления — до 500 символов' });
+  if (!b.data.text) {
+    db.prepare('DELETE FROM server_notices WHERE server_id = ?').run(id);
+    return res.json({ notice: null });
+  }
+  const now = Date.now();
+  db.prepare('INSERT INTO server_notices (server_id, text, tone, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET text = excluded.text, tone = excluded.tone, updated_at = excluded.updated_at').run(id, b.data.text, b.data.tone, now);
+  res.json({ notice: { text: b.data.text, tone: b.data.tone, updatedAt: now } });
 });
 
 function usualWeek(serverId: number, before: number): (number | null)[] {

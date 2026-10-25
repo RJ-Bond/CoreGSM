@@ -7,6 +7,8 @@ import '../../styles/analytics.css';
 import { api } from '../../api';
 import { rankById } from '../../vrisingRanks';
 import { ago, ErrorLine, fmtDate, plural, num } from '../../ui';
+import NickPic from '../NickPic';
+import { nickHue, nickInitial } from './helpers';
 
 interface Analytics {
   days: number;
@@ -182,31 +184,48 @@ function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
   );
 }
 
+type TopSort = 'hours' | 'visits' | 'recent';
+const TOP_SORTS: [TopSort, string][] = [['hours', 'По часам'], ['visits', 'По визитам'], ['recent', 'По давности']];
+
 function TopPlayers({ top }: { top: Analytics['top'] }) {
-  const max = Math.max(1, ...top.map((p) => p.hours));
+  const [sort, setSort] = useState<TopSort>('hours');
+  const list = useMemo(
+    () => [...top].sort((a, b) => (sort === 'visits' ? b.visits - a.visits || b.hours - a.hours : sort === 'recent' ? (b.lastSeen ?? Infinity) - (a.lastSeen ?? Infinity) : b.hours - a.hours)),
+    [top, sort],
+  );
+  const max = Math.max(1, ...top.map((p) => (sort === 'visits' ? p.visits : p.hours)));
   if (!top.length) return <p className="text-sm font-semibold text-mute">За этот период никто не играл.</p>;
   return (
-    <ol className="an-top">
-      {top.map((p, i) => {
-        const rank = p.rankId ? rankById(p.rankId) : null;
-        return (
-          <li key={p.name}>
-            <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-baseline gap-2">
-                <span className="truncate font-extrabold">{p.name}</span>
-                {rank && <span className="truncate text-xs font-bold text-mute">{rank.name}</span>}
+    <div className="space-y-3">
+      <div className="seg" role="group" aria-label="Порядок">
+        {TOP_SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>)}
+      </div>
+      <ol className="an-top">
+        {list.map((p, i) => {
+          const rank = p.rankId ? rankById(p.rankId) : null;
+          const value = sort === 'visits' ? p.visits : p.hours;
+          return (
+            <li key={p.name}>
+              <span className={`an-top-n ${i < 3 && sort !== 'recent' ? `is-${i + 1}` : ''}`}>{i + 1}</span>
+              <NickPic name={p.name} size={32} className="rounded-full">
+                <span className="avatar-hue grid shrink-0 place-items-center rounded-full font-extrabold" style={{ ['--h' as string]: nickHue(p.name), width: 32, height: 32, fontSize: 13 }} aria-hidden>{nickInitial(p.name)}</span>
+              </NickPic>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  <a className="truncate font-extrabold hover:underline" href={`/player/${encodeURIComponent(p.name)}`}>{p.name}</a>
+                  {rank && <span className="truncate text-xs font-bold text-mute">{rank.name}</span>}
+                </span>
+                <span className="an-top-bar"><span style={{ width: `${(value / max) * 100}%` }} /></span>
               </span>
-              <span className="an-top-bar"><span style={{ width: `${(p.hours / max) * 100}%` }} /></span>
-            </span>
-            <span className="shrink-0 text-right">
-              <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
-              <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
-            </span>
-          </li>
-        );
-      })}
-    </ol>
+              <span className="shrink-0 text-right">
+                <span className="block font-extrabold tabular-nums">{sort === 'visits' ? `${p.visits} ${plural(p.visits, ['визит', 'визита', 'визитов'])}` : `${num(p.hours)} ч`}</span>
+                <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 
