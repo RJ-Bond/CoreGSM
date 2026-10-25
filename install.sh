@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0da0822a1c31"
+COREGSM_BUILD="1d9395a0c486"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -10623,7 +10623,11 @@ export function registerNews(deps: {
     const others = order.filter((x) => x.id !== r.id);
     const suggested = [...others.filter((x) => x.cat === mine), ...others.filter((x) => x.cat !== mine)].slice(0, 3);
     const related = suggested.map((x) => byId.get(x.id) as NewsRow | undefined).filter((x): x is NewsRow => !!x).map((x) => publicNews(x, uid));
-    res.json({ ...base, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
+    // the last edit made after the publication (pinning does not count): «Обновлено …» under the headline
+    const ed = r.sent_at
+      ? (db.prepare("SELECT MAX(ts) AS ts, COUNT(*) AS n FROM news_versions WHERE news_id = ? AND ts > ? AND note NOT IN ('Закреплено', 'Откреплено')").get(r.id, r.sent_at) as { ts: number | null; n: number })
+      : { ts: null, n: 0 };
+    res.json({ ...base, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
   });
 
   // ---------- a link that looks good when pasted into Discord/Telegram: /n/<id> (redirects to the news page) ----------
@@ -46009,6 +46013,7 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
+import { NewsUnreadDot } from './components/news/newsSeen';
 import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
@@ -46431,6 +46436,7 @@ export default function App() {
             {visible.map((p) => (
               <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {t(p.label)}
+                {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
@@ -46505,6 +46511,7 @@ export default function App() {
                   >
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}
+                    {p.id === 'news' && page !== 'news' && <NewsUnreadDot className="nw-unread-abs" />}
                     {p.id === 'admin' && updateAvailable && (
                       <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">{t('hdr.update')}</span></span>
                     )}
@@ -47178,6 +47185,10 @@ export interface NewsItem {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  /** the rubric, the pin and the reactions (the admin list shows them) */
+  category?: NewsCategory;
+  pinned?: boolean;
+  reactions?: NewsReaction[];
 }
 
 export interface NewsSettings {
@@ -47403,6 +47414,9 @@ export interface NewsReaction { emoji: string; count: number; mine: boolean }
 
 /** GET /news/:id */
 export interface PublicNewsFull extends PublicNews {
+  /** the last edit made well after the publication, and how many there were (absent: not edited) */
+  editedAt?: number | null;
+  edits?: number;
   prev?: { id: number; title: string } | null;
   next?: { id: number; title: string } | null;
   /** up to three other news to read next (the same rubric first) */
@@ -51382,6 +51396,18 @@ import { toast } from '../../ui';
  * > quotes, lists, @everyone/@here, <@&role>, <@user>, <#channel>, <t:unix:R> and custom emoji.
  */
 
+/** the «#» that appears beside a heading on hover and copies the link to that part of the page */
+function HeadingAnchor({ id }: { id: string }) {
+  // in the editor preview the link would point at the editor: no anchor there
+  if (typeof window === 'undefined' || !/^\/news\/\d+/.test(window.location.pathname)) return null;
+  const copy = async () => {
+    const url = `${window.location.origin}${window.location.pathname}#${id}`;
+    try { await navigator.clipboard.writeText(url); toast(t('nw.anchorCopied')); } catch { /* no clipboard */ }
+    window.history.replaceState(null, '', `#${id}`);
+  };
+  return <button type="button" className="nw-anchor" onClick={() => void copy()} aria-label={t('nw.anchorCopy')} title={t('nw.anchorCopy')}>#</button>;
+}
+
 export interface DTheme {
   name: 'dark' | 'light';
   outer: string;
@@ -51588,7 +51614,12 @@ export function DiscordMd({ text }: { text: string }) {
     if (h) {
       const size = h[1].length === 1 ? 'text-[1.5em]' : h[1].length === 2 ? 'text-[1.25em]' : 'text-[1.1em]';
       // the id lets the table of contents of the news page jump here (extractHeadings builds the same ids)
-      out.push(<div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>{inlineMd(h[2])}</div>);
+      out.push(
+        <div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} nw-h mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>
+          {inlineMd(h[2])}
+          <HeadingAnchor id={`nw-h-${i}`} />
+        </div>,
+      );
       continue;
     }
     const small = /^-#\s+(.*)$/.exec(line);
@@ -52306,10 +52337,10 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState } from 'react';
 import type { NewsReaction, PublicNews, PublicNewsFull, Server } from '../../api';
 import { t } from '../../i18n';
-import { toast } from '../../ui';
+import { ago, fmtDateTime, toast } from '../../ui';
 import { cardOf, NewsCover, Row } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
-import { extractHeadings, readingMinutes } from './newsLogic';
+import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
 import {
   ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
 } from './NewsParts';
@@ -52337,6 +52368,20 @@ function ReadProgress({ target }: { target: React.RefObject<HTMLElement | null> 
   return <div className="nw-progress" style={{ width: `${p * 100}%` }} role="progressbar" aria-label={t('nw.progress')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(p * 100)} />;
 }
 
+/** «Наверх» after a long scroll */
+function ToTop() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const on = () => setShow(window.scrollY > 900);
+    on();
+    window.addEventListener('scroll', on, { passive: true });
+    return () => window.removeEventListener('scroll', on);
+  }, []);
+  if (!show) return null;
+  const go = () => window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  return <button type="button" className="nw-top" onClick={go} aria-label={t('nw.toTop')} title={t('nw.toTop')}><span aria-hidden>↑</span></button>;
+}
+
 /** one news item in full: cover, text, what changed, server cards, gallery, buttons, reactions, previous / next */
 export function NewsArticle({
   item, servers, canReact, onReactions, preview = false, related = [],
@@ -52353,9 +52398,19 @@ export function NewsArticle({
   const c = cardOf(item);
   const minutes = readingMinutes(`${c.text} ${c.fields.map((f) => f.value).join(' ')}`);
   const [viewer, setViewer] = useState<number | null>(null);
+  const [coverOpen, setCoverOpen] = useState(false);
+  const edited = !preview && wasEdited(item.sentAt, item.editedAt);
   const root = useRef<HTMLElement>(null);
   const headings = extractHeadings(c.text);
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
+  // a link to a part of the page (#nw-h-3): the text is drawn after the load, so jump once it is there
+  useEffect(() => {
+    const id = window.location.hash.slice(1);
+    if (preview || !/^nw-h-\d+$/.test(id)) return;
+    const timer = window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: 'start' }), 150);
+    return () => window.clearTimeout(timer);
+  }, [preview, item.id]);
 
   const jump = (id: string) => {
     const el = document.getElementById(id);
@@ -52384,13 +52439,17 @@ export function NewsArticle({
   return (
     <article className="nw-article" ref={root}>
       {!preview && <ReadProgress target={root} />}
-      <NewsCover c={c} servers={servers} as="h1" tall />
+      <div className="nw-cover-zoomable">
+        <NewsCover c={c} servers={servers} as="h1" tall />
+        {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
+      </div>
       <div className="nw-article-in">
         {(c.author || c.countdownAt || minutes > 0) && (
           <div className="nf-meta">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
+            {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
         )}
         {headings.length >= 3 && (
@@ -52451,6 +52510,8 @@ export function NewsArticle({
           ) : <span />}
         </nav>
       )}
+      {!preview && <ToTop />}
+      {coverOpen && c.image && <GalleryViewer urls={[c.image]} index={0} onIndex={() => undefined} onClose={() => setCoverOpen(false)} />}
       {viewer != null && c.gallery.length > 0 && <GalleryViewer urls={c.gallery} index={Math.min(viewer, c.gallery.length - 1)} onIndex={setViewer} onClose={() => setViewer(null)} />}
     </article>
   );
@@ -52865,8 +52926,9 @@ import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '
 import { NewsArticle } from './NewsArticle';
 import { CategoryIcon, PinIcon } from './NewsIcons';
 import { Countdown, categoryLabel, useNewsServers } from './NewsParts';
-import { cardOf, hasGeneratedCover, PublicFeed } from './PublicFeed';
-import { CATEGORY_HEX, isRubricFilter, orderFeed, visibleRubrics, type RubricFilter } from './newsLogic';
+import { cardOf, hasGeneratedCover, NewsCover, PublicFeed } from './PublicFeed';
+import { markSeen, readSeen } from './newsSeen';
+import { CATEGORY_HEX, isRubricFilter, orderFeed, pickHero, plainExcerpt, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
 /** how many news a page of the feed shows */
@@ -52956,6 +53018,9 @@ export function NewsListPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [counts, setCounts] = useState<Record<RubricFilter, number>>(ZERO_COUNTS);
   const wide = useMedia('(min-width: 1100px)');
+  // the time of the previous visit, taken once: the «Новое» marks stay while the page is open
+  const [seen] = useState(readSeen);
+  useEffect(() => { markSeen(); }, []);
   const servers = useNewsServers();
   const works = useWorks();
 
@@ -52990,7 +53055,20 @@ export function NewsListPage() {
   const showMore = () => { setLoadingMore(true); setLimit((l) => l + PAGE); };
 
   const ordered = useMemo(() => orderFeed(items), [items]);
-  const shown = ordered;
+  // the big block on top: only on the first page of «Все», the rest of the feed goes below it
+  const hero = filter === 'all' ? pickHero(ordered) : null;
+  const shown = hero ? ordered.filter((n) => n.id !== hero.id) : ordered;
+  const heroCard = hero ? cardOf(hero) : null;
+
+  // the next page loads by itself when the end of the feed comes into view (the button stays as a fallback)
+  const more = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = more.current;
+    if (!el || !hasMore || loadingMore || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver((e) => { if (e[0]?.isIntersecting) { setLoadingMore(true); setLimit((l) => l + PAGE); } }, { rootMargin: '400px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loadingMore, items.length]);
   const pinned = ordered.filter((n) => (n.pinned ?? n.payload?.pinned)).slice(0, 5);
   const now = Date.now();
   // the nearest event with a timer among the loaded news
@@ -53047,7 +53125,7 @@ export function NewsListPage() {
             </ul>
             </>
           )}
-          {loaded && ordered.length > 0 && shown.length === 0 && (
+          {loaded && ordered.length > 0 && shown.length === 0 && !hero && (
             <StateView
               kind="empty"
               art={<NewsArt />}
@@ -53056,9 +53134,18 @@ export function NewsListPage() {
               action={<button type="button" className="btn btn-soft" onClick={() => setRubric('all')}>{t('nw.showAll')}</button>}
             />
           )}
-          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} /></div>}
+          {heroCard && (
+            <article className="nw-hero fade-in">
+              <NewsCover c={heroCard} servers={servers} href={`/news/${heroCard.id}`} tall />
+              <div className="nw-hero-in">
+                {heroCard.text && <p>{plainExcerpt(heroCard.text, 260)}</p>}
+                <a className="btn" href={`/news/${heroCard.id}`}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+              </div>
+            </article>
+          )}
+          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} /></div>}
           {hasMore && (
-            <div className="ne-more">
+            <div className="ne-more" ref={more}>
               <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
                 {loadingMore ? t('nw.loadingMore') : t('nw.more')}
               </button>
@@ -53313,7 +53400,7 @@ import { useAuth } from '../../auth';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
 import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
 import {
-  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
+  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isFresh, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
 } from './newsLogic';
 
 export { PANEL_THEME } from './NewsParts';
@@ -53429,7 +53516,7 @@ function monthFormatter(lang: 'ru' | 'en') {
  * One news as a small article: a banner (the picture, or a cover drawn by the panel) with the rubric, the date and the
  * headline on it, and the whole text below (a list stays a list), the author and a link.
  */
-function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
+function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en'; seen: number | null }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
   const { me } = useAuth();
@@ -53445,6 +53532,7 @@ function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; 
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
+            {isFresh(c.at, seen) && <span className="nw-new">{t('nw.new')}</span>}
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
             {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
@@ -53498,7 +53586,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
  * The feed: an editorial list, pinned items first and then the rest grouped by month.
  * `items` must already be ordered (pinned first, newest first) and filtered.
  */
-export function PublicFeed({ items, servers, flat = false }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean }) {
+export function PublicFeed({ items, servers, flat = false, seen = null }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null }) {
   const { lang } = useI18n();
   if (items.length === 0) return null;
   const cards = items.map(cardOf);
@@ -53511,13 +53599,13 @@ export function PublicFeed({ items, servers, flat = false }: { items: PublicNews
       {pinned.length > 0 && (
         <section className="nw-group">
           <h2 className="ne-h">{t('nw.pinned')}</h2>
-          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
+          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
           {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
-          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
+          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
         </section>
       ))}
     </div>
@@ -54268,6 +54356,77 @@ export function toggleReaction(
       return { ...r, count, mine: r.emoji === next };
     }),
   };
+}
+
+// ---------- «Новое»: what was published since the person last opened the news ----------
+
+/** a published item is fresh when it came after the last visit (no stored visit yet: nothing is fresh) */
+export const isFresh = (sentAt: number | null | undefined, seen: number | null): boolean => seen != null && sentAt != null && sentAt > seen;
+
+export const unreadCount = (items: { sentAt: number | null }[], seen: number | null): number => items.filter((n) => isFresh(n.sentAt, seen)).length;
+
+/** the item for the big block at the top of the feed: the newest pinned one, else the newest one; null for a short feed */
+export function pickHero<T extends Pick<PublicNews, 'id' | 'sentAt' | 'pinned' | 'payload'>>(items: T[], min = 3): T | null {
+  if (items.length < min) return null;
+  const ordered = orderFeed(items);
+  return ordered[0] ?? null;
+}
+
+/** «Обновлено» is shown only when the edit came well after the publication (not for a fix made a minute later) */
+export const EDIT_GRACE_MS = 10 * 60_000;
+export const wasEdited = (sentAt: number | null | undefined, editedAt: number | null | undefined): boolean =>
+  sentAt != null && editedAt != null && editedAt - sentAt > EDIT_GRACE_MS;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/newsSeen.ts" << '__COREGSM_EOF__'
+import { createElement, useEffect, useState } from 'react';
+import { api, type PublicNews } from '../../api';
+import { t } from '../../i18n';
+import { unreadCount } from './newsLogic';
+
+const KEY = 'coregsm_news_seen';
+const EVENT = 'coregsm:news-seen';
+
+/** the time of the last visit to the news page (null: never; the first visit starts the count and marks nothing) */
+export function readSeen(): number | null {
+  try {
+    const v = Number(localStorage.getItem(KEY));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function markSeen(now = Date.now()): void {
+  try { localStorage.setItem(KEY, String(now)); } catch { /* not remembered */ }
+  window.dispatchEvent(new Event(EVENT));
+}
+
+/** how many news came after the last visit; polls rarely, and updates at once after a visit to /news */
+export function useNewsUnread(enabled: boolean): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let alive = true;
+    const run = () => {
+      const seen = readSeen();
+      // the first run only starts the count
+      if (seen == null) { markSeen(); setN(0); return; }
+      api<PublicNews[]>('/news?limit=30').then((list) => { if (alive && Array.isArray(list)) setN(unreadCount(list, seen)); }).catch(() => undefined);
+    };
+    run();
+    const timer = window.setInterval(run, 120_000);
+    window.addEventListener(EVENT, run);
+    return () => { alive = false; window.clearInterval(timer); window.removeEventListener(EVENT, run); };
+  }, [enabled]);
+  return n;
+}
+
+/** the number of unread news beside «Новости» in the menu (nothing while there are none) */
+export function NewsUnreadDot({ className = '' }: { className?: string }) {
+  const n = useNewsUnread(true);
+  if (n <= 0) return null;
+  return createElement('span', { className: `nw-unread ${className}`, title: t('nw.unread', { n }), role: 'img', 'aria-label': t('nw.unread', { n }) }, n > 9 ? '9+' : String(n));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
@@ -64587,6 +64746,14 @@ const en: Record<keyof typeof ru, string> = {
   'nw.progress': 'Read so far',
   'nw.liveNow': 'On the servers now',
   'nw.offline': 'offline',
+  'nw.new': 'New',
+  'nw.updated': 'Updated {when}',
+  'nw.updatedTip': '{date} · edits: {n}',
+  'nw.toTop': 'Back to top',
+  'nw.zoomCover': 'Open the cover full size',
+  'nw.anchorCopied': 'Link to the section copied',
+  'nw.anchorCopy': 'Copy link to the section',
+  'nw.unread': 'Unread news: {n}',
   'nw.copied': 'Link copied',
   'nw.copyFail': 'Could not copy the link',
   'nw.prev': 'Newer',
@@ -65842,6 +66009,14 @@ const ru = {
   'nw.progress': 'Прочитано',
   'nw.liveNow': 'Сейчас на серверах',
   'nw.offline': 'офлайн',
+  'nw.new': 'Новое',
+  'nw.updated': 'Обновлено {when}',
+  'nw.updatedTip': '{date} · правок: {n}',
+  'nw.toTop': 'Наверх',
+  'nw.zoomCover': 'Открыть обложку крупно',
+  'nw.anchorCopied': 'Ссылка на раздел скопирована',
+  'nw.anchorCopy': 'Скопировать ссылку на раздел',
+  'nw.unread': 'Непрочитанных новостей: {n}',
   'nw.copied': 'Ссылка скопирована',
   'nw.copyFail': 'Не удалось скопировать ссылку',
   'nw.prev': 'Новее',
@@ -71080,6 +71255,7 @@ import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
+import { newsImage } from '../components/news/newsLogic';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
@@ -71118,6 +71294,8 @@ function NewsList() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [picked, setPicked] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [changingTest, setChangingTest] = useState(false);
   const [view, setView] = useState<'list' | 'calendar'>(() => {
     try { return localStorage.getItem('news_view') === 'calendar' ? 'calendar' : 'list'; } catch { return 'list'; }
@@ -71172,6 +71350,29 @@ function NewsList() {
     await api(`/news/${n.id}/schedule`, 'PATCH', { scheduledAt: at })
       .then(() => toast(`Перенесено на ${fmtDateTime(at)}`))
       .catch((e) => setError(e.message));
+    void load();
+  };
+  const togglePin = async (n: NewsItem) => {
+    await api(`/news/${n.id}/pin`, 'PATCH', { pinned: !n.pinned }).then(() => toast(n.pinned ? 'Откреплено' : 'Закреплено вверху ленты')).catch((e) => setError(e.message));
+    void load();
+  };
+  const pick = (id: number) => setPicked((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const chosen = list.filter((n) => picked.includes(n.id));
+  const bulk = async (kind: 'publish' | 'pin' | 'unpin' | 'delete') => {
+    if (chosen.length === 0) return;
+    if (kind === 'delete') {
+      const sent = chosen.filter((n) => n.status === 'sent').length;
+      if (!(await confirmDialog({ title: `Удалить новостей: ${chosen.length}?`, text: sent ? `Опубликованных среди них ${sent}: их сообщения также удалятся из Discord.` : undefined, confirmLabel: 'Удалить', danger: true }))) return;
+    }
+    setBulkBusy(true);
+    const todo = kind === 'publish' ? chosen.filter((n) => ['draft', 'scheduled', 'error'].includes(n.status))
+      : kind === 'pin' ? chosen.filter((n) => !n.pinned) : kind === 'unpin' ? chosen.filter((n) => n.pinned) : chosen;
+    const res = await Promise.allSettled(todo.map((n) => (kind === 'publish' ? api(`/news/${n.id}/publish`, 'POST') : kind === 'delete' ? api(`/news/${n.id}`, 'DELETE') : api(`/news/${n.id}/pin`, 'PATCH', { pinned: kind === 'pin' }))));
+    const bad = res.filter((r) => r.status === 'rejected').length;
+    const verb = { publish: 'Отправлено', pin: 'Закреплено', unpin: 'Откреплено', delete: 'Удалено' }[kind];
+    toast(bad ? `${verb}: ${todo.length - bad}, не удалось: ${bad}` : todo.length ? `${verb}: ${todo.length}` : 'Подходящих новостей среди выбранных нет', bad ? 'err' : undefined);
+    setPicked([]);
+    setBulkBusy(false);
     void load();
   };
   const remove = async (n: NewsItem) => {
@@ -71275,24 +71476,54 @@ function NewsList() {
         </div>
       )}
 
+      {list.length > 1 && view === 'list' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
+          <label className="flex items-center gap-2 font-bold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === list.length} onChange={(e) => setPicked(e.target.checked ? list.map((n) => n.id) : [])} />
+            {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
+          </label>
+          {picked.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-2">
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('publish')}>Опубликовать</button>
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('pin')}>Закрепить</button>
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('unpin')}>Открепить</button>
+              <button className="btn btn-danger btn-sm" disabled={bulkBusy} onClick={() => void bulk('delete')}>Удалить</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
         {list.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
-            <article key={n.id} className="panel flex flex-col gap-3 overflow-hidden p-5" style={{ borderTop: `4px solid ${color}` }}>
+            <article key={n.id} className={`panel flex flex-col gap-3 overflow-hidden p-5 ${picked.includes(n.id) ? 'ring-2 ring-brand/60' : ''}`} style={{ borderTop: `4px solid ${color}` }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5">
+                  {list.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(n.id)} onChange={() => pick(n.id)} aria-label={`Выбрать: ${n.title}`} />}
                   <StatusPill n={n} />
+                  {n.pinned && <span className="pill pill-ok">ЗАКРЕПЛЕНО</span>}
                   {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? 'КАЖДЫЙ ДЕНЬ' : n.repeat === 'weekly' ? 'КАЖДУЮ НЕДЕЛЮ' : 'КАЖДЫЙ МЕСЯЦ'}</span>}
                 </div>
                 <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
               </div>
-              <h3 className="line-clamp-2 wrap-break-word text-lg font-black leading-tight">{n.title}</h3>
-              {excerpt(n) && <p className="line-clamp-3 wrap-break-word text-sm font-semibold text-mute">{excerpt(n)}</p>}
+              <div className="flex items-start gap-3">
+                {newsImage(n.payload) && <img src={newsImage(n.payload) ?? ''} alt="" loading="lazy" className="nl-thumb" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
+                <div className="min-w-0 flex-1">
+                  <h3 className="line-clamp-2 wrap-break-word text-lg font-black leading-tight">{n.title}</h3>
+                  {excerpt(n) && <p className="mt-1 line-clamp-3 wrap-break-word text-sm font-semibold text-mute">{excerpt(n)}</p>}
+                </div>
+              </div>
+              {(n.reactions ?? []).some((r) => r.count > 0) && (
+                <p className="flex flex-wrap gap-1.5 text-sm font-bold" aria-label="Реакции">
+                  {(n.reactions ?? []).filter((r) => r.count > 0).map((r) => <span key={r.emoji} className="nl-react">{r.emoji} {r.count}</span>)}
+                </p>
+              )}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>Изменить</a>
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
+                <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? 'Открепить' : 'Закрепить'}</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <span className="ml-auto flex items-center gap-1.5">
@@ -77721,6 +77952,10 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-stage > :nth-child(n+5) { animation-delay: .16s; }
 @keyframes adm-in { from { opacity: 0; transform: translateY(8px); } }
 @media (prefers-reduced-motion: reduce) { .adm-stage > * { animation: none; } }
+
+/* admin news list: the thumbnail, the reactions */
+.nl-thumb { width: 5.5rem; aspect-ratio: 16 / 10; flex: none; object-fit: cover; border-radius: var(--r-md); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.nl-react { padding: 1px 9px; border-radius: var(--r-pill); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-variant-numeric: tabular-nums; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -79253,6 +79488,27 @@ __COREGSM_EOF__
 .nw-skel-entry { border-radius: 16px; overflow: hidden; border: 1px solid rgb(var(--line)); margin-bottom: 14px; }
 .nw-skel-banner { height: 120px; border-radius: 0; }
 .nw-skel-entry .nw-skel-lines { display: grid; gap: 10px; padding: 16px; }
+
+/* ---------- «Новое», the hero, anchors, up, zoom, unread counter ---------- */
+.nw-new { display: inline-flex; align-items: center; padding: .2rem .6rem; border-radius: var(--r-pill); font-size: .75rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); }
+.nw-hero { display: grid; gap: .75rem; }
+.nw-hero .nw-cover { border-radius: var(--r-xl); }
+.nw-hero-in { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; }
+.nw-hero-in p { flex: 1 1 18rem; min-width: 0; margin: 0; font-weight: 600; color: rgb(var(--mute)); }
+.nw-h { position: relative; }
+.nw-anchor { margin-left: .4em; padding: 0 .2em; font: inherit; font-size: .8em; font-weight: 700; color: rgb(var(--mute)); opacity: 0; transition: opacity .15s ease; }
+.nw-h:hover .nw-anchor, .nw-anchor:focus-visible { opacity: 1; }
+.nw-anchor:hover { color: rgb(var(--link)); }
+@media (hover: none) { .nw-anchor { opacity: .5; } }
+.nw-top { position: fixed; right: 1rem; bottom: 6rem; z-index: 40; display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 50%; font-size: 1.25rem; font-weight: 800; color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: var(--shadow-3); animation: nw-top-in .2s ease; }
+@media (min-width: 768px) { .nw-top { bottom: 1.5rem; right: 1.5rem; } }
+@keyframes nw-top-in { from { opacity: 0; transform: translateY(8px); } }
+.nw-cover-zoomable { position: relative; }
+.nw-zoom { position: absolute; top: .75rem; right: .75rem; z-index: 2; display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: 50%; font-size: 1.1rem; color: #fff; background: rgb(0 0 0 / .45); backdrop-filter: blur(6px); opacity: .85; transition: opacity .15s ease, background-color .15s ease; }
+.nw-zoom:hover, .nw-zoom:focus-visible { opacity: 1; background: rgb(0 0 0 / .65); }
+.nw-unread { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; margin-left: .4rem; border-radius: var(--r-pill); font-size: .7rem; font-weight: 800; line-height: 1; color: #fff; background: rgb(var(--bad)); font-variant-numeric: tabular-nums; }
+.nw-unread-abs { position: absolute; top: .35rem; right: 24%; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .nw-top { animation: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'

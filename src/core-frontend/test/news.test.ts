@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   categoryOf, countByCategory, countdownText, coverGame, coverGradient, filterByCategory, galleryUrls, groupByMonth, groupChanges,
-  extractHeadings, isGeneratedCover, normCategory, orderFeed, relatedNews, toggleReaction, validActions, visibleRubrics,
+  extractHeadings, isFresh, isGeneratedCover, normCategory, orderFeed, pickHero, relatedNews, toggleReaction, unreadCount, validActions, visibleRubrics, wasEdited,
 } from '../src/components/news/newsLogic';
 import { blank, fromPayload, toPayload } from '../src/components/news/model';
 import type { PublicNews } from '../src/api';
@@ -142,5 +142,28 @@ describe('news page helpers', () => {
     expect(relatedNews(l, 1, 'wipe', 3).map((x) => x.id)).toEqual([4, 3, 2]);
     expect(relatedNews(l, 2, 'announcement', 2).map((x) => x.id)).toEqual([5, 4]);
     expect(relatedNews([item(1, 1)], 1, 'wipe')).toEqual([]);
+  });
+});
+
+describe('news: fresh, hero, edited', () => {
+  it('isFresh needs a stored visit and a later publication', () => {
+    expect(isFresh(200, 100)).toBe(true);
+    expect(isFresh(100, 100)).toBe(false);
+    expect(isFresh(200, null)).toBe(false);
+    expect(isFresh(null, 100)).toBe(false);
+  });
+  it('unreadCount counts the fresh ones', () => {
+    expect(unreadCount([{ sentAt: 5 }, { sentAt: 50 }, { sentAt: 99 }], 40)).toBe(2);
+  });
+  it('pickHero: nothing for a short feed, a pinned item first otherwise', () => {
+    const mk = (id: number, sentAt: number, pinned = false) => ({ id, sentAt, pinned, payload: { content: '', mention: 'none' as const, ...(pinned ? { pinned: true } : {}) } });
+    expect(pickHero([mk(1, 1), mk(2, 2)])).toBeNull();
+    expect(pickHero([mk(1, 1, true), mk(2, 5), mk(3, 9)])?.id).toBe(1);
+    expect(pickHero([mk(1, 1), mk(2, 5), mk(3, 9)])?.id).toBe(3);
+  });
+  it('wasEdited ignores quick fixes', () => {
+    expect(wasEdited(1000, 1000 + 60_000)).toBe(false);
+    expect(wasEdited(1000, 1000 + 3_600_000)).toBe(true);
+    expect(wasEdited(null, 5)).toBe(false);
   });
 });

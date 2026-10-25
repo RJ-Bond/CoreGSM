@@ -1,3 +1,4 @@
+import { NewsUnreadDot } from './components/news/newsSeen';
 import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
@@ -420,6 +421,7 @@ export default function App() {
             {visible.map((p) => (
               <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {t(p.label)}
+                {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
@@ -494,6 +496,7 @@ export default function App() {
                   >
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}
+                    {p.id === 'news' && page !== 'news' && <NewsUnreadDot className="nw-unread-abs" />}
                     {p.id === 'admin' && updateAvailable && (
                       <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">{t('hdr.update')}</span></span>
                     )}
