@@ -53,6 +53,12 @@ describe('api: community and player cards', () => {
     assert.equal(c.feed[0].online, true);
     assert.equal(c.feed[0].newcomer, true);
     assert.equal(c.feed.find((f: { name: string }) => f.name === 'Viktor').newcomer, false);
+    assert.equal(c.top.day.length >= 1, true);
+    assert.equal(c.top.all.length, 3);
+    assert.equal(c.top.week.find((p: { name: string }) => p.name.toLowerCase() === 'live').online, true);
+    assert.equal(c.top.week[0].prev, null); // Viktor was not on the list the week before
+    assert.equal(c.players.prev.month, 0); // nobody played 30-60 days ago
+    assert.equal(Array.isArray(c.series), true);
     assert.equal(c.heatmap.cells.length, 7);
     assert.equal(c.heatmap.busiest.avg >= 9, true);
   });

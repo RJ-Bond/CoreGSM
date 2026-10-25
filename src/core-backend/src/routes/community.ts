@@ -7,7 +7,9 @@
  *   heatmap   average players on all servers per weekday x hour (panel time zone), the busiest hour
  *   players   unique players in the last 24 h / 7 days / 30 days, new players this week
  *   feed      the latest arrivals: who came to which server, newcomers marked
- *   top       the players with the most hours this week and this month
+ *   series    players on all servers over the last 24 h, in 30-minute steps
+ *   top       the players with the most hours today, this week, this month and in all the kept history (up to 25 each);
+ *             `online` = on a server now, `prev` = the place in the period before (null: not in its top 50)
  *   servers   the servers by players now
  *
  * GET /api/players/:name   one player by the nick the game servers report: where and when they play
@@ -67,9 +69,10 @@ function community(now = Date.now()) {
   let busiest: { dow: number; hour: number; avg: number } | null = null;
   cells.forEach((row, dow) => row.forEach((avg, hour) => { if (avg != null && (!busiest || avg > busiest.avg)) busiest = { dow, hour, avg }; }));
 
-  const uniq = (since: number) => (db.prepare('SELECT COUNT(DISTINCT ulower(name)) AS n FROM player_sessions WHERE COALESCE(left_at, ?) > ?').get(now, since) as { n: number }).n;
+  const uniq = (since: number, until = now) => (db.prepare('SELECT COUNT(DISTINCT ulower(name)) AS n FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ?').get(now, since, until) as { n: number }).n;
   const firstSeen = db.prepare('SELECT MIN(joined_at) AS t FROM player_sessions WHERE ulower(name) = ulower(?)');
-  const newWeek = (db.prepare('SELECT COUNT(*) AS n FROM (SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions GROUP BY k) WHERE t > ?').get(now - 7 * DAY) as { n: number }).n;
+  const newBetween = (from: number, to: number) => (db.prepare('SELECT COUNT(*) AS n FROM (SELECT ulower(name) AS k, MIN(joined_at) AS t FROM player_sessions GROUP BY k) WHERE t > ? AND t <= ?').get(from, to) as { n: number }).n;
+  const newWeek = newBetween(now - 7 * DAY, now);
 
   const feed = (db.prepare('SELECT server_id, name, joined_at, left_at FROM player_sessions ORDER BY joined_at DESC LIMIT 14').all() as { server_id: number; name: string; joined_at: number; left_at: number | null }[])
     .filter((r) => names.has(r.server_id))
@@ -83,7 +86,22 @@ function community(now = Date.now()) {
       newcomer: (firstSeen.get(r.name) as { t: number }).t === r.joined_at,
     }));
 
-  const topSince = (since: number) => topPlayers(since, now);
+  // the same players' places in the period before, and who is on a server right now
+  const live_ = new Set((db.prepare('SELECT DISTINCT ulower(name) AS k FROM player_sessions WHERE left_at IS NULL').all() as { k: string }[]).map((r) => r.k));
+  const topSince = (span: number | null) => {
+    const list = topPlayers(span == null ? 0 : now - span, now, 25);
+    const before = span == null ? [] : topPlayers(now - 2 * span, now - span, 50);
+    const place = new Map(before.map((p, i) => [p.name.toLowerCase(), i + 1]));
+    return list.map((p) => ({ ...p, online: live_.has(p.name.toLowerCase()), prev: place.get(p.name.toLowerCase()) ?? null }));
+  };
+
+  // players on all servers over the last 24 h: per 30-minute step the servers' averages summed
+  const stepMs = 1_800_000;
+  const stepTotals = new Map<number, number>();
+  for (const r of db
+    .prepare('SELECT ts / ? AS b, server_id, AVG(players) AS a FROM history WHERE ts > ? AND online = 1 GROUP BY b, server_id')
+    .iterate(stepMs, now - DAY) as Iterable<{ b: number; a: number }>) stepTotals.set(r.b, (stepTotals.get(r.b) ?? 0) + r.a);
+  const series = [...stepTotals].sort((x, y) => x[0] - y[0]).map(([b, v]) => ({ ts: b * stepMs, players: Math.round(v * 10) / 10 }));
 
   const servers = live
     .filter((s) => names.has(s.id))
@@ -94,9 +112,13 @@ function community(now = Date.now()) {
     now: { players: servers.reduce((n, s) => n + s.players, 0), online: servers.filter((s) => s.online).length, servers: servers.length },
     record,
     heatmap: { cells, busiest },
-    players: { day: uniq(now - DAY), week: uniq(now - 7 * DAY), month: uniq(now - 30 * DAY), newWeek },
+    players: {
+      day: uniq(now - DAY), week: uniq(now - 7 * DAY), month: uniq(now - 30 * DAY), newWeek,
+      prev: { day: uniq(now - 2 * DAY, now - DAY), week: uniq(now - 14 * DAY, now - 7 * DAY), month: uniq(now - 60 * DAY, now - 30 * DAY), newWeek: newBetween(now - 14 * DAY, now - 7 * DAY) },
+    },
     feed,
-    top: { week: topSince(now - 7 * DAY), month: topSince(now - 30 * DAY) },
+    series,
+    top: { day: topSince(DAY), week: topSince(7 * DAY), month: topSince(30 * DAY), all: topSince(null) },
     servers,
   };
 }
