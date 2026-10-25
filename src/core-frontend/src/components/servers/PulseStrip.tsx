@@ -17,6 +17,8 @@ const ICON: Record<PulseState, JSX.Element> = {
 function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
   const gid = useId().replace(/:/g, '');
   const { t: tr } = useI18n();
+  // hooks go before the early return below: the chart appears once the history has arrived
+  const [hover, setHover] = useState<number | null>(null);
   if (!data || !hasEnoughHistory(data.points)) {
     return <div className="pulse-chart pulse-chart-empty">{tr('srv.pulse.noChart')}</div>;
   }
@@ -36,7 +38,6 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   const area = `${line}L${X(pts[pts.length - 1].x).toFixed(1)} ${H}L${X(pts[0].x).toFixed(1)} ${H}Z`;
   const max = Math.max(1, ...data.points.map((p) => p.players));
   const peak = data.peak;
-  const [hover, setHover] = useState<number | null>(null);
   const near = (e: PointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));

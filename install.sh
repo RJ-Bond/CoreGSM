@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a359d5f8d6b9"
+COREGSM_BUILD="5459793b964c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -58780,6 +58780,8 @@ const ICON: Record<PulseState, JSX.Element> = {
 function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
   const gid = useId().replace(/:/g, '');
   const { t: tr } = useI18n();
+  // hooks go before the early return below: the chart appears once the history has arrived
+  const [hover, setHover] = useState<number | null>(null);
   if (!data || !hasEnoughHistory(data.points)) {
     return <div className="pulse-chart pulse-chart-empty">{tr('srv.pulse.noChart')}</div>;
   }
@@ -58799,7 +58801,6 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   const area = `${line}L${X(pts[pts.length - 1].x).toFixed(1)} ${H}L${X(pts[0].x).toFixed(1)} ${H}Z`;
   const max = Math.max(1, ...data.points.map((p) => p.players));
   const peak = data.peak;
-  const [hover, setHover] = useState<number | null>(null);
   const near = (e: PointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
@@ -72064,7 +72065,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
@@ -72113,6 +72114,9 @@ function sortServers(list: Server[], sort: ListSort, uptime: Map<number, number>
 /** pull down from the very top of the page (touch): returns the current pull in px, calls `onPull` after a long enough pull */
 function usePullToRefresh(onPull: () => void): number {
   const [pull, setPull] = useState(0);
+  // the latest callback without re-subscribing (a re-subscription in the middle of a touch would forget where it began)
+  const cb = useRef(onPull);
+  cb.current = onPull;
   useEffect(() => {
     let y0: number | null = null;
     let cur = 0;
@@ -72123,7 +72127,7 @@ function usePullToRefresh(onPull: () => void): number {
       setPull(cur);
     };
     const end = () => {
-      if (y0 != null && cur >= PULL_AT) onPull();
+      if (y0 != null && cur >= PULL_AT) cb.current();
       y0 = null;
       cur = 0;
       setPull(0);
@@ -72138,7 +72142,7 @@ function usePullToRefresh(onPull: () => void): number {
       window.removeEventListener('touchend', end);
       window.removeEventListener('touchcancel', end);
     };
-  }, [onPull]);
+  }, []);
   return pull;
 }
 
