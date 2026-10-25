@@ -12,6 +12,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { commentCount } from './newsComments.js';
 import { viewsOf } from './newsViews.js';
+import { notifyNewsPublished } from './newsSubs.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
@@ -1095,6 +1096,13 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
         now,
         id,
       );
+      // the first post of an item (not a repeat of the edit): the subscribers of its rubric are told
+      if (prev && !prev.sent_at && prev.repeat === 'none') {
+        try {
+          const p = JSON.parse(prev.payload) as NewsPayload;
+          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+        } catch { /* the post itself is done */ }
+      }
     } else {
       const err = b.data.error ?? 'Ошибка отправки';
       const plan = planFailure(before?.attempts ?? 0, now, { retryAfterMs: b.data.retryAfterMs });
