@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="baf2d2dcbc88"
+COREGSM_BUILD="68b8c2a6ba8d"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7558,6 +7558,10 @@ export const ERRORS = {
   report_verdict_bad: 'Укажите решение; комментарий — до 300 символов',
   report_not_found: 'Жалоба не найдена',
   report_closed: 'Жалоба уже рассмотрена',
+  wipe_bad: 'Проверьте сценарий: у вайпа есть название и время, в команде не больше 200 символов',
+  wipe_past: 'Время вайпа должно быть в будущем',
+  wipe_not_found: 'Сценарий не найден',
+  wipe_locked: 'Сценарий уже запущен или завершён',
 
   // ---- following a player ----
   follow_nick_missing: 'Укажите ник игрока',
@@ -8893,6 +8897,7 @@ import { router as reviewsRouter } from './reviews.js';
 import { router as reportsRouter } from './reports.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
+import { router as wipesRouter, startWipeTimer, stopWipeTimer } from './wipes.js';
 import { router as probesRouter } from './probes.js';
 import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
@@ -8955,6 +8960,7 @@ app.use(reviewsRouter);
 app.use(reportsRouter);
 app.use(galleryRouter);
 app.use(restartsRouter);
+app.use(wipesRouter);
 app.use(probesRouter);
 app.use(configRouter);
 app.use(pushRouter);
@@ -9043,10 +9049,12 @@ const server = app.listen(PORT, () => {
   startBackupTimer();
   startDigestTimer();
   startRestartTimer();
+  startWipeTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 onShutdown('restarts', stopRestartTimer);
+onShutdown('wipes', stopWipeTimer);
 installShutdown(server);
 registerShutdownServer(server);
 
@@ -11356,6 +11364,9 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/update\/rollback$/, label: 'Запущен откат панели' },
   { m: 'POST', re: /^\/api\/backup\/restore$/, label: 'Восстановлена резервная копия' },
   { m: 'PUT', re: /^\/api\/backups\/settings$/, label: 'Изменены настройки резервного копирования', detail: (r) => ['schedule', 'keep', 'remoteUrl', 'passphrase'].filter((k) => r.body?.[k] !== undefined).map((k) => (k === 'schedule' ? `расписание: ${s(r.body?.schedule, 10)}` : k === 'keep' ? `хранить: ${Number(r.body?.keep) || ''}` : k === 'remoteUrl' ? 'внешняя копия' : 'шифрование')).join(', ') },
+  { m: 'POST', re: /^\/api\/servers\/(\d+)\/wipes$/, label: 'Запланирован вайп', pre: (id) => `сервер #${id}`, detail: (r) => s(r.body?.name) },
+  { m: 'PUT', re: /^\/api\/wipes\/(\d+)$/, label: 'Изменён сценарий вайпа', pre: (id) => `#${id}`, detail: (r) => s(r.body?.name) },
+  { m: 'DELETE', re: /^\/api\/wipes\/(\d+)$/, label: 'Отменён сценарий вайпа', pre: (id) => `#${id}` },
   { m: 'PATCH', re: /^\/api\/reports\/(\d+)$/, label: 'Обработана жалоба на игрока', pre: (id) => `#${id}`, detail: (r) => s(r.body?.status, 12) },
   { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
   { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
@@ -13774,6 +13785,20 @@ async function say(serverId: number, p: Plan, text: string): Promise<string | nu
   } catch (e) {
     return (e as Error).message;
   }
+}
+
+/** for the wipe scenario (wipes.ts): a line to the game chat with the server's own «say» command; null = sent or nothing to send with */
+export async function rconSay(serverId: number, text: string): Promise<string | null> {
+  const game = (db.prepare('SELECT game FROM servers WHERE id = ?').get(serverId) as { game: string } | undefined)?.game ?? '';
+  const p = planOf(serverId);
+  return say(serverId, { ...p, say: p.say.trim() || defaultSay(game) }, text);
+}
+
+/** a command over RCON; throws with the reason when RCON is not set up or refuses */
+export async function rconRun(serverId: number, command: string): Promise<string> {
+  const r = rconOf(serverId);
+  if (!r) throw new Error('RCON не настроен');
+  return rconCommand(r.host, r.port, r.password, command);
 }
 
 /** the restart itself: a maintenance window, the command, a report */
@@ -16480,15 +16505,19 @@ router.get('/api/seasons', viewer, (_req, res) => res.json(seasonsView()));
 
 const nameSchema = z.string().trim().min(1).max(60);
 
+/** a new season starts at `at`; the open one ends there */
+export function startSeason(name: string, at: number): number {
+  return db.transaction(() => {
+    db.prepare('UPDATE seasons SET ends_at = ? WHERE ends_at IS NULL AND starts_at < ?').run(at, at);
+    return Number(db.prepare('INSERT INTO seasons (name, starts_at) VALUES (?, ?)').run(name, at).lastInsertRowid);
+  })();
+}
+
 router.post('/api/seasons', admin, (req, res) => {
   const b = z.object({ name: nameSchema, startsAt: z.number().int().positive().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   const at = Math.min(b.data.startsAt ?? Date.now(), Date.now() + 365 * 86_400_000);
-  const id = db.transaction(() => {
-    // the open season ends where the new one starts
-    db.prepare('UPDATE seasons SET ends_at = ? WHERE ends_at IS NULL AND starts_at < ?').run(at, at);
-    return Number(db.prepare('INSERT INTO seasons (name, starts_at) VALUES (?, ?)').run(b.data.name, at).lastInsertRowid);
-  })();
+  const id = startSeason(b.data.name, at);
   res.json({ id, ...seasonsView() });
 });
 
@@ -17903,6 +17932,330 @@ export async function sendPush(t: PushTarget, message: Record<string, unknown>, 
     return 'failed';
   }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/wipeLogic.ts" << '__COREGSM_EOF__'
+/** Texts of the wipe scenario (pure, no database). */
+
+/** «24 ч», «1 ч 30 мин», «10 мин» */
+export function leadText(min: number): string {
+  if (min >= 1440 && min % 1440 === 0) return `${min / 1440} дн`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h ? (m ? `${h} ч ${m} мин` : `${h} ч`) : `${m} мин`;
+}
+
+/** {server}, {date}, {time}, {seed} in the texts of the scenario */
+export function fill(text: string, vars: Record<string, string>): string {
+  return text.replace(/\{(server|date|time|seed)\}/g, (_, k: string) => vars[k] ?? '');
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/wipes.ts" << '__COREGSM_EOF__'
+/**
+ * The wipe scenario of a server: one plan that holds everything around a wipe, in order.
+ *
+ *   before   a message in Discord (e.g. 24 h, 1 h and 10 min before) and a line in the game chat (RCON)
+ *   at wipe  the maintenance window → the wipe commands over RCON (the new seed goes in {seed}) →
+ *            a new season (the hall of fame closes the old one) → the news item «вайп прошёл» → a message in Discord
+ *
+ * It composes what the panel already does: the RCON of the restart plan, the maintenance windows, the news queue and
+ * the seasons. Every step runs once (done_steps is written before the step starts); a scenario that the panel missed
+ * by more than half an hour (it was off) is marked «missed» and nothing is run late.
+ *
+ *   GET    /api/servers/:id/wipes   the scenarios of a server, the next first (permission «Обслуживание»)
+ *   POST   /api/servers/:id/wipes   plan a wipe
+ *   PUT    /api/wipes/:id           change a scenario that has not started
+ *   DELETE /api/wipes/:id           cancel a planned scenario / remove a finished one
+ */
+import crypto from 'node:crypto';
+import express from 'express';
+import { z } from 'zod';
+import { allow, type AuthedRequest } from './auth.js';
+import { enqueueAlert } from './alerts.js';
+import { db, EFFECTIVE_NAME, getSetting } from './db.js';
+import { param } from './http.js';
+import { resetMaintenanceCache } from './maintenance.js';
+import { rconRun, rconSay } from './restarts.js';
+import { startSeason } from './seasons.js';
+import { fill, leadText } from './wipeLogic.js';
+import { log } from './logger.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS wipe_scenarios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  wipe_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  announce_min TEXT NOT NULL DEFAULT '[]',
+  say_min TEXT NOT NULL DEFAULT '[]',
+  channel_id TEXT NOT NULL DEFAULT '',
+  duration_min INTEGER NOT NULL DEFAULT 15,
+  commands TEXT NOT NULL DEFAULT '[]',
+  seed_mode TEXT NOT NULL DEFAULT 'none',
+  seed TEXT NOT NULL DEFAULT '',
+  season_name TEXT NOT NULL DEFAULT '',
+  news_channel_id TEXT NOT NULL DEFAULT '',
+  news_title TEXT NOT NULL DEFAULT '',
+  news_text TEXT NOT NULL DEFAULT '',
+  mention TEXT NOT NULL DEFAULT 'none',
+  done_steps TEXT NOT NULL DEFAULT '[]',
+  steps_log TEXT NOT NULL DEFAULT '[]',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wipes_server ON wipe_scenarios(server_id, wipe_at);
+`);
+
+interface Row {
+  id: number; server_id: number; name: string; wipe_at: number; status: string; announce_min: string; say_min: string; channel_id: string;
+  duration_min: number; commands: string; seed_mode: string; seed: string; season_name: string; news_channel_id: string; news_title: string;
+  news_text: string; mention: string; done_steps: string; steps_log: string; created_by: string; created_at: number;
+}
+interface StepLog { step: string; ok: boolean; text: string; at: number }
+
+const GRACE_MS = 30 * 60_000;
+const json = <T,>(s: string, d: T): T => { try { return JSON.parse(s) as T; } catch { return d; } };
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+const nameOf = (serverId: number) => (db.prepare(`SELECT ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(serverId) as { name: string } | undefined)?.name ?? `#${serverId}`;
+
+export function whenText(ts: number): { date: string; time: string } {
+  const d = new Date(ts);
+  return {
+    date: d.toLocaleDateString('ru-RU', { timeZone: tz(), day: 'numeric', month: 'long' }),
+    time: d.toLocaleTimeString('ru-RU', { timeZone: tz(), hour: '2-digit', minute: '2-digit' }),
+  };
+}
+
+const randomSeed = () => String(crypto.randomInt(1, 2_147_483_647));
+
+function view(r: Row) {
+  const steps = json<StepLog[]>(r.steps_log, []);
+  return {
+    id: r.id,
+    serverId: r.server_id,
+    name: r.name,
+    wipeAt: r.wipe_at,
+    status: r.status,
+    announceMin: json<number[]>(r.announce_min, []),
+    sayMin: json<number[]>(r.say_min, []),
+    channelId: r.channel_id,
+    durationMin: r.duration_min,
+    commands: json<string[]>(r.commands, []),
+    seedMode: r.seed_mode,
+    seed: r.seed,
+    seasonName: r.season_name,
+    newsChannelId: r.news_channel_id,
+    newsTitle: r.news_title,
+    newsText: r.news_text,
+    mention: r.mention,
+    steps,
+    failed: steps.filter((s) => !s.ok).length,
+    createdBy: r.created_by,
+  };
+}
+
+function discord(serverId: number, channelId: string, title: string, description: string, color: number, mention = 'none') {
+  enqueueAlert('restart', nameOf(serverId), { content: '', mention: mention as 'none' | 'here' | 'everyone', embed: { title, description, color, timestamp: new Date().toISOString() } }, channelId || undefined);
+}
+
+const save = (id: number, done: Set<string>, steps: StepLog[], status?: string) =>
+  db.prepare('UPDATE wipe_scenarios SET done_steps = ?, steps_log = ?, status = COALESCE(?, status) WHERE id = ?').run(JSON.stringify([...done]), JSON.stringify(steps), status ?? null, id);
+
+/** the wipe itself, every step once, in order; a failed step is logged and the next one still runs */
+async function runWipe(r: Row, done: Set<string>, steps: StepLog[]): Promise<void> {
+  const now = Date.now();
+  const server = nameOf(r.server_id);
+  const seed = r.seed_mode === 'random' ? randomSeed() : r.seed_mode === 'fixed' ? r.seed : '';
+  const w = whenText(r.wipe_at);
+  const vars = { server, date: w.date, time: w.time, seed };
+  const step = async (key: string, fn: () => Promise<string> | string) => {
+    try {
+      steps.push({ step: key, ok: true, text: await fn(), at: Date.now() });
+    } catch (e) {
+      steps.push({ step: key, ok: false, text: (e as Error).message, at: Date.now() });
+    }
+    save(r.id, done, steps);
+  };
+
+  await step('window', () => {
+    db.prepare('INSERT INTO maintenance_windows (server_id, name, start_ts, end_ts, repeat, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      r.server_id, `Вайп: ${r.name}`, Math.min(r.wipe_at, now), Math.max(r.wipe_at, now) + r.duration_min * 60_000, 'none', 'сценарий вайпа', now,
+    );
+    resetMaintenanceCache();
+    return `Окно обслуживания на ${r.duration_min} мин`;
+  });
+
+  const commands = json<string[]>(r.commands, []);
+  if (commands.length) {
+    await step('commands', async () => {
+      const answers: string[] = [];
+      for (const c of commands) {
+        const answer = await rconRun(r.server_id, fill(c, vars));
+        if (answer) answers.push(answer.slice(0, 100));
+      }
+      return `Команд отправлено: ${commands.length}${answers.length ? `; ответ сервера: ${answers.join(' | ')}` : ''}`;
+    });
+  }
+
+  if (r.season_name.trim()) {
+    await step('season', () => {
+      startSeason(fill(r.season_name, vars).slice(0, 60), r.wipe_at);
+      return `Начат сезон «${fill(r.season_name, vars).slice(0, 60)}»`;
+    });
+  }
+
+  if (r.news_channel_id && r.news_title.trim()) {
+    await step('news', () => {
+      const payload = {
+        content: '',
+        mention: r.mention,
+        category: 'wipe',
+        embed: { title: fill(r.news_title, vars).slice(0, 256), description: fill(r.news_text, vars).slice(0, 4000), color: 0xf0b232, timestamp: true },
+      };
+      db.prepare("INSERT INTO news (status, channel_id, payload, repeat, created_at, updated_at) VALUES ('queued', ?, ?, 'none', ?, ?)").run(r.news_channel_id, JSON.stringify(payload), now, now);
+      return 'Новость поставлена в очередь';
+    });
+  }
+
+  await step('discord', () => {
+    discord(r.server_id, r.channel_id, '🧹 Вайп', `Сервер **${server}** вайпается. Обычно это занимает до ${r.duration_min} мин.${seed ? `\nСид: \`${seed}\`` : ''}`, 0x5865f2);
+    return 'Сообщение в Discord поставлено в очередь';
+  });
+  save(r.id, done, steps, 'done');
+}
+
+/** one pass of the timer: the announcements that are due, the wipes that are due */
+export async function tickWipes(now = Date.now()): Promise<void> {
+  const rows = db.prepare("SELECT * FROM wipe_scenarios WHERE status = 'scheduled' ORDER BY wipe_at").all() as Row[];
+  for (const r of rows) {
+    const done = new Set(json<string[]>(r.done_steps, []));
+    const steps = json<StepLog[]>(r.steps_log, []);
+    const w = whenText(r.wipe_at);
+    const vars = { server: nameOf(r.server_id), date: w.date, time: w.time, seed: '' };
+    if (now < r.wipe_at) {
+      // of the announcements that are due only the closest one is sent (the panel may have been off for a while)
+      const dueOf = (kind: 'a' | 's', list: number[]) => list.filter((m) => now >= r.wipe_at - m * 60_000 && !done.has(`${kind}${m}`)).sort((x, y) => x - y);
+      const ann = dueOf('a', json<number[]>(r.announce_min, []));
+      if (ann.length) {
+        for (const m of ann) done.add(`a${m}`);
+        save(r.id, done, steps);
+        const left = Math.max(1, Math.round((r.wipe_at - now) / 60_000));
+        discord(r.server_id, r.channel_id, '🧹 Скоро вайп', `Сервер **${vars.server}** вайпнется ${w.date} в ${w.time} (через ${leadText(left)}). Соберите вещи и сохраните прогресс.`, 0xf0b232, r.mention);
+      }
+      const sy = dueOf('s', json<number[]>(r.say_min, []));
+      if (sy.length) {
+        for (const m of sy) done.add(`s${m}`);
+        save(r.id, done, steps);
+        const left = Math.max(1, Math.round((r.wipe_at - now) / 60_000));
+        const err = await rconSay(r.server_id, `Вайп сервера через ${leadText(left)}!`).catch((e: Error) => e.message);
+        if (err) { steps.push({ step: 'say', ok: false, text: err, at: now }); save(r.id, done, steps); }
+      }
+      continue;
+    }
+    if (done.has('run')) continue;
+    if (now - r.wipe_at > GRACE_MS) {
+      steps.push({ step: 'missed', ok: false, text: 'Панель была выключена в момент вайпа: сценарий не запущен', at: now });
+      save(r.id, done, steps, 'missed');
+      continue;
+    }
+    done.add('run');
+    save(r.id, done, steps, 'scheduled');
+    await runWipe(r, done, steps);
+  }
+}
+
+let timer: NodeJS.Timeout | undefined;
+let busy = false;
+export function startWipeTimer(): void {
+  timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void tickWipes().catch((e) => log.error('wipe timer failed', (e as Error).message)).finally(() => { busy = false; });
+  }, 30_000);
+  timer.unref();
+}
+export const stopWipeTimer = () => clearInterval(timer);
+
+// ---------- routes ----------
+
+const serverOf = (req: express.Request) => {
+  const id = Number(req.params.id);
+  return Number.isInteger(id) && (db.prepare('SELECT id FROM servers WHERE id = ?').get(id) as { id: number } | undefined);
+};
+
+const channel = z.string().regex(/^(\d{15,25})?$/);
+const minutes = (max: number, n: number) => z.array(z.number().int().min(1).max(max)).max(n).transform((l) => [...new Set(l)].sort((a, b) => b - a));
+const bodySchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  wipeAt: z.number().int().positive(),
+  announceMin: minutes(10_080, 6),
+  sayMin: minutes(180, 4),
+  channelId: channel,
+  durationMin: z.number().int().min(1).max(240),
+  commands: z.array(z.string().trim().min(1).max(200)).max(20),
+  seedMode: z.enum(['none', 'random', 'fixed']),
+  seed: z.string().trim().max(40).regex(/^[\w-]*$/),
+  seasonName: z.string().trim().max(60),
+  newsChannelId: channel,
+  newsTitle: z.string().trim().max(200),
+  newsText: z.string().trim().max(2000),
+  mention: z.enum(['none', 'here', 'everyone']),
+});
+
+const BAD = 'Проверьте сценарий: у вайпа есть название и время, в команде не больше 200 символов';
+const IN_PAST = 'Время вайпа должно быть в будущем';
+
+function values(b: z.infer<typeof bodySchema>) {
+  return [b.name, b.wipeAt, JSON.stringify(b.announceMin), JSON.stringify(b.sayMin), b.channelId, b.durationMin, JSON.stringify(b.commands), b.seedMode, b.seedMode === 'fixed' ? b.seed : '', b.seasonName, b.newsChannelId, b.newsTitle, b.newsText, b.mention] as const;
+}
+
+router.get('/api/servers/:id/wipes', param('id'), allow('maintenance'), (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const rows = db.prepare("SELECT * FROM wipe_scenarios WHERE server_id = ? ORDER BY (status = 'scheduled') DESC, CASE WHEN status = 'scheduled' THEN wipe_at END ASC, wipe_at DESC LIMIT 20").all(s.id) as Row[];
+  res.json(rows.map(view));
+});
+
+router.post('/api/servers/:id/wipes', param('id'), allow('maintenance'), (req, res) => {
+  const s = serverOf(req);
+  if (!s) return res.status(404).json({ error: 'Сервер не найден' });
+  const b = bodySchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: BAD });
+  if (b.data.wipeAt < Date.now() + 60_000) return res.status(400).json({ error: IN_PAST });
+  const info = db
+    .prepare('INSERT INTO wipe_scenarios (server_id, name, wipe_at, announce_min, say_min, channel_id, duration_min, commands, seed_mode, seed, season_name, news_channel_id, news_title, news_text, mention, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(s.id, ...values(b.data), (req as AuthedRequest).user?.username ?? '', Date.now());
+  res.status(201).json(view(db.prepare('SELECT * FROM wipe_scenarios WHERE id = ?').get(info.lastInsertRowid) as Row));
+});
+
+router.put('/api/wipes/:id', param('id'), allow('maintenance'), (req, res) => {
+  const row = db.prepare('SELECT * FROM wipe_scenarios WHERE id = ?').get(Number(req.params.id)) as Row | undefined;
+  if (!row) return res.status(404).json({ error: 'Сценарий не найден' });
+  if (row.status !== 'scheduled' || json<string[]>(row.done_steps, []).includes('run')) return res.status(409).json({ error: 'Сценарий уже запущен или завершён' });
+  const b = bodySchema.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: BAD });
+  if (b.data.wipeAt < Date.now() + 60_000) return res.status(400).json({ error: IN_PAST });
+  // a changed time starts the announcements over: the ones already sent were for the old date
+  const reset = b.data.wipeAt !== row.wipe_at;
+  db.prepare('UPDATE wipe_scenarios SET name = ?, wipe_at = ?, announce_min = ?, say_min = ?, channel_id = ?, duration_min = ?, commands = ?, seed_mode = ?, seed = ?, season_name = ?, news_channel_id = ?, news_title = ?, news_text = ?, mention = ?, done_steps = CASE WHEN ? THEN \'[]\' ELSE done_steps END WHERE id = ?')
+    .run(...values(b.data), reset ? 1 : 0, row.id);
+  res.json(view(db.prepare('SELECT * FROM wipe_scenarios WHERE id = ?').get(row.id) as Row));
+});
+
+router.delete('/api/wipes/:id', param('id'), allow('maintenance'), (req, res) => {
+  const row = db.prepare('SELECT status, done_steps FROM wipe_scenarios WHERE id = ?').get(Number(req.params.id)) as Pick<Row, 'status' | 'done_steps'> | undefined;
+  if (!row) return res.status(404).json({ error: 'Сценарий не найден' });
+  // a planned wipe is cancelled (and stays in the list); a cancelled or finished one is removed
+  if (row.status === 'scheduled') {
+    if (json<string[]>(row.done_steps, []).includes('run')) return res.status(409).json({ error: 'Сценарий уже запущен или завершён' });
+    db.prepare("UPDATE wipe_scenarios SET status = 'cancelled' WHERE id = ?").run(Number(req.params.id));
+  } else db.prepare('DELETE FROM wipe_scenarios WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend"
   cat > "$APP_DIR/core-backend/tsconfig.json" << '__COREGSM_EOF__'
@@ -51518,6 +51871,276 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/WipeScenarios.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Обслуживание: the wipe scenario of a server. One plan holds everything around a wipe: warnings in Discord
+ * and in the game chat, the maintenance window, the wipe commands (RCON, with a new seed), a new season and the news.
+ */
+import { useEffect, useState } from 'react';
+import { api, type Server } from '../api';
+import { confirmDialog } from '../confirm';
+import { Button, ErrorLine, Field, GameAvatar, Modal, Section, fmtDateTime, toast } from '../ui';
+import { ChannelPicker } from './ChannelPicker';
+import '../styles/admin.css';
+
+interface Step { step: string; ok: boolean; text: string; at: number }
+interface Wipe {
+  id: number;
+  name: string;
+  wipeAt: number;
+  status: 'scheduled' | 'done' | 'missed' | 'cancelled';
+  announceMin: number[];
+  sayMin: number[];
+  channelId: string;
+  durationMin: number;
+  commands: string[];
+  seedMode: 'none' | 'random' | 'fixed';
+  seed: string;
+  seasonName: string;
+  newsChannelId: string;
+  newsTitle: string;
+  newsText: string;
+  mention: 'none' | 'here' | 'everyone';
+  steps: Step[];
+  failed: number;
+}
+
+const ANNOUNCE = [{ m: 10_080, label: 'за неделю' }, { m: 1440, label: 'за сутки' }, { m: 180, label: 'за 3 часа' }, { m: 60, label: 'за час' }, { m: 10, label: 'за 10 мин' }];
+const SAY = [{ m: 30, label: 'за 30 мин' }, { m: 10, label: 'за 10 мин' }, { m: 5, label: 'за 5 мин' }, { m: 1, label: 'за минуту' }];
+const STEP_LABEL: Record<string, string> = { window: 'Окно обслуживания', commands: 'Команды вайпа', season: 'Новый сезон', news: 'Новость', discord: 'Сообщение в Discord', say: 'Игровой чат', missed: 'Пропущен' };
+const STATUS: Record<Wipe['status'], { text: string; cls: string }> = {
+  scheduled: { text: 'запланирован', cls: 'pill pill-ok' },
+  done: { text: 'выполнен', cls: 'pill pill-mute' },
+  missed: { text: 'пропущен', cls: 'pill pill-bad' },
+  cancelled: { text: 'отменён', cls: 'pill pill-mute' },
+};
+
+/** the value of <input type="datetime-local"> for a timestamp (the browser's time zone) */
+const localInput = (ts: number) => {
+  const d = new Date(ts - new Date(ts).getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+};
+
+const blank = (): Wipe => ({
+  id: 0,
+  name: 'Вайп',
+  wipeAt: Date.now() + 3 * 86_400_000,
+  status: 'scheduled',
+  announceMin: [1440, 60, 10],
+  sayMin: [10, 1],
+  channelId: '',
+  durationMin: 15,
+  commands: [],
+  seedMode: 'none',
+  seed: '',
+  seasonName: '',
+  newsChannelId: '',
+  newsTitle: 'Вайп на {server} прошёл',
+  newsText: 'Сервер {server} вайпнут {date} в {time}. Новая карта уже ждёт: заходите!',
+  mention: 'none',
+  steps: [],
+  failed: 0,
+});
+
+export default function WipeScenarios({ servers }: { servers: Server[] }) {
+  const [open, setOpen] = useState<Server | null>(null);
+  const [next, setNext] = useState<Record<number, Wipe | null>>({});
+  const load = () => {
+    for (const s of servers) {
+      api<Wipe[]>(`/servers/${s.id}/wipes`)
+        .then((l) => setNext((x) => ({ ...x, [s.id]: l.find((w) => w.status === 'scheduled') ?? null })))
+        .catch(() => undefined);
+    }
+  };
+  useEffect(load, [servers]);
+  if (!servers.length) return null;
+  return (
+    <Section
+      title="Сценарий вайпа"
+      description="Один сценарий на весь вайп: предупреждения в Discord и игровом чате, окно обслуживания, команды вайпа с новым сидом, новый сезон и новость «вайп прошёл». Каждый шаг выполняется один раз."
+    >
+      <ul className="grid gap-2">
+        {servers.map((s) => {
+          const w = next[s.id];
+          return (
+            <li key={s.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <GameAvatar game={s.game} size={32} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-extrabold">{s.name}</span>
+                <span className="block text-sm font-semibold text-mute">
+                  {w === undefined ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : w ? `${w.name} · ${fmtDateTime(w.wipeAt)}` : 'вайп не запланирован'}
+                </span>
+              </span>
+              {w && <span className="pill pill-ok">запланирован</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)}>Сценарии</button>
+            </li>
+          );
+        })}
+      </ul>
+      {open && <WipeModal server={open} onClose={() => { setOpen(null); load(); }} />}
+    </Section>
+  );
+}
+
+function WipeModal({ server, onClose }: { server: Server; onClose: () => void }) {
+  const [list, setList] = useState<Wipe[] | null>(null);
+  const [edit, setEdit] = useState<Wipe | null>(null);
+  const [error, setError] = useState('');
+  const load = () => api<Wipe[]>(`/servers/${server.id}/wipes`).then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+
+  const remove = async (w: Wipe) => {
+    if (w.status === 'scheduled' && !(await confirmDialog({ title: `Отменить «${w.name}»?`, text: 'Предупреждения и шаги вайпа выполняться не будут.', confirmLabel: 'Отменить вайп', danger: true }))) return;
+    await api(`/wipes/${w.id}`, 'DELETE').then(() => load()).catch((e: Error) => setError(e.message));
+  };
+
+  if (edit) return <WipeForm server={server} wipe={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); void load(); }} />;
+  return (
+    <Modal title={`Вайпы: ${server.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <ErrorLine text={error} />
+        {list === null ? <div className="skeleton h-20 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">Сценариев пока нет.</p> : (
+          <ul className="grid gap-2">
+            {list.map((w) => (
+              <li key={w.id} className="rounded-2xl bg-soft px-3.5 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-extrabold">{w.name}</span>
+                  <span className={STATUS[w.status].cls}>{STATUS[w.status].text}</span>
+                  {w.failed > 0 && <span className="pill pill-bad">ошибок: {w.failed}</span>}
+                  <span className="ml-auto text-sm font-bold text-mute">{fmtDateTime(w.wipeAt)}</span>
+                </div>
+                {w.steps.length > 0 && (
+                  <ul className="mt-2 space-y-0.5 text-sm font-semibold">
+                    {w.steps.map((s, i) => <li key={i} className={s.ok ? 'text-mute' : 'text-bad'}>{s.ok ? '✓' : '✗'} {STEP_LABEL[s.step] ?? s.step}: {s.text}</li>)}
+                  </ul>
+                )}
+                <div className="mt-2 flex gap-2">
+                  {w.status === 'scheduled' && <button type="button" className="btn btn-soft btn-sm" onClick={() => setEdit(w)}>Изменить</button>}
+                  <button type="button" className="btn btn-ghost btn-sm text-bad" onClick={() => void remove(w)}>{w.status === 'scheduled' ? 'Отменить' : 'Убрать'}</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex justify-between gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Закрыть</button>
+          <Button type="button" onClick={() => setEdit(blank())}>Запланировать вайп</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wipe; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState(wipe);
+  const [at, setAt] = useState(localInput(wipe.wipeAt));
+  const [cmds, setCmds] = useState(wipe.commands.join('\n'));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const toggle = (key: 'announceMin' | 'sayMin', m: number) =>
+    setF((x) => ({ ...x, [key]: x[key].includes(m) ? x[key].filter((v) => v !== m) : [...x[key], m] }));
+
+  const save = async () => {
+    const ts = new Date(at).getTime();
+    if (!Number.isFinite(ts)) return setError('Укажите дату и время вайпа');
+    setBusy(true);
+    setError('');
+    const body = {
+      name: f.name, wipeAt: ts, announceMin: f.announceMin, sayMin: f.sayMin, channelId: f.channelId, durationMin: f.durationMin,
+      commands: cmds.split('\n').map((c) => c.trim()).filter(Boolean), seedMode: f.seedMode, seed: f.seed, seasonName: f.seasonName,
+      newsChannelId: f.newsChannelId, newsTitle: f.newsTitle, newsText: f.newsText, mention: f.mention,
+    };
+    try {
+      await (wipe.id ? api(`/wipes/${wipe.id}`, 'PUT', body) : api(`/servers/${server.id}/wipes`, 'POST', body));
+      toast('Сценарий сохранён');
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Modal title={wipe.id ? 'Изменить вайп' : 'Запланировать вайп'} onClose={onClose}>
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Название"><input className="input" maxLength={60} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+          <Field label="Когда (ваше время)"><input className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
+          <Field label="Окно обслуживания, мин"><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
+        </div>
+
+        <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
+          <legend className="px-1 font-extrabold">1. Предупреждения</legend>
+          <div>
+            <span className="label">В Discord</span>
+            <div className="flex flex-wrap gap-1.5">
+              {ANNOUNCE.map((a) => <button key={a.m} type="button" className={`rp-day ${f.announceMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.announceMin.includes(a.m)} onClick={() => toggle('announceMin', a.m)}>{a.label}</button>)}
+            </div>
+          </div>
+          <div>
+            <span className="label">В игровом чате (нужен RCON)</span>
+            <div className="flex flex-wrap gap-1.5">
+              {SAY.map((a) => <button key={a.m} type="button" className={`rp-day ${f.sayMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.sayMin.includes(a.m)} onClick={() => toggle('sayMin', a.m)}>{a.label}</button>)}
+            </div>
+          </div>
+          <div>
+            <span className="label">Канал Discord</span>
+            <ChannelPicker id="wipe-channel" value={f.channelId} onChange={(v) => setF({ ...f, channelId: v })} />
+            <p className="mt-1 text-sm font-semibold text-mute">Не выбран: сообщения уйдут в канал оповещений.</p>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
+          <legend className="px-1 font-extrabold">2. В момент вайпа</legend>
+          <Field label="Команды RCON, по одной в строке (необязательно)">
+            <textarea className="input min-h-20 font-mono" value={cmds} onChange={(e) => setCmds(e.target.value)} placeholder={'server.seed {seed}\nserver.writecfg'} />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Сид {seed}">
+              <select className="input" value={f.seedMode} onChange={(e) => setF({ ...f, seedMode: e.target.value as Wipe['seedMode'] })}>
+                <option value="none">Не менять</option>
+                <option value="random">Случайный (выберет панель)</option>
+                <option value="fixed">Свой</option>
+              </select>
+            </Field>
+            {f.seedMode === 'fixed' && <Field label="Сид"><input className="input font-mono" maxLength={40} value={f.seed} onChange={(e) => setF({ ...f, seed: e.target.value })} /></Field>}
+          </div>
+          <Field label="Новый сезон (пусто: не начинать)"><input className="input" maxLength={60} value={f.seasonName} onChange={(e) => setF({ ...f, seasonName: e.target.value })} placeholder="например Сезон {date}" /></Field>
+          <p className="text-sm font-semibold text-mute">Окно обслуживания открывается всегда, чтобы вайп не считался сбоем. В командах и текстах работают {'{server}'}, {'{date}'}, {'{time}'} и {'{seed}'}.</p>
+        </fieldset>
+
+        <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
+          <legend className="px-1 font-extrabold">3. Новость после вайпа</legend>
+          <div>
+            <span className="label">Канал новостей (не выбран: новости не будет)</span>
+            <ChannelPicker id="wipe-news-channel" value={f.newsChannelId} onChange={(v) => setF({ ...f, newsChannelId: v })} />
+          </div>
+          {f.newsChannelId && (
+            <>
+              <Field label="Заголовок"><input className="input" maxLength={200} value={f.newsTitle} onChange={(e) => setF({ ...f, newsTitle: e.target.value })} /></Field>
+              <Field label="Текст"><textarea className="input min-h-20" maxLength={2000} value={f.newsText} onChange={(e) => setF({ ...f, newsText: e.target.value })} /></Field>
+              <Field label="Упоминание">
+                <select className="input" value={f.mention} onChange={(e) => setF({ ...f, mention: e.target.value as Wipe['mention'] })}>
+                  <option value="none">Без упоминания</option>
+                  <option value="here">@here</option>
+                  <option value="everyone">@everyone</option>
+                </select>
+              </Field>
+            </>
+          )}
+        </fieldset>
+
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Назад</button>
+          <Button type="button" loading={busy} onClick={() => void save()}>Сохранить</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/Calendar.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState } from 'react';
@@ -65672,6 +66295,10 @@ const errorsEn: Record<string, string> = {
   report_verdict_bad: 'Choose a decision; the comment is limited to 300 characters',
   report_not_found: 'Report not found',
   report_closed: 'The report has already been handled',
+  wipe_bad: 'Check the scenario: a wipe needs a name and a time, a command is at most 200 characters',
+  wipe_past: 'The wipe time must be in the future',
+  wipe_not_found: 'Scenario not found',
+  wipe_locked: 'The scenario has already started or finished',
   follow_nick_missing: 'Enter the player\'s nick',
   follow_limit: 'You can follow at most {n} players',
   maintenance_not_found: 'Maintenance window not found',
@@ -71537,6 +72164,7 @@ __COREGSM_EOF__
 import { useMemo, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import RestartPlans from '../components/RestartPlans';
+import WipeScenarios from '../components/WipeScenarios';
 import { StateView } from '../components/StateView';
 import {
   REPEAT_LABEL, fromLocalInput, presetNow, presetTonight, rangeLabel, toLocalInput, untilLabel, validateWindow, windowState,
@@ -71660,6 +72288,7 @@ export default function MaintenancePage() {
       )}
 
       <RestartPlans servers={servers} />
+      <WipeScenarios servers={servers} />
 
       {draft && <WindowModal draft={draft} servers={servers} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); void load(); }} />}
     </AdminPage>

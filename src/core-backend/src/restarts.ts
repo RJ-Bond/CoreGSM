@@ -109,6 +109,20 @@ async function say(serverId: number, p: Plan, text: string): Promise<string | nu
   }
 }
 
+/** for the wipe scenario (wipes.ts): a line to the game chat with the server's own «say» command; null = sent or nothing to send with */
+export async function rconSay(serverId: number, text: string): Promise<string | null> {
+  const game = (db.prepare('SELECT game FROM servers WHERE id = ?').get(serverId) as { game: string } | undefined)?.game ?? '';
+  const p = planOf(serverId);
+  return say(serverId, { ...p, say: p.say.trim() || defaultSay(game) }, text);
+}
+
+/** a command over RCON; throws with the reason when RCON is not set up or refuses */
+export async function rconRun(serverId: number, command: string): Promise<string> {
+  const r = rconOf(serverId);
+  if (!r) throw new Error('RCON не настроен');
+  return rconCommand(r.host, r.port, r.password, command);
+}
+
 /** the restart itself: a maintenance window, the command, a report */
 async function run(serverId: number, p: Plan, at: number, by = 'расписание'): Promise<string> {
   const now = Date.now();
