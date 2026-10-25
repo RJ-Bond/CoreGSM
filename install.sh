@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e6ab5f1796b5"
+COREGSM_BUILD="1e12912ca793"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6256,6 +6256,8 @@ export interface StatusRow {
   player_names: string;
   error: string | null;
   updated_at: number;
+  /** when the server entered its current state (online/offline) */
+  state_since: number | null;
 }
 
 export interface BindingRow {
@@ -8187,12 +8189,13 @@ import { queryServer, type QueryResult } from './query.js';
 import { log } from './logger.js';
 
 const upsert = db.prepare(`
-INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
-VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts, @failures)
+INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures, state_since)
+VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts, @failures, @ts)
 ON CONFLICT(server_id) DO UPDATE SET
   online=excluded.online, name=COALESCE(excluded.name, status.name), players=excluded.players, max_players=excluded.max_players,
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
-  error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures
+  error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures,
+  state_since=CASE WHEN status.online = excluded.online AND status.state_since IS NOT NULL THEN status.state_since ELSE excluded.updated_at END
 `);
 const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?, ?, ?, ?, ?, ?, ?)');
 // compiled once: these run for every server on every poll
@@ -9828,6 +9831,12 @@ CREATE TABLE IF NOT EXISTS smart_state (
       addColumn(db, 'users', 'totp_recovery', 'TEXT');
       addColumn(db, 'users', 'totp_step', 'INTEGER NOT NULL DEFAULT 0');
     },
+  },
+  {
+    version: 10,
+    name: 'status.state_since',
+    // when the server entered its current state (online / offline); NULL = not known yet
+    up: (db) => addColumn(db, 'status', 'state_since', 'INTEGER'),
   },
 ];
 
@@ -16841,6 +16850,8 @@ export function serialize(r: ServerJoin) {
     playerNames: r.player_names ? (JSON.parse(r.player_names) as string[]) : [],
     error: r.error ?? null,
     updatedAt: r.updated_at ?? null,
+    // since when the server is in its current state (online / offline); null = not known yet
+    stateSince: r.state_since ?? null,
     // running maintenance window for this server (alerts are muted, downtime is not counted) or null
     maintenance: maintenanceFor(r.id),
   };
@@ -16848,7 +16859,7 @@ export function serialize(r: ServerJoin) {
 
 export const SELECT_SERVERS = `
 SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, st.player_names, st.error,
-       st.updated_at, st.server_id AS has_status, st.name AS query_name
+       st.updated_at, st.state_since, st.server_id AS has_status, st.name AS query_name
 FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
 
 export function getServer(id: number) {
@@ -46784,6 +46795,8 @@ export interface Server {
   playerNames: string[];
   error: string | null;
   updatedAt: number | null;
+  /** since when the server is in its current state (online / offline); null = not known yet */
+  stateSince?: number | null;
   /** an active maintenance window for this server (null = none) */
   maintenance?: { name: string; until: number | null } | null;
 }
@@ -47775,6 +47788,44 @@ export function AccentPicker() {
         ))}
       </div>
       <p className="mt-2 text-sm font-semibold text-mute">{ACCENT_MODES.find((o) => o.id === mode)?.hint}. Запоминается в этом браузере.</p>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AdminStatusBar.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api, type Server } from '../api';
+import { Button, ago, toast, usePoll } from '../ui';
+
+/** The strip at the top of the admin area: is the polling alive, when was the last poll, poll everything now */
+export default function AdminStatusBar() {
+  const [servers, setServers] = useState<Server[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => setServers(await api<Server[]>('/servers').catch(() => null));
+  usePoll(load, 20_000);
+
+  if (!servers || servers.length === 0) return null;
+  const last = servers.reduce((m, s) => Math.max(m, s.updatedAt ?? 0), 0);
+  const stale = last > 0 && Date.now() - last > 5 * 60_000;
+  const down = servers.filter((s) => !s.online && s.hasStatus && !s.maintenance).length;
+  const tone = stale ? 'warn' : down > 0 ? 'bad' : 'ok';
+  const text = stale ? 'Опрос давно не отвечает' : down > 0 ? `Недоступно серверов: ${down}` : 'Опрос идёт, всё отвечает';
+
+  const pollAll = async () => {
+    setBusy(true);
+    await Promise.allSettled(servers.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
+    toast('Серверы опрошены');
+    await load();
+    setBusy(false);
+  };
+
+  return (
+    <div className="adm-status" role="status">
+      <span className={`adm-status-dot is-${tone}`} aria-hidden />
+      <span className="font-extrabold">{text}</span>
+      {last > 0 && <span className="text-mute" title="Время последнего опроса">· {ago(last)}</span>}
+      <Button type="button" size="sm" variant="soft" className="ml-auto" loading={busy} onClick={() => void pollAll()}>Опросить всё</Button>
     </div>
   );
 }
@@ -66452,7 +66503,7 @@ export function useSubscriptions(enabled: boolean): { list: Subscription[] | nul
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
@@ -66462,6 +66513,8 @@ import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, Load
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminOverview from './AdminOverview';
+import AdminStatusBar from '../components/AdminStatusBar';
+import { CHORDS, chordOf } from './adminLogic';
 import { ServersArt } from '../components/Illustrations';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
@@ -66479,6 +66532,7 @@ import SettingsPage, { UsersTab } from './Settings';
 export { ADMIN_SECTIONS };
 import SystemPage from './System';
 
+/** n = 0 draws a bare dot (a state, not a count) */
 interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
 
 /** the small counters on the sidebar: servers that do not answer, people waiting for approval */
@@ -66492,6 +66546,13 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
       if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
     }
     if (isAdmin) {
+      const [bot, sys] = await Promise.all([
+        api<{ state?: string }>('/bot/status').catch(() => null),
+        api<{ cert?: { daysLeft: number | null } }>('/system').catch(() => null),
+      ]);
+      if (bot?.state === 'error') out.discord = { n: 0, tone: 'bad', label: 'Бот Discord в ошибке' };
+      const days = sys?.cert?.daysLeft;
+      if (days != null && days <= 14) out.system = { n: 0, tone: days <= 0 ? 'bad' : 'warn', label: days <= 0 ? 'Сертификат истёк' : `Сертификат истекает через ${days} дн.` };
       const users = await api<UserRow[]>('/users').catch(() => null);
       const wait = users ? users.filter((u) => u.status === 'pending').length : 0;
       if (wait > 0) out.users = { n: wait, tone: 'warn', label: t('adm.badge.pending', { k: wait }) };
@@ -66596,17 +66657,48 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
       {s.label}
-      {badges[s.id] && <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>}
+      {badges[s.id] && (badges[s.id].n === 0
+        ? <span className={`adm-dot is-${badges[s.id].tone}`} title={badges[s.id].label} role="img" aria-label={badges[s.id].label} />
+        : <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>)}
       {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
     </a>
   );
+  // the sliding indicator under the current link
+  const navRef = useRef<HTMLElement>(null);
+  const [ind, setInd] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const nav = navRef.current;
+      const el = nav?.querySelector<HTMLElement>('.adm-link[aria-current="page"]');
+      if (!nav || !el || home) { setInd(null); return; }
+      setInd({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [current, home, pins, recent, badges, isAdmin]);
+  // «g» then a letter: go to a section (not while typing)
+  useEffect(() => {
+    if (!isAdmin) return;
+    let armed = 0;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.ctrlKey || e.metaKey || e.altKey || el?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === 'g') { armed = Date.now(); return; }
+      if (armed && Date.now() - armed < 1200 && CHORDS[e.key]) { armed = 0; navigate(`/admin/${CHORDS[e.key]}`); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isAdmin]);
+  const [menu, setMenu] = useState(false);
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
     <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]" data-density={dense ? 'compact' : undefined}>
-      <nav className="tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5" aria-label={t('adm.navLabel')}>
+      <nav ref={navRef} className={`adm-nav ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
+        {ind && <span className="adm-ind" aria-hidden style={{ transform: `translate(${ind.x}px, ${ind.y}px)`, width: ind.w, height: ind.h }} />}
         {isAdmin ? (
           <>
             <button type="button" className="adm-find max-md:hidden" onClick={() => window.dispatchEvent(new Event('coregsm:palette'))}>
@@ -66661,11 +66753,26 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             <CertWarning />
           </div>
         )}
-        {!home && crumb && (
+        {!home && isAdmin && <AdminStatusBar />}
+        {!home && current !== 'start' && current !== 'overview' && (
           <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
-            <a href={`/admin/${current}`}>{byId(current)?.label}</a>
+            <a href="/admin/overview">Админка</a>
             <span aria-hidden>›</span>
-            <span aria-current="page">{crumb}</span>
+            <span className="adm-crumb-menu">
+              <button type="button" className="font-extrabold text-ink hover:text-link" aria-expanded={menu} onClick={() => setMenu((v) => !v)} onBlur={(e) => { if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) setMenu(false); }}>
+                {byId(current)?.label} <span aria-hidden>▾</span>
+              </button>
+              {menu && (
+                <div className="adm-crumb-pop" role="menu">
+                  {sections.map((s) => (
+                    <a key={s.id} role="menuitem" href={`/admin/${s.id}`} onClick={() => setMenu(false)}>
+                      <span className="adm-ic" aria-hidden>{s.icon()}</span>{s.label}{isAdmin && chordOf(s.id) && <kbd>g {chordOf(s.id)}</kbd>}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </span>
+            {crumb && <><span aria-hidden>›</span><span aria-current="page">{crumb}</span></>}
           </nav>
         )}
         {home && <AdminHome />}
@@ -67144,6 +67251,8 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminOverview.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
+import { useAuth } from '../auth';
+import { delta, dayKey, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
 import type { OverviewData } from '../components/servers/overviewLogic';
 import { t, useI18n } from '../i18n';
@@ -67169,15 +67278,97 @@ interface Attention { id: string; tone: 'bad' | 'warn' | 'info'; text: string; h
 const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
 const WEEK = 7 * 86_400_000;
 
-function Tile({ label, value, sub, tone, href }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string }) {
+function Tile({ label, value, sub, tone, href, change, spark }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string; change?: { text: string; tone: 'up' | 'down' } | null; spark?: number[] }) {
   const body = (
     <>
       <span className="adm-tile-k">{label}</span>
-      <span className={`adm-tile-v ${tone ? `is-${tone}` : ''}`}>{value}</span>
+      <span className="adm-tile-row">
+        <span className={`adm-tile-v ${tone ? `is-${tone}` : ''}`}>{value}</span>
+        {change && <span className={`adm-delta is-${change.tone}`} title="за 24 часа">{change.text}</span>}
+      </span>
+      {spark && spark.length >= 3 && <SmoothArea values={spark} color="rgb(var(--link))" w={160} h={28} fill={0.18} strokeWidth={1.5} className="adm-tile-spark" label={label} />}
       {sub && <span className="adm-tile-s">{sub}</span>}
     </>
   );
   return href ? <a href={href} className="adm-tile">{body}</a> : <div className="adm-tile">{body}</div>;
+}
+
+const REASON_TEXT: Record<string, string> = {
+  down: 'Есть недоступные серверы',
+  bot: 'Бот Discord в ошибке',
+  cert: 'Сертификат скоро истечёт',
+  backup: 'Давно нет резервной копии',
+  pending: 'Ждут заявки игроков',
+  update: 'Доступно обновление',
+};
+
+/** The ring of the panel's health: the number in the middle, the reasons under it */
+function HealthRing({ score, reasons }: { score: number; reasons: { id: string; cost: number; tone: string }[] }) {
+  const R = 38;
+  const C = 2 * Math.PI * R;
+  const tone = score >= 90 ? 'ok' : score >= 65 ? 'warn' : 'bad';
+  return (
+    <section className="panel adm-health" aria-label="Здоровье панели">
+      <svg viewBox="0 0 100 100" className="adm-ring" role="img" aria-label={`Здоровье панели: ${score} из 100`}>
+        <circle cx="50" cy="50" r={R} className="adm-ring-bg" />
+        <circle cx="50" cy="50" r={R} className={`adm-ring-fg is-${tone}`} strokeDasharray={C} strokeDashoffset={C * (1 - score / 100)} transform="rotate(-90 50 50)" />
+        <text x="50" y="56" textAnchor="middle" className="adm-ring-n">{score}</text>
+      </svg>
+      <div className="min-w-0">
+        <p className="font-extrabold">{score >= 90 ? 'Панель в порядке' : score >= 65 ? 'Есть, на что взглянуть' : 'Нужно вмешательство'}</p>
+        {reasons.length === 0 ? (
+          <p className="text-sm font-semibold text-mute">Серверы, бот, сертификат и копии — всё в норме.</p>
+        ) : (
+          <ul className="mt-1 flex flex-wrap gap-1.5">
+            {reasons.map((r) => <li key={r.id} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id]} <b>−{r.cost}</b></li>)}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const DUTY = [
+  { id: 'servers', text: 'Просмотреть серверы', href: '/admin/servers' },
+  { id: 'users', text: 'Разобрать заявки игроков', href: '/admin/users' },
+  { id: 'backup', text: 'Проверить резервную копию', href: '/admin/settings/updates' },
+  { id: 'journal', text: 'Заглянуть в журнал', href: '/admin/journal' },
+];
+
+/** The checks of the day: kept in this browser, start anew each day */
+function Duty() {
+  const key = `adm-duty-${dayKey()}`;
+  const [done, setDone] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(key) ?? '[]') as string[]; } catch { return []; }
+  });
+  const toggle = (id: string) => {
+    const next = done.includes(id) ? done.filter((x) => x !== id) : [...done, id];
+    setDone(next);
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* private mode */ }
+  };
+  const left = DUTY.filter((d) => !done.includes(d.id)).length;
+  return (
+    <Section title="Обход на сегодня" description={left === 0 ? 'Всё обойдено — можно отдыхать' : `Осталось: ${left} из ${DUTY.length}`}>
+      <ul className="space-y-1.5">
+        {DUTY.map((d) => (
+          <li key={d.id} className="adm-duty">
+            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5">
+              <input type="checkbox" checked={done.includes(d.id)} onChange={() => toggle(d.id)} />
+              <span className={`font-bold ${done.includes(d.id) ? 'text-mute line-through' : ''}`}>{d.text}</span>
+            </label>
+            <a href={d.href} className="text-sm font-extrabold text-link hover:underline">Открыть</a>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+function auditTone(action: string): string {
+  if (/delete|remove|удал/i.test(action)) return 'is-del';
+  if (/create|add|создан|добав/i.test(action)) return 'is-add';
+  if (/login|password|2fa|security|вход|парол/i.test(action)) return 'is-sec';
+  return '';
 }
 
 /** «Сводка»: the state of the panel now, what needs attention, the last actions and the common jobs in one click */
@@ -67185,6 +67376,8 @@ export default function AdminOverview() {
   useI18n();
   const [raw, setRaw] = useState<Raw | null>(null);
   const [busy, setBusy] = useState<'poll' | 'backup' | null>(null);
+  const { me } = useAuth();
+  const [mine, setMine] = useState(false);
 
   const load = async () => {
     const [servers, overview, users, backups, update, bot, sys, audit] = await Promise.allSettled([
@@ -67195,7 +67388,7 @@ export default function AdminOverview() {
       api<UpdateInfo>('/update/status'),
       api<BotStatus>('/bot/status'),
       api<{ cert?: CertInfo }>('/system'),
-      api<AuditRow[]>('/audit?limit=5'),
+      api<AuditRow[]>('/audit?limit=30'),
     ]);
     setRaw({
       servers: ok(servers), overview: ok(overview), users: ok(users), backups: ok(backups), update: ok(update), bot: ok(bot),
@@ -67229,6 +67422,12 @@ export default function AdminOverview() {
 
   const points = raw?.overview?.points ?? [];
   const series = points.map((p) => p.players);
+  const health = healthScore({
+    servers: servers.length, down: down.length, botError: raw?.bot?.state === 'error', certDays: raw?.cert?.daysLeft ?? null,
+    pending, updateAvailable: !!raw?.update?.available, backupAgeMs: lastBackup ? Date.now() - lastBackup : null, backupsKnown: !!raw?.backups,
+  });
+  const avatarOf = (name: string) => raw?.users?.find((u) => u.username === name)?.avatarUrl ?? null;
+  const auditRows = (raw?.audit ?? []).filter((r) => !mine || r.actor === me?.username).slice(0, 10);
 
   const pollAll = async () => {
     setBusy('poll');
@@ -67257,13 +67456,29 @@ export default function AdminOverview() {
         </div>
       ) : (
         <>
+          <HealthRing score={health.score} reasons={health.reasons} />
+
           <div className="adm-tiles">
             <Tile label={t('adm.ov.servers')} value={servers.length ? `${online} / ${servers.length}` : '–'} tone={servers.length === 0 ? undefined : down.length ? 'bad' : 'ok'} href="/admin/servers" />
-            <Tile label={t('adm.ov.players')} value={String(players)} href="/admin/servers" />
+            <Tile label={t('adm.ov.players')} value={String(players)} change={delta(players, series[0])} spark={series} href="/admin/servers" />
             <Tile label={t('adm.ov.pending')} value={raw.users ? String(pending) : '–'} tone={pending > 0 ? 'warn' : undefined} href="/admin/users" />
             <Tile label={t('adm.ov.backup')} value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'} tone={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? 'warn' : undefined} href="/admin/settings/updates" />
             <Tile label={t('adm.ov.version')} value={raw.update?.current ? raw.update.current.slice(0, 7) : '–'} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
           </div>
+
+          {servers.length > 0 && (
+            <div className="adm-now" role="list" aria-label="Серверы сейчас">
+              {servers.map((s) => (
+                <a key={s.id} role="listitem" href={`/servers/${s.id}`} className={`adm-now-card ${s.maintenance ? 'is-maint' : s.online ? 'is-on' : 'is-off'}`}>
+                  <span className="adm-now-dot" aria-hidden />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-extrabold">{s.name}</span>
+                    <span className="block text-xs font-semibold tabular-nums text-mute">{s.maintenance ? 'обслуживание' : s.online ? `${s.players} / ${s.maxPlayers}` : 'недоступен'}</span>
+                  </span>
+                </a>
+              ))}
+            </div>
+          )}
 
           <Section title={t('adm.ov.attn')}>
             {attention.length === 0 ? (
@@ -67306,22 +67521,41 @@ export default function AdminOverview() {
             </Section>
           </div>
 
-          <Section title={t('adm.ov.recent')} actions={<a href="/admin/journal" className="text-sm font-extrabold text-link hover:underline">{t('adm.ov.journal')}</a>}>
-            {raw.audit && raw.audit.length > 0 ? (
-              <ul className="divide-y divide-line">
-                {raw.audit.map((r) => (
-                  <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2">
-                    <span className="w-32 shrink-0 text-sm font-semibold tabular-nums text-mute" title={fmtDateTime(r.ts)}>{ago(r.ts)}</span>
-                    <span className="font-extrabold">{r.action}</span>
-                    {r.detail && <span className="min-w-0 truncate font-semibold text-mute">{r.detail}</span>}
-                    <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="font-semibold text-mute">{t('adm.ov.noEvents')}</p>
-            )}
-          </Section>
+          <div className="grid items-start gap-5 lg:grid-cols-[2fr_1fr]">
+            <Section
+              title={t('adm.ov.recent')}
+              actions={
+                <span className="flex items-center gap-3">
+                  <button type="button" className="adm-chip" aria-pressed={mine} onClick={() => setMine((v) => !v)}>Только мои</button>
+                  <a href="/admin/journal" className="text-sm font-extrabold text-link hover:underline">{t('adm.ov.journal')}</a>
+                </span>
+              }
+            >
+              {auditRows.length > 0 ? (
+                <ul className="divide-y divide-line">
+                  {auditRows.map((r) => {
+                    const pic = avatarOf(r.actor);
+                    return (
+                      <li key={r.id} className="flex items-center gap-3 py-2">
+                        {pic ? (
+                          <img src={pic} alt="" width={28} height={28} loading="lazy" referrerPolicy="no-referrer" className="adm-av" />
+                        ) : (
+                          <span className="adm-av" aria-hidden>{r.actor.slice(0, 1).toUpperCase()}</span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate"><span className={`adm-act ${auditTone(r.action)}`}>{r.action}</span>{r.detail && <span className="ml-2 font-semibold text-mute">{r.detail}</span>}</p>
+                          <p className="text-xs font-semibold text-mute" title={fmtDateTime(r.ts)}>{r.actor} · {ago(r.ts)}</p>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="font-semibold text-mute">{mine ? 'Ваших действий пока нет' : t('adm.ov.noEvents')}</p>
+              )}
+            </Section>
+            <Duty />
+          </div>
         </>
       )}
     </AdminPage>
@@ -67356,6 +67590,19 @@ export interface TableActions {
 }
 
 const FILTERS: [ServerFilter, TKey][] = [['all', 'adm.tbl.all'], ['online', 'adm.tbl.online'], ['problems', 'adm.tbl.problems']];
+/** «2 ч», «15 мин»: how long a state has lasted */
+export function spanText(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return 'меньше минуты';
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} ч`;
+  return `${Math.floor(h / 24)} дн`;
+}
+const stateLine = (s: Server): string | null => {
+  if (s.maintenance || !s.hasStatus || !s.stateSince) return null;
+  return `${s.online ? 'работает' : 'не отвечает'} · ${spanText(Date.now() - s.stateSince)}`;
+};
 const pct = (v: number | undefined) => (v == null ? '–' : `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`);
 
 export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableActions }) {
@@ -67365,6 +67612,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
+  const [view, setView] = useState<'table' | 'cards'>(() => { try { return localStorage.getItem('coregsm_admin_srv_view') === 'cards' ? 'cards' : 'table'; } catch { return 'table'; } });
+  const pickView = (v: 'table' | 'cards') => { setView(v); try { localStorage.setItem('coregsm_admin_srv_view', v); } catch { /* not remembered */ } };
   const counts = useMemo(() => countServers(servers), [servers]);
   const rows = useMemo(() => filterServers(servers, filter, query), [servers, filter, query]);
   const shownIds = rows.map((s) => s.id);
@@ -67397,6 +67646,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
             </button>
           ))}
         </nav>
+        <div className="seg hidden w-fit md:flex" role="group" aria-label="Вид списка">
+          <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>Таблица</button>
+          <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>Карточки</button>
+        </div>
         <label className="adm-search ml-auto">
           <span aria-hidden>⌕</span>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('adm.tbl.search')} aria-label={t('adm.tbl.search')} />
@@ -67404,7 +67657,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       </div>
 
       {picked.length > 0 && (
-        <div className="adm-bulk" role="region" aria-label={t('adm.tbl.selected')}>
+        <div className="adm-bulk adm-bulk-float" role="region" aria-label={t('adm.tbl.selected')}>
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
@@ -67419,7 +67672,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       ) : (
         <>
           {/* wide screens: a table */}
-          <div className="tile adm-tablewrap hidden p-1.5 md:block">
+          <div className={`tile adm-tablewrap hidden p-1.5 ${view === 'table' ? 'md:block' : ''}`}>
             <table className="adm-table">
               <thead>
                 <tr>
@@ -67450,7 +67703,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                         </div>
                       </div>
                     </td>
-                    <td><StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} /></td>
+                    <td>
+                      <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
+                      {stateLine(s) && <div className="mt-0.5 text-xs font-semibold text-mute">{stateLine(s)}</div>}
+                    </td>
                     <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</td>
                     <td className="tabular-nums text-mute">{s.online && s.ping != null ? t('adm.tbl.ms', { n: s.ping }) : '—'}</td>
                     <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
@@ -67491,9 +67747,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
           </div>
 
           {/* a phone: a card per server */}
-          <div className="space-y-2.5 md:hidden">
+          <div className={`adm-cards ${view === 'table' ? 'md:hidden' : ''}`}>
             {rows.map((s) => (
-              <div key={s.id} className="tile flex flex-wrap items-center gap-x-3 gap-y-2 p-3.5" data-selected={sel.includes(s.id) ? 'true' : undefined}>
+              <div key={s.id} className="tile adm-card flex flex-wrap items-center gap-x-3 gap-y-2 p-3.5" data-state={s.maintenance ? 'maint' : !s.online && s.hasStatus ? 'off' : isLag(s) ? 'lag' : 'on'} data-selected={sel.includes(s.id) ? 'true' : undefined}>
                 <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`${t('adm.tbl.select')}: ${s.name}`} />
                 <GameAvatar game={s.game} size={40} />
                 <div className="min-w-0 flex-1 basis-40">
@@ -67501,6 +67757,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   <div className="truncate text-xs font-semibold text-mute">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
                 </div>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
+                {stateLine(s) && <div className="w-full text-xs font-semibold text-mute">{stateLine(s)}</div>}
                 <div className="flex w-full items-center gap-2 text-sm font-semibold text-mute">
                   <span className="tabular-nums">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</span>
                   <span>· {ago(s.updatedAt)}</span>
@@ -73348,9 +73605,9 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { confirmDialog } from '../confirm';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
-import { GAMES } from '../games';
+import { GAMES, gameLabel } from '../games';
 import GamePicker from '../components/GamePicker';
-import { ErrorLine, Field, Modal } from '../ui';
+import { ErrorLine, Field, GameAvatar, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
@@ -73488,6 +73745,16 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   return (
     <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={() => void close()}>
       <form onSubmit={submit} className="space-y-3.5">
+        <div className="sf-preview" aria-label="Так сервер увидят в списке" style={cover ? { backgroundImage: `linear-gradient(rgb(0 0 0 / .45), rgb(0 0 0 / .65)), url(${cover})` } : undefined} data-cover={cover ? 'true' : undefined}>
+          <GameAvatar game={f.game} size={44} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-extrabold">{f.name || (test?.online && test.name) || (f.host ? `${f.host}:${f.port}` : 'Название сервера')}</p>
+            <p className="truncate text-xs font-semibold opacity-80">{gameLabel(f.game)} · <span className="font-mono">{f.displayAddress || (f.host ? `${f.host}:${f.port}` : 'адрес')}</span></p>
+          </div>
+          <span className={`sf-preview-st ${test ? (test.online ? 'is-on' : 'is-off') : ''}`}>
+            {test ? (test.online ? `${test.players}/${test.maxPlayers}` : 'не отвечает') : 'не проверен'}
+          </span>
+        </div>
         <div>
           <span className="label">Игра</span>
           <GamePicker id="srv-game" value={f.game} custom={custom} onPick={pickGame} autoFocus />
@@ -75510,6 +75777,109 @@ export default function VerifyEmail({ token }: { token: string }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/adminLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { delta, dayKey, healthScore, type HealthInput } from './adminLogic';
+
+const fine: HealthInput = { servers: 4, down: 0, botError: false, certDays: 60, pending: 0, updateAvailable: false, backupAgeMs: 1000, backupsKnown: true };
+
+describe('healthScore', () => {
+  it('is 100 when all is fine', () => {
+    expect(healthScore(fine)).toEqual({ score: 100, reasons: [] });
+  });
+  it('subtracts every problem and lists it', () => {
+    const r = healthScore({ ...fine, down: 1, botError: true, pending: 2 });
+    expect(r.reasons.map((x) => x.id)).toEqual(['down', 'bot', 'pending']);
+    expect(r.score).toBe(100 - r.reasons.reduce((n, x) => n + x.cost, 0));
+    expect(r.score).toBeLessThan(70);
+  });
+  it('flags a missing backup but not when backups are unknown', () => {
+    expect(healthScore({ ...fine, backupAgeMs: null }).reasons.map((x) => x.id)).toEqual(['backup']);
+    expect(healthScore({ ...fine, backupAgeMs: null, backupsKnown: false }).reasons).toEqual([]);
+  });
+  it('never goes below zero', () => {
+    const r = healthScore({ servers: 1, down: 1, botError: true, certDays: -1, pending: 50, updateAvailable: true, backupAgeMs: null, backupsKnown: true });
+    expect(r.score).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('delta', () => {
+  it('is null for equal or unknown', () => {
+    expect(delta(3, 3)).toBeNull();
+    expect(delta(3, null)).toBeNull();
+  });
+  it('signs the difference', () => {
+    expect(delta(5, 3)).toEqual({ text: '+2', tone: 'up' });
+    expect(delta(1, 3)).toEqual({ text: '−2', tone: 'down' });
+  });
+});
+
+describe('dayKey', () => {
+  it('pads month and day', () => {
+    expect(dayKey(new Date(2026, 0, 5))).toBe('2026-01-05');
+  });
+});
+
+describe('chords', () => {
+  it('maps both ways', async () => {
+    const { CHORDS, chordOf } = await import('./adminLogic');
+    expect(CHORDS.s).toBe('servers');
+    expect(chordOf('servers')).toBe('s');
+    expect(chordOf('cards')).toBeNull();
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/adminLogic.ts" << '__COREGSM_EOF__'
+/** The pure parts of the admin overview: the health of the panel as one number with the reasons for it */
+
+export interface HealthInput {
+  servers: number;
+  down: number;
+  botError: boolean;
+  certDays: number | null;
+  pending: number;
+  updateAvailable: boolean;
+  backupAgeMs: number | null; // null — no copies at all
+  backupsKnown: boolean;
+}
+
+export interface HealthReason { id: string; cost: number; tone: 'bad' | 'warn' | 'info' }
+
+const WEEK = 7 * 86_400_000;
+
+/** 100 minus the cost of everything that is wrong; every cost is listed so the ring can explain itself */
+export function healthScore(h: HealthInput): { score: number; reasons: HealthReason[] } {
+  const reasons: HealthReason[] = [];
+  if (h.down > 0 && h.servers > 0) reasons.push({ id: 'down', cost: Math.min(50, Math.round((h.down / h.servers) * 60) + 10), tone: 'bad' });
+  if (h.botError) reasons.push({ id: 'bot', cost: 20, tone: 'bad' });
+  if (h.certDays != null && h.certDays <= 14) reasons.push({ id: 'cert', cost: h.certDays <= 0 ? 25 : 10, tone: h.certDays <= 0 ? 'bad' : 'warn' });
+  if (h.backupsKnown && (h.backupAgeMs == null || h.backupAgeMs > WEEK)) reasons.push({ id: 'backup', cost: 10, tone: 'warn' });
+  if (h.pending > 0) reasons.push({ id: 'pending', cost: Math.min(10, 3 + h.pending), tone: 'warn' });
+  if (h.updateAvailable) reasons.push({ id: 'update', cost: 3, tone: 'info' });
+  const score = Math.max(0, 100 - reasons.reduce((n, r) => n + r.cost, 0));
+  return { score, reasons };
+}
+
+/** A change between two numbers for a tile: +3 / −2, nothing when equal or unknown */
+export function delta(now: number, before: number | null | undefined): { text: string; tone: 'up' | 'down' } | null {
+  if (before == null || now === before) return null;
+  const d = now - before;
+  return { text: `${d > 0 ? '+' : '−'}${Math.abs(d)}`, tone: d > 0 ? 'up' : 'down' };
+}
+
+/** The set of local daily checks is keyed by the date so the list starts anew each day */
+export function dayKey(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** «g» then a letter jumps to a section of the admin area */
+export const CHORDS: Record<string, string> = { o: 'overview', s: 'servers', d: 'discord', n: 'news', a: 'alerts', u: 'users', j: 'journal', y: 'system', c: 'community', t: 'settings' };
+
+/** the letter of a section's chord, if it has one */
+export const chordOf = (section: string): string | null => Object.entries(CHORDS).find(([, id]) => id === section)?.[0] ?? null;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import type { Perm } from '../api';
@@ -77051,6 +77421,82 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .bk-line > span { flex: 1 1 0; max-width: 22px; min-height: 6px; border-radius: 4px 4px 2px 2px; background: rgb(var(--link)); opacity: .75; transition: opacity .15s ease; }
 .bk-line > span:hover { opacity: 1; }
 .bk-line > span.is-manual { background: rgb(var(--ok)); }
+
+/* ---------- overview: health ring, tile deltas, servers now, duty list, audit feed ---------- */
+.adm-health { display: flex; align-items: center; gap: 18px; }
+.adm-ring { width: 92px; height: 92px; flex: none; }
+.adm-ring-bg { fill: none; stroke: rgb(var(--line)); stroke-width: 9; }
+.adm-ring-fg { fill: none; stroke-width: 9; stroke-linecap: round; transition: stroke-dashoffset .8s cubic-bezier(.2, .8, .2, 1); }
+.adm-ring-fg.is-ok { stroke: rgb(var(--ok)); }
+.adm-ring-fg.is-warn { stroke: rgb(var(--warn)); }
+.adm-ring-fg.is-bad { stroke: rgb(var(--bad)); }
+.adm-ring-n { font-size: 26px; font-weight: 800; fill: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
+.adm-reason { padding: 2px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 650; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.adm-reason.is-bad { background: rgb(var(--badbg)); color: rgb(var(--bad)); box-shadow: none; }
+.adm-reason.is-warn { background: rgb(var(--warnbg)); color: rgb(var(--warn)); box-shadow: none; }
+.adm-tile-row { display: flex; align-items: baseline; gap: 8px; }
+.adm-delta { font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.adm-delta.is-up { color: rgb(var(--ok)); }
+.adm-delta.is-down { color: rgb(var(--bad)); }
+.adm-tile-spark { height: 28px; width: 100%; margin-top: 2px; }
+.adm-now { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.adm-now-card { display: flex; align-items: center; gap: 10px; flex: none; min-width: 9.5rem; max-width: 14rem; padding: 10px 14px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
+.adm-now-card:hover { border-color: rgb(var(--brand) / .5); }
+.adm-now-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: rgb(var(--ok)); }
+.adm-now-card.is-off .adm-now-dot { background: rgb(var(--bad)); }
+.adm-now-card.is-maint .adm-now-dot { background: rgb(var(--link)); }
+.adm-duty { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: var(--r-md); background: rgb(var(--soft) / .7); }
+.adm-chip { padding: 3px 11px; border-radius: var(--r-pill); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: 12px; font-weight: 650; color: rgb(var(--mute)); }
+.adm-chip[aria-pressed='true'] { color: rgb(var(--link)); background: rgb(var(--brand) / .14); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .45); }
+.adm-av { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 50%; object-fit: cover; background: rgb(var(--soft)); color: rgb(var(--link)); font-size: 13px; font-weight: 800; }
+.adm-act { font-weight: 800; }
+.adm-act.is-add { color: rgb(var(--ok)); }
+.adm-act.is-del { color: rgb(var(--bad)); }
+.adm-act.is-sec { color: rgb(var(--warn)); }
+@media (prefers-reduced-motion: reduce) { .adm-ring-fg { transition: none; } }
+
+/* ---------- shell: status strip, sliding indicator, crumbs menu ---------- */
+.adm-status { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; border-radius: var(--r-pill); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); font-size: 13px; font-weight: 650; }
+.adm-status-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 0 rgb(var(--ok) / .5); animation: adm-pulse 2.4s ease-out infinite; }
+.adm-status-dot.is-warn { background: rgb(var(--warn)); }
+.adm-status-dot.is-bad { background: rgb(var(--bad)); }
+@keyframes adm-pulse { 70% { box-shadow: 0 0 0 7px rgb(var(--ok) / 0); } 100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); } }
+.adm-nav { position: relative; }
+@media (min-width: 768px) { .adm-nav { position: sticky; } }
+.adm-ind { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; border-radius: 14px; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: var(--shadow-pop, 0 6px 16px -8px rgb(var(--brand) / .8)); transition: transform .28s cubic-bezier(.2, .8, .2, 1), width .28s ease, height .28s ease, opacity .2s ease; }
+.adm-nav.has-ind .adm-link.is-on { background: transparent; box-shadow: none; }
+.adm-nav .adm-link, .adm-nav .adm-item { position: relative; z-index: 1; }
+@media (max-width: 767px) { .adm-ind { border-radius: 999px; } }
+.adm-dot { margin-left: auto; width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--warn)); }
+.adm-dot.is-bad { background: rgb(var(--bad)); }
+.adm-crumb-menu { position: relative; }
+.adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+.adm-crumb-pop a { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md); color: rgb(var(--ink)); }
+.adm-crumb-pop a:hover { background: rgb(var(--soft)); text-decoration: none; }
+.adm-crumb-pop kbd { margin-left: auto; font: inherit; font-size: 11px; font-weight: 650; padding: 1px 6px; border-radius: 6px; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); color: rgb(var(--mute)); }
+@media (prefers-reduced-motion: reduce) { .adm-ind, .adm-status-dot { transition: none; animation: none; } }
+
+/* ---------- servers: cards view, the floating bulk bar ---------- */
+.adm-cards { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 768px) { .adm-cards { grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); } }
+.adm-card { position: relative; box-shadow: inset 4px 0 0 rgb(var(--ok)), var(--shadow-1); transition: box-shadow .15s ease, transform .15s ease; }
+.adm-card:hover { transform: translateY(-1px); }
+.adm-card[data-state='off'] { box-shadow: inset 4px 0 0 rgb(var(--bad)), var(--shadow-1); }
+.adm-card[data-state='lag'] { box-shadow: inset 4px 0 0 rgb(var(--warn)), var(--shadow-1); }
+.adm-card[data-state='maint'] { box-shadow: inset 4px 0 0 rgb(var(--link)), var(--shadow-1); }
+.adm-card[data-selected='true'] { background: rgb(var(--brand) / .1); }
+.adm-bulk.adm-bulk-float { position: fixed; top: auto; bottom: 5.5rem; left: 50%; z-index: 45; width: max-content; max-width: calc(100vw - 2rem); transform: translateX(-50%); background: rgb(var(--raised)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--brand) / .5); animation: adm-rise .22s cubic-bezier(.2, .8, .2, 1); }
+@media (min-width: 768px) { .adm-bulk.adm-bulk-float { bottom: 1.25rem; } }
+@keyframes adm-rise { from { opacity: 0; transform: translate(-50%, 12px); } }
+.adm-st:has(.adm-bulk) .adm-table thead th { top: 4.75rem; }
+@media (prefers-reduced-motion: reduce) { .adm-bulk.adm-bulk-float { animation: none; } .adm-card { transition: none; } }
+
+/* server form: the card as it will look in the list */
+.sf-preview { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--r-xl); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); background-size: cover; background-position: center; }
+.sf-preview[data-cover='true'] { color: #fff; }
+.sf-preview-st { flex: none; padding: 3px 11px; border-radius: var(--r-pill); font-size: 12px; font-weight: 750; background: rgb(var(--card)); color: rgb(var(--mute)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-variant-numeric: tabular-nums; }
+.sf-preview-st.is-on { background: rgb(var(--okbg)); color: rgb(var(--ok)); box-shadow: none; }
+.sf-preview-st.is-off { background: rgb(var(--badbg)); color: rgb(var(--bad)); box-shadow: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'

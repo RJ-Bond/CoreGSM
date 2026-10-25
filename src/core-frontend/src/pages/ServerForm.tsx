@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { confirmDialog } from '../confirm';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
-import { GAMES } from '../games';
+import { GAMES, gameLabel } from '../games';
 import GamePicker from '../components/GamePicker';
-import { ErrorLine, Field, Modal } from '../ui';
+import { ErrorLine, Field, GameAvatar, Modal } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
@@ -141,6 +141,16 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   return (
     <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={() => void close()}>
       <form onSubmit={submit} className="space-y-3.5">
+        <div className="sf-preview" aria-label="Так сервер увидят в списке" style={cover ? { backgroundImage: `linear-gradient(rgb(0 0 0 / .45), rgb(0 0 0 / .65)), url(${cover})` } : undefined} data-cover={cover ? 'true' : undefined}>
+          <GameAvatar game={f.game} size={44} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-extrabold">{f.name || (test?.online && test.name) || (f.host ? `${f.host}:${f.port}` : 'Название сервера')}</p>
+            <p className="truncate text-xs font-semibold opacity-80">{gameLabel(f.game)} · <span className="font-mono">{f.displayAddress || (f.host ? `${f.host}:${f.port}` : 'адрес')}</span></p>
+          </div>
+          <span className={`sf-preview-st ${test ? (test.online ? 'is-on' : 'is-off') : ''}`}>
+            {test ? (test.online ? `${test.players}/${test.maxPlayers}` : 'не отвечает') : 'не проверен'}
+          </span>
+        </div>
         <div>
           <span className="label">Игра</span>
           <GamePicker id="srv-game" value={f.game} custom={custom} onPick={pickGame} autoFocus />
