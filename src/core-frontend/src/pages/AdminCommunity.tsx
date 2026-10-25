@@ -14,6 +14,7 @@ export const COMMUNITY_TABS = [
   { id: 'seasons', get label() { return t('adm.com.seasons'); }, admin: true },
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
   { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
+  { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
 ] as const;
 
 export default function AdminCommunity({ sub = '' }: { sub?: string }) {
@@ -31,6 +32,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
       {tab === 'seasons' && <SeasonsAdmin />}
       {tab === 'reviews' && <ReviewsAdmin />}
       {tab === 'gallery' && <GalleryAdmin />}
+      {tab === 'reports' && <ReportsAdmin />}
     </AdminPage>
   );
 }
@@ -151,6 +153,57 @@ function ReviewsAdmin() {
               </span>
               <button type="button" className="row-act" aria-label={r.hidden ? t('adm.com.show') : t('adm.com.hide')} title={r.hidden ? t('adm.com.show') : t('adm.com.hide')} onClick={() => void hide(r.id, !r.hidden)}>{r.hidden ? <IconEye /> : <IconEyeOff />}</button>
               <button type="button" className="row-act row-act-danger" aria-label={t('adm.srv.delete')} title={t('adm.srv.delete')} onClick={() => void del(r.id)}><IconTrash /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+const REASON_LABEL: Record<string, string> = { cheating: 'Читы', abuse: 'Оскорбления', griefing: 'Грифинг', other: 'Другое' };
+interface ReportRow { id: number; nick: string; reason: string; text: string; reporter: string; serverId: number | null; serverName: string | null; status: string; createdAt: number; handledBy: string | null; handledAt: number | null; note: string; others: number }
+
+/** the queue of reports on players: the oldest first; a closed one tells who handled it */
+function ReportsAdmin() {
+  const [closed, setClosed] = useState(false);
+  const [list, setList] = useState<ReportRow[] | null>(null);
+  const [error, setError] = useState('');
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const load = () => api<ReportRow[]>(`/reports?status=${closed ? 'closed' : 'open'}`).then((l) => { setList(l); setError(''); }).catch((e: Error) => setError(e.message));
+  useEffect(() => { setList(null); void load(); }, [closed]);
+  const close = (id: number, status: 'resolved' | 'dismissed') =>
+    api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim() })
+      .then(() => { toast(status === 'resolved' ? 'Жалоба закрыта: меры приняты' : 'Жалоба отклонена'); void load(); })
+      .catch((e: Error) => setError(e.message));
+  return (
+    <Section
+      title="Жалобы на игроков"
+      description={closed ? 'Рассмотренные жалобы, новые сверху' : list ? (list.length ? `Ждут решения: ${list.length}. Старые сверху` : 'Новых жалоб нет') : undefined}
+      actions={<div className="seg" role="group" aria-label="Какие жалобы"><button type="button" className="seg-item" aria-current={!closed ? "true" : undefined} onClick={() => setClosed(false)}>Открытые</button><button type="button" className="seg-item" aria-current={closed ? "true" : undefined} onClick={() => setClosed(true)}>Рассмотренные</button></div>}
+    >
+      <ErrorLine text={error} />
+      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{closed ? 'Пока ничего не рассматривали.' : 'Очередь пуста.'}</p> : (
+        <ul className="grid gap-2.5">
+          {list.map((r) => (
+            <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <a href={`/player/${encodeURIComponent(r.nick)}`} className="font-extrabold hover:text-link">{r.nick}</a>
+                <span className="pill pill-warn">{REASON_LABEL[r.reason] ?? r.reason}</span>
+                {r.others > 0 && <span className="pill pill-bad" title="Других открытых жалоб на этого игрока">ещё жалоб: {r.others}</span>}
+                <span className="ml-auto text-xs font-bold text-mute">{r.reporter} · {ago(r.createdAt)}</span>
+              </div>
+              {r.text && <p className="mt-1.5 whitespace-pre-line text-sm font-semibold">{r.text}</p>}
+              {r.serverName && <p className="mt-1 text-xs font-bold text-mute">Сервер: <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
+              {r.status === 'open' ? (
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  <input className="input min-w-48 flex-1" maxLength={300} placeholder="Комментарий для автора жалобы (необязательно)" aria-label="Комментарий" value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
+                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>Меры приняты</button>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>Отклонить</button>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? '✅ Меры приняты' : 'ℹ️ Отклонена'} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
+              )}
             </li>
           ))}
         </ul>
