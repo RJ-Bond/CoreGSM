@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="dc22af709fda"
+COREGSM_BUILD="1d9395a0c486"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -51402,10 +51402,10 @@ function HeadingAnchor({ id }: { id: string }) {
   if (typeof window === 'undefined' || !/^\/news\/\d+/.test(window.location.pathname)) return null;
   const copy = async () => {
     const url = `${window.location.origin}${window.location.pathname}#${id}`;
-    try { await navigator.clipboard.writeText(url); toast('Ссылка на раздел скопирована'); } catch { /* no clipboard */ }
+    try { await navigator.clipboard.writeText(url); toast(t('nw.anchorCopied')); } catch { /* no clipboard */ }
     window.history.replaceState(null, '', `#${id}`);
   };
-  return <button type="button" className="nw-anchor" onClick={() => void copy()} aria-label="Скопировать ссылку на раздел" title="Скопировать ссылку на раздел">#</button>;
+  return <button type="button" className="nw-anchor" onClick={() => void copy()} aria-label={t('nw.anchorCopy')} title={t('nw.anchorCopy')}>#</button>;
 }
 
 export interface DTheme {
@@ -52379,7 +52379,7 @@ function ToTop() {
   }, []);
   if (!show) return null;
   const go = () => window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-  return <button type="button" className="nw-top" onClick={go} aria-label="Наверх" title="Наверх"><span aria-hidden>↑</span></button>;
+  return <button type="button" className="nw-top" onClick={go} aria-label={t('nw.toTop')} title={t('nw.toTop')}><span aria-hidden>↑</span></button>;
 }
 
 /** one news item in full: cover, text, what changed, server cards, gallery, buttons, reactions, previous / next */
@@ -52441,7 +52441,7 @@ export function NewsArticle({
       {!preview && <ReadProgress target={root} />}
       <div className="nw-cover-zoomable">
         <NewsCover c={c} servers={servers} as="h1" tall />
-        {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label="Открыть обложку крупно" title="Открыть крупно"><span aria-hidden>⤢</span></button>}
+        {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
       </div>
       <div className="nw-article-in">
         {(c.author || c.countdownAt || minutes > 0) && (
@@ -52449,7 +52449,7 @@ export function NewsArticle({
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
-            {edited && item.editedAt && <span className="nw-read" title={`${fmtDateTime(item.editedAt)}${item.edits ? ` · правок: ${item.edits}` : ''}`}>Обновлено {ago(item.editedAt)}</span>}
+            {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
         )}
         {headings.length >= 3 && (
@@ -53532,7 +53532,7 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
-            {isFresh(c.at, seen) && <span className="nw-new">Новое</span>}
+            {isFresh(c.at, seen) && <span className="nw-new">{t('nw.new')}</span>}
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
             {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
@@ -54381,6 +54381,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/news/newsSeen.ts" << '__COREGSM_EOF__'
 import { createElement, useEffect, useState } from 'react';
 import { api, type PublicNews } from '../../api';
+import { t } from '../../i18n';
 import { unreadCount } from './newsLogic';
 
 const KEY = 'coregsm_news_seen';
@@ -54425,7 +54426,7 @@ export function useNewsUnread(enabled: boolean): number {
 export function NewsUnreadDot({ className = '' }: { className?: string }) {
   const n = useNewsUnread(true);
   if (n <= 0) return null;
-  return createElement('span', { className: `nw-unread ${className}`, title: `Непрочитанных новостей: ${n}`, role: 'img', 'aria-label': `Непрочитанных новостей: ${n}` }, n > 9 ? '9+' : String(n));
+  return createElement('span', { className: `nw-unread ${className}`, title: t('nw.unread', { n }), role: 'img', 'aria-label': t('nw.unread', { n }) }, n > 9 ? '9+' : String(n));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
@@ -64745,6 +64746,14 @@ const en: Record<keyof typeof ru, string> = {
   'nw.progress': 'Read so far',
   'nw.liveNow': 'On the servers now',
   'nw.offline': 'offline',
+  'nw.new': 'New',
+  'nw.updated': 'Updated {when}',
+  'nw.updatedTip': '{date} · edits: {n}',
+  'nw.toTop': 'Back to top',
+  'nw.zoomCover': 'Open the cover full size',
+  'nw.anchorCopied': 'Link to the section copied',
+  'nw.anchorCopy': 'Copy link to the section',
+  'nw.unread': 'Unread news: {n}',
   'nw.copied': 'Link copied',
   'nw.copyFail': 'Could not copy the link',
   'nw.prev': 'Newer',
@@ -66000,6 +66009,14 @@ const ru = {
   'nw.progress': 'Прочитано',
   'nw.liveNow': 'Сейчас на серверах',
   'nw.offline': 'офлайн',
+  'nw.new': 'Новое',
+  'nw.updated': 'Обновлено {when}',
+  'nw.updatedTip': '{date} · правок: {n}',
+  'nw.toTop': 'Наверх',
+  'nw.zoomCover': 'Открыть обложку крупно',
+  'nw.anchorCopied': 'Ссылка на раздел скопирована',
+  'nw.anchorCopy': 'Скопировать ссылку на раздел',
+  'nw.unread': 'Непрочитанных новостей: {n}',
   'nw.copied': 'Ссылка скопирована',
   'nw.copyFail': 'Не удалось скопировать ссылку',
   'nw.prev': 'Новее',

@@ -43,7 +43,7 @@ function ToTop() {
   }, []);
   if (!show) return null;
   const go = () => window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-  return <button type="button" className="nw-top" onClick={go} aria-label="Наверх" title="Наверх"><span aria-hidden>↑</span></button>;
+  return <button type="button" className="nw-top" onClick={go} aria-label={t('nw.toTop')} title={t('nw.toTop')}><span aria-hidden>↑</span></button>;
 }
 
 /** one news item in full: cover, text, what changed, server cards, gallery, buttons, reactions, previous / next */
@@ -105,7 +105,7 @@ export function NewsArticle({
       {!preview && <ReadProgress target={root} />}
       <div className="nw-cover-zoomable">
         <NewsCover c={c} servers={servers} as="h1" tall />
-        {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label="Открыть обложку крупно" title="Открыть крупно"><span aria-hidden>⤢</span></button>}
+        {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
       </div>
       <div className="nw-article-in">
         {(c.author || c.countdownAt || minutes > 0) && (
@@ -113,7 +113,7 @@ export function NewsArticle({
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
-            {edited && item.editedAt && <span className="nw-read" title={`${fmtDateTime(item.editedAt)}${item.edits ? ` · правок: ${item.edits}` : ''}`}>Обновлено {ago(item.editedAt)}</span>}
+            {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
         )}
         {headings.length >= 3 && (

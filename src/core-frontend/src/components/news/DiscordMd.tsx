@@ -14,10 +14,10 @@ function HeadingAnchor({ id }: { id: string }) {
   if (typeof window === 'undefined' || !/^\/news\/\d+/.test(window.location.pathname)) return null;
   const copy = async () => {
     const url = `${window.location.origin}${window.location.pathname}#${id}`;
-    try { await navigator.clipboard.writeText(url); toast('Ссылка на раздел скопирована'); } catch { /* no clipboard */ }
+    try { await navigator.clipboard.writeText(url); toast(t('nw.anchorCopied')); } catch { /* no clipboard */ }
     window.history.replaceState(null, '', `#${id}`);
   };
-  return <button type="button" className="nw-anchor" onClick={() => void copy()} aria-label="Скопировать ссылку на раздел" title="Скопировать ссылку на раздел">#</button>;
+  return <button type="button" className="nw-anchor" onClick={() => void copy()} aria-label={t('nw.anchorCopy')} title={t('nw.anchorCopy')}>#</button>;
 }
 
 export interface DTheme {
