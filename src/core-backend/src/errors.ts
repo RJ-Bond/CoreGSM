@@ -127,6 +127,13 @@ export const ERRORS = {
   retry_failed_only: 'Повторить можно только неудавшуюся доставку',
   check_filter: 'Проверьте параметры фильтра',
 
+  // ---- reviews, pinned notice, subscription test ----
+  review_not_found: 'Отзыв не найден',
+  review_own_flag: 'Свой отзыв отмечать нельзя',
+  review_reply_long: 'Ответ — до 600 символов',
+  notice_long: 'Текст объявления — до 500 символов',
+  sub_test_wait: 'Подождите несколько секунд перед следующей проверкой',
+
   // ---- maintenance windows ----
   maintenance_not_found: 'Окно обслуживания не найдено',
   bad_date: 'Неверная дата',
