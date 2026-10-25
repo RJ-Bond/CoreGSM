@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { NewsReaction, PublicNews, PublicNewsFull, Server } from '../../api';
+import { api, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { t } from '../../i18n';
 import { ago, fmtDateTime, toast } from '../../ui';
 import { cardOf, NewsCover, Row } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
+import { Comments } from './Comments';
 import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
 import {
   ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
@@ -66,6 +67,16 @@ export function NewsArticle({
   const edited = !preview && wasEdited(item.sentAt, item.editedAt);
   const root = useRef<HTMLElement>(null);
   const headings = extractHeadings(c.text);
+  // one view per tab session
+  useEffect(() => {
+    if (preview) return;
+    const key = `nw_viewed_${item.id}`;
+    try {
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+    } catch { /* counted again, no harm */ }
+    void api(`/news/${item.id}/view`, 'POST').catch(() => undefined);
+  }, [item.id, preview]);
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
 
   // a link to a part of the page (#nw-h-3): the text is drawn after the load, so jump once it is there
@@ -108,10 +119,11 @@ export function NewsArticle({
         {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
       </div>
       <div className="nw-article-in">
-        {(c.author || c.countdownAt || minutes > 0) && (
+        {(c.author || c.countdownAt || minutes > 0 || (c.views > 0 && !preview)) && (
           <div className="nf-meta">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {!preview && c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
             {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
@@ -152,6 +164,16 @@ export function NewsArticle({
           </>
         )}
       </div>
+      {!preview && c.author && (
+        <div className="nw-article-in">
+          <aside className="nw-authorbox" aria-label={t('nw.author.title')}>
+            <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />
+            <span className="nw-authorbox-n">{t('nw.author.count', { n: item.authorCount ?? 0 })}</span>
+            {item.authorId != null && (item.authorCount ?? 0) > 1 && <a className="btn btn-soft btn-sm" href={`/news?author=${item.authorId}`}>{t('nw.author.all')}</a>}
+          </aside>
+        </div>
+      )}
+      {!preview && <div className="nw-article-in"><Comments newsId={item.id} /></div>}
       {!preview && related.length > 0 && (
         <section className="nw-related" aria-label={t('nw.related')}>
           <h2 className="nw-h2">{t('nw.related')}</h2>

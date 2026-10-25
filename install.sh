@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="68b8c2a6ba8d"
+COREGSM_BUILD="2835636cfaca"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7557,6 +7557,16 @@ export const ERRORS = {
   report_limit: 'Не больше {n} жалоб в сутки',
   report_verdict_bad: 'Укажите решение; комментарий — до 300 символов',
   report_not_found: 'Жалоба не найдена',
+  comments_closed: 'Комментарии к этой новости закрыты',
+  comment_bad: 'Комментарий: от 1 до 1000 символов',
+  comment_burst: 'Слишком много комментариев подряд. Подождите немного',
+  comment_reply_bad: 'Ответить можно только на комментарий к этой же новости',
+  comment_dup: 'Такой комментарий уже есть',
+  comment_not_found: 'Комментарий не найден',
+  comment_not_yours: 'Это не ваш комментарий',
+  comment_yours: 'Это ваш комментарий',
+  comment_edit_late: 'Править комментарий можно в течение 10 минут',
+  comment_pin_bad: 'Закрепить можно только основной комментарий',
   report_closed: 'Жалоба уже рассмотрена',
   wipe_bad: 'Проверьте сценарий: у вайпа есть название и время, в команде не больше 200 символов',
   wipe_past: 'Время вайпа должно быть в будущем',
@@ -8898,6 +8908,9 @@ import { router as reportsRouter } from './reports.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as wipesRouter, startWipeTimer, stopWipeTimer } from './wipes.js';
+import { router as newsCommentsRouter } from './newsComments.js';
+import { router as newsViewsRouter } from './newsViews.js';
+import { router as newsSubsRouter } from './newsSubs.js';
 import { router as probesRouter } from './probes.js';
 import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
@@ -8966,6 +8979,11 @@ app.use(configRouter);
 app.use(pushRouter);
 app.use(bindingsRouter);
 app.use(internalRouter);
+
+// before the news routes: /api/news/discussed and /api/news/comments/* must not be taken for /api/news/:id
+app.use(newsCommentsRouter);
+app.use(newsViewsRouter);
+app.use(newsSubsRouter);
 
 registerNews({
   app,
@@ -9975,6 +9993,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { commentCount } from './newsComments.js';
+import { viewsOf } from './newsViews.js';
+import { notifyNewsPublished } from './newsSubs.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
@@ -10596,6 +10617,8 @@ export function registerNews(deps: {
       pinned: full.pinned,
       authorRole: full.authorRole,
       reactions: full.reactions,
+      comments: commentCount(full.id),
+      views: viewsOf(full.id),
     };
   };
   const isPublished = (r: { status: string }) => r.status === 'sent' || r.status === 'edit_queued';
@@ -10617,6 +10640,11 @@ export function registerNews(deps: {
     return list.slice(offset, offset + Math.min(100, limit));
   };
   const PUBLISHED_SQL = "status IN ('sent','edit_queued')";
+  const totals = (sql: string) => new Map((db.prepare(sql).all() as { id: number; n: number }[]).map((r) => [r.id, r.n]));
+  const reactionTotals = () => totals('SELECT news_id AS id, COUNT(*) AS n FROM news_reactions GROUP BY news_id');
+  const commentTotals = () => totals("SELECT news_id AS id, COUNT(*) AS n FROM news_comments WHERE status = 'visible' GROUP BY news_id");
+  const viewTotals = () => totals('SELECT news_id AS id, SUM(n) AS n FROM news_views GROUP BY news_id');
+
   app.get('/api/news', viewer, (req, res) => {
     const uid = uidOf(req);
     if (isAdmin(req)) {
@@ -10625,8 +10653,13 @@ export function registerNews(deps: {
     }
     // only the published rows are read, and only the requested page is turned into the public shape (reactions are a query each)
     const cat = typeof req.query.category === 'string' && (NEWS_CATEGORIES as readonly string[]).includes(req.query.category) ? req.query.category : '';
-    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}`).all(...(cat ? [cat] : [])) as NewsRow[];
-    const pub = rows.sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
+    const author = Number(req.query.author);
+    const byAuthor = Number.isInteger(author) && author > 0;
+    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}${byAuthor ? ' AND created_by = ?' : ''}`).all(...(cat ? [cat] : []), ...(byAuthor ? [author] : [])) as NewsRow[];
+    // ?sort=top (most reactions) / discussed (most comments) / viewed (most views): by that number, then the newest; without it: pinned first, then the newest
+    const sort = req.query.sort;
+    const score = sort === 'top' ? reactionTotals() : sort === 'discussed' ? commentTotals() : sort === 'viewed' ? viewTotals() : null;
+    const pub = rows.sort((a, b) => (score ? (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) : Number(pinnedOf(b)) - Number(pinnedOf(a))) || byTime(a, b));
     res.json(pageOf(pub, req).map((r) => publicNews(r, uid)));
   });
 
@@ -10668,7 +10701,9 @@ export function registerNews(deps: {
     const ed = r.sent_at
       ? (db.prepare("SELECT MAX(ts) AS ts, COUNT(*) AS n FROM news_versions WHERE news_id = ? AND ts > ? AND note NOT IN ('Закреплено', 'Откреплено')").get(r.id, r.sent_at) as { ts: number | null; n: number })
       : { ts: null, n: 0 };
-    res.json({ ...base, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
+    // «Кто писал»: how many items the author has published, and the id for the filter ?author=
+    const authorCount = r.created_by == null ? 0 : (db.prepare(`SELECT COUNT(*) AS n FROM news WHERE test = 0 AND created_by = ? AND ${PUBLISHED_SQL}`).get(r.created_by) as { n: number }).n;
+    res.json({ ...base, authorId: r.created_by ?? null, authorCount, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
   });
 
   // ---------- a link that looks good when pasted into Discord/Telegram: /n/<id> (redirects to the news page) ----------
@@ -11044,6 +11079,13 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
         now,
         id,
       );
+      // the first post of an item (not a repeat of the edit): the subscribers of its rubric are told
+      if (prev && !prev.sent_at && prev.repeat === 'none') {
+        try {
+          const p = JSON.parse(prev.payload) as NewsPayload;
+          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+        } catch { /* the post itself is done */ }
+      }
     } else {
       const err = b.data.error ?? 'Ошибка отправки';
       const plan = planFailure(before?.attempts ?? 0, now, { retryAfterMs: b.data.retryAfterMs });
@@ -11061,6 +11103,516 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
     res.json({ ok: true });
   });
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsComments.ts" << '__COREGSM_EOF__'
+/**
+ * Comments under a news item (the site and the panel).
+ *
+ *   GET    /api/news/:id/comments            the thread: comments, replies, reactions, what the viewer may do
+ *   POST   /api/news/:id/comments            write { text, parentId? } (signed in)
+ *   PATCH  /api/news/comments/:cid           edit your own comment within 10 minutes { text }
+ *   DELETE /api/news/comments/:cid           delete your own comment (staff: hide, see below)
+ *   PUT    /api/news/comments/:cid/reaction  { emoji | null }
+ *   POST   /api/news/comments/:cid/flag      complain about a comment (once per user)
+ *   GET    /api/news/comments/mentions?q=    nicks for the @-hint
+ *   GET    /api/news/discussed               the news with the most comments lately (the side panel)
+ * Moderation (permission «Модерация»):
+ *   POST   /api/news/comments/:cid/hide      hide with a reason { reason } / { restore: true } shows it again
+ *   POST   /api/news/comments/:cid/pin       pin to the top of the thread { pinned } (one per news)
+ *   GET    /api/news/comments/queue          complained-about and hidden comments
+ *   GET    /api/news/comments/count          how many wait in the queue (the badge of the admin menu)
+ *   POST   /api/news/comments/bulk           { ids, action: 'approve' | 'hide' | 'delete' }
+ * Staff with the «Новости» permission:
+ *   PUT    /api/news/:id/comments/lock       close / open the thread of one news item { locked }
+ *   GET|PUT /api/news/comments/settings      the switch for the whole site { enabled }
+ */
+import express from 'express';
+import { z } from 'zod';
+import { allow, auth, viewer, type AuthedRequest } from './auth.js';
+import { db, getSetting, setSetting } from './db.js';
+import { param } from './http.js';
+import { pushToUser } from './subscriptions.js';
+
+export const router = express.Router();
+const moderator = allow('moderation');
+const newsStaff = allow('news');
+
+export const MAX_LEN = 1000;
+export const EDIT_WINDOW_MS = 10 * 60_000;
+export const EMOJI = ['👍', '❤️', '😂', '🔥'] as const;
+const BURST = 8;
+const BURST_MS = 10 * 60_000;
+const MAX_THREAD = 500;
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  news_id INTEGER NOT NULL,
+  parent_id INTEGER,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'visible',
+  hide_reason TEXT NOT NULL DEFAULT '',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  edited_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ncomments_news ON news_comments(news_id, created_at);
+CREATE TABLE IF NOT EXISTS news_comment_reactions (
+  comment_id INTEGER NOT NULL REFERENCES news_comments(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  PRIMARY KEY (comment_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS news_comment_flags (
+  comment_id INTEGER NOT NULL REFERENCES news_comments(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (comment_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS news_comment_locks (news_id INTEGER PRIMARY KEY);
+`);
+
+interface CRow {
+  id: number; news_id: number; parent_id: number | null; user_id: number; text: string; status: string; hide_reason: string;
+  pinned: number; created_at: number; edited_at: number | null; username: string; role: string;
+}
+
+const enabled = () => getSetting('news_comments') !== '0';
+const published = (newsId: number): boolean => {
+  const r = db.prepare('SELECT status FROM news WHERE id = ? AND test = 0').get(newsId) as { status: string } | undefined;
+  return !!r && (r.status === 'sent' || r.status === 'edit_queued');
+};
+const isStaff = (role: string) => role === 'admin' || role === 'moderator';
+
+/** nicks mentioned in a text (@name), only the ones that are accounts, at most 5, never the author */
+export function mentionedUsers(text: string, authorId: number): { id: number; username: string }[] {
+  const names = [...new Set([...text.matchAll(/(?:^|[\s(])@([\p{L}\p{N}_.-]{2,32})/gu)].map((m) => m[1].toLowerCase()))].slice(0, 5);
+  const find = db.prepare('SELECT id, username FROM users WHERE LOWER(username) = ?');
+  const out: { id: number; username: string }[] = [];
+  for (const n of names) {
+    const u = find.get(n) as { id: number; username: string } | undefined;
+    if (u && u.id !== authorId) out.push(u);
+  }
+  return out;
+}
+
+/** a line in the inbox; an unread one of the same kind for the same link is updated instead of repeated (3 new comments) */
+function notify(userId: number, kind: string, url: string, text: string, collapse?: (n: number) => string, title = 'Новости'): void {
+  const now = Date.now();
+  if (collapse) {
+    const old = db.prepare("SELECT id, text FROM user_notifications WHERE user_id = ? AND kind = ? AND url = ? AND read = 0 ORDER BY id DESC LIMIT 1").get(userId, kind, url) as { id: number; text: string } | undefined;
+    if (old) {
+      const n = Number(/\((\d+)\)$/.exec(old.text)?.[1] ?? 1) + 1;
+      db.prepare('UPDATE user_notifications SET text = ?, ts = ? WHERE id = ?').run(`${collapse(n)} (${n})`, now, old.id);
+      return;
+    }
+  }
+  db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(userId, now, kind, collapse ? `${text} (1)` : text, url);
+  pushToUser(userId, { title, body: text, url, tag: `${kind}-${url}` });
+}
+
+const titleOf = (newsId: number): string => {
+  try {
+    const r = db.prepare('SELECT payload FROM news WHERE id = ?').get(newsId) as { payload: string } | undefined;
+    const p = r ? (JSON.parse(r.payload) as { embed?: { title?: string }; content?: string }) : null;
+    return (p?.embed?.title || p?.content || `Новость №${newsId}`).slice(0, 60);
+  } catch {
+    return `Новость №${newsId}`;
+  }
+};
+
+export function commentCount(newsId: number): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM news_comments WHERE news_id = ? AND status = 'visible'").get(newsId) as { n: number }).n;
+}
+
+const SELECT = 'SELECT c.*, u.username, u.role FROM news_comments c JOIN users u ON u.id = c.user_id';
+
+function thread(newsId: number, viewerId: number | null, staff: boolean) {
+  const all = db.prepare(`${SELECT} WHERE c.news_id = ? ORDER BY c.created_at, c.id LIMIT ${MAX_THREAD}`).all(newsId) as CRow[];
+  // a deleted comment stays as a stub only while it has replies under it
+  const parents = new Set(all.filter((r) => r.status !== 'deleted' && r.parent_id).map((r) => r.parent_id));
+  const rows = all.filter((r) => r.status !== 'deleted' || parents.has(r.id));
+  const react = db.prepare('SELECT comment_id, emoji, user_id FROM news_comment_reactions WHERE comment_id IN (SELECT id FROM news_comments WHERE news_id = ?)').all(newsId) as { comment_id: number; emoji: string; user_id: number }[];
+  const flags = db.prepare('SELECT comment_id, user_id FROM news_comment_flags WHERE comment_id IN (SELECT id FROM news_comments WHERE news_id = ?)').all(newsId) as { comment_id: number; user_id: number }[];
+  const counts = new Map<number, Record<string, number>>();
+  const mine = new Map<number, string>();
+  for (const r of react) {
+    const c = counts.get(r.comment_id) ?? {};
+    c[r.emoji] = (c[r.emoji] ?? 0) + 1;
+    counts.set(r.comment_id, c);
+    if (r.user_id === viewerId) mine.set(r.comment_id, r.emoji);
+  }
+  const flagged = new Set(flags.filter((f) => f.user_id === viewerId).map((f) => f.comment_id));
+  const flagN = new Map<number, number>();
+  for (const f of flags) flagN.set(f.comment_id, (flagN.get(f.comment_id) ?? 0) + 1);
+  return rows.map((r) => {
+    const hidden = r.status === 'hidden';
+    const gone = r.status === 'deleted';
+    const own = viewerId === r.user_id;
+    return {
+      id: r.id,
+      parentId: r.parent_id,
+      author: r.username,
+      role: isStaff(r.role) ? r.role : 'user',
+      mine: own,
+      // a hidden comment shows its text to staff and to the author only
+      text: (hidden && !staff && !own) || gone ? '' : r.text,
+      hidden,
+      deleted: gone,
+      hideReason: hidden ? r.hide_reason : '',
+      pinned: !!r.pinned,
+      createdAt: r.created_at,
+      editedAt: r.edited_at,
+      canEdit: own && !hidden && !gone && Date.now() - r.created_at <= EDIT_WINDOW_MS,
+      reactions: counts.get(r.id) ?? {},
+      myReaction: mine.get(r.id) ?? null,
+      flagged: flagged.has(r.id),
+      flags: staff ? flagN.get(r.id) ?? 0 : undefined,
+    };
+  });
+}
+
+const staffOf = (req: AuthedRequest) => !!req.user && (req.user.role === 'admin' || req.user.role === 'moderator');
+
+router.get('/api/news/comments/settings', newsStaff, (_req, res) => res.json({ enabled: enabled() }));
+router.put('/api/news/comments/settings', newsStaff, (req, res) => {
+  const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  setSetting('news_comments', b.data.enabled ? '1' : '0');
+  res.json({ enabled: enabled() });
+});
+
+router.get('/api/news/comments/mentions', auth, (req, res) => {
+  const q = String(req.query.q ?? '').trim().toLowerCase().replace(/[%_]/g, '').slice(0, 32);
+  if (!q) return res.json([]);
+  const rows = db.prepare("SELECT username FROM users WHERE LOWER(username) LIKE ? ORDER BY username LIMIT 6").all(`${q}%`) as { username: string }[];
+  res.json(rows.map((r) => r.username));
+});
+
+router.get('/api/news/discussed', viewer, (_req, res) => {
+  const since = Date.now() - 14 * 86_400_000;
+  const rows = db
+    .prepare("SELECT news_id, COUNT(*) AS n FROM news_comments WHERE status = 'visible' AND created_at > ? GROUP BY news_id ORDER BY n DESC, MAX(created_at) DESC LIMIT 12")
+    .all(since) as { news_id: number; n: number }[];
+  res.json(rows.filter((r) => published(r.news_id)).slice(0, 5).map((r) => ({ id: r.news_id, title: titleOf(r.news_id), comments: r.n })));
+});
+
+router.get('/api/news/comments/queue', moderator, (_req, res) => {
+  const rows = db
+    .prepare(`${SELECT} WHERE c.status <> 'deleted' AND (c.status = 'hidden' OR EXISTS (SELECT 1 FROM news_comment_flags f WHERE f.comment_id = c.id)) ORDER BY (c.status = 'hidden'), c.created_at DESC LIMIT 200`)
+    .all() as CRow[];
+  const flagN = db.prepare('SELECT COUNT(*) AS n FROM news_comment_flags WHERE comment_id = ?');
+  res.json(rows.map((r) => ({
+    id: r.id, newsId: r.news_id, title: titleOf(r.news_id), author: r.username, text: r.text, status: r.status, hideReason: r.hide_reason,
+    createdAt: r.created_at, flags: (flagN.get(r.id) as { n: number }).n,
+  })));
+});
+
+router.get('/api/news/comments/count', moderator, (_req, res) => {
+  res.json({ open: (db.prepare("SELECT COUNT(*) AS n FROM news_comments c WHERE c.status = 'visible' AND EXISTS (SELECT 1 FROM news_comment_flags f WHERE f.comment_id = c.id)").get() as { n: number }).n });
+});
+
+router.post('/api/news/comments/bulk', moderator, (req, res) => {
+  const b = z.object({ ids: z.array(z.number().int().positive()).min(1).max(100), action: z.enum(['approve', 'hide', 'delete']), reason: z.string().trim().max(200).optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const mark = (ids: number[]) => ids.map(() => '?').join(',');
+  db.transaction(() => {
+    const ids = b.data.ids;
+    if (b.data.action === 'approve') {
+      db.prepare(`DELETE FROM news_comment_flags WHERE comment_id IN (${mark(ids)})`).run(...ids);
+      db.prepare(`UPDATE news_comments SET status = 'visible', hide_reason = '' WHERE status = 'hidden' AND id IN (${mark(ids)})`).run(...ids);
+    } else if (b.data.action === 'hide') {
+      db.prepare(`UPDATE news_comments SET status = 'hidden', hide_reason = ? WHERE status = 'visible' AND id IN (${mark(ids)})`).run(b.data.reason ?? '', ...ids);
+      db.prepare(`DELETE FROM news_comment_flags WHERE comment_id IN (${mark(ids)})`).run(...ids);
+    } else {
+      db.prepare(`UPDATE news_comments SET status = 'deleted', text = '', pinned = 0 WHERE id IN (${mark(ids)})`).run(...ids);
+      db.prepare(`DELETE FROM news_comment_flags WHERE comment_id IN (${mark(ids)})`).run(...ids);
+    }
+  })();
+  res.json({ ok: true });
+});
+
+router.get('/api/news/:id/comments', param('id'), viewer, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!published(id) && !staffOf(req)) return res.status(404).json({ error: 'Новость не найдена' });
+  const locked = !!db.prepare('SELECT 1 FROM news_comment_locks WHERE news_id = ?').get(id);
+  const on = enabled();
+  res.json({
+    enabled: on,
+    locked,
+    canPost: on && !locked && !!req.user,
+    staff: staffOf(req),
+    items: on ? thread(id, req.user?.id ?? null, staffOf(req)) : [],
+  });
+});
+
+router.put('/api/news/:id/comments/lock', param('id'), newsStaff, (req, res) => {
+  const b = z.object({ locked: z.boolean() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const id = Number(req.params.id);
+  if (b.data.locked) db.prepare('INSERT OR IGNORE INTO news_comment_locks (news_id) VALUES (?)').run(id);
+  else db.prepare('DELETE FROM news_comment_locks WHERE news_id = ?').run(id);
+  res.json({ locked: b.data.locked });
+});
+
+router.post('/api/news/:id/comments', param('id'), auth, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!published(id)) return res.status(404).json({ error: 'Новость не найдена' });
+  if (!enabled() || db.prepare('SELECT 1 FROM news_comment_locks WHERE news_id = ?').get(id)) return res.status(403).json({ error: 'Комментарии к этой новости закрыты' });
+  const b = z.object({ text: z.string().trim().min(1).max(MAX_LEN), parentId: z.number().int().positive().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Комментарий: от 1 до 1000 символов' });
+  const me = req.user!;
+  const recent = (db.prepare('SELECT COUNT(*) AS n FROM news_comments WHERE user_id = ? AND created_at > ?').get(me.id, Date.now() - BURST_MS) as { n: number }).n;
+  if (recent >= BURST && me.role === 'player') return res.status(429).json({ error: 'Слишком много комментариев подряд. Подождите немного' });
+  let parent: CRow | undefined;
+  if (b.data.parentId) {
+    parent = db.prepare(`${SELECT} WHERE c.id = ?`).get(b.data.parentId) as CRow | undefined;
+    if (!parent || parent.news_id !== id || parent.status === 'deleted') return res.status(400).json({ error: 'Ответить можно только на комментарий к этой же новости' });
+  }
+  // replies stay one level deep: an answer to an answer goes under the same top comment
+  const parentId = parent ? parent.parent_id ?? parent.id : null;
+  if (db.prepare("SELECT 1 FROM news_comments WHERE user_id = ? AND news_id = ? AND text = ? AND status <> 'deleted' AND created_at > ?").get(me.id, id, b.data.text, Date.now() - 60 * 60_000)) {
+    return res.status(409).json({ error: 'Такой комментарий уже есть' });
+  }
+  const now = Date.now();
+  const cid = Number(db.prepare('INSERT INTO news_comments (news_id, parent_id, user_id, text, created_at) VALUES (?, ?, ?, ?, ?)').run(id, parentId, me.id, b.data.text, now).lastInsertRowid);
+  const url = `/news/${id}#c-${cid}`;
+  const title = titleOf(id);
+  const told = new Set<number>([me.id]);
+  if (parent && parent.user_id !== me.id) {
+    told.add(parent.user_id);
+    notify(parent.user_id, 'news_reply', url, `${me.username} ответил на ваш комментарий к «${title}»`);
+  }
+  for (const u of mentionedUsers(b.data.text, me.id)) {
+    if (told.has(u.id)) continue;
+    told.add(u.id);
+    notify(u.id, 'news_mention', url, `${me.username} упомянул вас в комментарии к «${title}»`);
+  }
+  const owner = (db.prepare('SELECT created_by FROM news WHERE id = ?').get(id) as { created_by: number | null } | undefined)?.created_by;
+  if (owner && !told.has(owner)) {
+    const text = `Новые комментарии к «${title}»`;
+    notify(owner, 'news_comment', `/news/${id}#comments`, text, () => text, 'Комментарии');
+  }
+  res.status(201).json({ id: cid });
+});
+
+const load = (cid: number) => db.prepare(`${SELECT} WHERE c.id = ?`).get(cid) as CRow | undefined;
+
+router.patch('/api/news/comments/:cid', param('cid'), auth, (req: AuthedRequest, res) => {
+  const row = load(Number(req.params.cid));
+  if (!row || row.status === 'deleted') return res.status(404).json({ error: 'Комментарий не найден' });
+  if (row.user_id !== req.user!.id) return res.status(403).json({ error: 'Это не ваш комментарий' });
+  if (row.status !== 'visible' || Date.now() - row.created_at > EDIT_WINDOW_MS) return res.status(403).json({ error: 'Править комментарий можно в течение 10 минут' });
+  const b = z.object({ text: z.string().trim().min(1).max(MAX_LEN) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Комментарий: от 1 до 1000 символов' });
+  db.prepare('UPDATE news_comments SET text = ?, edited_at = ? WHERE id = ?').run(b.data.text, Date.now(), row.id);
+  res.json({ ok: true });
+});
+
+router.delete('/api/news/comments/:cid', param('cid'), auth, (req: AuthedRequest, res) => {
+  const row = load(Number(req.params.cid));
+  if (!row || row.status === 'deleted') return res.status(404).json({ error: 'Комментарий не найден' });
+  if (row.user_id !== req.user!.id) return res.status(403).json({ error: 'Это не ваш комментарий' });
+  db.prepare("UPDATE news_comments SET status = 'deleted', text = '', pinned = 0 WHERE id = ?").run(row.id);
+  db.prepare('DELETE FROM news_comment_flags WHERE comment_id = ?').run(row.id);
+  res.json({ ok: true });
+});
+
+router.put('/api/news/comments/:cid/reaction', param('cid'), auth, (req: AuthedRequest, res) => {
+  const row = load(Number(req.params.cid));
+  if (!row || row.status !== 'visible') return res.status(404).json({ error: 'Комментарий не найден' });
+  const b = z.object({ emoji: z.enum(EMOJI).nullable() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверная реакция' });
+  if (b.data.emoji === null) db.prepare('DELETE FROM news_comment_reactions WHERE comment_id = ? AND user_id = ?').run(row.id, req.user!.id);
+  else db.prepare('INSERT INTO news_comment_reactions (comment_id, user_id, emoji) VALUES (?, ?, ?) ON CONFLICT(comment_id, user_id) DO UPDATE SET emoji = excluded.emoji').run(row.id, req.user!.id, b.data.emoji);
+  res.json({ ok: true });
+});
+
+router.post('/api/news/comments/:cid/flag', param('cid'), auth, (req: AuthedRequest, res) => {
+  const row = load(Number(req.params.cid));
+  if (!row || row.status !== 'visible') return res.status(404).json({ error: 'Комментарий не найден' });
+  if (row.user_id === req.user!.id) return res.status(403).json({ error: 'Это ваш комментарий' });
+  db.prepare('INSERT OR IGNORE INTO news_comment_flags (comment_id, user_id, ts) VALUES (?, ?, ?)').run(row.id, req.user!.id, Date.now());
+  res.json({ ok: true });
+});
+
+router.post('/api/news/comments/:cid/hide', param('cid'), moderator, (req: AuthedRequest, res) => {
+  const row = load(Number(req.params.cid));
+  if (!row || row.status === 'deleted') return res.status(404).json({ error: 'Комментарий не найден' });
+  const b = z.object({ reason: z.string().trim().max(200).default(''), restore: z.boolean().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  if (b.data.restore) db.prepare("UPDATE news_comments SET status = 'visible', hide_reason = '' WHERE id = ?").run(row.id);
+  else {
+    db.prepare("UPDATE news_comments SET status = 'hidden', hide_reason = ?, pinned = 0 WHERE id = ?").run(b.data.reason, row.id);
+    db.prepare('DELETE FROM news_comment_flags WHERE comment_id = ?').run(row.id);
+    if (row.user_id !== req.user!.id) notify(row.user_id, 'news_hidden', `/news/${row.news_id}#c-${row.id}`, `Ваш комментарий к «${titleOf(row.news_id)}» скрыт модератором${b.data.reason ? `: ${b.data.reason}` : ''}`);
+  }
+  res.json({ ok: true });
+});
+
+router.post('/api/news/comments/:cid/pin', param('cid'), moderator, (req: AuthedRequest, res) => {
+  const row = load(Number(req.params.cid));
+  if (!row || row.status !== 'visible') return res.status(404).json({ error: 'Комментарий не найден' });
+  if (row.parent_id) return res.status(400).json({ error: 'Закрепить можно только основной комментарий' });
+  const b = z.object({ pinned: z.boolean() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  db.transaction(() => {
+    if (b.data.pinned) db.prepare('UPDATE news_comments SET pinned = 0 WHERE news_id = ?').run(row.news_id);
+    db.prepare('UPDATE news_comments SET pinned = ? WHERE id = ?').run(b.data.pinned ? 1 : 0, row.id);
+  })();
+  res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsSubs.ts" << '__COREGSM_EOF__'
+/**
+ * Subscriptions to the rubrics of the news: a signed-in user picks the rubrics he wants to hear about; when an item
+ * of such a rubric is published for the first time, the notification goes to the bell of the panel (with a link to
+ * the item), to the devices with Web Push and, when the account is linked, to Discord as a DM — the same three ways
+ * as the server subscriptions and the player follows.
+ *
+ *   GET /api/me/news-subscriptions   { categories: [...] }
+ *   PUT /api/me/news-subscriptions   { categories: [...] } (replaces the list; an empty list unsubscribes)
+ *
+ * news.ts calls notifyNewsPublished() once, when the bot has posted an item for the first time.
+ * Statistics of one item for the editors:
+ *   GET /api/news/:id/stats          views by day, reactions, comments (permission «Новости»)
+ */
+import express from 'express';
+import { z } from 'zod';
+import { allow, auth, type AuthedRequest } from './auth.js';
+import { db } from './db.js';
+import { enqueueDelivery } from './deliveries.js';
+import { param } from './http.js';
+import { log } from './logger.js';
+import { viewsByDay, viewsOf } from './newsViews.js';
+import { NEWS_RUBRICS, newsNoticeText, normRubric } from './newsSubsLogic.js';
+import { dmAvailable, pushToUser } from './subscriptions.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_subscriptions (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category TEXT NOT NULL,
+  PRIMARY KEY (user_id, category)
+);
+CREATE INDEX IF NOT EXISTS idx_news_subs_cat ON news_subscriptions(category);
+`);
+
+/** Tells the subscribers of the rubric about a published item (never throws into the news flow). Returns how many were told. */
+export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null }, base = ''): number {
+  try {
+    const category = normRubric(item.category);
+    const subs = db
+      .prepare(`SELECT s.user_id, u.discord_id FROM news_subscriptions s JOIN users u ON u.id = s.user_id AND u.status = 'active' WHERE s.category = ? AND s.user_id IS NOT ?`)
+      .all(category, item.authorId) as { user_id: number; discord_id: string | null }[];
+    if (!subs.length) return 0;
+    const now = Date.now();
+    const text = newsNoticeText(category, item.title);
+    const url = `/news/${item.id}`;
+    const insert = db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)');
+    for (const s of subs) {
+      insert.run(s.user_id, now, 'news', text, url);
+      if (s.discord_id && dmAvailable()) {
+        const content = base ? `${text}\n${base}${url}` : text;
+        enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content, summary: text.slice(0, 120) } });
+      }
+      pushToUser(s.user_id, { title: 'Новости', body: text, url, tag: `news-${item.id}` });
+    }
+    return subs.length;
+  } catch (e) {
+    log.error('news subscriptions failed', (e as Error).message);
+    return 0;
+  }
+}
+
+router.get('/api/me/news-subscriptions', auth, (req: AuthedRequest, res) => {
+  const rows = db.prepare('SELECT category FROM news_subscriptions WHERE user_id = ?').all(req.user!.id) as { category: string }[];
+  res.json({ categories: NEWS_RUBRICS.filter((c) => rows.some((r) => r.category === c)) });
+});
+
+router.put('/api/me/news-subscriptions', auth, (req: AuthedRequest, res) => {
+  const b = z.object({ categories: z.array(z.enum(NEWS_RUBRICS)).max(NEWS_RUBRICS.length) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const uid = req.user!.id;
+  const list = [...new Set(b.data.categories)];
+  db.transaction(() => {
+    db.prepare('DELETE FROM news_subscriptions WHERE user_id = ?').run(uid);
+    const ins = db.prepare('INSERT INTO news_subscriptions (user_id, category) VALUES (?, ?)');
+    for (const c of list) ins.run(uid, c);
+  })();
+  res.json({ categories: NEWS_RUBRICS.filter((c) => list.includes(c)) });
+});
+
+router.get('/api/news/:id/stats', param('id'), allow('news'), (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT sent_at FROM news WHERE id = ? AND test = 0').get(id) as { sent_at: number | null } | undefined;
+  if (!r) return res.status(404).json({ error: 'Новость не найдена' });
+  const reactions = db.prepare('SELECT emoji, COUNT(*) AS count FROM news_reactions WHERE news_id = ? GROUP BY emoji ORDER BY count DESC').all(id) as { emoji: string; count: number }[];
+  const comments = (db.prepare("SELECT COUNT(*) AS n FROM news_comments WHERE news_id = ? AND status = 'visible'").get(id) as { n: number }).n;
+  res.json({ sentAt: r.sent_at, views: viewsOf(id), byDay: viewsByDay(id, 30), reactions, comments });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsSubsLogic.ts" << '__COREGSM_EOF__'
+/** Texts and names of the news subscriptions (pure, no database). */
+
+export const NEWS_RUBRICS = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
+export type Rubric = (typeof NEWS_RUBRICS)[number];
+
+export const RUBRIC_EMOJI: Record<Rubric, string> = { announcement: '📣', wipe: '🧹', update: '🛠️', event: '🎉', maintenance: '🔧', other: '📰' };
+
+/** «🧹 Новая новость: …» for the bell and the DM */
+export const newsNoticeText = (category: string, title: string): string => `${RUBRIC_EMOJI[category as Rubric] ?? '📰'} Новая новость: «${title.slice(0, 120)}»`;
+
+export const normRubric = (c: unknown): Rubric => ((NEWS_RUBRICS as readonly string[]).includes(String(c)) ? (c as Rubric) : 'announcement');
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsViews.ts" << '__COREGSM_EOF__'
+/**
+ * Views of a news item: the page counts one view per visitor session (the browser asks once per tab session).
+ *   POST /api/news/:id/view   { } → { views }  (published news only, 120 requests a minute per address)
+ * The totals sit next to a per-day count (the chart in the statistics of a news item).
+ */
+import express from 'express';
+import { rateLimit, viewer } from './auth.js';
+import { db } from './db.js';
+import { param } from './http.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_views (
+  news_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  n INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (news_id, day)
+);
+`);
+
+export const viewsOf = (newsId: number): number => (db.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM news_views WHERE news_id = ?').get(newsId) as { n: number }).n;
+
+/** views per day for the last `days` days, oldest first (days without a view are 0) */
+export function viewsByDay(newsId: number, days = 30, now = Date.now()): { day: string; n: number }[] {
+  const rows = new Map((db.prepare('SELECT day, n FROM news_views WHERE news_id = ? AND day >= ?').all(newsId, dayKey(now - (days - 1) * 86_400_000)) as { day: string; n: number }[]).map((r) => [r.day, r.n]));
+  return Array.from({ length: days }, (_, i) => {
+    const day = dayKey(now - (days - 1 - i) * 86_400_000);
+    return { day, n: rows.get(day) ?? 0 };
+  });
+}
+
+export const dayKey = (ts: number): string => new Date(ts).toISOString().slice(0, 10);
+
+router.post('/api/news/:id/view', param('id'), rateLimit(120), viewer, (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT status FROM news WHERE id = ? AND test = 0').get(id) as { status: string } | undefined;
+  if (!r || (r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
+  db.prepare('INSERT INTO news_views (news_id, day, n) VALUES (?, ?, 1) ON CONFLICT(news_id, day) DO UPDATE SET n = n + 1').run(id, dayKey(Date.now()));
+  res.json({ views: viewsOf(id) });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/nickMatch.ts" << '__COREGSM_EOF__'
@@ -11367,6 +11919,11 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/servers\/(\d+)\/wipes$/, label: 'Запланирован вайп', pre: (id) => `сервер #${id}`, detail: (r) => s(r.body?.name) },
   { m: 'PUT', re: /^\/api\/wipes\/(\d+)$/, label: 'Изменён сценарий вайпа', pre: (id) => `#${id}`, detail: (r) => s(r.body?.name) },
   { m: 'DELETE', re: /^\/api\/wipes\/(\d+)$/, label: 'Отменён сценарий вайпа', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/news\/comments\/(\d+)\/hide$/, label: 'Скрыт или показан комментарий к новости', pre: (id) => `#${id}`, detail: (r) => (r.body?.restore ? 'показан' : s(r.body?.reason)) },
+  { m: 'POST', re: /^\/api\/news\/comments\/(\d+)\/pin$/, label: 'Закреплён комментарий к новости', pre: (id) => `#${id}`, detail: (r) => (r.body?.pinned ? 'закреплён' : 'откреплён') },
+  { m: 'POST', re: /^\/api\/news\/comments\/bulk$/, label: 'Массовое действие с комментариями', detail: (r) => s(r.body?.action, 12) },
+  { m: 'PUT', re: /^\/api\/news\/(\d+)\/comments\/lock$/, label: 'Изменён доступ к комментариям новости', pre: (id) => `#${id}`, detail: (r) => (r.body?.locked ? 'закрыты' : 'открыты') },
+  { m: 'PUT', re: /^\/api\/news\/comments\/settings$/, label: 'Изменён переключатель комментариев к новостям', detail: (r) => (r.body?.enabled ? 'включены' : 'выключены') },
   { m: 'PATCH', re: /^\/api\/reports\/(\d+)$/, label: 'Обработана жалоба на игрока', pre: (id) => `#${id}`, detail: (r) => s(r.body?.status, 12) },
   { m: 'POST', re: /^\/api\/backups\/run$/, label: 'Создана резервная копия' },
   { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
@@ -17527,6 +18084,7 @@ __COREGSM_EOF__
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from './db.js';
+import { addColumn } from './schema.js';
 import { enqueueDelivery } from './deliveries.js';
 
 /** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
@@ -17565,6 +18123,8 @@ CREATE TABLE IF NOT EXISTS user_notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notif_user ON user_notifications(user_id, read, ts);
 `);
+// where the notification leads when it is not a server page (a comment under a news item)
+addColumn(db, 'user_notifications', 'url', "TEXT NOT NULL DEFAULT ''");
 
 // ---------- transition logic (pure) ----------
 
@@ -17721,11 +18281,11 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     const unreadOnly = req.query.unread === '1' || req.query.unread === 'true';
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
     const rows = db
-      .prepare(`SELECT id, ts, kind, server_id, text, read FROM user_notifications WHERE user_id = ? ${unreadOnly ? 'AND read = 0' : ''} ORDER BY ts DESC, id DESC LIMIT ?`)
-      .all(uid, limit) as { id: number; ts: number; kind: string; server_id: number | null; text: string; read: number }[];
+      .prepare(`SELECT id, ts, kind, server_id, text, read, url FROM user_notifications WHERE user_id = ? ${unreadOnly ? 'AND read = 0' : ''} ORDER BY ts DESC, id DESC LIMIT ?`)
+      .all(uid, limit) as { id: number; ts: number; kind: string; server_id: number | null; text: string; read: number; url: string }[];
     res.json({
       unread: unreadNotifications(uid),
-      items: rows.map((r) => ({ id: r.id, ts: r.ts, kind: r.kind, serverId: r.server_id, text: r.text, read: !!r.read })),
+      items: rows.map((r) => ({ id: r.id, ts: r.ts, kind: r.kind, serverId: r.server_id, text: r.text, read: !!r.read, url: r.url || null })),
     });
   });
 
@@ -48039,6 +48599,10 @@ export interface PublicNews {
   pinned?: boolean;
   authorRole?: 'admin' | 'moderator' | 'player' | null;
   reactions?: NewsReaction[];
+  /** visible comments under it */
+  comments?: number;
+  /** how many times the page was opened */
+  views?: number;
 }
 
 export interface NewsReaction { emoji: string; count: number; mine: boolean }
@@ -48048,6 +48612,9 @@ export interface PublicNewsFull extends PublicNews {
   /** the last edit made well after the publication, and how many there were (absent: not edited) */
   editedAt?: number | null;
   edits?: number;
+  /** who wrote it (the account) and how many items that account has published */
+  authorId?: number | null;
+  authorCount?: number;
   prev?: { id: number; title: string } | null;
   next?: { id: number; title: string } | null;
   /** up to three other news to read next (the same rubric first) */
@@ -52287,6 +52854,256 @@ export function ChecklistModal({
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/Comments.tsx" << '__COREGSM_EOF__'
+/** Comments under a news item: write, reply, edit within 10 minutes, react, complain; moderators hide and pin. */
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { confirmDialog, promptDialog } from '../../confirm';
+import { t } from '../../i18n';
+import { ago, Button, ErrorLine, fmtDateTime, toast } from '../../ui';
+import { buildThread, parseComment, visibleCount, type CommentItem, type CommentSort } from './commentMd';
+
+interface Thread { enabled: boolean; locked: boolean; canPost: boolean; staff: boolean; items: CommentItem[] }
+
+const EMOJI = ['👍', '❤️', '😂', '🔥'];
+const MAX = 1000;
+const SORT_KEY = 'nw_comment_sort';
+const loadSort = (): CommentSort => {
+  try {
+    const v = localStorage.getItem(SORT_KEY);
+    return v === 'old' || v === 'top' ? v : 'new';
+  } catch {
+    return 'new';
+  }
+};
+
+function Body({ text }: { text: string }) {
+  const blocks = useMemo(() => parseComment(text), [text]);
+  const inline = (toks: ReturnType<typeof parseComment>[number]['toks']): ReactNode[] =>
+    toks.map((k, i) => {
+      if (k.t === 'b') return <strong key={i}>{k.v}</strong>;
+      if (k.t === 'i') return <em key={i}>{k.v}</em>;
+      if (k.t === 'code') return <code key={i}>{k.v}</code>;
+      if (k.t === 'mention') return <span key={i} className="cm-mention">@{k.v}</span>;
+      if (k.t === 'link') return <a key={i} href={k.href} target="_blank" rel="noopener noreferrer nofollow ugc">{k.v}</a>;
+      return k.v;
+    });
+  return (
+    <div className="cm-text">
+      {blocks.map((b, i) => (b.quote ? <blockquote key={i}>{inline(b.toks)}</blockquote> : <p key={i}>{b.toks.length ? inline(b.toks) : <br />}</p>))}
+    </div>
+  );
+}
+
+/** the text box: counter, Ctrl+Enter, a hint of nicks after «@» */
+function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label }: {
+  initial?: string; placeholder: string; submit: (text: string) => Promise<void>; cancel?: () => void; autoFocus?: boolean; label: string;
+}) {
+  const [text, setText] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [hint, setHint] = useState<string[]>([]);
+  const area = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (autoFocus) area.current?.focus(); }, [autoFocus]);
+
+  const query = () => {
+    const el = area.current;
+    if (!el) return null;
+    const m = /(?:^|[\s(])@([\p{L}\p{N}_.-]{0,32})$/u.exec(text.slice(0, el.selectionStart));
+    return m ? m[1] : null;
+  };
+  const q = query();
+  useEffect(() => {
+    if (!q) { setHint([]); return undefined; }
+    let dead = false;
+    const timer = window.setTimeout(() => {
+      api<string[]>(`/news/comments/mentions?q=${encodeURIComponent(q)}`).then((l) => { if (!dead) setHint(l); }).catch(() => { if (!dead) setHint([]); });
+    }, 200);
+    return () => { dead = true; window.clearTimeout(timer); };
+  }, [q]);
+
+  const pick = (name: string) => {
+    const el = area.current;
+    if (!el) return;
+    const upto = text.slice(0, el.selectionStart).replace(/@[\p{L}\p{N}_.-]*$/u, `@${name} `);
+    setText(upto + text.slice(el.selectionStart));
+    setHint([]);
+    el.focus();
+  };
+  const send = async () => {
+    if (busy || !text.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      await submit(text.trim());
+      setText('');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setBusy(false);
+  };
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(); }
+    if (e.key === 'Escape' && cancel) cancel();
+  };
+  return (
+    <div className="cm-compose">
+      <textarea ref={area} className="input cm-input" rows={3} maxLength={MAX} value={text} placeholder={placeholder} aria-label={label} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
+      {hint.length > 0 && (
+        <ul className="cm-hint" role="listbox" aria-label={t('nw.cm.mentions')}>
+          {hint.map((h) => <li key={h}><button type="button" role="option" aria-selected={false} onClick={() => pick(h)}>@{h}</button></li>)}
+        </ul>
+      )}
+      <ErrorLine text={error} />
+      <div className="cm-compose-foot">
+        <span className={`cm-counter ${text.length > MAX - 100 ? 'is-near' : ''}`}>{text.length}/{MAX}</span>
+        <span className="cm-md-hint">{t('nw.cm.mdHint')}</span>
+        <span className="cm-compose-btns">
+          {cancel && <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>{t('nw.cm.cancel')}</button>}
+          <Button type="button" size="sm" loading={busy} disabled={!text.trim()} onClick={() => void send()}>{t('nw.cm.send')}</Button>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export function Comments({ newsId }: { newsId: number }) {
+  const { me } = useAuth();
+  const [data, setData] = useState<Thread | null>(null);
+  const [sort, setSortState] = useState<CommentSort>(loadSort);
+  const [replyTo, setReplyTo] = useState<number | null>(null);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  const canLock = me?.role === 'admin' || !!me?.perms?.includes('news');
+  const canModerate = me?.role === 'admin' || !!me?.perms?.includes('moderation');
+
+  const load = () => api<Thread>(`/news/${newsId}/comments`).then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
+  useEffect(() => { setData(null); void load(); }, [newsId, me?.username]);
+
+  // a link to a comment (#c-12) or to the block (#comments): scroll to it once the thread is drawn
+  useEffect(() => {
+    if (!data) return undefined;
+    const id = window.location.hash.slice(1);
+    if (!/^(c-\d+|comments)$/.test(id)) return undefined;
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(id);
+      el?.scrollIntoView({ block: id === 'comments' ? 'start' : 'center' });
+      if (id !== 'comments') { el?.classList.add('is-target'); window.setTimeout(() => el?.classList.remove('is-target'), 2500); }
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [data !== null]);
+
+  const setSort = (s: CommentSort) => {
+    setSortState(s);
+    try { localStorage.setItem(SORT_KEY, s); } catch { /* not remembered */ }
+  };
+  const tree = useMemo(() => buildThread(data?.items ?? [], sort), [data, sort]);
+  const act = (fn: () => Promise<unknown>, done?: string) => fn().then(() => { if (done) toast(done); return load(); }).catch((e: Error) => toast(e.message, 'err'));
+
+  const write = async (text: string, parentId?: number) => {
+    await api(`/news/${newsId}/comments`, 'POST', { text, ...(parentId ? { parentId } : {}) });
+    setReplyTo(null);
+    await load();
+  };
+  const react = (c: CommentItem, emoji: string) => act(() => api(`/news/comments/${c.id}/reaction`, 'PUT', { emoji: c.myReaction === emoji ? null : emoji }));
+  const remove = async (c: CommentItem) => {
+    if (await confirmDialog({ title: t('nw.cm.deleteTitle'), text: t('nw.cm.deleteText'), confirmLabel: t('nw.cm.delete'), danger: true })) void act(() => api(`/news/comments/${c.id}`, 'DELETE'));
+  };
+  const flag = async (c: CommentItem) => {
+    if (await confirmDialog({ title: t('nw.cm.flagTitle'), text: t('nw.cm.flagText'), confirmLabel: t('nw.cm.flag') })) void act(() => api(`/news/comments/${c.id}/flag`, 'POST'), t('nw.cm.flagged'));
+  };
+  const hide = async (c: CommentItem) => {
+    if (c.hidden) return void act(() => api(`/news/comments/${c.id}/hide`, 'POST', { restore: true }));
+    const reason = await promptDialog({ title: t('nw.cm.hideTitle'), label: t('nw.cm.hideReason'), confirmLabel: t('nw.cm.hide'), placeholder: t('nw.cm.hideHolder') });
+    if (reason !== null) void act(() => api(`/news/comments/${c.id}/hide`, 'POST', { reason }));
+  };
+  const pin = (c: CommentItem) => act(() => api(`/news/comments/${c.id}/pin`, 'POST', { pinned: !c.pinned }));
+  const lock = () => act(() => api(`/news/${newsId}/comments/lock`, 'PUT', { locked: !data?.locked }));
+
+  if (!data && !error) return <section id="comments" className="nw-comments" aria-busy="true"><div className="skeleton h-24 rounded-2xl" /></section>;
+  if (data && !data.enabled) return null;
+  const count = data ? visibleCount(data.items) : 0;
+
+  const one = (c: CommentItem, nested: boolean) => {
+    const staffAuthor = c.role !== 'user';
+    return (
+      <article key={c.id} id={`c-${c.id}`} className={`cm ${nested ? 'is-reply' : ''} ${c.pinned ? 'is-pinned' : ''}`}>
+        <header className="cm-head">
+          <span className="cm-ava" aria-hidden>{c.author.slice(0, 1).toUpperCase()}</span>
+          <b className="cm-author">{c.author}</b>
+          {staffAuthor && <span className="pill pill-ok">{c.role === 'admin' ? t('nw.role.admin') : t('nw.role.moderator')}</span>}
+          {c.pinned && <span className="pill pill-warn">📌 {t('nw.cm.pinned')}</span>}
+          <a className="cm-time" href={`#c-${c.id}`} title={fmtDateTime(c.createdAt)}>{ago(c.createdAt)}</a>
+          {c.editedAt && <span className="cm-time" title={fmtDateTime(c.editedAt)}>{t('nw.cm.edited')}</span>}
+        </header>
+        {c.deleted ? (
+          <p className="cm-stub">{t('nw.cm.deletedStub')}</p>
+        ) : editing === c.id ? (
+          <Compose autoFocus initial={c.text} label={t('nw.cm.editLabel')} placeholder="" submit={async (text) => { await api(`/news/comments/${c.id}`, 'PATCH', { text }); setEditing(null); await load(); }} cancel={() => setEditing(null)} />
+        ) : (
+          <>
+            {c.hidden && <p className="cm-stub">{t('nw.cm.hiddenStub')}{c.hideReason ? `: ${c.hideReason}` : ''}</p>}
+            {c.text && <Body text={c.text} />}
+          </>
+        )}
+        {!c.deleted && !c.hidden && (
+          <footer className="cm-foot">
+            <span className="cm-reacts" role="group" aria-label={t('nw.cm.reactions')}>
+              {EMOJI.map((e) => (
+                <button key={e} type="button" className="cm-react" aria-pressed={c.myReaction === e} disabled={!me} title={me ? undefined : t('nw.react.login')} onClick={() => void react(c, e)}>
+                  <span aria-hidden>{e}</span>
+                  {(c.reactions[e] ?? 0) > 0 && <span className="tabular-nums">{c.reactions[e]}</span>}
+                </button>
+              ))}
+            </span>
+            {data?.canPost && <button type="button" className="cm-act" onClick={() => setReplyTo(replyTo === c.id ? null : c.id)}>{t('nw.cm.reply')}</button>}
+            {c.canEdit && <button type="button" className="cm-act" onClick={() => setEditing(c.id)}>{t('nw.cm.edit')}</button>}
+            {c.mine && <button type="button" className="cm-act" onClick={() => void remove(c)}>{t('nw.cm.delete')}</button>}
+            {me && !c.mine && !c.flagged && <button type="button" className="cm-act" onClick={() => void flag(c)}>{t('nw.cm.flag')}</button>}
+            {c.flagged && <span className="cm-time">{t('nw.cm.flagged')}</span>}
+            {canModerate && !c.mine && <button type="button" className="cm-act" onClick={() => void hide(c)}>{t('nw.cm.hide')}</button>}
+            {canModerate && !nested && <button type="button" className="cm-act" onClick={() => void pin(c)}>{c.pinned ? t('nw.cm.unpin') : t('nw.cm.pin')}</button>}
+            {canModerate && (c.flags ?? 0) > 0 && <span className="pill pill-bad">{t('nw.cm.flags', { n: c.flags ?? 0 })}</span>}
+          </footer>
+        )}
+        {c.hidden && canModerate && <footer className="cm-foot"><button type="button" className="cm-act" onClick={() => void hide(c)}>{t('nw.cm.show')}</button></footer>}
+        {replyTo === c.id && (
+          <Compose autoFocus label={t('nw.cm.replyLabel', { name: c.author })} placeholder={t('nw.cm.replyHolder', { name: c.author })} submit={(text) => write(text, c.id)} cancel={() => setReplyTo(null)} />
+        )}
+      </article>
+    );
+  };
+
+  return (
+    <section id="comments" className="nw-comments" aria-label={t('nw.cm.title')}>
+      <div className="cm-top">
+        <h2 className="nw-h2">{t('nw.cm.title')}{count > 0 && <span className="cm-total tabular-nums"> {count}</span>}</h2>
+        {count > 1 && (
+          <div className="seg" role="group" aria-label={t('nw.cm.sort')}>
+            {(['new', 'old', 'top'] as const).map((s) => <button key={s} type="button" className="seg-item" aria-current={sort === s ? 'true' : undefined} onClick={() => setSort(s)}>{t(`nw.cm.sort.${s}` as const)}</button>)}
+          </div>
+        )}
+        {canLock && data && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void lock()}>{data.locked ? t('nw.cm.open') : t('nw.cm.close')}</button>}
+      </div>
+      <ErrorLine text={error} />
+      {data?.locked && <p className="cm-note">{t('nw.cm.locked')}</p>}
+      {data?.canPost && <Compose label={t('nw.cm.write')} placeholder={t('nw.cm.holder')} submit={(text) => write(text)} />}
+      {data && !data.canPost && !data.locked && !me && <p className="cm-note"><a href="/login">{t('nw.cm.login')}</a></p>}
+      {data && tree.length === 0 && <p className="cm-empty">{t('nw.cm.empty')}</p>}
+      <div className="cm-list">
+        {tree.map(({ top, replies }) => (
+          <div key={top.id} className="cm-thread">
+            {one(top, false)}
+            {replies.length > 0 && <div className="cm-replies">{replies.map((r) => one(r, true))}</div>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/DiscordMd.tsx" << '__COREGSM_EOF__'
 import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
 import { t } from '../../i18n';
@@ -53237,11 +54054,12 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/NewsArticle.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
-import type { NewsReaction, PublicNews, PublicNewsFull, Server } from '../../api';
+import { api, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { t } from '../../i18n';
 import { ago, fmtDateTime, toast } from '../../ui';
 import { cardOf, NewsCover, Row } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
+import { Comments } from './Comments';
 import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
 import {
   ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
@@ -53304,6 +54122,16 @@ export function NewsArticle({
   const edited = !preview && wasEdited(item.sentAt, item.editedAt);
   const root = useRef<HTMLElement>(null);
   const headings = extractHeadings(c.text);
+  // one view per tab session
+  useEffect(() => {
+    if (preview) return;
+    const key = `nw_viewed_${item.id}`;
+    try {
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+    } catch { /* counted again, no harm */ }
+    void api(`/news/${item.id}/view`, 'POST').catch(() => undefined);
+  }, [item.id, preview]);
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
 
   // a link to a part of the page (#nw-h-3): the text is drawn after the load, so jump once it is there
@@ -53346,10 +54174,11 @@ export function NewsArticle({
         {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
       </div>
       <div className="nw-article-in">
-        {(c.author || c.countdownAt || minutes > 0) && (
+        {(c.author || c.countdownAt || minutes > 0 || (c.views > 0 && !preview)) && (
           <div className="nf-meta">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {!preview && c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
             {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
@@ -53390,6 +54219,16 @@ export function NewsArticle({
           </>
         )}
       </div>
+      {!preview && c.author && (
+        <div className="nw-article-in">
+          <aside className="nw-authorbox" aria-label={t('nw.author.title')}>
+            <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />
+            <span className="nw-authorbox-n">{t('nw.author.count', { n: item.authorCount ?? 0 })}</span>
+            {item.authorId != null && (item.authorCount ?? 0) > 1 && <a className="btn btn-soft btn-sm" href={`/news?author=${item.authorId}`}>{t('nw.author.all')}</a>}
+          </aside>
+        </div>
+      )}
+      {!preview && <div className="nw-article-in"><Comments newsId={item.id} /></div>}
       {!preview && related.length > 0 && (
         <section className="nw-related" aria-label={t('nw.related')}>
           <h2 className="nw-h2">{t('nw.related')}</h2>
@@ -53833,6 +54672,26 @@ import { markSeen, readSeen } from './newsSeen';
 import { CATEGORY_HEX, isRubricFilter, orderFeed, pickHero, plainExcerpt, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
+const SORT_STORE = 'news_sort';
+const VIEW_STORE = 'news_view';
+type FeedSort = 'new' | 'top' | 'discussed' | 'viewed';
+const SORTS: FeedSort[] = ['new', 'top', 'discussed', 'viewed'];
+const loadSort = (): FeedSort => {
+  try {
+    const v = localStorage.getItem(SORT_STORE);
+    return SORTS.includes(v as FeedSort) ? (v as FeedSort) : 'new';
+  } catch {
+    return 'new';
+  }
+};
+const loadDense = (): boolean => {
+  try { return localStorage.getItem(VIEW_STORE) === 'dense'; } catch { return false; }
+};
+/** ?author=<id> of the address: the feed of one author */
+const authorFromUrl = (): number | null => {
+  const n = Number(new URLSearchParams(window.location.search).get('author'));
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
 /** how many news a page of the feed shows */
 const PAGE = 20;
 const ZERO_COUNTS: Record<RubricFilter, number> = { all: 0, announcement: 0, wipe: 0, update: 0, event: 0, maintenance: 0, other: 0 };
@@ -53914,6 +54773,9 @@ export function NewsListPage() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [rubric, setRubricState] = useState<RubricFilter>(loadRubric);
+  const [sort, setSortState] = useState<FeedSort>(loadSort);
+  const [dense, setDenseState] = useState(loadDense);
+  const [author, setAuthor] = useState<number | null>(authorFromUrl);
   // the feed comes in pages: one more than shown tells whether there is a next page
   const [limit, setLimit] = useState(PAGE);
   const [hasMore, setHasMore] = useState(false);
@@ -53925,10 +54787,12 @@ export function NewsListPage() {
   useEffect(() => { markSeen(); }, []);
   const servers = useNewsServers();
   const works = useWorks();
+  const [hot, setHot] = useState<{ id: number; title: string; comments: number }[]>([]);
+  useEffect(() => { api<typeof hot>('/news/discussed').then((l) => setHot(Array.isArray(l) ? l : [])).catch(() => undefined); }, []);
 
   const filter: RubricFilter = rubric;
   const load = () => Promise.all([
-    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}`),
+    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}${sort === 'new' ? '' : `&sort=${sort}`}${author ? `&author=${author}` : ''}`),
     api<Record<RubricFilter, number>>('/news/counts').catch(() => null),
   ])
     .then(([n, c]) => {
@@ -53947,18 +54811,33 @@ export function NewsListPage() {
     if (first.current) { first.current = false; return; }
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [limit, filter]);
+  }, [limit, filter, sort, author]);
 
   const setRubric = (r: RubricFilter) => {
     setRubricState(r);
     setLimit(PAGE);
     try { localStorage.setItem(STORE, r); } catch { /* not remembered */ }
   };
+  const setSort = (s: FeedSort) => {
+    setSortState(s);
+    setLimit(PAGE);
+    try { localStorage.setItem(SORT_STORE, s); } catch { /* not remembered */ }
+  };
+  const setDense = (v: boolean) => {
+    setDenseState(v);
+    try { localStorage.setItem(VIEW_STORE, v ? 'dense' : 'cards'); } catch { /* not remembered */ }
+  };
+  const clearAuthor = () => {
+    setAuthor(null);
+    setLimit(PAGE);
+    window.history.replaceState(null, '', window.location.pathname);
+  };
   const showMore = () => { setLoadingMore(true); setLimit((l) => l + PAGE); };
 
-  const ordered = useMemo(() => orderFeed(items), [items]);
+  // sorted by something else than the date: the order comes from the server as it is
+  const ordered = useMemo(() => (sort === 'new' ? orderFeed(items) : items), [items, sort]);
   // the big block on top: only on the first page of «Все», the rest of the feed goes below it
-  const hero = filter === 'all' ? pickHero(ordered) : null;
+  const hero = filter === 'all' && sort === 'new' && !dense && !author ? pickHero(ordered) : null;
   const shown = hero ? ordered.filter((n) => n.id !== hero.id) : ordered;
   const heroCard = hero ? cardOf(hero) : null;
 
@@ -53991,7 +54870,7 @@ export function NewsListPage() {
     </button>
   );
 
-  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
+  const hasSide = pinned.length > 0 || hot.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
 
   return (
     <div className="nw-page">
@@ -54003,6 +54882,18 @@ export function NewsListPage() {
             <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
               {chip('all')}
               {rubrics.map((r) => chip(r))}
+            </div>
+          )}
+          {loaded && counts.all > 1 && (
+            <div className="nw-tools">
+              <div className="seg" role="group" aria-label={t('nw.sort')}>
+                {SORTS.map((s) => <button key={s} type="button" className="seg-item" aria-current={sort === s ? 'true' : undefined} onClick={() => setSort(s)}>{t(`nw.sort.${s}` as const)}</button>)}
+              </div>
+              <div className="seg" role="group" aria-label={t('nw.view')}>
+                <button type="button" className="seg-item" aria-current={!dense ? 'true' : undefined} onClick={() => setDense(false)}>{t('nw.view.cards')}</button>
+                <button type="button" className="seg-item" aria-current={dense ? 'true' : undefined} onClick={() => setDense(true)}>{t('nw.view.dense')}</button>
+              </div>
+              {author && <button type="button" className="nw-rub" onClick={clearAuthor}>{t('nw.author.filter')} <span aria-hidden>✕</span></button>}
             </div>
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
@@ -54045,7 +54936,7 @@ export function NewsListPage() {
               </div>
             </article>
           )}
-          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} /></div>}
+          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
           {hasMore && (
             <div className="ne-more" ref={more}>
               <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
@@ -54063,6 +54954,17 @@ export function NewsListPage() {
                   {pinned.map((n) => (
                     <li key={n.id}>
                       <a href={`/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
+                    </li>
+                  ))}
+                </ul>
+              </AsideSection>
+            )}
+            {hot.length > 0 && (
+              <AsideSection id="hot" title={t('nw.cm.discussed')} wide={wide}>
+                <ul className="nw-side-list">
+                  {hot.map((n) => (
+                    <li key={n.id}>
+                      <a href={`/news/${n.id}#comments`}><span>{n.title}</span><span className="nw-live-n tabular-nums">💬 {n.comments}</span></a>
                     </li>
                   ))}
                 </ul>
@@ -54163,6 +55065,70 @@ export function NewsArticlePage({ id }: { id: number }) {
         )}
       </div>
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/NewsStats.tsx" << '__COREGSM_EOF__'
+/** Admin: the statistics of one published news item: views by day, reactions, comments. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { ErrorLine, Modal, fmtDateTime } from '../../ui';
+
+interface Stats { sentAt: number | null; views: number; byDay: { day: string; n: number }[]; reactions: { emoji: string; count: number }[]; comments: number }
+
+/** bars for the views of every day (a plain SVG; the tallest bar is the whole height) */
+export function ViewsChart({ days }: { days: { day: string; n: number }[] }) {
+  const max = Math.max(1, ...days.map((d) => d.n));
+  const w = 6;
+  const gap = 2;
+  return (
+    <svg viewBox={`0 0 ${days.length * (w + gap)} 60`} className="h-28 w-full" role="img" aria-label={`Просмотры за ${days.length} дней`} preserveAspectRatio="none">
+      {days.map((d, i) => {
+        const h = d.n === 0 ? 1 : Math.max(3, (d.n / max) * 56);
+        return (
+          <rect key={d.day} x={i * (w + gap)} y={58 - h} width={w} height={h} rx={1.5} className={d.n ? 'fill-brand' : 'fill-line'}>
+            <title>{`${d.day}: ${d.n}`}</title>
+          </rect>
+        );
+      })}
+    </svg>
+  );
+}
+
+export function NewsStatsModal({ id, title, onClose }: { id: number; title: string; onClose: () => void }) {
+  const [s, setS] = useState<Stats | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api<Stats>(`/news/${id}/stats`).then(setS).catch((e: Error) => setError(e.message));
+  }, [id]);
+  const week = s ? s.byDay.slice(-7).reduce((a, d) => a + d.n, 0) : 0;
+  return (
+    <Modal title={`Статистика: ${title}`} onClose={onClose}>
+      <div className="space-y-4">
+        <ErrorLine text={error} />
+        {!s && !error && <div className="skeleton h-40 rounded-2xl" />}
+        {s && (
+          <>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.views}</div><div className="text-xs font-bold text-mute">просмотров</div></div>
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{week}</div><div className="text-xs font-bold text-mute">за 7 дней</div></div>
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.comments}</div><div className="text-xs font-bold text-mute">комментариев</div></div>
+            </div>
+            <div>
+              <div className="label">Просмотры по дням (30 дней)</div>
+              <ViewsChart days={s.byDay} />
+              <div className="flex justify-between text-xs font-bold text-mute"><span>{s.byDay[0]?.day}</span><span>{s.byDay[s.byDay.length - 1]?.day}</span></div>
+            </div>
+            <p className="font-bold">
+              Реакции:{' '}
+              {s.reactions.length ? s.reactions.map((r) => <span key={r.emoji} className="mr-3">{r.emoji} {r.count}</span>) : <span className="text-mute">пока нет</span>}
+            </p>
+            {s.sentAt && <p className="text-sm font-semibold text-mute">Опубликовано {fmtDateTime(s.sentAt)}</p>}
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 __COREGSM_EOF__
@@ -54309,6 +55275,8 @@ export { PANEL_THEME } from './NewsParts';
 
 export interface Card {
   id: number;
+  comments: number;
+  views: number;
   title: string;
   text: string;
   author: { name: string; icon?: string } | null;
@@ -54369,6 +55337,8 @@ export function cardOf(n: PublicNews): Card {
     statusIds: Array.isArray(p.statusServerIds) ? p.statusServerIds : [],
     game: typeof p.game === 'string' ? p.game : '',
     reactions: Array.isArray(n.reactions) ? n.reactions : [],
+    comments: typeof n.comments === 'number' ? n.comments : 0,
+    views: typeof n.views === 'number' ? n.views : 0,
   };
 }
 
@@ -54449,6 +55419,8 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
           {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
           <span className="nb-tools">
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
+            {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
             <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
             {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
             <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
@@ -54477,6 +55449,8 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
         <div className="nf-actions">
           {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          {c.views > 0 && <span className="nw-cmcount" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
+          {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
@@ -54488,26 +55462,32 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
  * The feed: an editorial list, pinned items first and then the rest grouped by month.
  * `items` must already be ordered (pinned first, newest first) and filtered.
  */
-export function PublicFeed({ items, servers, flat = false, seen = null }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null }) {
+export function PublicFeed({ items, servers, flat = false, seen = null, dense = false, plain = false }: {
+  items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null;
+  /** a compact list (a small picture and the headline) instead of full articles */
+  dense?: boolean;
+  /** exactly the given order: no «Закреплено» section and no month groups (the feed is sorted by something else than the date) */
+  plain?: boolean;
+}) {
   const { lang } = useI18n();
   if (items.length === 0) return null;
   const cards = items.map(cardOf);
-  const pinned = cards.filter((c) => c.pinned);
-  const normal = cards.filter((c) => !c.pinned);
-  const groups = flat ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
+  const pinned = plain ? [] : cards.filter((c) => c.pinned);
+  const normal = plain ? cards : cards.filter((c) => !c.pinned);
+  const groups = flat || plain ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
 
   return (
-    <div className="nw-feed ne-list">
+    <div className={`nw-feed ne-list ${dense ? 'is-dense' : ''}`}>
       {pinned.length > 0 && (
         <section className="nw-group">
           <h2 className="ne-h">{t('nw.pinned')}</h2>
-          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
+          {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
           {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
-          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
+          {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       ))}
     </div>
@@ -54550,6 +55530,84 @@ export function StatusServers({ servers, value, onChange }: { servers: Server[];
     </div>
   );
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/commentMd.ts" << '__COREGSM_EOF__'
+/** The few Markdown marks a comment may have: **bold**, *italic*, `code`, [text](https://link), bare links, > quotes, @nicks. Pure, no HTML. */
+
+export type Tok =
+  | { t: 'text'; v: string }
+  | { t: 'b' | 'i' | 'code' | 'mention'; v: string }
+  | { t: 'link'; v: string; href: string };
+
+export interface Block { quote: boolean; toks: Tok[] }
+
+const INLINE = /\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)|(?<=^|[\s(])@([\p{L}\p{N}_.-]{2,32})/gu;
+
+export function tokenize(line: string): Tok[] {
+  const out: Tok[] = [];
+  let at = 0;
+  for (const m of line.matchAll(INLINE)) {
+    const i = m.index ?? 0;
+    if (i > at) out.push({ t: 'text', v: line.slice(at, i) });
+    if (m[1] !== undefined) out.push({ t: 'b', v: m[1] });
+    else if (m[2] !== undefined) out.push({ t: 'i', v: m[2] });
+    else if (m[3] !== undefined) out.push({ t: 'code', v: m[3] });
+    else if (m[4] !== undefined) out.push({ t: 'link', v: m[4], href: m[5] });
+    else if (m[6] !== undefined) {
+      // the punctuation that ends a sentence is not a part of the address
+      const url = m[6].replace(/[.,;:!?)\]]+$/, '');
+      out.push({ t: 'link', v: url, href: url });
+      if (url.length < m[6].length) out.push({ t: 'text', v: m[6].slice(url.length) });
+    } else out.push({ t: 'mention', v: m[7] });
+    at = i + m[0].length;
+  }
+  if (at < line.length) out.push({ t: 'text', v: line.slice(at) });
+  return out;
+}
+
+/** lines → blocks: a line that starts with «> » is a quote, the others are plain lines */
+export function parseComment(text: string): Block[] {
+  return text.split('\n').map((line) => {
+    const quote = /^>\s?/.test(line);
+    return { quote, toks: tokenize(quote ? line.replace(/^>\s?/, '') : line) };
+  });
+}
+
+export type CommentSort = 'new' | 'old' | 'top';
+
+export interface CommentItem {
+  id: number;
+  parentId: number | null;
+  author: string;
+  role: 'admin' | 'moderator' | 'user';
+  mine: boolean;
+  text: string;
+  hidden: boolean;
+  deleted: boolean;
+  hideReason: string;
+  pinned: boolean;
+  createdAt: number;
+  editedAt: number | null;
+  canEdit: boolean;
+  reactions: Record<string, number>;
+  myReaction: string | null;
+  flagged: boolean;
+  flags?: number;
+}
+
+const score = (c: CommentItem) => Object.values(c.reactions).reduce((a, b) => a + b, 0);
+
+/** the thread as a tree: the pinned comment first, then the top-level ones in the chosen order; replies oldest first */
+export function buildThread(items: CommentItem[], sort: CommentSort): { top: CommentItem; replies: CommentItem[] }[] {
+  const tops = items.filter((c) => c.parentId == null);
+  const byTime = (a: CommentItem, b: CommentItem) => a.createdAt - b.createdAt || a.id - b.id;
+  tops.sort((a, b) => Number(b.pinned) - Number(a.pinned) || (sort === 'old' ? byTime(a, b) : sort === 'top' ? score(b) - score(a) || byTime(b, a) : byTime(b, a)));
+  return tops.map((top) => ({ top, replies: items.filter((c) => c.parentId === top.id).sort(byTime) }));
+}
+
+/** the number in the head of the block: comments that are not deleted or hidden */
+export const visibleCount = (items: CommentItem[]) => items.filter((c) => !c.deleted && !c.hidden).length;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/emoji.ts" << '__COREGSM_EOF__'
@@ -54913,6 +55971,15 @@ export interface Check { level: 'ok' | 'warn' | 'error'; text: string }
 
 const TEMPLATE_WORDS = /(^|[^А-ЯЁа-яёA-Za-z0-9_])(ДАТА|ВРЕМЯ|НАЗВАНИЕ|ПРИЗ)(?![А-ЯЁа-яёA-Za-z0-9_])/g;
 
+/** links in a Discord-markdown text: http:// ones, an empty [text]() and a bare «www.» that is not a link in Discord */
+export function linkProblems(text: string): { insecure: number; empty: number; bare: number } {
+  return {
+    empty: (text.match(/\[[^\]]*\]\(\s*\)/g) ?? []).length,
+    insecure: (text.match(/\bhttp:\/\/[^\s)>\]]+/gi) ?? []).length,
+    bare: (text.match(/(^|[\s(])www\.[^\s)]+/gi) ?? []).length,
+  };
+}
+
 export function runChecks(d: Draft): Check[] {
   const out: Check[] = [];
   const noChannel = !/^\d{15,25}$/.test(d.channelId);
@@ -54946,6 +56013,18 @@ export function runChecks(d: Draft): Check[] {
 
   const half = d.embeds.reduce((n, e) => n + e.fields.filter((f) => !!f.name.trim() !== !!f.value.trim()).length, 0);
   if (half) out.push({ level: 'warn', text: `Полей с пустым названием или значением: ${half}. Они не будут показаны.` });
+
+  const allText = [d.content, ...d.embeds.flatMap((e) => [e.description, ...e.fields.map((f) => f.value)])].join('\n');
+  const lp = linkProblems(allText);
+  if (lp.empty) out.push({ level: 'warn', text: `Ссылок без адреса: ${lp.empty}. Текст в скобках пустой, ссылка не откроется.` });
+  if (lp.insecure) out.push({ level: 'warn', text: `Ссылок без https://: ${lp.insecure}. Браузер предупредит об опасном соединении.` });
+  if (lp.bare) out.push({ level: 'warn', text: `Адресов, начинающихся с www., без http(s)://: ${lp.bare}. Discord не сделает их ссылкой.` });
+
+  const first = d.embeds[0];
+  if (first && embedHasContent(first) && !first.title.trim()) out.push({ level: 'warn', text: 'У новости нет заголовка: на сайте она будет без названия.' });
+  const external = d.embeds.filter((e) => e.imageUrl.trim() && !e.imageUpload).length + d.gallery.filter((g) => g.url.trim() && !g.upload).length;
+  if (external) out.push({ level: 'warn', text: `Картинок по внешней ссылке: ${external}. Чужой сайт может убрать или не открыть файл: надёжнее загрузить картинку в редактор.` });
+  if (first && embedHasContent(first) && !first.imageUrl.trim() && !first.imageUpload && d.gallery.length === 0) out.push({ level: 'ok', text: 'Обложки нет: на сайте её нарисует панель.' });
 
   const texts = [d.content, ...d.embeds.flatMap((e) => [e.title, e.description, e.footer, e.authorName, ...e.fields.flatMap((f) => [f.name, f.value])])];
   const words = new Set<string>();
@@ -56138,6 +57217,60 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
       </div>
       <ErrorLine text={error} />
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/NewsSubs.tsx" << '__COREGSM_EOF__'
+/** Profile: which rubrics of the news the account wants to hear about (the bell, the devices and Discord). */
+import { useEffect, useState } from 'react';
+import { api, type NewsCategory } from '../../api';
+import { ErrorLine, Section, toast } from '../../ui';
+import { categoryLabel } from '../news/NewsParts';
+
+const RUBRICS: NewsCategory[] = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'];
+
+export function NewsSubsCard() {
+  const [picked, setPicked] = useState<NewsCategory[] | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api<{ categories: NewsCategory[] }>('/me/news-subscriptions').then((r) => setPicked(r.categories)).catch((e: Error) => setError(e.message));
+  }, []);
+  const save = async (next: NewsCategory[]) => {
+    const before = picked;
+    setPicked(next);
+    setError('');
+    try {
+      const r = await api<{ categories: NewsCategory[] }>('/me/news-subscriptions', 'PUT', { categories: next });
+      setPicked(r.categories);
+      toast(r.categories.length ? 'Подписка на новости сохранена' : 'Подписка на новости выключена');
+    } catch (e) {
+      setPicked(before);
+      setError((e as Error).message);
+    }
+  };
+  const flip = (c: NewsCategory) => void save(picked?.includes(c) ? picked.filter((x) => x !== c) : [...(picked ?? []), c]);
+  const all = picked?.length === RUBRICS.length;
+  return (
+    <Section title="Новости" description="О каких новостях сообщать: уведомление придёт в колокольчик, на устройства с включёнными уведомлениями и в личные сообщения Discord (если привязан).">
+      <ErrorLine text={error} />
+      {picked === null ? <div className="skeleton h-20 rounded-2xl" /> : (
+        <div className="grid gap-2">
+          <label className="flex cursor-pointer items-center gap-2.5 font-extrabold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={all} onChange={() => void save(all ? [] : [...RUBRICS])} />
+            Все рубрики
+          </label>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {RUBRICS.map((c) => (
+              <label key={c} className="flex cursor-pointer items-center gap-2.5 font-bold">
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(c)} onChange={() => flip(c)} />
+                {categoryLabel(c)}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -65986,6 +67119,7 @@ const en: Record<keyof typeof ru, string> = {
   'start.map': 'Where things are',
   'start.mapText': 'The menu on the left is split into four groups. Expand for a description of each section.',
   'adm.com.reports': 'Reports',
+  'adm.com.comments': 'Comments',
   'adm.com.seasons': 'Seasons',
   'adm.com.reviews': 'Reviews',
   'adm.com.gallery': 'Gallery',
@@ -66063,6 +67197,62 @@ const en: Record<keyof typeof ru, string> = {
   'nw.hints.maintenance.t': 'When a server will be down and why',
   'nw.codeCopy': 'Copy',
   'nw.codeCopied': 'Code copied',
+  'nw.sort': 'Feed order',
+  'nw.sort.new': 'Newest',
+  'nw.sort.top': 'Best',
+  'nw.sort.discussed': 'Discussed',
+  'nw.sort.viewed': 'Most read',
+  'nw.view': 'Feed view',
+  'nw.view.cards': 'Cards',
+  'nw.view.dense': 'List',
+  'nw.views': '{n} views',
+  'nw.author.title': 'Author',
+  'nw.author.count': 'News published: {n}',
+  'nw.author.all': 'All news by this author',
+  'nw.author.filter': 'One author only',
+  'nw.cm.title': 'Comments',
+  'nw.cm.count': '{n} comments',
+  'nw.cm.write': 'Your comment',
+  'nw.cm.holder': 'What do you think?',
+  'nw.cm.send': 'Send',
+  'nw.cm.cancel': 'Cancel',
+  'nw.cm.mdHint': '**bold**, *italic*, `code`, > quote, @nick · Ctrl+Enter to send',
+  'nw.cm.mentions': 'Who to mention',
+  'nw.cm.reply': 'Reply',
+  'nw.cm.replyLabel': 'Reply to {name}',
+  'nw.cm.replyHolder': 'Reply to {name}',
+  'nw.cm.edit': 'Edit',
+  'nw.cm.editLabel': 'Edit comment',
+  'nw.cm.edited': 'edited',
+  'nw.cm.delete': 'Delete',
+  'nw.cm.deleteTitle': 'Delete the comment?',
+  'nw.cm.deleteText': 'The comment disappears for everyone. Replies under it stay.',
+  'nw.cm.deletedStub': 'Comment deleted',
+  'nw.cm.hiddenStub': 'Hidden by a moderator',
+  'nw.cm.hide': 'Hide',
+  'nw.cm.show': 'Show',
+  'nw.cm.hideTitle': 'Hide the comment',
+  'nw.cm.hideReason': 'Reason (the author will see it)',
+  'nw.cm.hideHolder': 'For example: abuse',
+  'nw.cm.flag': 'Report',
+  'nw.cm.flagTitle': 'Report this comment?',
+  'nw.cm.flagText': 'Moderators will check it. The author will not see your name.',
+  'nw.cm.flagged': 'Report sent',
+  'nw.cm.flags': 'reports: {n}',
+  'nw.cm.pin': 'Pin',
+  'nw.cm.unpin': 'Unpin',
+  'nw.cm.pinned': 'Pinned',
+  'nw.cm.reactions': 'Reactions',
+  'nw.cm.sort': 'Comment order',
+  'nw.cm.sort.new': 'Newest',
+  'nw.cm.sort.old': 'Oldest',
+  'nw.cm.sort.top': 'Top',
+  'nw.cm.empty': 'No comments yet. Be the first.',
+  'nw.cm.login': 'Sign in to comment',
+  'nw.cm.locked': 'Comments on this news item are closed.',
+  'nw.cm.close': 'Close comments',
+  'nw.cm.open': 'Open comments',
+  'nw.cm.discussed': 'Discussed',
   'pf.greet.night': 'Good night, {name}',
   'pf.greet.morning': 'Good morning, {name}',
   'pf.greet.day': 'Good afternoon, {name}',
@@ -66294,6 +67484,16 @@ const errorsEn: Record<string, string> = {
   report_limit: 'No more than {n} reports a day',
   report_verdict_bad: 'Choose a decision; the comment is limited to 300 characters',
   report_not_found: 'Report not found',
+  comments_closed: 'Comments on this news item are closed',
+  comment_bad: 'A comment is 1 to 1000 characters',
+  comment_burst: 'Too many comments in a row. Wait a little',
+  comment_reply_bad: 'You can only reply to a comment under the same news item',
+  comment_dup: 'You have already posted this comment',
+  comment_not_found: 'Comment not found',
+  comment_not_yours: 'This is not your comment',
+  comment_yours: 'This is your comment',
+  comment_edit_late: 'A comment can be edited within 10 minutes',
+  comment_pin_bad: 'Only a top-level comment can be pinned',
   report_closed: 'The report has already been handled',
   wipe_bad: 'Check the scenario: a wipe needs a name and a time, a command is at most 200 characters',
   wipe_past: 'The wipe time must be in the future',
@@ -67263,6 +68463,7 @@ const ru = {
   'start.mapText': 'Меню слева разделено на четыре группы. Развернуть описание разделов.',
   'adm.com.seasons': 'Сезоны',
   'adm.com.reports': 'Жалобы',
+  'adm.com.comments': 'Комментарии',
   'adm.com.reviews': 'Отзывы',
   'adm.com.gallery': 'Галерея',
   'adm.com.subtitle': 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов',
@@ -67339,6 +68540,62 @@ const ru = {
   'nw.hints.maintenance.t': 'Когда сервер будет недоступен и почему',
   'nw.codeCopy': 'Копировать',
   'nw.codeCopied': 'Код скопирован',
+  'nw.sort': 'Порядок ленты',
+  'nw.sort.new': 'Новые',
+  'nw.sort.top': 'Лучшие',
+  'nw.sort.discussed': 'Обсуждаемые',
+  'nw.sort.viewed': 'Читаемые',
+  'nw.view': 'Вид ленты',
+  'nw.view.cards': 'Карточки',
+  'nw.view.dense': 'Список',
+  'nw.views': 'Просмотров: {n}',
+  'nw.author.title': 'Автор',
+  'nw.author.count': 'Опубликовано новостей: {n}',
+  'nw.author.all': 'Все новости автора',
+  'nw.author.filter': 'Только один автор',
+  'nw.cm.title': 'Комментарии',
+  'nw.cm.count': 'Комментариев: {n}',
+  'nw.cm.write': 'Ваш комментарий',
+  'nw.cm.holder': 'Что вы об этом думаете?',
+  'nw.cm.send': 'Отправить',
+  'nw.cm.cancel': 'Отмена',
+  'nw.cm.mdHint': '**жирный**, *курсив*, `код`, > цитата, @ник · Ctrl+Enter — отправить',
+  'nw.cm.mentions': 'Кого упомянуть',
+  'nw.cm.reply': 'Ответить',
+  'nw.cm.replyLabel': 'Ответ для {name}',
+  'nw.cm.replyHolder': 'Ответ для {name}',
+  'nw.cm.edit': 'Править',
+  'nw.cm.editLabel': 'Правка комментария',
+  'nw.cm.edited': 'изменён',
+  'nw.cm.delete': 'Удалить',
+  'nw.cm.deleteTitle': 'Удалить комментарий?',
+  'nw.cm.deleteText': 'Комментарий исчезнет у всех. Ответы под ним останутся.',
+  'nw.cm.deletedStub': 'Комментарий удалён',
+  'nw.cm.hiddenStub': 'Скрыто модератором',
+  'nw.cm.hide': 'Скрыть',
+  'nw.cm.show': 'Показать',
+  'nw.cm.hideTitle': 'Скрыть комментарий',
+  'nw.cm.hideReason': 'Причина (её увидит автор)',
+  'nw.cm.hideHolder': 'Например: оскорбления',
+  'nw.cm.flag': 'Пожаловаться',
+  'nw.cm.flagTitle': 'Пожаловаться на комментарий?',
+  'nw.cm.flagText': 'Модераторы его проверят. Вашего имени автор не увидит.',
+  'nw.cm.flagged': 'Жалоба отправлена',
+  'nw.cm.flags': 'жалоб: {n}',
+  'nw.cm.pin': 'Закрепить',
+  'nw.cm.unpin': 'Открепить',
+  'nw.cm.pinned': 'Закреплён',
+  'nw.cm.reactions': 'Реакции',
+  'nw.cm.sort': 'Порядок комментариев',
+  'nw.cm.sort.new': 'Новые',
+  'nw.cm.sort.old': 'Старые',
+  'nw.cm.sort.top': 'Популярные',
+  'nw.cm.empty': 'Комментариев пока нет. Напишите первым.',
+  'nw.cm.login': 'Войдите, чтобы комментировать',
+  'nw.cm.locked': 'Комментарии к этой новости закрыты.',
+  'nw.cm.close': 'Закрыть комментарии',
+  'nw.cm.open': 'Открыть комментарии',
+  'nw.cm.discussed': 'Обсуждают',
   'pf.greet.night': 'Доброй ночи, {name}',
   'pf.greet.morning': 'Доброе утро, {name}',
   'pf.greet.day': 'Добрый день, {name}',
@@ -67699,7 +68956,7 @@ export const SUB_KINDS: SubKind[] = ['free_slot', 'back_online', 'went_down'];
 export interface Subscription { serverId: number; kinds: SubKind[] }
 
 /** GET /me/notifications */
-export interface NotificationItem { id: number; ts: number; kind: string; serverId: number | null; text: string; read: boolean }
+export interface NotificationItem { id: number; ts: number; kind: string; serverId: number | null; text: string; read: boolean; url?: string | null }
 export interface NotificationList { unread: number; items: NotificationItem[] }
 
 /** the badge on the bell: nothing for 0, the number up to 99, then «99+» */
@@ -67721,8 +68978,9 @@ export function toggleKind(kinds: readonly SubKind[], kind: SubKind): SubKind[] 
   return normalizeKinds(has ? kinds.filter((k) => k !== kind) : [...kinds, kind]);
 }
 
-/** the notification links to its server page, or nowhere */
-export function notificationHref(n: Pick<NotificationItem, 'serverId'>): string | null {
+/** the notification links to the page it names (a comment under a news item), else to its server page, or nowhere */
+export function notificationHref(n: Pick<NotificationItem, 'serverId'> & { url?: string | null }): string | null {
+  if (typeof n.url === 'string' && /^\/(?!\/)/.test(n.url)) return n.url;
   return n.serverId != null && Number.isFinite(Number(n.serverId)) ? `/servers/${n.serverId}` : null;
 }
 
@@ -67798,8 +69056,9 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
       if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
     }
     if (isAdmin || perms.includes('moderation')) {
-      const rep = await api<{ open: number }>('/reports/count').catch(() => null);
-      if (rep && rep.open > 0) out.community = { n: rep.open, tone: 'warn', label: `Жалоб на игроков: ${rep.open}` };
+      const [rep, com] = await Promise.all([api<{ open: number }>('/reports/count').catch(() => null), api<{ open: number }>('/news/comments/count').catch(() => null)]);
+      const n = (rep?.open ?? 0) + (com?.open ?? 0);
+      if (n > 0) out.community = { n, tone: 'warn', label: `Ждут модерации: жалоб на игроков ${rep?.open ?? 0}, комментариев ${com?.open ?? 0}` };
     }
     if (isAdmin) {
       const [bot, sys] = await Promise.all([
@@ -68335,6 +69594,7 @@ export const COMMUNITY_TABS = [
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
   { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
   { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
+  { id: 'comments', get label() { return t('adm.com.comments'); }, admin: false },
 ] as const;
 
 export default function AdminCommunity({ sub = '' }: { sub?: string }) {
@@ -68353,6 +69613,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
       {tab === 'reviews' && <ReviewsAdmin />}
       {tab === 'gallery' && <GalleryAdmin />}
       {tab === 'reports' && <ReportsAdmin />}
+      {tab === 'comments' && <CommentsAdmin />}
     </AdminPage>
   );
 }
@@ -68524,6 +69785,72 @@ function ReportsAdmin() {
               ) : (
                 <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? '✅ Меры приняты' : 'ℹ️ Отклонена'} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
               )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+interface QueueRow { id: number; newsId: number; title: string; author: string; text: string; status: string; hideReason: string; createdAt: number; flags: number }
+
+/** complained-about and hidden comments under the news; the switch of the comments for the whole site */
+function CommentsAdmin() {
+  const { me } = useAuth();
+  const canSwitch = me?.role === 'admin' || !!me?.perms?.includes('news');
+  const [rows, setRows] = useState<QueueRow[] | null>(null);
+  const [picked, setPicked] = useState<number[]>([]);
+  const [on, setOn] = useState<boolean | null>(null);
+  const [error, setError] = useState('');
+  const load = () => api<QueueRow[]>('/news/comments/queue').then((l) => { setRows(l); setPicked((p) => p.filter((id) => l.some((r) => r.id === id))); setError(''); }).catch((e: Error) => setError(e.message));
+  useEffect(() => {
+    void load();
+    if (canSwitch) api<{ enabled: boolean }>('/news/comments/settings').then((s) => setOn(s.enabled)).catch(() => undefined);
+  }, []);
+  const flip = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const run = (ids: number[], action: 'approve' | 'hide' | 'delete', reason?: string) =>
+    api('/news/comments/bulk', 'POST', { ids, action, ...(reason ? { reason } : {}) }).then(() => { toast('Готово'); void load(); }).catch((e: Error) => setError(e.message));
+  const hideMany = async (ids: number[]) => {
+    const reason = await promptDialog({ title: 'Скрыть комментарии', label: 'Причина (её увидит автор)', confirmLabel: 'Скрыть', placeholder: 'Например: оскорбления' });
+    if (reason !== null) void run(ids, 'hide', reason);
+  };
+  const delMany = async (ids: number[]) => {
+    if (await confirmDialog({ title: `Удалить комментариев: ${ids.length}?`, text: 'Это нельзя отменить.', confirmLabel: 'Удалить', danger: true })) void run(ids, 'delete');
+  };
+  const switchSite = (v: boolean) => api<{ enabled: boolean }>('/news/comments/settings', 'PUT', { enabled: v }).then((s) => { setOn(s.enabled); toast(s.enabled ? 'Комментарии включены' : 'Комментарии выключены'); }).catch((e: Error) => setError(e.message));
+  return (
+    <Section
+      title="Комментарии к новостям"
+      description={rows ? (rows.length ? `В очереди: ${rows.length}. Сначала те, на кого пожаловались` : 'Жалоб и скрытых комментариев нет') : undefined}
+      actions={canSwitch && on !== null ? <label className="flex cursor-pointer items-center gap-2 font-bold"><input type="checkbox" className="h-4 w-4 accent-brand" checked={on} onChange={(e) => void switchSite(e.target.checked)} />Комментарии включены</label> : undefined}
+    >
+      <ErrorLine text={error} />
+      {picked.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">
+          <b>Выбрано: {picked.length}</b>
+          <button type="button" className="btn btn-success btn-sm" onClick={() => void run(picked, 'approve')}>Оставить</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void hideMany(picked)}>Скрыть</button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => void delMany(picked)}>Удалить</button>
+        </div>
+      )}
+      {rows === null ? <div className="skeleton h-24 rounded-2xl" /> : rows.length === 0 ? <p className="text-sm font-semibold text-mute">Очередь пуста.</p> : (
+        <ul className="grid gap-2.5">
+          {rows.map((r) => (
+            <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(r.id)} onChange={() => flip(r.id)} aria-label={`Выбрать комментарий ${r.author}`} />
+                <b>{r.author}</b>
+                {r.status === 'hidden' ? <span className="pill pill-mute">скрыт{r.hideReason ? `: ${r.hideReason}` : ''}</span> : <span className="pill pill-bad">жалоб: {r.flags}</span>}
+                <a href={`/news/${r.newsId}#c-${r.id}`} className="min-w-0 truncate text-sm font-bold text-mute hover:text-link">{r.title}</a>
+                <span className="ml-auto text-xs font-bold text-mute">{ago(r.createdAt)}</span>
+              </div>
+              <p className="mt-1.5 whitespace-pre-line wrap-break-word text-sm font-semibold">{r.text}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className="btn btn-success btn-xs" onClick={() => void run([r.id], 'approve')}>{r.status === 'hidden' ? 'Показать' : 'Оставить'}</button>
+                {r.status !== 'hidden' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void hideMany([r.id])}>Скрыть</button>}
+                <button type="button" className="btn btn-danger btn-xs" onClick={() => void delMany([r.id])}>Удалить</button>
+              </div>
             </li>
           ))}
         </ul>
@@ -72373,6 +73700,7 @@ import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
+import { NewsStatsModal } from '../components/news/NewsStats';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
@@ -72409,6 +73737,7 @@ function NewsList() {
   const list = items.filter((n) => !hidden.includes(n.id));
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [stats, setStats] = useState<{ id: number; title: string } | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
@@ -72642,6 +73971,7 @@ function NewsList() {
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
                 <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? 'Открепить' : 'Закрепить'}</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
+                {['sent', 'edit_queued'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => setStats({ id: n.id, title: n.title })}>Статистика</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <span className="ml-auto flex items-center gap-1.5">
                   <button type="button" className="row-act" title="Дублировать" aria-label="Дублировать" onClick={() => void copy(n)}><IconCopyPlus /></button>
@@ -72652,6 +73982,7 @@ function NewsList() {
           );
         })}
       </div>
+      {stats && <NewsStatsModal id={stats.id} title={stats.title} onClose={() => setStats(null)} />}
     </AdminPage>
   );
 }
@@ -73557,6 +74888,7 @@ import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
 import { FollowsCard } from '../components/profile/Follows';
+import { NewsSubsCard } from '../components/profile/NewsSubs';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
@@ -73730,6 +75062,7 @@ function SecurityTab() {
         <DiscordCard onChanged={reload} />
         <PushCard />
         <FollowsCard />
+        <NewsSubsCard />
         <SessionsCard key={rev} />
       </div>
       <JournalCard onRevoked={() => setRev((x) => x + 1)} />
@@ -80631,6 +81964,61 @@ __COREGSM_EOF__
 .nw-unread { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; margin-left: .4rem; border-radius: var(--r-pill); font-size: .7rem; font-weight: 800; line-height: 1; color: #fff; background: rgb(var(--bad)); font-variant-numeric: tabular-nums; }
 .nw-unread-abs { position: absolute; top: .35rem; right: 24%; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .nw-top { animation: none; } }
+
+/* ---------- comments under an item ---------- */
+.nw-comments { margin-top: 2.5rem; display: grid; gap: 1rem; scroll-margin-top: 5rem; }
+.cm-top { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; }
+.cm-top .nw-h2 { margin: 0; margin-right: auto; }
+.cm-total { color: rgb(var(--mute)); font-weight: 700; }
+.cm-note, .cm-empty { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
+.cm-list { display: grid; gap: .75rem; }
+.cm-thread { display: grid; gap: .5rem; }
+.cm { position: relative; display: grid; gap: .45rem; padding: .85rem 1rem; border-radius: var(--r-lg, 16px); background: rgb(var(--soft)); scroll-margin-top: 6rem; transition: box-shadow .3s, background .3s; }
+.cm.is-pinned { box-shadow: inset 3px 0 0 rgb(var(--brand)); }
+.cm.is-target { background: color-mix(in srgb, rgb(var(--brand)) 14%, rgb(var(--soft))); box-shadow: 0 0 0 2px rgb(var(--brand)); }
+.cm-replies { display: grid; gap: .5rem; margin-left: 1.25rem; padding-left: .85rem; border-left: 2px solid rgb(var(--line)); }
+.cm-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; }
+.cm-ava { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: color-mix(in srgb, rgb(var(--brand)) 20%, transparent); font-size: .8rem; font-weight: 800; }
+.cm-author { font-weight: 800; overflow-wrap: anywhere; }
+.cm-time { font-size: .8rem; font-weight: 700; color: rgb(var(--mute)); text-decoration: none; }
+a.cm-time:hover { color: rgb(var(--link)); }
+.cm-text { display: grid; gap: .25rem; overflow-wrap: anywhere; font-weight: 500; }
+.cm-text p { margin: 0; }
+.cm-text blockquote { margin: 0; padding: .1rem .75rem; border-left: 3px solid rgb(var(--line)); color: rgb(var(--mute)); }
+.cm-text code { padding: .05rem .35rem; border-radius: 6px; background: rgb(var(--line) / .5); font-size: .9em; }
+.cm-text a { color: rgb(var(--link)); text-decoration: underline; text-underline-offset: 2px; }
+.cm-mention { font-weight: 800; color: rgb(var(--link)); }
+.cm-stub { margin: 0; font-style: italic; font-weight: 600; color: rgb(var(--mute)); }
+.cm-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; }
+.cm-reacts { display: inline-flex; gap: .25rem; }
+.cm-react { display: inline-flex; align-items: center; gap: .3rem; min-height: 32px; padding: 0 .55rem; border: 1px solid transparent; border-radius: var(--r-pill); background: transparent; font-size: .85rem; font-weight: 700; cursor: pointer; }
+.cm-react:hover:not(:disabled) { background: rgb(var(--line) / .5); }
+.cm-react[aria-pressed='true'] { border-color: rgb(var(--brand)); background: color-mix(in srgb, rgb(var(--brand)) 14%, transparent); }
+.cm-react:disabled { opacity: .55; cursor: default; }
+.cm-act { padding: .25rem .1rem; border: 0; background: none; font-size: .85rem; font-weight: 700; color: rgb(var(--mute)); cursor: pointer; }
+.cm-act:hover { color: rgb(var(--link)); text-decoration: underline; }
+.cm-compose { position: relative; display: grid; gap: .5rem; }
+.cm-input { min-height: 5rem; resize: vertical; }
+.cm-compose-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; }
+.cm-counter { font-size: .8rem; font-weight: 700; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; }
+.cm-counter.is-near { color: rgb(var(--warn, var(--bad))); }
+.cm-md-hint { flex: 1 1 12rem; font-size: .78rem; font-weight: 600; color: rgb(var(--mute)); }
+.cm-compose-btns { display: inline-flex; gap: .4rem; margin-left: auto; }
+.cm-hint { position: absolute; left: .5rem; bottom: 3.2rem; z-index: 5; display: grid; min-width: 10rem; margin: 0; padding: .25rem; list-style: none; border-radius: 12px; border: 1px solid rgb(var(--line)); background: rgb(var(--card, var(--bg))); box-shadow: 0 8px 24px rgb(0 0 0 / .18); }
+.cm-hint button { width: 100%; padding: .4rem .6rem; border: 0; border-radius: 8px; background: none; text-align: left; font-weight: 700; cursor: pointer; }
+.cm-hint button:hover, .cm-hint button:focus-visible { background: rgb(var(--soft)); }
+.nw-cmcount { font-size: .85rem; font-weight: 800; color: rgb(var(--mute)); text-decoration: none; }
+.nw-cmcount:hover { color: rgb(var(--link)); }
+@media (max-width: 640px) { .cm-replies { margin-left: .5rem; padding-left: .6rem; } }
+
+/* ---------- feed tools, compact list, author box ---------- */
+.nw-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; margin: .25rem 0 .5rem; }
+.nw-tools .seg { max-width: 100%; overflow-x: auto; }
+.nw-feed.is-dense .nf-item { padding-block: .5rem; }
+.nw-feed.is-dense .nf-text { display: none; }
+.nw-feed.is-dense .nf-thumb { width: 3.5rem; min-width: 3.5rem; aspect-ratio: 1; }
+.nw-authorbox { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-top: 2rem; padding: .85rem 1rem; border-radius: var(--r-lg, 16px); background: rgb(var(--soft)); }
+.nw-authorbox-n { flex: 1 1 8rem; font-size: .85rem; font-weight: 700; color: rgb(var(--mute)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'

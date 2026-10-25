@@ -9,7 +9,7 @@ export const SUB_KINDS: SubKind[] = ['free_slot', 'back_online', 'went_down'];
 export interface Subscription { serverId: number; kinds: SubKind[] }
 
 /** GET /me/notifications */
-export interface NotificationItem { id: number; ts: number; kind: string; serverId: number | null; text: string; read: boolean }
+export interface NotificationItem { id: number; ts: number; kind: string; serverId: number | null; text: string; read: boolean; url?: string | null }
 export interface NotificationList { unread: number; items: NotificationItem[] }
 
 /** the badge on the bell: nothing for 0, the number up to 99, then «99+» */
@@ -31,8 +31,9 @@ export function toggleKind(kinds: readonly SubKind[], kind: SubKind): SubKind[] 
   return normalizeKinds(has ? kinds.filter((k) => k !== kind) : [...kinds, kind]);
 }
 
-/** the notification links to its server page, or nowhere */
-export function notificationHref(n: Pick<NotificationItem, 'serverId'>): string | null {
+/** the notification links to the page it names (a comment under a news item), else to its server page, or nowhere */
+export function notificationHref(n: Pick<NotificationItem, 'serverId'> & { url?: string | null }): string | null {
+  if (typeof n.url === 'string' && /^\/(?!\/)/.test(n.url)) return n.url;
   return n.serverId != null && Number.isFinite(Number(n.serverId)) ? `/servers/${n.serverId}` : null;
 }
 
