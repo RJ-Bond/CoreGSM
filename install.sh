@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1e12912ca793"
+COREGSM_BUILD="8f37e99541f2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7543,6 +7543,13 @@ export const ERRORS = {
   delivery_not_found: 'Доставка не найдена',
   retry_failed_only: 'Повторить можно только неудавшуюся доставку',
   check_filter: 'Проверьте параметры фильтра',
+
+  // ---- reviews, pinned notice, subscription test ----
+  review_not_found: 'Отзыв не найден',
+  review_own_flag: 'Свой отзыв отмечать нельзя',
+  review_reply_long: 'Ответ — до 600 символов',
+  notice_long: 'Текст объявления — до 500 символов',
+  sub_test_wait: 'Подождите несколько секунд перед следующей проверкой',
 
   // ---- maintenance windows ----
   maintenance_not_found: 'Окно обслуживания не найдено',
@@ -65058,6 +65065,11 @@ const errorsEn: Record<string, string> = {
   check_filter: 'Check the filter parameters',
 
   // ---- maintenance windows ----
+  review_not_found: 'Review not found',
+  review_own_flag: 'You cannot flag your own review',
+  review_reply_long: 'The reply is limited to 600 characters',
+  notice_long: 'The notice is limited to 500 characters',
+  sub_test_wait: 'Wait a few seconds before the next check',
   maintenance_not_found: 'Maintenance window not found',
   bad_date: 'Invalid date',
   title_required: 'Enter a title',
