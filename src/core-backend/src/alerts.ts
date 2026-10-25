@@ -5,6 +5,7 @@
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
+import { localParts } from './localTime.js';
 import { gameLabel } from './games.js';
 import { inMaintenance } from './maintenance.js';
 import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
@@ -37,6 +38,19 @@ export const alertSettings = () => ({
   mention: (['none', 'here', 'everyone'].includes(getSetting('alerts_mention') ?? '') ? getSetting('alerts_mention') : 'none') as 'none' | 'here' | 'everyone',
 });
 
+/** quiet hours: in this window (the panel's time zone, may cross midnight) the messages still arrive, but without @here / @everyone */
+export const quietSettings = () => {
+  const hour = (k: string, d: number) => { const n = Number(getSetting(k)); return Number.isInteger(n) && n >= 0 && n <= 23 ? n : d; };
+  return { enabled: getSetting('alerts_quiet') === '1', from: hour('alerts_quiet_from', 23), to: hour('alerts_quiet_to', 8) };
+};
+
+export function isQuietNow(now = Date.now()): boolean {
+  const q = quietSettings();
+  if (!q.enabled || q.from === q.to) return false;
+  const h = localParts(now, getSetting('timezone') || process.env.TZ || 'Europe/Moscow').hour;
+  return q.from < q.to ? h >= q.from && h < q.to : h >= q.from || h < q.to;
+}
+
 const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
 
 export interface Payload {
@@ -49,8 +63,12 @@ export interface Payload {
 
 export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';
 
-export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
+export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payload, channelId?: string) {
   const s = alertSettings();
+  // quiet hours: no pings (the test message shows how it really looks, so it keeps its own mention)
+  const payload: Payload = kind !== 'test' && payload0.mention !== 'none' && isQuietNow()
+    ? { ...payload0, mention: 'none', content: payload0.content.replace(/@(everyone|here)/g, '').trim() }
+    : payload0;
   const target = channelId || s.channelId;
   const now = Date.now();
   // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
@@ -168,6 +186,7 @@ export function registerAlerts(deps: {
     }[];
     return {
       ...s,
+      quiet: { ...quietSettings(), now: isQuietNow() },
       smart: Object.fromEntries(SMART_KINDS.map((k) => [k, smartEnabled(k)])) as Record<(typeof SMART_KINDS)[number], boolean>,
       channelName: ch.channelName,
       guildName: ch.guildName,
@@ -184,6 +203,7 @@ export function registerAlerts(deps: {
         channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
         afterMin: z.number().int().min(1).max(120).optional(),
         mention: z.enum(['none', 'here', 'everyone']).optional(),
+        quiet: z.object({ enabled: z.boolean(), from: z.number().int().min(0).max(23), to: z.number().int().min(0).max(23) }).optional(),
         smart: z.object({ low: z.boolean().optional(), ping: z.boolean().optional(), full: z.boolean().optional() }).optional(),
       })
       .safeParse(req.body);
@@ -195,6 +215,11 @@ export function registerAlerts(deps: {
     if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
     if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
     if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
+    if (b.data.quiet) {
+      setSetting('alerts_quiet', b.data.quiet.enabled ? '1' : '0');
+      setSetting('alerts_quiet_from', String(b.data.quiet.from));
+      setSetting('alerts_quiet_to', String(b.data.quiet.to));
+    }
     for (const k of SMART_KINDS) if (b.data.smart?.[k] !== undefined) setSetting(`alerts_smart_${k}`, b.data.smart[k] ? '1' : '0');
     res.json(payload());
   });

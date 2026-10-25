@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="dba75608cdb2"
+COREGSM_BUILD="9216c0ef821a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3863,6 +3863,7 @@ __COREGSM_EOF__
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
+import { localParts } from './localTime.js';
 import { gameLabel } from './games.js';
 import { inMaintenance } from './maintenance.js';
 import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
@@ -3895,6 +3896,19 @@ export const alertSettings = () => ({
   mention: (['none', 'here', 'everyone'].includes(getSetting('alerts_mention') ?? '') ? getSetting('alerts_mention') : 'none') as 'none' | 'here' | 'everyone',
 });
 
+/** quiet hours: in this window (the panel's time zone, may cross midnight) the messages still arrive, but without @here / @everyone */
+export const quietSettings = () => {
+  const hour = (k: string, d: number) => { const n = Number(getSetting(k)); return Number.isInteger(n) && n >= 0 && n <= 23 ? n : d; };
+  return { enabled: getSetting('alerts_quiet') === '1', from: hour('alerts_quiet_from', 23), to: hour('alerts_quiet_to', 8) };
+};
+
+export function isQuietNow(now = Date.now()): boolean {
+  const q = quietSettings();
+  if (!q.enabled || q.from === q.to) return false;
+  const h = localParts(now, getSetting('timezone') || process.env.TZ || 'Europe/Moscow').hour;
+  return q.from < q.to ? h >= q.from && h < q.to : h >= q.from || h < q.to;
+}
+
 const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
 
 export interface Payload {
@@ -3907,8 +3921,12 @@ export interface Payload {
 
 export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';
 
-export function enqueueAlert(kind: AlertKind, serverName: string, payload: Payload, channelId?: string) {
+export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payload, channelId?: string) {
   const s = alertSettings();
+  // quiet hours: no pings (the test message shows how it really looks, so it keeps its own mention)
+  const payload: Payload = kind !== 'test' && payload0.mention !== 'none' && isQuietNow()
+    ? { ...payload0, mention: 'none', content: payload0.content.replace(/@(everyone|here)/g, '').trim() }
+    : payload0;
   const target = channelId || s.channelId;
   const now = Date.now();
   // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
@@ -4026,6 +4044,7 @@ export function registerAlerts(deps: {
     }[];
     return {
       ...s,
+      quiet: { ...quietSettings(), now: isQuietNow() },
       smart: Object.fromEntries(SMART_KINDS.map((k) => [k, smartEnabled(k)])) as Record<(typeof SMART_KINDS)[number], boolean>,
       channelName: ch.channelName,
       guildName: ch.guildName,
@@ -4042,6 +4061,7 @@ export function registerAlerts(deps: {
         channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
         afterMin: z.number().int().min(1).max(120).optional(),
         mention: z.enum(['none', 'here', 'everyone']).optional(),
+        quiet: z.object({ enabled: z.boolean(), from: z.number().int().min(0).max(23), to: z.number().int().min(0).max(23) }).optional(),
         smart: z.object({ low: z.boolean().optional(), ping: z.boolean().optional(), full: z.boolean().optional() }).optional(),
       })
       .safeParse(req.body);
@@ -4053,6 +4073,11 @@ export function registerAlerts(deps: {
     if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
     if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
     if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
+    if (b.data.quiet) {
+      setSetting('alerts_quiet', b.data.quiet.enabled ? '1' : '0');
+      setSetting('alerts_quiet_from', String(b.data.quiet.from));
+      setSetting('alerts_quiet_to', String(b.data.quiet.to));
+    }
     for (const k of SMART_KINDS) if (b.data.smart?.[k] !== undefined) setSetting(`alerts_smart_${k}`, b.data.smart[k] ? '1' : '0');
     res.json(payload());
   });
@@ -67002,6 +67027,7 @@ interface AlertsInfo {
   afterMin: number;
   mention: 'none' | 'here' | 'everyone';
   smart?: { low: boolean; ping: boolean; full: boolean };
+  quiet?: { enabled: boolean; from: number; to: number; now: boolean };
   recent: { id: number; kind: keyof typeof KIND; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
 }
 
@@ -67022,6 +67048,48 @@ const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
   { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
 ];
 
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
+
+/** quiet hours: the messages keep coming, only without @here / @everyone */
+function QuietHours({ info, save }: { info: AlertsInfo; save: (p: { quiet: { enabled: boolean; from: number; to: number } }, done?: string) => Promise<void> }) {
+  const q = info.quiet ?? { enabled: false, from: 23, to: 8, now: false };
+  const set = (patch: Partial<{ enabled: boolean; from: number; to: number }>) => void save({ quiet: { enabled: q.enabled, from: q.from, to: q.to, ...patch } });
+  const span = q.from === q.to ? 0 : (q.to - q.from + 24) % 24;
+  return (
+    <Section title="Тихие часы" description="В эти часы сообщения о серверах всё равно приходят, но без @here и @everyone: никого не будят ночью.">
+      <label className="flex cursor-pointer items-center gap-3">
+        <Switch checked={q.enabled} onChange={(on) => set({ enabled: on })} />
+        <span className="font-extrabold">Не упоминать в тихие часы</span>
+        {q.enabled && <span className={`pill ml-auto ${q.now ? 'pill-warn' : 'pill-mute'}`}>{q.now ? 'сейчас тихие часы' : 'сейчас обычный режим'}</span>}
+      </label>
+      {q.enabled && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor="quiet-from" className="label">С</label>
+              <select id="quiet-from" className="input" value={q.from} onChange={(e) => set({ from: Number(e.target.value) })}>{HOURS.map((h) => <option key={h} value={h}>{hh(h)}</option>)}</select>
+            </div>
+            <div>
+              <label htmlFor="quiet-to" className="label">До</label>
+              <select id="quiet-to" className="input" value={q.to} onChange={(e) => set({ to: Number(e.target.value) })}>{HOURS.map((h) => <option key={h} value={h}>{hh(h)}</option>)}</select>
+            </div>
+            <p className="pb-2 text-sm font-semibold text-mute">{span === 0 ? 'Начало и конец совпадают: тихих часов нет.' : `Тихих часов в сутки: ${span}. По времени панели.`}</p>
+          </div>
+          {/* the day at a glance: shaded cells are quiet */}
+          <div className="qh-day" role="img" aria-label={`Тихие часы: с ${hh(q.from)} до ${hh(q.to)}`}>
+            {HOURS.map((h) => {
+              const quiet = span > 0 && (q.from < q.to ? h >= q.from && h < q.to : h >= q.from || h < q.to);
+              return <span key={h} className={quiet ? 'is-quiet' : ''} title={`${hh(h)}${quiet ? ': тихо' : ''}`} />;
+            })}
+          </div>
+          <div className="qh-ticks" aria-hidden><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 /** Messages to a Discord channel when a game server stops answering and when it is back. */
 export default function AlertsPage() {
   const [info, setInfo] = useState<AlertsInfo | null>(null);
@@ -67035,7 +67103,7 @@ export default function AlertsPage() {
   };
   usePoll(load, 10_000);
 
-  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>>, done?: string) => {
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>> & { quiet?: { enabled: boolean; from: number; to: number } }, done?: string) => {
     await api<AlertsInfo>('/alerts', 'PUT', patch)
       .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
@@ -67125,6 +67193,8 @@ export default function AlertsPage() {
         </Section>
       )}
 
+      {info && <QuietHours info={info} save={save} />}
+
       <DigestSection alertsChannel={info?.channelId ?? ''} />
 
       <Section title="Последние оповещения">
@@ -67162,8 +67232,33 @@ import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
-import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast } from '../ui';
 import { errorText } from '../apiErrors';
+
+/** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
+function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; schedule: BackupInfo['schedule'] }) {
+  const list = [...items].sort((a, b) => a.createdAt - b.createdAt).slice(-30);
+  const max = Math.max(1, ...list.map((b) => b.size));
+  const total = items.reduce((n, b) => n + b.size, 0);
+  const last = list[list.length - 1];
+  const ageH = (Date.now() - last.createdAt) / 3_600_000;
+  // an automatic schedule that has not produced a copy for twice its period is worth a warning
+  const late = schedule !== 'off' && ageH > (schedule === 'daily' ? 48 : 24 * 14);
+  return (
+    <div className="mb-3 space-y-2 rounded-ui-lg bg-soft p-3.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm font-bold text-mute">
+        <span><b className="text-ink">{items.length}</b> {items.length === 1 ? 'копия' : items.length < 5 ? 'копии' : 'копий'}, всего {fmtSize(total)}</span>
+        <span className={late ? 'text-warn' : ''}>последняя: {ago(last.createdAt)}{late ? '. Расписание давно не срабатывало' : ''}</span>
+      </div>
+      <div className="bk-line" role="img" aria-label={`Копий: ${items.length}`}>
+        {list.map((b) => (
+          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? 'авто' : 'вручную'}`} />
+        ))}
+      </div>
+      <div className="flex justify-between text-xs font-bold text-mute"><span>{fmtDateTime(list[0].createdAt)}</span><span>{fmtDateTime(last.createdAt)}</span></div>
+    </div>
+  );
+}
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -67451,6 +67546,7 @@ export default function BackupsCard() {
 
       <div>
         <h3 className="mb-2 font-black">Копии на сервере</h3>
+        {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
@@ -75989,6 +76085,18 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 [data-density='compact'] .divide-y > li { padding-block: .35rem; }
 [data-density='compact'] .adm-tile { padding: 9px 12px; }
 [data-density='compact'] .adm-tile-v { font-size: 20px; }
+
+/* quiet hours of the alerts: the day in 24 cells */
+.qh-day { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 3px; }
+.qh-day > span { height: 18px; border-radius: 4px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.qh-day > span.is-quiet { background: rgb(var(--brand) / .55); box-shadow: none; }
+.qh-ticks { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* backups: a bar per copy */
+.bk-line { display: flex; align-items: flex-end; gap: 3px; height: 56px; }
+.bk-line > span { flex: 1 1 0; max-width: 22px; min-height: 6px; border-radius: 4px 4px 2px 2px; background: rgb(var(--link)); opacity: .75; transition: opacity .15s ease; }
+.bk-line > span:hover { opacity: 1; }
+.bk-line > span.is-manual { background: rgb(var(--ok)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
