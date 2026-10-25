@@ -352,3 +352,12 @@ a.cm-time:hover { color: rgb(var(--link)); }
 .nw-cmcount { font-size: .85rem; font-weight: 800; color: rgb(var(--mute)); text-decoration: none; }
 .nw-cmcount:hover { color: rgb(var(--link)); }
 @media (max-width: 640px) { .cm-replies { margin-left: .5rem; padding-left: .6rem; } }
+
+/* ---------- feed tools, compact list, author box ---------- */
+.nw-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; margin: .25rem 0 .5rem; }
+.nw-tools .seg { max-width: 100%; overflow-x: auto; }
+.nw-feed.is-dense .nf-item { padding-block: .5rem; }
+.nw-feed.is-dense .nf-text { display: none; }
+.nw-feed.is-dense .nf-thumb { width: 3.5rem; min-width: 3.5rem; aspect-ratio: 1; }
+.nw-authorbox { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-top: 2rem; padding: .85rem 1rem; border-radius: var(--r-lg, 16px); background: rgb(var(--soft)); }
+.nw-authorbox-n { flex: 1 1 8rem; font-size: .85rem; font-weight: 700; color: rgb(var(--mute)); }

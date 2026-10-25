@@ -702,6 +702,8 @@ export interface PublicNews {
   reactions?: NewsReaction[];
   /** visible comments under it */
   comments?: number;
+  /** how many times the page was opened */
+  views?: number;
 }
 
 export interface NewsReaction { emoji: string; count: number; mine: boolean }
@@ -711,6 +713,9 @@ export interface PublicNewsFull extends PublicNews {
   /** the last edit made well after the publication, and how many there were (absent: not edited) */
   editedAt?: number | null;
   edits?: number;
+  /** who wrote it (the account) and how many items that account has published */
+  authorId?: number | null;
+  authorCount?: number;
   prev?: { id: number; title: string } | null;
   next?: { id: number; title: string } | null;
   /** up to three other news to read next (the same rubric first) */

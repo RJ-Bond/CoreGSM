@@ -45,6 +45,7 @@ import { router as reportsRouter } from './reports.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as newsCommentsRouter } from './newsComments.js';
+import { router as newsViewsRouter } from './newsViews.js';
 import { router as probesRouter } from './probes.js';
 import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
@@ -115,6 +116,7 @@ app.use(internalRouter);
 
 // before the news routes: /api/news/discussed and /api/news/comments/* must not be taken for /api/news/:id
 app.use(newsCommentsRouter);
+app.use(newsViewsRouter);
 
 registerNews({
   app,
