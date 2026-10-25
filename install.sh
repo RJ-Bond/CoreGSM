@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8f37e99541f2"
+COREGSM_BUILD="0da0822a1c31"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -11259,6 +11259,7 @@ __COREGSM_EOF__
 import { allow } from './auth.js';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import tls from 'node:tls';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
@@ -11494,6 +11495,9 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
       diskFree: space.free,
       diskTotal: space.total,
       memoryMb: Math.round(process.memoryUsage().rss / 1048576),
+      // the load average of the last minute and the number of cores (the load is 0 on Windows)
+      load1: Math.round(os.loadavg()[0] * 100) / 100,
+      cpuCount: Math.max(1, os.cpus().length),
       counts: {
         servers: count('SELECT COUNT(*) AS c FROM servers'),
         online: count('SELECT COUNT(*) AS c FROM status WHERE online = 1'),
@@ -16021,7 +16025,8 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar, (SELECT MAX(last_seen) FROM sessions WHERE user_id = users.id) AS last_seen FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+    last_seen: number | null;
     id: number;
     username: string;
     role: Role;
@@ -16032,7 +16037,7 @@ router.get('/api/users', admin, (_req, res) => {
     discord_id: string | null;
     discord_avatar: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u) })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u), lastSeen: u.last_seen ?? null })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {
@@ -47376,6 +47381,8 @@ export interface UserRow {
   status: 'active' | 'pending';
   discordName: string | null;
   avatarUrl?: string | null;
+  /** the last request with any of the account's sessions (null: never signed in) */
+  lastSeen?: number | null;
 }
 
 /** what guests and players get for a posted news item */
@@ -67160,6 +67167,7 @@ function SeasonsAdmin() {
 
       <Section title={t('adm.com.seasons')} description={!s ? undefined : rows.length ? t('adm.com.count', { n: rows.length }) : t('adm.com.none')}>
         {!s && !error && <SkeletonRows n={2} />}
+        {rows.length > 1 && <SeasonLine rows={rows} />}
         <ul className="grid gap-2">
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
@@ -67177,6 +67185,22 @@ function SeasonsAdmin() {
         </ul>
       </Section>
     </>
+  );
+}
+
+/** the seasons on one line, the width of a piece = how long the season lasted (oldest at the left) */
+function SeasonLine({ rows }: { rows: { id: number; name: string; startsAt: number; endsAt: number | null; isCurrent: boolean }[] }) {
+  const list = [...rows].sort((a, b) => a.startsAt - b.startsAt);
+  const now = Date.now();
+  const span = (r: (typeof list)[number]) => Math.max(86_400_000, (r.endsAt ?? now) - r.startsAt);
+  return (
+    <ol className="se-line" aria-label="Сезоны по порядку">
+      {list.map((r) => (
+        <li key={r.id} className={r.isCurrent ? 'is-now' : ''} style={{ flexGrow: span(r) }} title={`${r.name}: ${fmtDate(r.startsAt)}${r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}`}>
+          <span className="truncate">{r.name}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -67231,10 +67255,42 @@ function GalleryAdmin() {
     if (!(await confirmDialog({ title: t('adm.com.shotDelQ'), text: t('adm.com.shotDelText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
     await api(`/gallery/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
-  const waiting = list?.filter((s) => s.status === 'pending').length ?? 0;
+  const pendingList = list?.filter((s) => s.status === 'pending') ?? [];
+  const waiting = pendingList.length;
+  const head = pendingList[0];
+  const [skipped, setSkipped] = useState<number[]>([]);
+  const next = pendingList.find((x) => !skipped.includes(x.id)) ?? head;
+  // A — publish, X — reject, → — later (not while typing)
+  useEffect(() => {
+    if (!next) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]') || open !== null) return;
+      const k = e.key.toLowerCase();
+      if (k === 'a' || k === 'ф') void patch(next.id, { status: 'approved' }, t('adm.com.published'));
+      else if (k === 'x' || k === 'ч') void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'));
+      else if (e.key === 'ArrowRight') setSkipped((l) => [...l, next.id]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
   return (
     <Section title={t('adm.com.gallery')} description={waiting ? t('adm.com.waiting', { n: waiting }) : t('adm.com.noWaiting')}>
       <ErrorLine text={error} />
+      {next && (
+        <div className="mq">
+          <img src={next.thumb} alt="" className="mq-img" />
+          <div className="mq-body">
+            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">На проверке · {waiting}</p>
+            <p className="font-extrabold">{next.caption || t('adm.com.noCaption')}</p>
+            <p className="text-sm font-semibold text-mute">{[next.author, next.serverName, ago(next.createdAt)].filter(Boolean).join(' · ')}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>Опубликовать <kbd>A</kbd></button>
+              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>Отклонить <kbd>X</kbd></button>
+              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>Позже <kbd>→</kbd></button>}
+            </div>
+          </div>
+        </div>
+      )}
       {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title={t('adm.com.shotsNone')} text={t('adm.com.shotsNoneText')}><a href="/gallery" className="btn btn-soft mt-2">{t('adm.com.openGallery')}</a></Empty> : (
         <ul className="ga-grid">
           {list.map((s, i) => (
@@ -67795,7 +67851,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
-import { AdminPage, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
+import { AdminPage, Burst, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -68008,7 +68064,7 @@ export default function AdminStart() {
         <>
           {allDone ? (
             <div className="tile fade-in flex flex-wrap items-center gap-4 p-5" role="status">
-              <span className="pop grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-okbg text-ok"><Check size={30} /></span>
+              <span className="pop relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-okbg text-ok"><Check size={30} /><Burst count={12} radius={38} /></span>
               <div className="min-w-0 flex-1 basis-60">
                 <h2 className="text-xl font-extrabold leading-tight">{t('start.allDone')}</h2>
                 <p className="font-semibold text-mute">{t('start.allDoneText')}</p>
@@ -68173,6 +68229,36 @@ const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
   { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
 ];
 
+/** what each kind of message looks like in the channel */
+const SAMPLES: { kind: keyof typeof KIND; icon: string; text: string; on: (i: AlertsInfo) => boolean }[] = [
+  { kind: 'down', icon: '🔴', text: 'Сервер «Survival» не отвечает уже 3 минуты', on: (i) => i.enabled },
+  { kind: 'up', icon: '🟢', text: 'Сервер «Survival» снова в сети, простой 12 минут', on: (i) => i.enabled },
+  { kind: 'low', icon: '📉', text: 'На «Survival» необычно мало игроков для этого часа', on: (i) => i.enabled && !!i.smart?.low },
+  { kind: 'ping', icon: '📶', text: 'На «Survival» вырос пинг: 240 мс при обычных 60', on: (i) => i.enabled && !!i.smart?.ping },
+  { kind: 'full', icon: '👥', text: '«Survival» заполнен на 94%', on: (i) => i.enabled && !!i.smart?.full },
+];
+
+/** the cards of the message kinds: a sample line and whether the kind is on */
+function KindCards({ info }: { info: AlertsInfo }) {
+  const where = info.channelId ? (info.channelName ? `# ${info.channelName}` : `канал ${info.channelId}`) : 'канал не выбран';
+  return (
+    <Section title="Какие сообщения приходят" description="Так они выглядят в канале; серые карточки выключены.">
+      <div className="al-kinds">
+        {SAMPLES.map((x) => {
+          const on = x.on(info);
+          return (
+            <div key={x.kind} className={`al-kind ${on ? '' : 'is-off'}`}>
+              <div className="flex items-center gap-2"><span className={`pill ${KIND[x.kind].cls}`}>{KIND[x.kind].label}</span><span className="ml-auto text-xs font-bold text-mute">{on ? 'включено' : 'выключено'}</span></div>
+              <p className="al-msg"><span aria-hidden>{x.icon}</span> {x.text}</p>
+              <p className="text-xs font-semibold text-mute">{where}</p>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
@@ -68212,6 +68298,22 @@ function QuietHours({ info, save }: { info: AlertsInfo; save: (p: { quiet: { ena
         </div>
       )}
     </Section>
+  );
+}
+
+/** the delivery queue in one line: how many left, are waiting, failed */
+function Queue({ recent }: { recent: AlertsInfo['recent'] }) {
+  const sent = recent.filter((r) => r.status === 'sent').length;
+  const wait = recent.filter((r) => r.status === 'queued' || r.status === 'sending').length;
+  const bad = recent.filter((r) => r.status === 'error').length;
+  const pct = (n: number) => `${(n / recent.length) * 100}%`;
+  return (
+    <div className="space-y-1.5">
+      <div className="al-queue" role="img" aria-label={`Отправлено ${sent}, ждёт ${wait}, ошибок ${bad}`}>
+        <i className="is-ok" style={{ width: pct(sent) }} /><i className="is-warn" style={{ width: pct(wait) }} /><i className="is-bad" style={{ width: pct(bad) }} />
+      </div>
+      <p className="text-xs font-bold text-mute">Отправлено: {sent} · ждёт: {wait} · с ошибкой: {bad}{bad > 0 ? ' (они выше остальных)' : ''}</p>
+    </div>
   );
 }
 
@@ -68318,6 +68420,8 @@ export default function AlertsPage() {
         </Section>
       )}
 
+      {info && <KindCards info={info} />}
+
       {info && <QuietHours info={info} save={save} />}
 
       <DigestSection alertsChannel={info?.channelId ?? ''} />
@@ -68334,8 +68438,9 @@ export default function AlertsPage() {
             {!info.channelId && <button className="btn mt-2" onClick={() => setChanging(true)}>Выбрать канал</button>}
           </div>
         )}
+        {info && info.recent.length > 0 && <Queue recent={info.recent} />}
         <ul className="divide-y divide-line">
-          {info?.recent.map((r) => (
+          {info && [...info.recent].sort((a, b) => Number(b.status === 'error') - Number(a.status === 'error')).map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
               <span className={`pill ${KIND[r.kind].cls}`}>{KIND[r.kind].label}</span>
               <span className="min-w-0 flex-1 truncate font-bold">{r.serverName}</span>
@@ -69554,6 +69659,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       <Strip>
         <div className="flex items-center gap-3">
+          <span className={`dc-ring is-${bot?.state ?? 'idle'}`} aria-hidden title={bot?.tag ?? undefined} />
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
@@ -69657,6 +69763,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                 </div>
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
+
+              <ol className="dc-flow" aria-label="Схема привязки">
+                <li className="is-ok"><b>Сервер</b><span className="truncate">{s?.online ? 'онлайн' : s ? 'недоступен' : 'удалён'}</span></li>
+                <li className={bot?.state === 'online' ? 'is-ok' : 'is-bad'}><b>Канал</b><span className="truncate">{b.channelName ? `# ${b.channelName}` : 'не найден'}</span></li>
+                <li className={!b.enabled ? 'is-mute' : b.lastError ? 'is-bad' : b.lastUpdate ? 'is-ok' : 'is-warn'}><b>Сообщение</b><span className="truncate">{!b.enabled ? 'пауза' : b.lastError ? 'ошибка' : b.lastUpdate ? ago(b.lastUpdate) : 'ждёт'}</span></li>
+              </ol>
 
               {(b.serverIds ?? []).length > 1 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">
@@ -75121,6 +75233,8 @@ interface Health {
   diskFree: number | null;
   diskTotal: number | null;
   memoryMb: number;
+  load1?: number;
+  cpuCount?: number;
   counts: { servers: number; online: number; bindings: number; users: number; history: number };
   bot: { state: string; tag: string | null; error: string | null; updatedAt: number };
   guilds: number;
@@ -75173,6 +75287,7 @@ export default function SystemPage() {
 
   const diskUsed = h && h.diskTotal && h.diskFree != null ? 1 - h.diskFree / h.diskTotal : null;
   const memFrac = h ? h.memoryMb / MEM_REF_MB : null;
+  const cpuFrac = h && h.load1 != null && h.cpuCount ? h.load1 / h.cpuCount : null;
   const dbFrac = h && h.dbBytes != null ? h.dbBytes / DB_REF_BYTES : null;
 
   const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
@@ -75217,7 +75332,7 @@ export default function SystemPage() {
 
       {h ? (
         <>
-          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-3" role="group" aria-label="Ресурсы">
+          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-2 xl:grid-cols-4" role="group" aria-label="Ресурсы">
             <div className="panel p-5 text-center">
               <Gauge
                 value={diskUsed}
@@ -75230,6 +75345,11 @@ export default function SystemPage() {
               <div className="text-sm font-semibold text-mute">{h.diskTotal ? `всего ${mb(h.diskTotal)}` : 'размер неизвестен'}</div>
             </div>
             <div className="panel p-5 text-center">
+              <Gauge value={cpuFrac} tone={usageTone(cpuFrac)} label="Нагрузка процессора" display={cpuFrac == null ? '–' : `${Math.round(cpuFrac * 100)} %`} caption={h.load1 != null ? `load ${h.load1}` : undefined} icon={<IconSystem size={18} />} />
+              <div className="mt-2 font-extrabold">Процессор</div>
+              <div className="text-sm font-semibold text-mute">{h.cpuCount ? `ядер: ${h.cpuCount}, средняя за минуту` : 'нет данных'}</div>
+            </div>
+            <div className="panel p-5 text-center">
               <Gauge value={memFrac} tone={usageTone(memFrac)} label="Память панели" display={`${h.memoryMb} МБ`} caption={`из ${MEM_REF_MB} МБ`} icon={<IconMemory size={18} />} />
               <div className="mt-2 font-extrabold">Память</div>
               <div className="text-sm font-semibold text-mute">процесс панели, ориентир {MEM_REF_MB} МБ</div>
@@ -75240,6 +75360,18 @@ export default function SystemPage() {
               <div className="text-sm font-semibold text-mute">{h.counts.history.toLocaleString('ru-RU')} точек истории</div>
             </div>
           </div>
+
+          {h.cert && h.cert.daysLeft != null && (
+            <Section title="Сертификат HTTPS" description={h.cert.notAfter ? `Действует до ${fmtDateTime(h.cert.notAfter)}` : undefined}>
+              <div className="cert-bar" role="img" aria-label={`Осталось дней: ${h.cert.daysLeft}`}>
+                <i className={`is-${certTone(h.cert)}`} style={{ width: `${Math.max(2, Math.min(100, (h.cert.daysLeft / 90) * 100))}%` }} />
+              </div>
+              <p className="text-sm font-semibold text-mute">
+                {certText(h.cert)} из 90{h.cert.selfSigned ? ' · самоподписанный: браузеры покажут предупреждение' : h.cert.issuer ? ` · выдал ${h.cert.issuer}` : ''}.
+                {h.cert.daysLeft <= 14 ? ' Пора продлевать: обычно это делает ваш обратный прокси (Caddy, Nginx Proxy Manager, certbot).' : ''}
+              </p>
+            </Section>
+          )}
 
           <Section title="Состояние">
             <ul className="divide-y divide-line">
@@ -76776,7 +76908,7 @@ import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { promptDialog } from '../../confirm';
-import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, toast, undoable, useAutosave } from '../../ui';
+import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, ago, toast, undoable, useAutosave } from '../../ui';
 import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
@@ -76798,6 +76930,14 @@ const PERM_PRESETS: { label: string; perms: Perm[] }[] = [
   { label: 'Админ серверов', perms: ['servers', 'maintenance'] },
   { label: 'Снять все', perms: [] },
 ];
+
+const ONLINE_MS = 5 * 60_000;
+/** «в сети» / «был 3 ч назад» / «ещё не заходил» */
+function seenText(u: UserRow, now = Date.now()): { online: boolean; text: string } {
+  if (!u.lastSeen) return { online: false, text: 'ещё не заходил' };
+  if (now - u.lastSeen < ONLINE_MS) return { online: true, text: 'в сети' };
+  return { online: false, text: `был ${ago(u.lastSeen)}` };
+}
 
 const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
@@ -76980,12 +77120,15 @@ function UsersTabInner() {
         >
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
-              <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+              <li key={u.id} className="us-req flex flex-wrap items-center gap-2 py-2.5">
                 <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={`Выбрать: ${u.username}`} />
-                <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
-                <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
-                  <span className="truncate">{u.username}</span>
-                  {u.discordName && <DiscordBadge name={u.discordName} />}
+                <UserAvatar name={u.username} url={u.avatarUrl} size={40} tone="brand" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-center gap-2 font-extrabold">
+                    <span className="truncate">{u.username}</span>
+                    {u.discordName && <DiscordBadge name={u.discordName} />}
+                  </span>
+                  <span className="block text-xs font-semibold text-mute">{u.createdAt ? `Заявка подана ${ago(u.createdAt)}` : 'Ждёт одобрения'}{access?.rules ? ' · принял правила' : ''}</span>
                 </span>
                 <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
@@ -77009,11 +77152,17 @@ function UsersTabInner() {
         {loaded && listed.length === 0 && <p className="font-semibold text-mute">Никого не найдено.</p>}
         <ul className="divide-y divide-line">
           {listed.map((u) => (
-            <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-              <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
-              <span className="min-w-0 flex-1 truncate font-bold">
-                {u.username}{u.username === me?.username ? ' (вы)' : ''}
-                {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
+            <li key={u.id} className="us-row flex flex-wrap items-center gap-2 py-2.5">
+              <span className="us-av">
+                <UserAvatar name={u.username} url={u.avatarUrl} size={40} tone="brand" />
+                {seenText(u).online && <i className="us-online" title="В сети" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-extrabold">
+                  {u.username}{u.username === me?.username ? ' (вы)' : ''}
+                  {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
+                </span>
+                <span className={`block text-xs font-semibold ${seenText(u).online ? 'text-ok' : 'text-mute'}`}>{seenText(u).text}{u.createdAt ? ` · с нами с ${new Date(u.createdAt).toLocaleDateString('ru-RU')}` : ''}</span>
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
@@ -77029,8 +77178,9 @@ function UsersTabInner() {
                   <legend className="sr-only">Права модератора {u.username}</legend>
                   <span className="basis-full flex flex-wrap items-center gap-1.5 pb-1">
                     <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Набор:</span>
+                    <span className="text-xs font-extrabold text-mute" aria-live="polite">· выдано {(u.perms ?? []).length} из {PERM_LABELS.length}</span>
                     {PERM_PRESETS.map((p) => (
-                      <button key={p.label} type="button" className="us-preset" onClick={() => void setPerms(u, p.perms)}>{p.label}</button>
+                      <button key={p.label} type="button" className="us-preset" aria-pressed={p.perms.length > 0 && p.perms.length === (u.perms ?? []).length && p.perms.every((x) => (u.perms ?? []).includes(x))} onClick={() => void setPerms(u, p.perms)}>{p.label}</button>
                     ))}
                   </span>
                   {PERM_LABELS.map((p) => {
@@ -77509,6 +77659,68 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .sf-preview-st { flex: none; padding: 3px 11px; border-radius: var(--r-pill); font-size: 12px; font-weight: 750; background: rgb(var(--card)); color: rgb(var(--mute)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-variant-numeric: tabular-nums; }
 .sf-preview-st.is-on { background: rgb(var(--okbg)); color: rgb(var(--ok)); box-shadow: none; }
 .sf-preview-st.is-off { background: rgb(var(--badbg)); color: rgb(var(--bad)); box-shadow: none; }
+
+/* users: cards, online dot, permissions grid */
+.us-row, .us-req { padding-inline: 4px; border-radius: var(--r-md); transition: background-color .15s ease; }
+.us-row:hover, .us-req:hover { background: rgb(var(--soft) / .55); }
+.us-av { position: relative; display: inline-grid; flex: none; }
+.us-online { position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 2px rgb(var(--card)); }
+.us-perms { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+.us-perms > .basis-full { grid-column: 1 / -1; }
+.us-perm { align-items: flex-start; border-radius: var(--r-lg); padding: 8px 12px 8px 10px; }
+.us-preset[aria-pressed='true'] { color: rgb(var(--link)); background: rgb(var(--brand) / .14); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .45); }
+
+/* discord: the chain server → channel → message, the bot ring */
+.dc-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
+.dc-flow li { position: relative; display: grid; gap: 1px; min-width: 0; padding: 6px 10px; font-size: 12px; font-weight: 650; color: rgb(var(--mute)); background: rgb(var(--soft)); box-shadow: inset 0 -3px 0 rgb(var(--ok)); }
+.dc-flow li:first-child { border-radius: var(--r-md) 0 0 var(--r-md); }
+.dc-flow li:last-child { border-radius: 0 var(--r-md) var(--r-md) 0; }
+.dc-flow li + li { margin-left: 2px; }
+.dc-flow li b { color: rgb(var(--ink)); font-weight: 800; }
+.dc-flow li.is-bad { box-shadow: inset 0 -3px 0 rgb(var(--bad)); }
+.dc-flow li.is-warn { box-shadow: inset 0 -3px 0 rgb(var(--warn)); }
+.dc-flow li.is-mute { box-shadow: inset 0 -3px 0 rgb(var(--line)); }
+.dc-ring { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 3px solid rgb(var(--line)); }
+.dc-ring.is-online { border-color: rgb(var(--ok)); animation: adm-pulse 2.4s ease-out infinite; }
+.dc-ring.is-connecting { border-color: rgb(var(--warn)); border-top-color: transparent; animation: adm-spin 1s linear infinite; }
+@keyframes adm-spin { to { transform: rotate(360deg); } }
+.dc-ring.is-error { border-color: rgb(var(--bad)); }
+@media (prefers-reduced-motion: reduce) { .dc-ring { animation: none !important; } }
+
+/* alerts: kinds of messages, the delivery bar */
+.al-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 10px; }
+.al-kind { display: grid; gap: 6px; padding: 12px 14px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
+.al-kind.is-off { opacity: .6; box-shadow: none; background: rgb(var(--soft) / .6); }
+.al-msg { padding: 8px 10px; border-radius: var(--r-md); border-left: 3px solid rgb(var(--brand)); background: rgb(var(--soft)); font-size: 13px; font-weight: 650; }
+.al-queue { display: flex; height: 8px; border-radius: var(--r-pill); overflow: hidden; background: rgb(var(--line)); }
+.al-queue i { display: block; height: 100%; transition: width .4s ease; }
+.al-queue i.is-ok { background: rgb(var(--ok)); }
+.al-queue i.is-warn { background: rgb(var(--warn)); }
+.al-queue i.is-bad { background: rgb(var(--bad)); }
+
+/* system: the days of the certificate */
+.cert-bar { height: 10px; border-radius: var(--r-pill); background: rgb(var(--line)); overflow: hidden; }
+.cert-bar i { display: block; height: 100%; border-radius: var(--r-pill); background: rgb(var(--ok)); transition: width .5s ease; }
+.cert-bar i.is-warn { background: rgb(var(--warn)); }
+.cert-bar i.is-bad { background: rgb(var(--bad)); }
+
+/* community: the seasons line, the moderation queue */
+.se-line { display: flex; gap: 3px; margin: 0 0 10px; padding: 0; list-style: none; }
+.se-line li { min-width: 3.5rem; padding: 6px 10px; border-radius: var(--r-md); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: 12px; font-weight: 750; color: rgb(var(--mute)); overflow: hidden; }
+.se-line li.is-now { color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: none; }
+.mq { display: flex; flex-wrap: wrap; gap: 14px; padding: 12px; border-radius: var(--r-xl); background: rgb(var(--brand) / .08); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .35); }
+.mq-img { width: min(100%, 16rem); aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.mq-body { flex: 1 1 14rem; min-width: 0; }
+.mq kbd { margin-left: 4px; font: inherit; font-size: 11px; font-weight: 800; padding: 0 5px; border-radius: 5px; background: rgb(255 255 255 / .25); }
+
+/* every admin page: the blocks come up one after another */
+.adm-stage > * { animation: adm-in .35s cubic-bezier(.2, .8, .2, 1) both; }
+.adm-stage > :nth-child(2) { animation-delay: .04s; }
+.adm-stage > :nth-child(3) { animation-delay: .08s; }
+.adm-stage > :nth-child(4) { animation-delay: .12s; }
+.adm-stage > :nth-child(n+5) { animation-delay: .16s; }
+@keyframes adm-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .adm-stage > * { animation: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -80142,7 +80354,7 @@ export function AdminPage({ head, narrow = false, children }: { head: ReactNode;
   return (
     <div className={`space-y-5 ${narrow ? 'max-w-4xl' : ''}`}>
       {head}
-      <div className="space-y-5">{children}</div>
+      <div className="adm-stage space-y-5">{children}</div>
     </div>
   );
 }

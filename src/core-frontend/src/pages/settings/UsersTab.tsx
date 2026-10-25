@@ -5,7 +5,7 @@ import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { promptDialog } from '../../confirm';
-import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, toast, undoable, useAutosave } from '../../ui';
+import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, ago, toast, undoable, useAutosave } from '../../ui';
 import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
@@ -27,6 +27,14 @@ const PERM_PRESETS: { label: string; perms: Perm[] }[] = [
   { label: 'Админ серверов', perms: ['servers', 'maintenance'] },
   { label: 'Снять все', perms: [] },
 ];
+
+const ONLINE_MS = 5 * 60_000;
+/** «в сети» / «был 3 ч назад» / «ещё не заходил» */
+function seenText(u: UserRow, now = Date.now()): { online: boolean; text: string } {
+  if (!u.lastSeen) return { online: false, text: 'ещё не заходил' };
+  if (now - u.lastSeen < ONLINE_MS) return { online: true, text: 'в сети' };
+  return { online: false, text: `был ${ago(u.lastSeen)}` };
+}
 
 const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
 
@@ -209,12 +217,15 @@ function UsersTabInner() {
         >
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
-              <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
+              <li key={u.id} className="us-req flex flex-wrap items-center gap-2 py-2.5">
                 <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={`Выбрать: ${u.username}`} />
-                <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
-                <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
-                  <span className="truncate">{u.username}</span>
-                  {u.discordName && <DiscordBadge name={u.discordName} />}
+                <UserAvatar name={u.username} url={u.avatarUrl} size={40} tone="brand" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-center gap-2 font-extrabold">
+                    <span className="truncate">{u.username}</span>
+                    {u.discordName && <DiscordBadge name={u.discordName} />}
+                  </span>
+                  <span className="block text-xs font-semibold text-mute">{u.createdAt ? `Заявка подана ${ago(u.createdAt)}` : 'Ждёт одобрения'}{access?.rules ? ' · принял правила' : ''}</span>
                 </span>
                 <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
                 <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
@@ -238,11 +249,17 @@ function UsersTabInner() {
         {loaded && listed.length === 0 && <p className="font-semibold text-mute">Никого не найдено.</p>}
         <ul className="divide-y divide-line">
           {listed.map((u) => (
-            <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-              <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
-              <span className="min-w-0 flex-1 truncate font-bold">
-                {u.username}{u.username === me?.username ? ' (вы)' : ''}
-                {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
+            <li key={u.id} className="us-row flex flex-wrap items-center gap-2 py-2.5">
+              <span className="us-av">
+                <UserAvatar name={u.username} url={u.avatarUrl} size={40} tone="brand" />
+                {seenText(u).online && <i className="us-online" title="В сети" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-extrabold">
+                  {u.username}{u.username === me?.username ? ' (вы)' : ''}
+                  {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
+                </span>
+                <span className={`block text-xs font-semibold ${seenText(u).online ? 'text-ok' : 'text-mute'}`}>{seenText(u).text}{u.createdAt ? ` · с нами с ${new Date(u.createdAt).toLocaleDateString('ru-RU')}` : ''}</span>
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
@@ -258,8 +275,9 @@ function UsersTabInner() {
                   <legend className="sr-only">Права модератора {u.username}</legend>
                   <span className="basis-full flex flex-wrap items-center gap-1.5 pb-1">
                     <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Набор:</span>
+                    <span className="text-xs font-extrabold text-mute" aria-live="polite">· выдано {(u.perms ?? []).length} из {PERM_LABELS.length}</span>
                     {PERM_PRESETS.map((p) => (
-                      <button key={p.label} type="button" className="us-preset" onClick={() => void setPerms(u, p.perms)}>{p.label}</button>
+                      <button key={p.label} type="button" className="us-preset" aria-pressed={p.perms.length > 0 && p.perms.length === (u.perms ?? []).length && p.perms.every((x) => (u.perms ?? []).includes(x))} onClick={() => void setPerms(u, p.perms)}>{p.label}</button>
                     ))}
                   </span>
                   {PERM_LABELS.map((p) => {

@@ -680,6 +680,8 @@ export interface UserRow {
   status: 'active' | 'pending';
   discordName: string | null;
   avatarUrl?: string | null;
+  /** the last request with any of the account's sessions (null: never signed in) */
+  lastSeen?: number | null;
 }
 
 /** what guests and players get for a posted news item */
