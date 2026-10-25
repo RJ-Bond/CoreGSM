@@ -2,6 +2,7 @@ import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
+import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
@@ -215,7 +216,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (missing) return <NotFound kind="server" />;
 
-  const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
+  const back = <Crumbs items={[['/servers', t('nav.servers')], [`/servers/${id}`, data?.server.name ?? '…']]} />;
 
   if (!data) {
     return (

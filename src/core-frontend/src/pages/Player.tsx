@@ -4,6 +4,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
+import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
@@ -50,7 +51,7 @@ export default function PlayerPage({ name }: { name: string }) {
   const maxS = Math.max(1, ...p.servers.map((s) => s.hours));
   return (
     <div className="space-y-5">
-      <a href="/community" className="ml-1 inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Сообщество</a>
+      <Crumbs items={[['/community', 'Сообщество'], [`/player/${encodeURIComponent(p.name)}`, p.name]]} />
       <section className="tile pl-hero fade-in">
         <span className="pl-ava" aria-hidden>{p.name.slice(0, 1).toUpperCase()}</span>
         <div className="min-w-0 flex-1">
