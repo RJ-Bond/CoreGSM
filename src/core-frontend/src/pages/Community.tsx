@@ -403,7 +403,7 @@ function GalleryStrip() {
         <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
       </div>
       {list === null ? <div className="skeleton h-48 rounded-2xl" />
-        : list.length === 0 ? <Empty art={<PeopleArt />} title="Скриншотов пока нет" text="Поделитесь первым кадром из игры."><a href="/gallery" className="btn btn-primary">Загрузить</a></Empty>
+        : list.length === 0 ? <Empty art={<PeopleArt />} title="Скриншотов пока нет" text="Поделитесь первым кадром из игры."><a href="/gallery" className="btn">Загрузить</a></Empty>
         : (
           <ul className={`cm-gal n${Math.min(list.length, 5)}`}>
             {list.slice(0, 5).map((s, i) => (
