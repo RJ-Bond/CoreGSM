@@ -1,6 +1,6 @@
 import { useId, useState, type ReactNode } from 'react';
 import { t, useI18n } from '../../i18n';
-import { ago, fmtDateTime, toast } from '../../ui';
+import { AnimatedNumber, ago, fmtDateTime, toast } from '../../ui';
 import { pingTone } from './helpers';
 
 export interface PassportData {
@@ -60,7 +60,7 @@ export default function Passport({ d }: { d: PassportData }) {
         {d.map && d.online && <Item k="Карта"><span title={d.map}>{d.map}</span></Item>}
         {d.version && <Item k="Версия"><span>{`v${d.version.replace(/^v/i, '')}`}</span></Item>}
         {d.country && <Item k="Страна"><span>{`${d.flag} ${d.country}`.trim()}</span></Item>}
-        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}>{d.ping} мс · {pt.label}</span></Item>}
+        {pt && d.ping != null && <Item k="Пинг"><span className={PP_TONE[pt.tone]}><AnimatedNumber value={d.ping} /> мс · {pt.label}</span></Item>}
       </dl>
       <button type="button" className="pp-more-btn" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
         {open ? t('srv.pp.less') : t('srv.pp.more')}
