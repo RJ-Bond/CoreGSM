@@ -17,6 +17,8 @@ describe('bell badge', () => {
   it('links a notification to its server', () => {
     expect(notificationHref({ serverId: 12 })).toBe('/servers/12');
     expect(notificationHref({ serverId: null })).toBeNull();
+    expect(notificationHref({ serverId: null, url: '/news/3#c-9' })).toBe('/news/3#c-9');
+    expect(notificationHref({ serverId: 2, url: '//evil.example' })).toBe('/servers/2');
   });
 });
 
