@@ -23,6 +23,8 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
+const MARK_RU: Record<Ev['type'], string> = { up: 'возврат', down: 'сбой', peak: 'пик', maintenance: 'тех. работы' };
+
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   if (e.type === 'up') return 'Сервер вернулся';
   if (e.type === 'peak') return `Пик игроков: ${e.players ?? '–'}`;
@@ -31,7 +33,7 @@ function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   return stillDown ? 'Сервер упал · недоступен до сих пор' : 'Сервер упал';
 }
 
-export default function EventsFeed({ events, online, limit, moreHref }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string }) {
+export default function EventsFeed({ events, online, limit, moreHref, uptimePct, windowLabel }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string; uptimePct?: number | null; windowLabel?: string }) {
   useI18n();
   const [filter, setFilter] = useState<EventFilter>('all');
 
@@ -52,8 +54,17 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
   const shown = limit ? list.slice(0, limit) : list;
   const groups = groupByDay(shown).map((g) => ({ ...g, title: dayTitle(g.kind, g.ts) }));
 
+  const outages = events.filter((e) => e.type === 'down').length;
+  const downTotal = [...downFor.values()].reduce((a, b) => a + b, 0);
   return (
     <div>
+      {!limit && events.length > 0 && (
+        <div className="ev-sum">
+          <div className="ev-sum-c"><b>{outages}</b><span>{plural(outages, ['сбой', 'сбоя', 'сбоев'])}</span></div>
+          <div className="ev-sum-c"><b>{downTotal ? fmtDuration(downTotal) : '0'}</b><span>суммарный простой</span></div>
+          {uptimePct != null && <div className="ev-sum-c"><b>{Math.round(uptimePct * 10) / 10}%</b><span>доступность{windowLabel ? ` ${windowLabel}` : ''}</span></div>}
+        </div>
+      )}
       {!limit && (
         <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label={t('srv.ev.filter')}>
           {EVENT_FILTERS.map((k) => (
@@ -85,7 +96,10 @@ export default function EventsFeed({ events, online, limit, moreHref }: { events
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d={ic.path} /></svg>
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className={`ev-type ev-${e.type}`}>{MARK_RU[e.type]}</span>
+                          <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
+                        </span>
                         <time dateTime={new Date(e.ts).toISOString()} title={absTime(e.ts)} className="text-sm font-semibold text-mute">
                           {ago(e.ts)} · {clock(e.ts)}
                         </time>
