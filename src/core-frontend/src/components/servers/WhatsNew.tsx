@@ -3,11 +3,17 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
+import { cardOf } from '../news/PublicFeed';
+import { CATEGORY_HEX } from '../news/newsLogic';
 import { IconChevronDown } from '../../icons';
 import { StateView } from '../StateView';
 import type { OverviewData, RecentEvent } from './overviewLogic';
 
 const OPEN_KEY = 'coregsm_whatsnew_open';
+const SEEN_KEY = 'coregsm_whatsnew_seen';
+
+const seenAt = (): number => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } };
+const markSeen = (at: number) => { try { localStorage.setItem(SEEN_KEY, String(at)); } catch { /* not remembered */ } };
 
 export function readOpen(): boolean {
   try {
@@ -99,10 +105,10 @@ function eventText(e: RecentEvent): string {
 export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle: () => void; overview: OverviewData | null }) {
   useI18n();
   const [news, setNews] = useState<PublicNews | null | undefined>(undefined);
+  const [seen, setSeen] = useState(seenAt);
 
   // nothing is fetched while the block is folded
   usePoll(() => {
-    if (!open) return;
     return api<PublicNews[]>('/news')
       .then((l) => setNews(l.find((n) => n.status === 'sent' || n.status === 'edit_queued') ?? null))
       .catch(() => setNews(null));
@@ -110,11 +116,18 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
 
   const maint = overview?.maintenance ?? [];
   const bodyId = 'srv-whatsnew-body';
+  const fresh = !!news?.sentAt && news.sentAt > seen;
+  // opening the block counts as reading the news
+  useEffect(() => {
+    if (open && news?.sentAt && news.sentAt > seen) { markSeen(news.sentAt); const id = setTimeout(() => setSeen(news.sentAt as number), 4000); return () => clearTimeout(id); }
+  }, [open, news, seen]);
+  const card = news ? cardOf(news) : null;
   return (
     <aside className={`panel srv-new ${open && news === null && maint.length === 0 ? 'srv-new-compact' : ''}`} aria-label={t('srv.new.title')}>
       <h2 className="m-0">
         <button type="button" className="srv-new-head" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
           <span className="font-black">{t('srv.new.title')}</span>
+          {fresh && <span className="srv-new-badge">{t('srv.new.fresh')}</span>}
           <span aria-hidden className={`srv-new-chev ${open ? 'open' : ''}`}><IconChevronDown /></span>
         </button>
       </h2>
@@ -128,7 +141,8 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             {news === undefined ? (
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
             ) : news ? (
-              <div className="srv-new-news">
+              <div className="srv-new-news" style={{ ['--cat' as string]: card ? CATEGORY_HEX[card.category] : undefined }}>
+                {card?.image && <img className="srv-new-thumb" src={card.image} alt="" loading="lazy" />}
                 <a href="/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
                 {teaserNodes(news).length > 0 && <span className="srv-new-news-text">{teaserNodes(news)}</span>}
                 <span className="srv-new-news-foot">

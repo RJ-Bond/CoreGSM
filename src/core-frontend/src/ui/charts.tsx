@@ -82,6 +82,19 @@ export function MiniSpark({ serverId, color }: { serverId: number; color: string
   return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label="График игроков за сутки" /></div>;
 }
 
+/** how many players more (or fewer) a server has than an hour ago, from the 24 h buckets; null while the history is too short */
+export function useHourTrend(serverId: number): number | null {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  if (!raw) return null;
+  let last = raw.players.length - 1;
+  while (last >= 0 && raw.players[last] == null) last--;
+  const per = Math.max(1, Math.round(raw.players.length / 24));
+  const cur = raw.players[last];
+  const before = raw.players[last - per];
+  return cur != null && before != null ? Math.round(cur - before) : null;
+}
+
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
 export function useSparkSpanMin(serverId: number): number | null {
   const set = useSparkSet();

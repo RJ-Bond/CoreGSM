@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="55890b8d2bdc"
+COREGSM_BUILD="0bf43666b0c0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -58712,7 +58712,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/PulseStrip.tsx" << '__COREGSM_EOF__'
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
-import { useId, type JSX } from 'react';
+import { useId, useState, type JSX, type PointerEvent } from 'react';
 import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
@@ -58749,10 +58749,20 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   const area = `${line}L${X(pts[pts.length - 1].x).toFixed(1)} ${H}L${X(pts[0].x).toFixed(1)} ${H}Z`;
   const max = Math.max(1, ...data.points.map((p) => p.players));
   const peak = data.peak;
+  const [hover, setHover] = useState<number | null>(null);
+  const near = (e: PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+    let best = 0;
+    pts.forEach((p, i) => { if (Math.abs(p.x - x) < Math.abs(pts[best].x - x)) best = i; });
+    setHover(best);
+  };
+  const hp = hover != null ? pts[hover] : null;
+  const hts = hp ? start + hp.x * (end - start) : 0;
   const pk = peak ? { x: Math.max(0, Math.min(1, (peak.ts - start) / (end - start))), y: peak.players / max } : null;
   return (
     <figure className="pulse-chart" aria-label={tr('srv.pulse.chart')}>
-      <div className="pulse-plot">
+      <div className="pulse-plot" onPointerMove={near} onPointerDown={near} onPointerLeave={() => setHover(null)}>
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-hidden>
           <defs>
             <linearGradient id={`pg${gid}`} x1="0" y1="0" x2="0" y2="1">
@@ -58763,12 +58773,21 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
           <path d={area} fill={`url(#pg${gid})`} />
           <path d={line} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         </svg>
+        {hp && (
+          <>
+            <span className="pulse-cursor" style={{ left: `${hp.x * 100}%` }} aria-hidden />
+            <span className="pulse-tip" style={{ left: `${Math.max(14, Math.min(86, hp.x * 100))}%` }} role="status">
+              <b>{Math.round(hp.y * max)}</b> · {fmtTime(hts)}
+            </span>
+          </>
+        )}
         {pk && peak && (
           <span className="pulse-peak" style={{ left: `${pk.x * 100}%`, top: `${((Y(pk.y)) / H) * 100}%` }} aria-hidden />
         )}
       </div>
       <figcaption>
         <span>{spanText}</span>
+        <span className="pulse-ticks" aria-hidden><span>{fmtTime(start)}</span><span>{fmtTime((start + end) / 2)}</span><span>{tr('spark.now')}</span></span>
         {peak ? <span className="pulse-peak-text">{tr('srv.pulse.peak', { n: peak.players, time: fmtTime(peak.ts) })}</span> : <span>{tr('srv.pulse.noPeak')}</span>}
       </figcaption>
     </figure>
@@ -58801,6 +58820,13 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
     sub = t('srv.pulse.okSub', { n: online.length });
   }
 
+  // players now against about an hour ago, from the chart buckets
+  let trend: number | null = null;
+  if (overview && overview.points.length > 1) {
+    const pts = overview.points;
+    const per = Math.max(1, Math.round(3_600_000 / overview.bucketMs));
+    if (pts.length > per) trend = pts[pts.length - 1].players - pts[pts.length - 1 - per].players;
+  }
   return (
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
       <div className="pulse-state" role="status">
@@ -58813,7 +58839,7 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
       <dl className="pulse-nums">
         <div>
           <dt>{t('srv.pulse.players')}</dt>
-          <dd><AnimatedNumber value={players} pulse /></dd>
+          <dd><AnimatedNumber value={players} pulse />{trend != null && trend !== 0 && <small className={`pulse-trend ${trend > 0 ? 'up' : 'down'}`} title={t('srv.trend.hour')}>{trend > 0 ? '▲' : '▼'} {Math.abs(trend)}</small>}</dd>
         </div>
         <div>
           <dt>{t('srv.pulse.servers')}</dt>
@@ -58840,10 +58866,11 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
-import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural, num } from '../../ui';
+import { AnimatedNumber, GameAvatar, MiniSpark, StatusPill, ago, isLag, plural, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
+export interface ListSort { key: 'name' | 'players' | 'ping' | 'up'; dir: 'asc' | 'desc' }
 export type ServersView = 'tiles' | 'list' | 'chart';
 export const VIEW_KEY = 'coregsm_servers_view';
 
@@ -58945,6 +58972,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
         <StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
       </div>
       <div className="srv-c-name">
+        <span className="srv-stripe" aria-hidden />
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
           <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
@@ -58960,6 +58988,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
               <span className="text-mute">/ {s.maxPlayers}</span>
             </div>
             <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
+            <span className="srv-rowspark max-lg:hidden"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></span>
           </>
         ) : (
           <span className="truncate text-[13px] font-bold text-mute" title={s.error ?? undefined}>{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем ответ'}</span>
@@ -58973,8 +59002,10 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
   );
 }
 
-export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select }: {
+export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select, sort, onSort }: {
   select?: SelectProps;
+  sort?: ListSort | null;
+  onSort?: (k: ListSort['key']) => void;
   servers: Server[];
   uptime: Map<number, number>;
   rx: Reactions;
@@ -58986,10 +59017,13 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, sel
     <div className={`panel srv-list fade-in ${select?.on ? "selecting" : ""}`} aria-label="Серверы">
       <div className="srv-row srv-head">
         <div className="srv-c-status">Статус</div>
-        <div className="srv-c-name">Сервер</div>
-        <div className="srv-c-players">Игроки</div>
-        <div className="srv-c-ping">Пинг</div>
-        <div className="srv-c-up">Аптайм 30 дн</div>
+        {([['name', 'srv-c-name', 'Сервер'], ['players', 'srv-c-players', 'Игроки'], ['ping', 'srv-c-ping', 'Пинг'], ['up', 'srv-c-up', 'Аптайм 30 дн']] as const).map(([k, cls, label]) => (
+          <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
+              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            </button>
+          </div>
+        ))}
         <div className="srv-c-addr">Адрес</div>
         <div className="srv-c-fav" />
       </div>
@@ -59098,11 +59132,17 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
+import { cardOf } from '../news/PublicFeed';
+import { CATEGORY_HEX } from '../news/newsLogic';
 import { IconChevronDown } from '../../icons';
 import { StateView } from '../StateView';
 import type { OverviewData, RecentEvent } from './overviewLogic';
 
 const OPEN_KEY = 'coregsm_whatsnew_open';
+const SEEN_KEY = 'coregsm_whatsnew_seen';
+
+const seenAt = (): number => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } };
+const markSeen = (at: number) => { try { localStorage.setItem(SEEN_KEY, String(at)); } catch { /* not remembered */ } };
 
 export function readOpen(): boolean {
   try {
@@ -59194,10 +59234,10 @@ function eventText(e: RecentEvent): string {
 export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle: () => void; overview: OverviewData | null }) {
   useI18n();
   const [news, setNews] = useState<PublicNews | null | undefined>(undefined);
+  const [seen, setSeen] = useState(seenAt);
 
   // nothing is fetched while the block is folded
   usePoll(() => {
-    if (!open) return;
     return api<PublicNews[]>('/news')
       .then((l) => setNews(l.find((n) => n.status === 'sent' || n.status === 'edit_queued') ?? null))
       .catch(() => setNews(null));
@@ -59205,11 +59245,18 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
 
   const maint = overview?.maintenance ?? [];
   const bodyId = 'srv-whatsnew-body';
+  const fresh = !!news?.sentAt && news.sentAt > seen;
+  // opening the block counts as reading the news
+  useEffect(() => {
+    if (open && news?.sentAt && news.sentAt > seen) { markSeen(news.sentAt); const id = setTimeout(() => setSeen(news.sentAt as number), 4000); return () => clearTimeout(id); }
+  }, [open, news, seen]);
+  const card = news ? cardOf(news) : null;
   return (
     <aside className={`panel srv-new ${open && news === null && maint.length === 0 ? 'srv-new-compact' : ''}`} aria-label={t('srv.new.title')}>
       <h2 className="m-0">
         <button type="button" className="srv-new-head" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
           <span className="font-black">{t('srv.new.title')}</span>
+          {fresh && <span className="srv-new-badge">{t('srv.new.fresh')}</span>}
           <span aria-hidden className={`srv-new-chev ${open ? 'open' : ''}`}><IconChevronDown /></span>
         </button>
       </h2>
@@ -59223,7 +59270,8 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             {news === undefined ? (
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
             ) : news ? (
-              <div className="srv-new-news">
+              <div className="srv-new-news" style={{ ['--cat' as string]: card ? CATEGORY_HEX[card.category] : undefined }}>
+                {card?.image && <img className="srv-new-thumb" src={card.image} alt="" loading="lazy" />}
                 <a href="/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
                 {teaserNodes(news).length > 0 && <span className="srv-new-news-text">{teaserNodes(news)}</span>}
                 <span className="srv-new-news-foot">
@@ -59382,7 +59430,7 @@ import type { Server } from '../../api';
 import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
-import { toast } from '../../ui';
+import { toast, useHourTrend } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -59618,6 +59666,49 @@ export function AddrCopy({ address, className = '' }: { address: string; classNa
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
     </button>
   );
+}
+
+/** four bars for the ping: the lower the ping, the more of them are lit (the colour follows the tone of the ping) */
+export function PingBars({ ping, tone }: { ping: number; tone: 'ok' | 'warn' | 'bad' }) {
+  const lit = ping <= 50 ? 4 : ping <= 100 ? 3 : ping <= 200 ? 2 : 1;
+  return (
+    <span className={`ping-bars ${tone}`} aria-hidden>
+      {[1, 2, 3, 4].map((i) => <i key={i} className={i <= lit ? 'on' : ''} style={{ height: `${4 + i * 3}px` }} />)}
+    </span>
+  );
+}
+
+/** «▲ +3 за час»: the change of the player count in the last hour (nothing while it is flat or unknown) */
+export function TrendChip({ serverId, onDark = false, className = '' }: { serverId: number; onDark?: boolean; className?: string }) {
+  useI18n();
+  const d = useHourTrend(serverId);
+  if (d == null || d === 0) return null;
+  return (
+    <span className={`srv-trend ${d > 0 ? 'up' : 'down'} ${onDark ? 'on-dark' : ''} ${className}`} title={t('srv.trend.hour')}>
+      <span aria-hidden>{d > 0 ? '▲' : '▼'}</span> {d > 0 ? `+${d}` : `−${-d}`} <small>{t('srv.trend.hour')}</small>
+    </span>
+  );
+}
+
+/** a few names of the players who are in the game now, «+N» for the rest */
+export function PlayerNames({ names, max = 6, onDark = false, className = '' }: { names: string[]; max?: number; onDark?: boolean; className?: string }) {
+  useI18n();
+  if (names.length === 0) return null;
+  return (
+    <ul className={`srv-names ${onDark ? 'on-dark' : ''} ${className}`} aria-label={t('srv.who')}>
+      {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}>{n}</li>)}
+      {names.length > max && <li className="more">+{names.length - max}</li>}
+    </ul>
+  );
+}
+
+/** «2 ч 10 мин» for a length of time in ms */
+export function durText(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60_000));
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
+  return `${Math.floor(h / 24)} дн`;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -63030,6 +63121,11 @@ const en: Record<keyof typeof ru, string> = {
   'srv.hero.maintenance': 'Maintenance in progress',
   'srv.hero.fav': 'Favourite',
   'srv.hero.busiest': 'Busiest',
+  'srv.trend.hour': 'per hour',
+  'srv.who': "who's on",
+  'srv.top': 'Back to top',
+  'srv.down.for': 'Down for {d}',
+  'srv.new.fresh': 'new',
   'srv.new.title': "What's new",
   'srv.new.openLink': 'Open link →',
   'srv.new.allNews': 'All news →',
@@ -64275,6 +64371,11 @@ const ru = {
   'srv.hero.maintenance': 'Сейчас идёт обслуживание',
   'srv.hero.fav': 'Избранный',
   'srv.hero.busiest': 'Самый загруженный',
+  'srv.trend.hour': 'за час',
+  'srv.who': 'кто играет',
+  'srv.top': 'Наверх',
+  'srv.down.for': 'Простой {d}',
+  'srv.new.fresh': 'новое',
   'srv.new.title': 'Что нового',
   'srv.new.openLink': 'Открыть ссылку →',
   'srv.new.allNews': 'Все новости →',
@@ -71522,8 +71623,8 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
-import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
-import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
@@ -71545,6 +71646,74 @@ export default function ServersPage({ sub }: { sub: string }) {
 }
 
 /** a greeting for the signed-in user: «Доброе утро, Иван» */
+const SIZE_KEY = 'coregsm_srv_size';
+const PULL_AT = 70;
+
+/** the sort of the list view: a column and a direction */
+function sortServers(list: Server[], sort: ListSort, uptime: Map<number, number>): Server[] {
+  const dir = sort.dir === 'asc' ? 1 : -1;
+  const val = (s: Server): number | string => (sort.key === 'name' ? s.name.toLowerCase() : sort.key === 'players' ? (s.online ? s.players : -1) : sort.key === 'ping' ? (s.online && s.ping != null ? s.ping : Infinity) : uptime.get(s.id) ?? -1);
+  return [...list].sort((a, b) => {
+    const x = val(a), y = val(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+}
+
+/** pull down from the very top of the page (touch): returns the current pull in px, calls `onPull` after a long enough pull */
+function usePullToRefresh(onPull: () => void): number {
+  const [pull, setPull] = useState(0);
+  useEffect(() => {
+    let y0: number | null = null;
+    let cur = 0;
+    const start = (e: TouchEvent) => { y0 = window.scrollY <= 0 ? e.touches[0].clientY : null; cur = 0; };
+    const move = (e: TouchEvent) => {
+      if (y0 == null) return;
+      cur = Math.max(0, Math.min(110, (e.touches[0].clientY - y0) * 0.5));
+      setPull(cur);
+    };
+    const end = () => {
+      if (y0 != null && cur >= PULL_AT) onPull();
+      y0 = null;
+      cur = 0;
+      setPull(0);
+    };
+    window.addEventListener('touchstart', start, { passive: true });
+    window.addEventListener('touchmove', move, { passive: true });
+    window.addEventListener('touchend', end);
+    window.addEventListener('touchcancel', end);
+    return () => {
+      window.removeEventListener('touchstart', start);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', end);
+      window.removeEventListener('touchcancel', end);
+    };
+  }, [onPull]);
+  return pull;
+}
+
+const ViewIcon = ({ id }: { id: ServersView }) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    {id === 'tiles' ? <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></> : id === 'list' ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : <path d="M3 3v18h18M7 15l4-5 3 3 5-7" />}
+  </svg>
+);
+
+/** a round «наверх» button once the page is scrolled a screen or two */
+function ScrollTop() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const f = () => setOn(window.scrollY > 700);
+    f();
+    window.addEventListener('scroll', f, { passive: true });
+    return () => window.removeEventListener('scroll', f);
+  }, []);
+  if (!on) return null;
+  return (
+    <button type="button" className="srv-top" aria-label={t('srv.top')} title={t('srv.top')} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m18 15-6-6-6 6" /></svg>
+    </button>
+  );
+}
+
 function greeting(name: string): string {
   const h = new Date().getHours();
   const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
@@ -71578,7 +71747,7 @@ const FILTER_KEY = 'coregsm_server_filter';
 const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
-function LiveBadge({ at }: { at: number }) {
+function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void; busy: boolean }) {
   const [, tick] = useState(0);
   useEffect(() => {
     const t = window.setInterval(() => tick((n) => n + 1), 5000);
@@ -71586,10 +71755,10 @@ function LiveBadge({ at }: { at: number }) {
   }, []);
   if (!at) return null;
   return (
-    <span className="inline-flex items-center gap-2 rounded-full bg-soft px-3 py-1 text-xs font-extrabold text-mute" title="Страница обновляется сама">
+    <button type="button" className="srv-live" title="Страница обновляется сама. Нажмите, чтобы обновить сейчас" onClick={onRefresh} aria-busy={busy || undefined}>
       <span className="live-dot" aria-hidden />
-      обновлено {ago(at)}
-    </span>
+      {busy ? 'обновляю…' : `обновлено ${ago(at)}`}
+    </button>
   );
 }
 
@@ -71609,6 +71778,8 @@ function ServerList() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [uptime, setUptime] = useState<Map<number, number>>(new Map());
+  // when the running outage of a server began (the public status endpoint knows it, the poll time does not)
+  const [downSince, setDownSince] = useState<Map<number, number>>(new Map());
   const [updatedAt, setUpdatedAt] = useState(0);
   const [filter, setFilterState] = useState<Filter>(() => {
     try {
@@ -71639,13 +71810,28 @@ function ServerList() {
       .finally(() => setLoaded(true));
   // the TV mode refreshes twice as often
   usePoll(load, 10_000);
+  // a tap on «обновлено …» or a pull down from the top of the page refreshes at once
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshNow = async () => {
+    setRefreshing(true);
+    await load();
+    setTimeout(() => setRefreshing(false), 400);
+  };
+  const pull = usePullToRefresh(() => refreshNow());
+  // tile size and the sort of the list view
+  const [size, setSizeState] = useState<'s' | 'm' | 'l'>(() => { try { const v = localStorage.getItem(SIZE_KEY); return v === 's' || v === 'l' ? v : 'm'; } catch { return 'm'; } });
+  const setSize = (v: 's' | 'm' | 'l') => { setSizeState(v); try { localStorage.setItem(SIZE_KEY, v); } catch { /* not remembered */ } };
+  const [listSort, setListSort] = useState<ListSort | null>(null);
   const rx = useServerReactions(servers, loaded);
   // 30-day availability comes from the public status endpoint; the tile is simply hidden when it has no data
   usePoll(
     () => api<StatusInfo>('/status')
-      .then((r) => setUptime(new Map(r.servers.filter((x) => x.uptime30 != null).map((x) => [x.id, x.uptime30 as number]))))
+      .then((r) => {
+        setUptime(new Map(r.servers.filter((x) => x.uptime30 != null).map((x) => [x.id, x.uptime30 as number])));
+        setDownSince(new Map((r.incidents ?? []).filter((i) => i.end == null && !i.planned).map((i) => [i.serverId, i.start])));
+      })
       .catch(() => undefined),
-    5 * 60_000,
+    60_000,
   );
 
   // total players over the last 24 h (the pulse strip) and planned maintenance (the news block)
@@ -71681,7 +71867,8 @@ function ServerList() {
   const filtered = effFilter === 'all' ? [] : sorted.filter((s) => (effFilter === 'online' ? s.online : effFilter === 'offline' ? !s.online : favs.includes(s.id)));
 
   const effView: ServersView = servers.length === 0 ? 'tiles' : view;
-  const visible = effFilter === 'all' ? sorted : filtered;
+  const visible0 = effFilter === 'all' ? sorted : filtered;
+  const visible = effView === 'list' && listSort ? sortServers(visible0, listSort, uptime) : visible0;
   const resetFilter = () => setFilter('all');
 
   // ---- bulk selection (administrators; not in the TV mode) ----
@@ -71714,6 +71901,8 @@ function ServerList() {
     onFav: () => void toggleFav(s.id),
     onOpen: () => open(s),
     select,
+    uptime: uptime.get(s.id),
+    downSince: downSince.get(s.id),
   });
 
   return (
@@ -71724,7 +71913,7 @@ function ServerList() {
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
-          <LiveBadge at={updatedAt} />
+          <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>Управление серверами</a>}
         </span>
       </PageHead>
@@ -71757,9 +71946,18 @@ function ServerList() {
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
               </button>
             )}
+            {effView === 'tiles' && (
+              <div className="seg max-sm:hidden" role="group" aria-label="Размер плиток">
+                {([['s', 'S', 'Компактные'], ['m', 'M', 'Обычные'], ['l', 'L', 'Крупные']] as const).map(([id, mark, label]) => (
+                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={label} aria-label={label} onClick={() => setSize(id)}>{mark}</button>
+                ))}
+              </div>
+            )}
             <div className="seg" role="group" aria-label="Вид списка">
               {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
+                <button key={id} type="button" className="seg-item srv-view-btn" aria-pressed={effView === id} title={label} onClick={() => setView(id)}>
+                  <ViewIcon id={id} /><span className="max-sm:sr-only">{label}</span>
+                </button>
               ))}
             </div>
           </div>
@@ -71786,6 +71984,8 @@ function ServerList() {
               <ServersList
                 servers={visible}
                 uptime={uptime}
+                sort={listSort}
+                onSort={(k) => setListSort((cur) => (cur?.key === k ? (cur.dir === 'asc' ? { key: k, dir: 'desc' } : null) : { key: k, dir: k === 'name' || k === 'ping' ? 'asc' : 'desc' }))}
                 rx={rx}
                 favOf={(id) => (me ? favs.includes(id) : null)}
                 onOpen={open}
@@ -71797,14 +71997,14 @@ function ServerList() {
             {effView === 'chart' && visible.length > 0 && <CompareChart servers={visible} />}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
-              <div className="fade-in srv-grid">
+              <div className="fade-in srv-grid" data-size={size}>
                 {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
               </div>
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
-              <div className="fade-in srv-grid">
-                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} uptime={uptime.get(hero.id)} />}
+              <div className="fade-in srv-grid" data-size={size}>
+                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
                 {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
               </div>
             )}
@@ -71821,6 +72021,9 @@ function ServerList() {
           <a href="/news">{t('nav.news')}</a>
         </footer>
       )}
+
+      <ScrollTop />
+      {pull > 0 && <div className="srv-pull" style={{ height: pull }} aria-hidden>{pull >= PULL_AT ? 'Отпустите, чтобы обновить' : 'Потяните вниз'}</div>}
 
       {selOn && (
         <BulkBar
@@ -71861,7 +72064,7 @@ const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElemen
   }
 };
 
-function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
+function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; downSince?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
   const sparkSpan = useSparkSpanMin(s.id);
   useI18n();
   const [c1, c2] = gameGradient(s.game);
@@ -71896,7 +72099,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
             <span>{gameLabel(s.game)}</span>
             <span aria-hidden>·</span>
-            <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
+            <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
           </div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
           {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
@@ -71912,9 +72115,11 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
-            {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />пинг {s.ping} мс</span>}
+            <TrendChip serverId={s.id} onDark />
+            {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
           </div>
           <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
+          <PlayerNames className="relative" names={s.playerNames ?? []} onDark />
           <div className="sh-chart relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
@@ -71925,7 +72130,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           {s.hasStatus ? (
             <div className="rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
               <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-              <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
+              <p className="mt-1 text-sm font-semibold text-white/85">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}Последний ответ: {ago(s.updatedAt)}</p>
             </div>
           ) : (
             <div className="rounded-2xl bg-white/20 px-4 py-3 text-base font-extrabold">Ожидаем первый ответ</div>
@@ -71934,16 +72139,19 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         </div>
       )}
 
-      <div className="sh-foot relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
-        <span>{spanCaption(sparkSpan)}</span>
-        {uptime != null && <span>аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-        <span className="truncate">{s.online && s.map ? `карта ${s.map}` : `обновлено ${ago(s.updatedAt)}`}</span>
+      <div className="sh-foot relative mt-auto flex flex-wrap items-center gap-1.5 text-[13px] font-bold text-white/90">
+        <span className="sh-chip">{spanCaption(sparkSpan)}</span>
+        {uptime != null && <span className="sh-chip">аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+        {s.online && s.map && <span className="sh-chip">карта {s.map}</span>}
+        {s.version && <span className="sh-chip">v{s.version}</span>}
+        {!s.online && <span className="sh-chip">обновлено {ago(s.updatedAt)}</span>}
       </div>
     </article>
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  const [who, setWho] = useState(false);
   const [c1, c2] = gameGradient(s.game);
   // the accent is taken from the cover picture, so two games of the same colour family still look different
   const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
@@ -71971,18 +72179,21 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
         <h3 className="line-clamp-2 wrap-break-word text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+        <div className="srv-chips"><span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
       {s.online ? (
         <>
-          <div className="flex items-baseline gap-1.5 px-1.5">
+          <div className={`flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-[13px] font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />{`${s.ping} мс`}</>}</span>
+            <TrendChip serverId={s.id} />
+            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-[13px] font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
+          {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
             : <div className="px-1.5"><Spark serverId={s.id} color={accent} /></div>}
@@ -71991,7 +72202,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
         s.hasStatus ? (
           <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
             <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-            <p className="truncate text-[13px] font-bold leading-snug text-bad">Не отвечает · {ago(s.updatedAt)}</p>
+            <p className="truncate text-[13px] font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : `Не отвечает · ${ago(s.updatedAt)}`}</p>
           </div>
         ) : (
           <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-[13px] font-bold text-mute">Ожидаем первый ответ</div>
@@ -72000,7 +72211,10 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="truncate font-mono" />
-        <span className="shrink-0">{s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          {uptime != null && <span className="srv-up" title="Аптайм за 30 дней">{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
+        </span>
       </div>
     </article>
   );
@@ -76705,6 +76919,88 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; padding: 8px 0 4px; font-size: 13px; font-weight: 650; color: rgb(var(--mute)); }
 .srv-foot a { color: inherit; }
 .srv-foot a:hover, .srv-foot a:focus-visible { color: rgb(var(--link)); text-decoration: underline; }
+
+/* ---------- home, pass 3 ---------- */
+/* ping as four signal bars */
+.ping-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; flex: none; }
+.ping-bars > i { width: 3px; border-radius: 1px; background: currentColor; opacity: .25; }
+.ping-bars > i.on { opacity: 1; }
+.ping-bars.ok { color: rgb(var(--ok)); }
+.ping-bars.warn { color: rgb(var(--warn)); }
+.ping-bars.bad { color: rgb(var(--bad)); }
+.srv-hero .ping-bars.ok, .srv-hero .ping-bars.warn, .srv-hero .ping-bars.bad { color: #fff; }
+.srv-hero .ping-bars.warn > i.on { background: #fbbf24; }
+.srv-hero .ping-bars.bad > i.on { background: #f87171; }
+
+/* trend chip, who is online */
+.srv-trend { display: inline-flex; align-items: baseline; gap: 4px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.srv-trend small { font-size: 12px; font-weight: 700; opacity: .8; }
+.srv-trend.up { color: rgb(var(--ok)); }
+.srv-trend.down { color: rgb(var(--bad)); }
+.srv-trend.on-dark.up { color: #86efac; }
+.srv-trend.on-dark.down { color: #fca5a5; }
+.srv-names { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; font-weight: 700; }
+.srv-names > li { padding: 2px 9px; border-radius: var(--r-pill); background: rgb(var(--soft)); color: rgb(var(--ink)); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-names.on-dark > li { background: rgb(255 255 255 / .18); color: #fff; }
+.srv-who { margin-left: auto; font-size: 12px; font-weight: 800; color: rgb(var(--link)); }
+.srv-who[aria-expanded='true'] { text-decoration: underline; }
+.srv-zero .tabular-nums, .srv-zero [class*='text-[']:first-child { color: rgb(var(--mute)); }
+
+/* chips under the tile name and in the hero footer */
+.srv-chips { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 2px; font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+.srv-chip { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 12px; line-height: 20px; }
+.srv-up { font-weight: 800; font-variant-numeric: tabular-nums; }
+.sh-chip { padding: 2px 10px; border-radius: var(--r-pill); background: rgb(255 255 255 / .16); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12); line-height: 20px; }
+
+/* hero: a stronger scrim under the text, a glow on the icon of the pulse */
+.srv-hero::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgb(8 10 20 / .30) 0%, rgb(8 10 20 / .08) 35%, rgb(8 10 20 / .50) 100%); }
+.srv-hero h2, .srv-hero .sh-count { text-shadow: 0 1px 12px rgb(0 0 0 / .35); }
+.pulse-icon { box-shadow: 0 0 0 1px rgb(var(--pulse) / .25), 0 0 18px -2px rgb(var(--pulse) / .55); }
+
+/* tile size */
+.srv-grid[data-size='s'] { gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
+.srv-grid[data-size='l'] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+
+/* live badge as a button, scroll to top, pull to refresh */
+.srv-live { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 12px; font-weight: 800; color: rgb(var(--mute)); transition: background-color .15s ease; }
+.srv-live:hover { background: rgb(var(--soft) / .7); color: rgb(var(--ink)); }
+.srv-live[aria-busy='true'] .live-dot { animation: spin-pulse .6s linear infinite; }
+@keyframes spin-pulse { 50% { transform: scale(1.6); opacity: .5; } }
+.srv-top { position: fixed; right: 16px; bottom: calc(5.5rem + env(safe-area-inset-bottom)); z-index: 40; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: rgb(var(--raised)); color: rgb(var(--ink)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+.srv-top:hover { background: rgb(var(--brand)); color: #fff; }
+@media (min-width: 768px) { .srv-top { bottom: 24px; right: 24px; } }
+.srv-pull { position: fixed; top: 0; left: 0; right: 0; z-index: 60; display: grid; place-items: end center; padding-bottom: 8px; font-size: 12px; font-weight: 800; color: rgb(var(--mute)); background: linear-gradient(rgb(var(--page)), transparent); pointer-events: none; overflow: hidden; }
+.srv-view-btn { display: inline-flex; align-items: center; gap: 6px; }
+
+/* pulse chart: cursor, tooltip, time labels, trend */
+.pulse-plot { touch-action: pan-y; }
+.pulse-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: currentColor; opacity: .45; pointer-events: none; }
+.pulse-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--raised)); color: rgb(var(--ink)); font-size: 12px; font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
+.pulse-ticks { display: flex; flex: 1; justify-content: space-between; margin: 0 8px; font-size: 11px; opacity: .75; }
+.pulse-trend { margin-left: 6px; font-size: 12px; font-weight: 800; }
+.pulse-trend.up { color: rgb(var(--ok)); }
+.pulse-trend.down { color: rgb(var(--bad)); }
+
+/* list: sortable head, state stripe, sparkline */
+.srv-sort { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; text-align: left; }
+.srv-sort:hover { color: rgb(var(--ink)); }
+.srv-stripe { align-self: stretch; width: 3px; margin-left: -8px; border-radius: 2px; background: rgb(var(--ok)); flex: none; }
+.srv-row.off .srv-stripe { background: rgb(var(--bad)); }
+.srv-head .srv-stripe { display: none; }
+.srv-rowspark { margin-left: 8px; flex: none; }
+.srv-c-players { display: flex; align-items: center; }
+
+/* what's new: unread dot, thumbnail, category bar */
+.srv-new-badge { margin-right: auto; margin-left: 8px; padding: 0 8px; border-radius: var(--r-pill); background: rgb(var(--brand)); color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; }
+.srv-new-news { position: relative; border-left: 4px solid var(--cat, transparent); }
+.srv-new-thumb { width: 100%; max-height: 120px; object-fit: cover; border-radius: var(--r-md); margin-bottom: 4px; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .srv-hero::before { background: linear-gradient(180deg, rgb(0 0 0 / .42) 0%, rgb(0 0 0 / .16) 35%, rgb(0 0 0 / .62) 100%); }
+  :root:not([data-theme='light']) .sh-chip { background: rgb(0 0 0 / .35); }
+}
+:root[data-theme='dark'] .srv-hero::before { background: linear-gradient(180deg, rgb(0 0 0 / .42) 0%, rgb(0 0 0 / .16) 35%, rgb(0 0 0 / .62) 100%); }
+:root[data-theme='dark'] .sh-chip { background: rgb(0 0 0 / .35); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
@@ -76922,7 +77218,7 @@ export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/fo
 export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
-export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, spanCaption } from './ui/charts';
+export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
@@ -77755,6 +78051,19 @@ export function MiniSpark({ serverId, color }: { serverId: number; color: string
   const vals = raw && first >= 0 ? smoothValues(filled(raw.players.slice(first)), 1) : [];
   if (vals.length < 3) return <span className="text-mute" aria-hidden>–</span>;
   return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label="График игроков за сутки" /></div>;
+}
+
+/** how many players more (or fewer) a server has than an hour ago, from the 24 h buckets; null while the history is too short */
+export function useHourTrend(serverId: number): number | null {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  if (!raw) return null;
+  let last = raw.players.length - 1;
+  while (last >= 0 && raw.players[last] == null) last--;
+  const per = Math.max(1, Math.round(raw.players.length / 24));
+  const cur = raw.players[last];
+  const before = raw.players[last - per];
+  return cur != null && before != null ? Math.round(cur - before) : null;
 }
 
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */

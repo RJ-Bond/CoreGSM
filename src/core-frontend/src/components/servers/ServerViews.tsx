@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
-import { AnimatedNumber, GameAvatar, StatusPill, ago, isLag, plural, num } from '../../ui';
+import { AnimatedNumber, GameAvatar, MiniSpark, StatusPill, ago, isLag, plural, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
+export interface ListSort { key: 'name' | 'players' | 'ping' | 'up'; dir: 'asc' | 'desc' }
 export type ServersView = 'tiles' | 'list' | 'chart';
 export const VIEW_KEY = 'coregsm_servers_view';
 
@@ -108,6 +109,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
         <StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
       </div>
       <div className="srv-c-name">
+        <span className="srv-stripe" aria-hidden />
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
           <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
@@ -123,6 +125,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
               <span className="text-mute">/ {s.maxPlayers}</span>
             </div>
             <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
+            <span className="srv-rowspark max-lg:hidden"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></span>
           </>
         ) : (
           <span className="truncate text-[13px] font-bold text-mute" title={s.error ?? undefined}>{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем ответ'}</span>
@@ -136,8 +139,10 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
   );
 }
 
-export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select }: {
+export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select, sort, onSort }: {
   select?: SelectProps;
+  sort?: ListSort | null;
+  onSort?: (k: ListSort['key']) => void;
   servers: Server[];
   uptime: Map<number, number>;
   rx: Reactions;
@@ -149,10 +154,13 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, sel
     <div className={`panel srv-list fade-in ${select?.on ? "selecting" : ""}`} aria-label="Серверы">
       <div className="srv-row srv-head">
         <div className="srv-c-status">Статус</div>
-        <div className="srv-c-name">Сервер</div>
-        <div className="srv-c-players">Игроки</div>
-        <div className="srv-c-ping">Пинг</div>
-        <div className="srv-c-up">Аптайм 30 дн</div>
+        {([['name', 'srv-c-name', 'Сервер'], ['players', 'srv-c-players', 'Игроки'], ['ping', 'srv-c-ping', 'Пинг'], ['up', 'srv-c-up', 'Аптайм 30 дн']] as const).map(([k, cls, label]) => (
+          <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
+              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            </button>
+          </div>
+        ))}
         <div className="srv-c-addr">Адрес</div>
         <div className="srv-c-fav" />
       </div>
