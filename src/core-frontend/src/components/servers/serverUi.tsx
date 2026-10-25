@@ -4,7 +4,7 @@ import type { Server } from '../../api';
 import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
-import { toast } from '../../ui';
+import { toast, useHourTrend } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 
 // ---------- reactions to changes (item 29) ----------
@@ -240,4 +240,47 @@ export function AddrCopy({ address, className = '' }: { address: string; classNa
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
     </button>
   );
+}
+
+/** four bars for the ping: the lower the ping, the more of them are lit (the colour follows the tone of the ping) */
+export function PingBars({ ping, tone }: { ping: number; tone: 'ok' | 'warn' | 'bad' }) {
+  const lit = ping <= 50 ? 4 : ping <= 100 ? 3 : ping <= 200 ? 2 : 1;
+  return (
+    <span className={`ping-bars ${tone}`} aria-hidden>
+      {[1, 2, 3, 4].map((i) => <i key={i} className={i <= lit ? 'on' : ''} style={{ height: `${4 + i * 3}px` }} />)}
+    </span>
+  );
+}
+
+/** «▲ +3 за час»: the change of the player count in the last hour (nothing while it is flat or unknown) */
+export function TrendChip({ serverId, onDark = false, className = '' }: { serverId: number; onDark?: boolean; className?: string }) {
+  useI18n();
+  const d = useHourTrend(serverId);
+  if (d == null || d === 0) return null;
+  return (
+    <span className={`srv-trend ${d > 0 ? 'up' : 'down'} ${onDark ? 'on-dark' : ''} ${className}`} title={t('srv.trend.hour')}>
+      <span aria-hidden>{d > 0 ? '▲' : '▼'}</span> {d > 0 ? `+${d}` : `−${-d}`} <small>{t('srv.trend.hour')}</small>
+    </span>
+  );
+}
+
+/** a few names of the players who are in the game now, «+N» for the rest */
+export function PlayerNames({ names, max = 6, onDark = false, className = '' }: { names: string[]; max?: number; onDark?: boolean; className?: string }) {
+  useI18n();
+  if (names.length === 0) return null;
+  return (
+    <ul className={`srv-names ${onDark ? 'on-dark' : ''} ${className}`} aria-label={t('srv.who')}>
+      {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}>{n}</li>)}
+      {names.length > max && <li className="more">+{names.length - max}</li>}
+    </ul>
+  );
+}
+
+/** «2 ч 10 мин» for a length of time in ms */
+export function durText(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60_000));
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
+  return `${Math.floor(h / 24)} дн`;
 }

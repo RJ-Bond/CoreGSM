@@ -1,5 +1,5 @@
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
-import { useId, type JSX } from 'react';
+import { useId, useState, type JSX, type PointerEvent } from 'react';
 import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
@@ -36,10 +36,20 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   const area = `${line}L${X(pts[pts.length - 1].x).toFixed(1)} ${H}L${X(pts[0].x).toFixed(1)} ${H}Z`;
   const max = Math.max(1, ...data.points.map((p) => p.players));
   const peak = data.peak;
+  const [hover, setHover] = useState<number | null>(null);
+  const near = (e: PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+    let best = 0;
+    pts.forEach((p, i) => { if (Math.abs(p.x - x) < Math.abs(pts[best].x - x)) best = i; });
+    setHover(best);
+  };
+  const hp = hover != null ? pts[hover] : null;
+  const hts = hp ? start + hp.x * (end - start) : 0;
   const pk = peak ? { x: Math.max(0, Math.min(1, (peak.ts - start) / (end - start))), y: peak.players / max } : null;
   return (
     <figure className="pulse-chart" aria-label={tr('srv.pulse.chart')}>
-      <div className="pulse-plot">
+      <div className="pulse-plot" onPointerMove={near} onPointerDown={near} onPointerLeave={() => setHover(null)}>
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-hidden>
           <defs>
             <linearGradient id={`pg${gid}`} x1="0" y1="0" x2="0" y2="1">
@@ -50,12 +60,21 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
           <path d={area} fill={`url(#pg${gid})`} />
           <path d={line} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         </svg>
+        {hp && (
+          <>
+            <span className="pulse-cursor" style={{ left: `${hp.x * 100}%` }} aria-hidden />
+            <span className="pulse-tip" style={{ left: `${Math.max(14, Math.min(86, hp.x * 100))}%` }} role="status">
+              <b>{Math.round(hp.y * max)}</b> · {fmtTime(hts)}
+            </span>
+          </>
+        )}
         {pk && peak && (
           <span className="pulse-peak" style={{ left: `${pk.x * 100}%`, top: `${((Y(pk.y)) / H) * 100}%` }} aria-hidden />
         )}
       </div>
       <figcaption>
         <span>{spanText}</span>
+        <span className="pulse-ticks" aria-hidden><span>{fmtTime(start)}</span><span>{fmtTime((start + end) / 2)}</span><span>{tr('spark.now')}</span></span>
         {peak ? <span className="pulse-peak-text">{tr('srv.pulse.peak', { n: peak.players, time: fmtTime(peak.ts) })}</span> : <span>{tr('srv.pulse.noPeak')}</span>}
       </figcaption>
     </figure>
@@ -88,6 +107,13 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
     sub = t('srv.pulse.okSub', { n: online.length });
   }
 
+  // players now against about an hour ago, from the chart buckets
+  let trend: number | null = null;
+  if (overview && overview.points.length > 1) {
+    const pts = overview.points;
+    const per = Math.max(1, Math.round(3_600_000 / overview.bucketMs));
+    if (pts.length > per) trend = pts[pts.length - 1].players - pts[pts.length - 1 - per].players;
+  }
   return (
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
       <div className="pulse-state" role="status">
@@ -100,7 +126,7 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
       <dl className="pulse-nums">
         <div>
           <dt>{t('srv.pulse.players')}</dt>
-          <dd><AnimatedNumber value={players} pulse /></dd>
+          <dd><AnimatedNumber value={players} pulse />{trend != null && trend !== 0 && <small className={`pulse-trend ${trend > 0 ? 'up' : 'down'}`} title={t('srv.trend.hour')}>{trend > 0 ? '▲' : '▼'} {Math.abs(trend)}</small>}</dd>
         </div>
         <div>
           <dt>{t('srv.pulse.servers')}</dt>
