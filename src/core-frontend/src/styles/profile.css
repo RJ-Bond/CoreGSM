@@ -167,3 +167,12 @@
 
 .vr-ladder li button { display: grid; place-items: center; width: 100%; height: 100%; border-radius: inherit; background: transparent; }
 .pf-here { color: rgb(var(--ok)); }
+
+/* player card: places among all players */
+.pl-places { display: flex; flex-wrap: wrap; gap: 8px; }
+.pl-place { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+.pl-place b { color: rgb(var(--ink)); font-weight: 800; }
+.pl-move { display: inline-flex; align-items: baseline; gap: 2px; padding: 0 6px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 11px; font-style: normal; font-weight: 800; line-height: 18px; color: rgb(var(--mute)); }
+.pl-move.up { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
+.pl-move.down { color: rgb(var(--bad)); background: rgb(var(--badbg)); }
+.pl-move.new { color: rgb(var(--link)); background: rgb(var(--link) / .14); }
