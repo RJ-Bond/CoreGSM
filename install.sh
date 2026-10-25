@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1814e8d9237f"
+COREGSM_BUILD="dba75608cdb2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -73239,9 +73239,9 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Setup.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
-import { AuthBrand, AuthShell, Button, ErrorLine, Field, noAutofill, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
+import { AuthBrand, AuthShell, Button, ErrorLine, Field, FieldError, noAutofill, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
 const STEPS = ['Аккаунт', 'Discord', 'Готово'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
@@ -73257,15 +73257,21 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   const [proxyUrl, setProxyUrl] = useState('');
   const [proxyType, setProxyType] = useState<ProxyType>('socks5');
   const [error, setError] = useState('');
+  // a mistake is shown at its own field, the focus goes there
+  const [errs, setErrs] = useState<{ user?: string; pass?: string; repeat?: string }>({});
+  const userRef = useRef<HTMLInputElement>(null);
+  const passRef = useRef<HTMLInputElement>(null);
+  const repRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [shakeCls, shake] = useShake();
 
   const next = (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!LOGIN_RE.test(username.trim())) { shake(); return setError('Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -'); }
-    if (password.length < 10) { shake(); return setError('Пароль должен быть не короче 10 символов'); }
-    if (password !== repeat) { shake(); return setError('Пароли не совпадают'); }
+    setErrs({});
+    if (!LOGIN_RE.test(username.trim())) { shake(); setErrs({ user: 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -' }); return userRef.current?.focus(); }
+    if (password.length < 10) { shake(); setErrs({ pass: 'Пароль должен быть не короче 10 символов' }); return passRef.current?.focus(); }
+    if (password !== repeat) { shake(); setErrs({ repeat: 'Пароли не совпадают' }); return repRef.current?.focus(); }
     setStep(1);
   };
 
@@ -73317,12 +73323,22 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               Код показан в конце установки. Если потерялся: <span className="font-mono">grep SETUP_TOKEN /app/.env</span>
             </p>
             <Field label="Логин администратора">
-              <input id="setup-user" className="input" value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="username" />
+              <input id="setup-user" ref={userRef} className="input" value={username} onChange={(e) => { setUsername(e.target.value); setErrs((x) => ({ ...x, user: undefined })); }} required autoComplete="username" aria-invalid={errs.user ? true : undefined} aria-describedby={errs.user ? 'setup-user-err' : undefined} />
+              <FieldError id="setup-user-err" text={errs.user} />
             </Field>
-            <PasswordField id="setup-pass" label="Пароль (от 10 символов)" value={password} onChange={setPassword} autoComplete="new-password">
+            <PasswordField id="setup-pass" ref={passRef} label="Пароль (от 10 символов)" value={password} onChange={(v) => { setPassword(v); setErrs((x) => ({ ...x, pass: undefined })); }} autoComplete="new-password" error={errs.pass}>
               <PasswordStrength password={password} />
             </PasswordField>
-            <PasswordField id="setup-pass2" label="Повторите пароль" value={repeat} onChange={setRepeat} autoComplete="new-password" />
+            <PasswordField
+              id="setup-pass2"
+              ref={repRef}
+              label="Повторите пароль"
+              value={repeat}
+              onChange={(v) => { setRepeat(v); setErrs((x) => ({ ...x, repeat: undefined })); }}
+              autoComplete="new-password"
+              error={errs.repeat}
+              hint={repeat && repeat === password && !errs.repeat ? 'Пароли совпадают ✓' : undefined}
+            />
             <ErrorLine text={error} />
             <button className="btn w-full">Далее</button>
           </form>
