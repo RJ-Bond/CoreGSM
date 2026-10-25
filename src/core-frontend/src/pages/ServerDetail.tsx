@@ -15,7 +15,7 @@ import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
 import HistoryChart, { type Series } from '../components/server/HistoryChart';
-import PlayersList from '../components/server/PlayersList';
+import PlayersList, { PlayerFacts } from '../components/server/PlayersList';
 import EventsFeed from '../components/server/EventsFeed';
 import ConnectTab from '../components/server/ConnectTab';
 import SubscribeMenu from '../components/server/SubscribeMenu';
@@ -27,10 +27,10 @@ import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { AddrCopy } from '../components/servers/serverUi';
-import { SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
+import { BlockBoundary, SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
-  countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
+  SERVER_TABS, countryName, flagEmoji, guessMode, stagger, tabHref, useNow, type TabId,
 } from '../components/server/helpers';
 import { lazyPage, PageFrame } from '../lazyPage';
 
@@ -142,6 +142,26 @@ function useTabSwipe(tab: TabId, id: number) {
   };
 }
 
+// what the user picked last time: the chart period and series, and the tab of every server
+const PREFS_KEY = 'coregsm_srv_prefs';
+const TABS_KEY = 'coregsm_srv_tabs';
+function readPrefs(): { hours: number; series: Series } {
+  try {
+    const v = JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null') as { hours?: number; series?: string } | null;
+    return { hours: v && [24, 168, 720].includes(v.hours as number) ? (v.hours as number) : 24, series: v?.series === 'ping' ? 'ping' : 'players' };
+  } catch {
+    return { hours: 24, series: 'players' };
+  }
+}
+function readTabs(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(TABS_KEY) ?? 'null') as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
   const swipe = useTabSwipe(tab, id);
@@ -159,8 +179,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     io.observe(el);
     return () => io.disconnect();
   });
-  const [hours, setHours] = useState(24);
-  const [series, setSeries] = useState<Series>('players');
+  const [prefs] = useState(readPrefs);
+  const [hours, setHours] = useState(prefs.hours);
+  const [series, setSeries] = useState<Series>(prefs.series);
+  useEffect(() => {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ hours, series })); } catch { /* private mode */ }
+  }, [hours, series]);
   const [data, setData] = useState<ServerDetails | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState('');
@@ -243,6 +267,24 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     const target = marker.getBoundingClientRect().top + window.scrollY - offset;
     if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
   }, [tab]);
+
+  // the tab is remembered per server: «/servers/5» reopens the tab the user left it on (the overview is a choice too)
+  const tabSeen = useRef(false);
+  useEffect(() => {
+    const m = readTabs();
+    if (!tabSeen.current) {
+      tabSeen.current = true;
+      const last = m[String(id)] as TabId | undefined;
+      if (!tab && last && (SERVER_TABS as readonly string[]).includes(last)) { navigate(tabHref(id, last), { replace: true }); return; }
+    }
+    m[String(id)] = tab;
+    try { localStorage.setItem(TABS_KEY, JSON.stringify(m)); } catch { /* private mode */ }
+  }, [tab, id]);
+
+  // which way the tab bar moved: the new panel slides in from that side
+  const tabIdx = TAB_LIST.findIndex((x) => x.id === tab);
+  const [slide, setSlide] = useState({ idx: tabIdx, dir: '' });
+  if (slide.idx !== tabIdx) setSlide({ idx: tabIdx, dir: tabIdx > slide.idx ? 'r' : 'l' });
 
   // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
   const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
@@ -361,6 +403,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         online: s.online, hasStatus: s.hasStatus, players: s.players, maxPlayers: s.maxPlayers,
         peak: stats.peakPlayers ?? null, peakAt: stats.peakAt ?? null, uptimePct: stats.uptimePct ?? null, avg: stats.avgPlayers ?? null,
         samples: stats.samples, windowLabel,
+        series: points.filter((p) => p.online).map((p) => p.players),
       }}
     />
   );
@@ -373,6 +416,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
         <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+        {s.online && <PlayerFacts peak={stats.peakPlayers ?? null} peakAt={stats.peakAt ?? null} avg={stats.avgPlayers ?? null} windowLabel={windowLabel} list={data.playersNow ?? []} />}
         <PlayersList {...playersProps} />
       </section>
     );
@@ -489,6 +533,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           maintenance={s.maintenance}
           freeSlot={freeSlot}
           onNotify={() => openSub('free_slot')}
+          who={(data.playersNow?.length ? data.playersNow.map((p) => p.name) : s.playerNames).filter(Boolean)}
+          whoHref={tabHref(id, 'players')}
         />
 
         <Passport
@@ -546,8 +592,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         )}
       />
 
-      <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
-        {panel}
+      <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
+        <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
       </div>
 
       {me && (

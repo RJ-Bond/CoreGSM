@@ -302,3 +302,67 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 .srv-mini b { font-weight: 800; }
 .srv-mini-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--bad)); }
 .srv-mini-dot.on { background: rgb(var(--ok)); }
+
+/* ======================================================================
+   server page, pass 2: who is playing, trends, tiles, record cards, tab slide, block errors
+   ====================================================================== */
+
+/* «Сейчас на сервере»: a stack of avatars in the banner */
+.srv-who { display: inline-flex; max-width: 100%; align-items: center; gap: 10px; margin-top: 12px; padding: 4px 14px 4px 4px; border-radius: var(--r-pill); background: rgb(0 0 0 / .22); color: #fff; text-decoration: none; transition: background-color .15s ease; }
+.srv-who:hover { background: rgb(0 0 0 / .34); }
+.srv-who-stack { display: flex; flex: none; }
+.srv-who-stack > i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: -8px; border-radius: 50%; border: 2px solid rgb(30 30 40 / .9); font-style: normal; font-size: 12px; font-weight: 800; }
+.srv-who-stack > i:first-child { margin-left: 0; }
+.srv-who-more { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; }
+
+/* metrics: sparkline and a trend arrow */
+.srv-spark { display: block; width: 100%; height: 22px; margin-top: 6px; color: var(--srv-acc, rgb(var(--brand))); opacity: .85; }
+.srv-trend { margin-left: 8px; font-size: 12.5px; font-weight: 800; letter-spacing: 0; vertical-align: middle; }
+.srv-trend.is-up { color: rgb(var(--ok)); }
+.srv-trend.is-down { color: rgb(var(--bad)); }
+.srv-trend.is-flat { color: rgb(var(--mute)); }
+
+/* players: view switch, session bar, place chip, tiles, leaving rows, record cards */
+.pl-view { flex: none; }
+.pl-view .seg-item { padding: .4rem .65rem; }
+.pl-bar { display: block; height: 4px; margin-top: 5px; border-radius: 99px; background: rgb(var(--ink) / .08); overflow: hidden; }
+.pl-bar > u { display: block; height: 100%; border-radius: inherit; background: var(--srv-acc, rgb(var(--brand))); opacity: .75; text-decoration: none; transition: width .4s ease; }
+.pl-place-chip { flex: none; padding: 0 7px; border-radius: 99px; font-size: 11.5px; font-weight: 800; line-height: 18px; background: color-mix(in srgb, var(--srv-acc, rgb(var(--brand))) 18%, transparent); color: rgb(var(--ink)); }
+.pl-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+.pl-tile { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px 10px; border-radius: var(--r-lg); background: rgb(var(--soft)); text-align: center; transition: transform .15s ease, background-color .15s ease; -webkit-touch-callout: none; user-select: none; }
+.pl-tile:hover { transform: translateY(-2px); }
+.pl-tile:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgb(var(--brand) / .55); }
+.pl-tile-n { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.pl-tile-t { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+.pl-tile .pl-bar { width: 100%; }
+.pl-row { -webkit-touch-callout: none; }
+.pl-gone { overflow: hidden; color: rgb(var(--mute)); animation: pl-gone 2.6s ease-in both; }
+@keyframes pl-gone { 0% { opacity: .9; max-height: 64px; } 70% { opacity: 0; max-height: 64px; } 100% { opacity: 0; max-height: 0; } }
+.pl-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.pl-fact { display: flex; min-width: 0; flex-direction: column; gap: 1px; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.pl-fact-k { font-size: 12.5px; font-weight: 700; color: rgb(var(--mute)); }
+.pl-fact-v { font-size: 22px; font-weight: 800; line-height: 1.15; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.pl-fact-h { font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
+
+/* a failed block */
+.srv-block-err { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; border-radius: var(--r-lg); background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* the new tab slides in from the side the user moved to */
+@keyframes tab-slide-r { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: none; } }
+@keyframes tab-slide-l { from { opacity: 0; transform: translateX(-22px); } to { opacity: 1; transform: none; } }
+.tab-slide-r { animation: tab-slide-r .28s cubic-bezier(.2, .8, .2, 1) both; }
+.tab-slide-l { animation: tab-slide-l .28s cubic-bezier(.2, .8, .2, 1) both; }
+
+/* the game's accent reaches a few more details */
+.srv-page { accent-color: var(--srv-acc); }
+.srv-page .chip-filter.on { box-shadow: 0 0 0 1.5px var(--srv-acc), 0 2px 6px rgba(40, 50, 80, .08); }
+.srv-page .pl-row:hover { background: color-mix(in srgb, var(--srv-acc) 9%, rgb(var(--soft))); }
+.srv-page ::selection { background: color-mix(in srgb, var(--srv-acc) 35%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-slide-r, .tab-slide-l { animation: none; }
+  .pl-gone { animation: none; display: none; }
+  .pl-tile { transition: none; }
+  .pl-tile:hover { transform: none; }
+}
+html[data-motion='reduce'] :is(.tab-slide-r, .tab-slide-l) { animation: none; }
