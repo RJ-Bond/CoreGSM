@@ -8,9 +8,9 @@ import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '
 import { NewsArticle } from './NewsArticle';
 import { CategoryIcon, PinIcon } from './NewsIcons';
 import { Countdown, categoryLabel, useNewsServers } from './NewsParts';
-import { cardOf, hasGeneratedCover, NewsCover, PublicFeed } from './PublicFeed';
+import { cardOf, hasGeneratedCover, PublicFeed } from './PublicFeed';
 import { markSeen, readSeen } from './newsSeen';
-import { CATEGORY_HEX, isRubricFilter, orderFeed, pickHero, plainExcerpt, visibleRubrics, type RubricFilter } from './newsLogic';
+import { CATEGORY_HEX, isRubricFilter, orderFeed, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
 const SORT_STORE = 'news_sort';
@@ -177,10 +177,8 @@ export function NewsListPage() {
 
   // sorted by something else than the date: the order comes from the server as it is
   const ordered = useMemo(() => (sort === 'new' ? orderFeed(items) : items), [items, sort]);
-  // the big block on top: only on the first page of «Все», the rest of the feed goes below it
-  const hero = filter === 'all' && sort === 'new' && !dense && !author ? pickHero(ordered) : null;
-  const shown = hero ? ordered.filter((n) => n.id !== hero.id) : ordered;
-  const heroCard = hero ? cardOf(hero) : null;
+  // every item looks the same, the newest one too: no separate big block on top
+  const shown = ordered;
 
   // the next page loads by itself when the end of the feed comes into view (the button stays as a fallback)
   const more = useRef<HTMLDivElement>(null);
@@ -259,7 +257,7 @@ export function NewsListPage() {
             </ul>
             </>
           )}
-          {loaded && ordered.length > 0 && shown.length === 0 && !hero && (
+          {loaded && ordered.length > 0 && shown.length === 0 && (
             <StateView
               kind="empty"
               art={<NewsArt />}
@@ -267,15 +265,6 @@ export function NewsListPage() {
               text={t('nw.emptyRubric.text')}
               action={<button type="button" className="btn btn-soft" onClick={() => setRubric('all')}>{t('nw.showAll')}</button>}
             />
-          )}
-          {heroCard && (
-            <article className="nw-hero fade-in">
-              <NewsCover c={heroCard} servers={servers} href={`/news/${heroCard.id}`} tall />
-              <div className="nw-hero-in">
-                {heroCard.text && <p>{plainExcerpt(heroCard.text, 260)}</p>}
-                <a className="btn" href={`/news/${heroCard.id}`}>{t('nw.readShort')}<span aria-hidden> →</span></a>
-              </div>
-            </article>
           )}
           {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
           {hasMore && (
