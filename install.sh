@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ed2aee23217c"
+COREGSM_BUILD="1814e8d9237f"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -14526,6 +14526,7 @@ export function playerCard(nick: string, now = Date.now()) {
   const hours = (v: { joined_at: number; left_at: number }) => (v.left_at - v.joined_at) / 3600_000;
   const per = new Map<number, { hours: number; visits: number; last: number }>();
   const byHour = Array<number>(24).fill(0);
+  const perDay = new Map<string, number>();
   const days = new Set<string>();
   for (const v of visits) {
     const p = per.get(v.server_id) ?? { hours: 0, visits: 0, last: 0 };
@@ -14534,7 +14535,11 @@ export function playerCard(nick: string, now = Date.now()) {
     p.last = Math.max(p.last, v.left_at);
     per.set(v.server_id, p);
     // the hours of the day the player is on, counted in quarter-hour steps
-    for (let t = v.joined_at; t < v.left_at; t += 900_000) byHour[localParts(t, zone).hour] += 0.25;
+    for (let t = v.joined_at; t < v.left_at; t += 900_000) {
+      const lp = localParts(t, zone);
+      byHour[lp.hour] += 0.25;
+      perDay.set(lp.day, (perDay.get(lp.day) ?? 0) + 0.25);
+    }
     days.add(localParts(v.joined_at, zone).day);
   }
   // the streak: days in a row with a visit, up to today (or yesterday)
@@ -14544,7 +14549,23 @@ export function playerCard(nick: string, now = Date.now()) {
     if (days.has(d)) streak++;
     else if (k > 0) break;
   }
+  // the last 90 days one by one (oldest first), for the activity calendar
+  const byDay = Array.from({ length: 90 }, (_, k) => {
+    const date = localParts(now - (89 - k) * DAY, zone).day;
+    return { date, seconds: Math.round((perDay.get(date) ?? 0) * 3600) };
+  });
   const name = visits[visits.length - 1].name;
+  // the place among all players for a week, a month and all the kept history, and the place a week ago
+  const placeIn = (list: { name: string }[]) => {
+    const i = list.findIndex((p) => p.name.toLowerCase() === name.toLowerCase());
+    return i < 0 ? null : i + 1;
+  };
+  const ranks = {
+    week: placeIn(topPlayers(now - 7 * DAY, now, 500)),
+    weekBefore: placeIn(topPlayers(now - 14 * DAY, now - 7 * DAY, 500)),
+    month: placeIn(topPlayers(now - 30 * DAY, now, 500)),
+    all: placeIn(topPlayers(0, now, 500)),
+  };
   const game = [...per.keys()].map((id) => names.get(id)?.game).find((g) => g === 'vrising');
   const total = visits.reduce((n, v) => n + hours(v), 0);
   return {
@@ -14558,6 +14579,8 @@ export function playerCard(nick: string, now = Date.now()) {
     streak,
     usualHour: byHour.some((v) => v > 0) ? byHour.indexOf(Math.max(...byHour)) : null,
     byHour: byHour.map((v) => Math.round(v * 10) / 10),
+    byDay,
+    ranks,
     servers: [...per]
       .filter(([id]) => names.has(id))
       .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
@@ -57816,7 +57839,7 @@ export const panelDomId = (id: TabId) => `srv-panel-${id || 'overview'}`;
  * Tab strip of the server page: a sliding `.seg` capsule, sticky under the glass header, scrolls sideways on phones
  * (the active tab is centred). Tabs are links, so the address bar and the back button work.
  */
-export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode }) {
+export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode; mini?: ReactNode }) {
   const seg = useRef<HTMLElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -57900,6 +57923,8 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
           })}
         </nav>
         {toc}
+        {/* once the banner is scrolled away, the name and the players stay in sight (wide screens) */}
+        {stuck && mini && <div className="srv-mini-wrap">{mini}</div>}
       </div>
     </>
   );
@@ -68929,10 +68954,11 @@ __COREGSM_EOF__
  * full size (arrows and Esc work). Signed-in players upload their own; until the staff approve a picture only its
  * author sees it, under «Мои скриншоты».
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type TouchEvent } from 'react';
 import { api, getToken, type Server } from '../api';
 import { errorText } from '../apiErrors';
 import { useAuth } from '../auth';
+import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
 import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast } from '../ui';
 import '../styles/gallery.css';
 
@@ -68969,11 +68995,29 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, [index, list.length, onClose, onIndex]);
+  // the neighbours are loaded in advance, so a step is instant
+  useEffect(() => {
+    for (const k of [index + 1, index - 1]) {
+      const n = list[(k + list.length) % list.length];
+      if (n && n !== list[index]) new Image().src = n.url;
+    }
+  }, [index, list]);
+  const touch = useRef<{ x: number; y: number } | null>(null);
+  const onStart = (e: TouchEvent) => { touch.current = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null; };
+  const onEnd = (e: TouchEvent) => {
+    const t0 = touch.current;
+    touch.current = null;
+    if (!t0 || list.length < 2) return;
+    const dx = e.changedTouches[0].clientX - t0.x;
+    const dy = e.changedTouches[0].clientY - t0.y;
+    if (Math.abs(dx) > 60 && Math.abs(dy) < Math.abs(dx) * 0.6) onIndex((index + (dx < 0 ? 1 : -1) + list.length) % list.length);
+    else if (dy > 90 && Math.abs(dx) < dy * 0.6) onClose();
+  };
   if (!s) return null;
   return (
-    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || 'Скриншот'} onClick={onClose}>
+    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || 'Скриншот'} onClick={onClose} onTouchStart={onStart} onTouchEnd={onEnd}>
       <figure className="gl-box-fig" onClick={(e) => e.stopPropagation()}>
-        <img src={s.url} alt={s.caption || 'Скриншот'} width={s.width} height={s.height} />
+        <img key={s.id} src={s.url} alt={s.caption || 'Скриншот'} width={s.width} height={s.height} style={{ backgroundImage: `url(${s.thumb})`, backgroundSize: 'cover' }} />
         <figcaption>
           <span className="min-w-0 flex-1">
             {s.caption && <span className="block font-extrabold">{s.caption}</span>}
@@ -68982,6 +69026,15 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
           <span className="text-sm font-bold opacity-75">{index + 1} / {list.length}</span>
         </figcaption>
       </figure>
+      {list.length > 1 && (
+        <div className="gl-box-strip" onClick={(e) => e.stopPropagation()} role="tablist" aria-label="Все скриншоты">
+          {list.map((x, i) => (
+            <button key={x.id} type="button" role="tab" aria-selected={i === index} className={i === index ? 'is-on' : ''} onClick={() => onIndex(i)} aria-label={x.caption || `Скриншот ${i + 1}`}>
+              <img src={x.thumb} alt="" loading="lazy" />
+            </button>
+          ))}
+        </div>
+      )}
       {list.length > 1 && (
         <>
           <button type="button" className="gl-box-nav is-prev" aria-label="Предыдущий" onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
@@ -68993,13 +69046,32 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
   );
 }
 
+/** a thumbnail that fades in once loaded, on a shimmering box of the right proportions (the page does not jump) */
+function ShotImg({ shot }: { shot: Shot }) {
+  const [ok, setOk] = useState(false);
+  return (
+    <span className={`gl-ph ${ok ? 'is-ok' : 'skeleton'}`} style={{ aspectRatio: `${shot.width} / ${shot.height}` }}>
+      <img
+        ref={(el) => { if (el?.complete && !ok) setOk(true); }}
+        src={shot.thumb}
+        alt=""
+        loading="lazy"
+        width={640}
+        height={Math.round((640 * shot.height) / shot.width)}
+        onLoad={() => setOk(true)}
+        onError={() => setOk(true)}
+      />
+    </span>
+  );
+}
+
 export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: number) => void; badge?: (s: Shot) => string | null }) {
   return (
     <ul className="gl-grid">
       {list.map((s, i) => (
         <li key={s.id} className="gl-cell">
           <button type="button" className="gl-shot" onClick={() => onOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
-            <img src={s.thumb} alt="" loading="lazy" width={640} height={Math.round((640 * s.height) / s.width)} />
+            <ShotImg shot={s} />
             {s.featured && <span className="gl-star" title="Лучшее">★</span>}
             {badge?.(s) && <span className="gl-badge">{badge(s)}</span>}
             {(s.caption || s.author) && (
@@ -69015,8 +69087,8 @@ export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: nu
   );
 }
 
-function UploadForm({ servers, onClose, onDone }: { servers: Server[]; onClose: () => void; onDone: (s: Shot) => void }) {
-  const [file, setFile] = useState<File | null>(null);
+function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; onClose: () => void; onDone: (s: Shot) => void; initial?: File | null }) {
+  const [file, setFile] = useState<File | null>(initial ?? null);
   const [preview, setPreview] = useState('');
   const [caption, setCaption] = useState('');
   const [serverId, setServerId] = useState<number | ''>('');
@@ -69079,6 +69151,7 @@ export default function GalleryPage() {
   const [servers, setServers] = useState<Server[]>([]);
   const [open, setOpen] = useState<{ list: Shot[]; i: number } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [dropped, setDropped] = useState<File | null>(null);
   const [error, setError] = useState('');
   const topRef = useRef<HTMLDivElement>(null);
 
@@ -69089,8 +69162,16 @@ export default function GalleryPage() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (me) api<Server[]>('/servers').then(setServers).catch(() => undefined); }, [me]);
 
+  // a picture dropped anywhere on the page opens the upload form with it
+  const drop = useDropTarget((f) => {
+    if (!me) return toast('Войдите, чтобы загрузить скриншот', 'err');
+    if (!IMAGE_TYPES.includes(f.type)) return toast('Нужна картинка: PNG, JPG или WebP', 'err');
+    setDropped(f);
+    setUploading(true);
+  }, uploading);
   return (
-    <div className="space-y-5" ref={topRef}>
+    <div className="space-y-5" ref={topRef} {...drop.props}>
+      {drop.over && <div className="gl-dropzone" aria-hidden><span>Отпустите, чтобы загрузить скриншот</span></div>}
       <PageHead
         icon={<IconImage />}
         title="Галерея"
@@ -69116,9 +69197,11 @@ export default function GalleryPage() {
       {uploading && (
         <UploadForm
           servers={servers}
-          onClose={() => setUploading(false)}
+          initial={dropped}
+          onClose={() => { setUploading(false); setDropped(null); }}
           onDone={(s) => {
             setUploading(false);
+            setDropped(null);
             toast(s.status === 'approved' ? 'Скриншот опубликован' : 'Скриншот отправлен на проверку');
             load();
           }}
@@ -70606,6 +70689,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
+import { ActivityStrip } from '../components/profile/Stats';
 import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
@@ -70624,10 +70708,25 @@ interface PlayerCard {
   streak: number;
   usualHour: number | null;
   byHour: number[];
+  /** the last 90 days, oldest first */
+  byDay: { date: string; seconds: number }[];
+  ranks: { week: number | null; weekBefore: number | null; month: number | null; all: number | null };
   servers: { id: number; name: string; game: string; hours: number; visits: number; last: number }[];
   recent: { serverId: number; serverName: string; from: number; to: number | null }[];
   rankId?: string;
   achievements?: Achievement[];
+}
+
+/** «№ 7 за неделю ▲2»: the place among all players, with the move against the week before */
+function RankChip({ place, before, label }: { place: number | null; before?: number | null; label: string }) {
+  if (place == null) return null;
+  const d = before === undefined ? null : before == null ? 'new' : before - place;
+  return (
+    <span className="pl-place">
+      <b>№ {place}</b> {label}
+      {d === 'new' ? <i className="pl-move new">новый</i> : typeof d === 'number' && d !== 0 ? <i className={`pl-move ${d > 0 ? 'up' : 'down'}`}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</i> : null}
+    </span>
+  );
 }
 
 const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
@@ -70659,11 +70758,22 @@ export default function PlayerPage({ name }: { name: string }) {
         <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-black leading-tight">{p.name}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-2 font-bold text-mute">
-            {p.online ? <span className="cm-live">сейчас в игре</span> : p.lastSeen ? <span>был {ago(p.lastSeen)}</span> : null}
+            {p.online ? (
+              <span className="cm-live">
+                сейчас в игре{(() => { const v = p.recent.find((r) => r.to == null); return v ? <> · <a href={`/servers/${v.serverId}`} className="underline decoration-dotted underline-offset-2">{v.serverName}</a></> : null; })()}
+              </span>
+            ) : p.lastSeen ? <span>был {ago(p.lastSeen)}</span> : null}
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>впервые {fmtDateTime(p.firstSeen)}</span>
           </p>
         </div>
+        {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (
+          <div className="pl-places basis-full" aria-label="Места среди игроков">
+            <RankChip place={p.ranks.week} before={p.ranks.weekBefore} label="за неделю" />
+            <RankChip place={p.ranks.month} label="за месяц" />
+            <RankChip place={p.ranks.all} label="за всё время" />
+          </div>
+        )}
         <dl className="pl-stats">
           <div><dt>Часов</dt><dd>{num(p.hours)}</dd></div>
           <div><dt>Визитов</dt><dd>{p.visits}</dd></div>
@@ -70707,6 +70817,11 @@ export default function PlayerPage({ name }: { name: string }) {
           </ul>
         </section>
       </div>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Активность за 90 дней</h2>
+        <ActivityStrip byDay={p.byDay} />
+      </section>
 
       {p.achievements && p.achievements.length > 0 && (
         <section className="tile p-4 sm:p-5">
@@ -71600,7 +71715,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { t, useI18n } from '../i18n';
 import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
@@ -71625,7 +71740,8 @@ import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
-import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
+import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
+import { AddrCopy } from '../components/servers/serverUi';
 import { SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
@@ -71710,8 +71826,40 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
   );
 }
 
+/** on a phone a swipe along the page moves to the next / previous tab; charts, scrollable blocks and the screen edges are left alone */
+function useTabSwipe(tab: TabId, id: number) {
+  const start = useRef<{ x: number; y: number; at: number } | null>(null);
+  const scrollsX = (el: HTMLElement | null) => {
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      if (n.scrollWidth > n.clientWidth + 2 && /(auto|scroll)/.test(getComputedStyle(n).overflowX)) return true;
+    }
+    return false;
+  };
+  return {
+    onTouchStart: (e: TouchEvent<HTMLElement>) => {
+      const p = e.touches[0];
+      const el = e.target as HTMLElement;
+      const edge = p.clientX < 24 || p.clientX > window.innerWidth - 24;
+      start.current = edge || el.closest('svg, canvas, input, select, textarea, [role="slider"], [data-noswipe]') || scrollsX(el) ? null : { x: p.clientX, y: p.clientY, at: Date.now() };
+    },
+    onTouchEnd: (e: TouchEvent<HTMLElement>) => {
+      const s = start.current;
+      start.current = null;
+      if (!s) return;
+      const p = e.changedTouches[0];
+      const dx = p.clientX - s.x;
+      const dy = p.clientY - s.y;
+      if (Math.abs(dx) < 80 || Math.abs(dy) > Math.abs(dx) * 0.5 || Date.now() - s.at > 600) return;
+      const i = TAB_LIST.findIndex((x) => x.id === tab);
+      const n = dx < 0 ? i + 1 : i - 1;
+      if (n >= 0 && n < TAB_LIST.length) navigate(tabHref(id, TAB_LIST[n].id));
+    },
+  };
+}
+
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
+  const swipe = useTabSwipe(tab, id);
   const { me, isAdmin } = useAuth();
   // editing a server: administrators and moderators given «Серверы»
   const canEdit = isAdmin || !!me?.perms?.includes('servers');
@@ -72103,9 +72251,17 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         id={id}
         tab={tab}
         counts={{ events: events.length, players: s.online ? s.players : 0 }}
+        mini={(
+          <span className="srv-mini">
+            <i className={`srv-mini-dot ${s.online ? 'on' : 'off'}`} aria-hidden />
+            <b className="truncate">{s.name}</b>
+            <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : 'не в сети'}</span>
+            <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
+          </span>
+        )}
       />
 
-      <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
+      <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         {panel}
       </div>
 
@@ -76724,6 +76880,16 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 @media (max-width: 639px) { .srv-addr-btn { min-width: 0; max-width: 100%; } }
 /* reviews: an empty block is one line */
 .rv-none { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
+
+/* the name and the players in the sticky tab bar (wide screens, once the banner is scrolled away) */
+.srv-mini-wrap { display: none; }
+@media (min-width: 1100px) {
+  .srv-mini-wrap { display: block; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); max-width: 38%; }
+}
+.srv-mini { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 4px 10px 4px 12px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 13px; font-weight: 700; }
+.srv-mini b { font-weight: 800; }
+.srv-mini-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--bad)); }
+.srv-mini-dot.on { background: rgb(var(--ok)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
@@ -76767,6 +76933,28 @@ __COREGSM_EOF__
 .ga-meta { padding: 8px 12px 0; min-width: 0; }
 .ga-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px 12px; }
 .ga-acts .row-act { margin-left: auto; }
+
+/* thumbnails fade in on a box of the right proportions */
+.gl-ph { display: block; width: 100%; overflow: hidden; }
+.gl-ph > img { opacity: 0; transition: opacity .35s ease, transform .5s cubic-bezier(.2, .8, .2, 1); }
+.gl-ph.is-ok > img { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .gl-ph > img { transition: none; } }
+
+/* the viewer: a strip of thumbnails, swipe on a phone */
+.gl-box { touch-action: pan-y pinch-zoom; }
+.gl-box-strip { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; gap: 6px; padding: 0 64px; overflow-x: auto; scrollbar-width: none; }
+.gl-box-strip::-webkit-scrollbar { display: none; }
+.gl-box-strip button { flex: none; width: 56px; height: 40px; border-radius: var(--r-sm); overflow: hidden; opacity: .55; box-shadow: 0 0 0 2px transparent; transition: opacity .15s ease, box-shadow .15s ease; }
+.gl-box-strip button:hover { opacity: .9; }
+.gl-box-strip button.is-on { opacity: 1; box-shadow: 0 0 0 2px #fff; }
+.gl-box-strip img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.gl-box-fig img { min-width: 120px; background-color: rgb(20 22 32); }
+.gl-box-fig img { max-height: calc(100dvh - 190px); }
+@media (max-width: 639px) { .gl-box-strip { bottom: 66px; padding: 0 12px; justify-content: flex-start; } .gl-box-fig img { max-height: calc(100dvh - 230px); } }
+
+/* a picture dragged over the page */
+.gl-dropzone { position: fixed; inset: 12px; z-index: 70; display: grid; place-items: center; border: 3px dashed rgb(var(--brand)); border-radius: var(--r-xl); background: rgb(var(--brand) / .12); pointer-events: none; }
+.gl-dropzone > span { padding: 12px 22px; border-radius: var(--r-pill); background: rgb(var(--brand)); color: #fff; font-size: 18px; font-weight: 800; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
@@ -77339,6 +77527,15 @@ __COREGSM_EOF__
 
 .vr-ladder li button { display: grid; place-items: center; width: 100%; height: 100%; border-radius: inherit; background: transparent; }
 .pf-here { color: rgb(var(--ok)); }
+
+/* player card: places among all players */
+.pl-places { display: flex; flex-wrap: wrap; gap: 8px; }
+.pl-place { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+.pl-place b { color: rgb(var(--ink)); font-weight: 800; }
+.pl-move { display: inline-flex; align-items: baseline; gap: 2px; padding: 0 6px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 11px; font-style: normal; font-weight: 800; line-height: 18px; color: rgb(var(--mute)); }
+.pl-move.up { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
+.pl-move.down { color: rgb(var(--bad)); background: rgb(var(--badbg)); }
+.pl-move.new { color: rgb(var(--link)); background: rgb(var(--link) / .14); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/servers.css" << '__COREGSM_EOF__'

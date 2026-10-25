@@ -75,6 +75,10 @@ describe('api: community and player cards', () => {
     assert.equal(p.servers[0].hours, 6);
     assert.equal(p.byHour.reduce((n: number, v: number) => n + v, 0), 12);
     assert.equal(p.recent.length, 6);
+    assert.equal(p.byDay.length, 90);
+    assert.equal(p.byDay.reduce((n: number, d: { seconds: number }) => n + d.seconds, 0), 12 * 3600);
+    assert.equal(p.ranks.week, 1);
+    assert.equal(p.ranks.all, 1);
     const live = await api.call('GET', '/api/players/Live');
     assert.equal(live.body.online, true);
     assert.equal(live.body.lastSeen, null);
