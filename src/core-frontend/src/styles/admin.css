@@ -106,3 +106,15 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 [data-density='compact'] .divide-y > li { padding-block: .35rem; }
 [data-density='compact'] .adm-tile { padding: 9px 12px; }
 [data-density='compact'] .adm-tile-v { font-size: 20px; }
+
+/* quiet hours of the alerts: the day in 24 cells */
+.qh-day { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 3px; }
+.qh-day > span { height: 18px; border-radius: 4px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.qh-day > span.is-quiet { background: rgb(var(--brand) / .55); box-shadow: none; }
+.qh-ticks { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; color: rgb(var(--mute)); }
+
+/* backups: a bar per copy */
+.bk-line { display: flex; align-items: flex-end; gap: 3px; height: 56px; }
+.bk-line > span { flex: 1 1 0; max-width: 22px; min-height: 6px; border-radius: 4px 4px 2px 2px; background: rgb(var(--link)); opacity: .75; transition: opacity .15s ease; }
+.bk-line > span:hover { opacity: 1; }
+.bk-line > span.is-manual { background: rgb(var(--ok)); }
