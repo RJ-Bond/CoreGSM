@@ -8,6 +8,7 @@ import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
+import { newsImage } from '../components/news/newsLogic';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
@@ -46,6 +47,8 @@ function NewsList() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [picked, setPicked] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [changingTest, setChangingTest] = useState(false);
   const [view, setView] = useState<'list' | 'calendar'>(() => {
     try { return localStorage.getItem('news_view') === 'calendar' ? 'calendar' : 'list'; } catch { return 'list'; }
@@ -100,6 +103,29 @@ function NewsList() {
     await api(`/news/${n.id}/schedule`, 'PATCH', { scheduledAt: at })
       .then(() => toast(`Перенесено на ${fmtDateTime(at)}`))
       .catch((e) => setError(e.message));
+    void load();
+  };
+  const togglePin = async (n: NewsItem) => {
+    await api(`/news/${n.id}/pin`, 'PATCH', { pinned: !n.pinned }).then(() => toast(n.pinned ? 'Откреплено' : 'Закреплено вверху ленты')).catch((e) => setError(e.message));
+    void load();
+  };
+  const pick = (id: number) => setPicked((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const chosen = list.filter((n) => picked.includes(n.id));
+  const bulk = async (kind: 'publish' | 'pin' | 'unpin' | 'delete') => {
+    if (chosen.length === 0) return;
+    if (kind === 'delete') {
+      const sent = chosen.filter((n) => n.status === 'sent').length;
+      if (!(await confirmDialog({ title: `Удалить новостей: ${chosen.length}?`, text: sent ? `Опубликованных среди них ${sent}: их сообщения также удалятся из Discord.` : undefined, confirmLabel: 'Удалить', danger: true }))) return;
+    }
+    setBulkBusy(true);
+    const todo = kind === 'publish' ? chosen.filter((n) => ['draft', 'scheduled', 'error'].includes(n.status))
+      : kind === 'pin' ? chosen.filter((n) => !n.pinned) : kind === 'unpin' ? chosen.filter((n) => n.pinned) : chosen;
+    const res = await Promise.allSettled(todo.map((n) => (kind === 'publish' ? api(`/news/${n.id}/publish`, 'POST') : kind === 'delete' ? api(`/news/${n.id}`, 'DELETE') : api(`/news/${n.id}/pin`, 'PATCH', { pinned: kind === 'pin' }))));
+    const bad = res.filter((r) => r.status === 'rejected').length;
+    const verb = { publish: 'Отправлено', pin: 'Закреплено', unpin: 'Откреплено', delete: 'Удалено' }[kind];
+    toast(bad ? `${verb}: ${todo.length - bad}, не удалось: ${bad}` : todo.length ? `${verb}: ${todo.length}` : 'Подходящих новостей среди выбранных нет', bad ? 'err' : undefined);
+    setPicked([]);
+    setBulkBusy(false);
     void load();
   };
   const remove = async (n: NewsItem) => {
@@ -203,24 +229,54 @@ function NewsList() {
         </div>
       )}
 
+      {list.length > 1 && view === 'list' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
+          <label className="flex items-center gap-2 font-bold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === list.length} onChange={(e) => setPicked(e.target.checked ? list.map((n) => n.id) : [])} />
+            {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
+          </label>
+          {picked.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-2">
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('publish')}>Опубликовать</button>
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('pin')}>Закрепить</button>
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('unpin')}>Открепить</button>
+              <button className="btn btn-danger btn-sm" disabled={bulkBusy} onClick={() => void bulk('delete')}>Удалить</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
         {list.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
-            <article key={n.id} className="panel flex flex-col gap-3 overflow-hidden p-5" style={{ borderTop: `4px solid ${color}` }}>
+            <article key={n.id} className={`panel flex flex-col gap-3 overflow-hidden p-5 ${picked.includes(n.id) ? 'ring-2 ring-brand/60' : ''}`} style={{ borderTop: `4px solid ${color}` }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5">
+                  {list.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(n.id)} onChange={() => pick(n.id)} aria-label={`Выбрать: ${n.title}`} />}
                   <StatusPill n={n} />
+                  {n.pinned && <span className="pill pill-ok">ЗАКРЕПЛЕНО</span>}
                   {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? 'КАЖДЫЙ ДЕНЬ' : n.repeat === 'weekly' ? 'КАЖДУЮ НЕДЕЛЮ' : 'КАЖДЫЙ МЕСЯЦ'}</span>}
                 </div>
                 <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
               </div>
-              <h3 className="line-clamp-2 wrap-break-word text-lg font-black leading-tight">{n.title}</h3>
-              {excerpt(n) && <p className="line-clamp-3 wrap-break-word text-sm font-semibold text-mute">{excerpt(n)}</p>}
+              <div className="flex items-start gap-3">
+                {newsImage(n.payload) && <img src={newsImage(n.payload) ?? ''} alt="" loading="lazy" className="nl-thumb" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
+                <div className="min-w-0 flex-1">
+                  <h3 className="line-clamp-2 wrap-break-word text-lg font-black leading-tight">{n.title}</h3>
+                  {excerpt(n) && <p className="mt-1 line-clamp-3 wrap-break-word text-sm font-semibold text-mute">{excerpt(n)}</p>}
+                </div>
+              </div>
+              {(n.reactions ?? []).some((r) => r.count > 0) && (
+                <p className="flex flex-wrap gap-1.5 text-sm font-bold" aria-label="Реакции">
+                  {(n.reactions ?? []).filter((r) => r.count > 0).map((r) => <span key={r.emoji} className="nl-react">{r.emoji} {r.count}</span>)}
+                </p>
+              )}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>Изменить</a>
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
+                <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? 'Открепить' : 'Закрепить'}</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <span className="ml-auto flex items-center gap-1.5">

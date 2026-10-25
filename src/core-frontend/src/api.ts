@@ -477,6 +477,10 @@ export interface NewsItem {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  /** the rubric, the pin and the reactions (the admin list shows them) */
+  category?: NewsCategory;
+  pinned?: boolean;
+  reactions?: NewsReaction[];
 }
 
 export interface NewsSettings {
@@ -702,6 +706,9 @@ export interface NewsReaction { emoji: string; count: number; mine: boolean }
 
 /** GET /news/:id */
 export interface PublicNewsFull extends PublicNews {
+  /** the last edit made well after the publication, and how many there were (absent: not edited) */
+  editedAt?: number | null;
+  edits?: number;
   prev?: { id: number; title: string } | null;
   next?: { id: number; title: string } | null;
   /** up to three other news to read next (the same rubric first) */
