@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
@@ -47,6 +47,9 @@ function sortServers(list: Server[], sort: ListSort, uptime: Map<number, number>
 /** pull down from the very top of the page (touch): returns the current pull in px, calls `onPull` after a long enough pull */
 function usePullToRefresh(onPull: () => void): number {
   const [pull, setPull] = useState(0);
+  // the latest callback without re-subscribing (a re-subscription in the middle of a touch would forget where it began)
+  const cb = useRef(onPull);
+  cb.current = onPull;
   useEffect(() => {
     let y0: number | null = null;
     let cur = 0;
@@ -57,7 +60,7 @@ function usePullToRefresh(onPull: () => void): number {
       setPull(cur);
     };
     const end = () => {
-      if (y0 != null && cur >= PULL_AT) onPull();
+      if (y0 != null && cur >= PULL_AT) cb.current();
       y0 = null;
       cur = 0;
       setPull(0);
@@ -72,7 +75,7 @@ function usePullToRefresh(onPull: () => void): number {
       window.removeEventListener('touchend', end);
       window.removeEventListener('touchcancel', end);
     };
-  }, [onPull]);
+  }, []);
   return pull;
 }
 
