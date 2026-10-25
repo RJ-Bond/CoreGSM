@@ -3,7 +3,7 @@ import { downsample, trendPct } from './serverLogic';
 
 describe('trendPct', () => {
   it('compares the last third with the first third', () => {
-    expect(trendPct([10, 10, 12, 14, 15, 20])).toBe(100);
+    expect(trendPct([10, 10, 12, 14, 15, 20])).toBe(75);
     expect(trendPct([20, 20, 15, 12, 10, 10])).toBe(-50);
   });
   it('has no answer for short series or an empty base', () => {
