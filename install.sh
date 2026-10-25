@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1d9395a0c486"
+COREGSM_BUILD="a651fe442eda"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7551,6 +7551,10 @@ export const ERRORS = {
   notice_long: 'Текст объявления — до 500 символов',
   sub_test_wait: 'Подождите несколько секунд перед следующей проверкой',
 
+  // ---- following a player ----
+  follow_nick_missing: 'Укажите ник игрока',
+  follow_limit: 'Можно следить не больше чем за {n} игроками',
+
   // ---- maintenance windows ----
   maintenance_not_found: 'Окно обслуживания не найдено',
   bad_date: 'Неверная дата',
@@ -8186,6 +8190,7 @@ import { trackAlerts } from './alerts.js';
 import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
 import { onSessionsOpened } from './nickOnboarding.js';
+import { notifyFollowers } from './playerFollows.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
 import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
@@ -8345,6 +8350,7 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
     syncPlayersNow(s.id, r.playerNames, d.online, ts);
     const opened = syncPlayerSessions(s.id, r.playerNames, d.online, ts);
     onSessionsOpened(s.id, opened, ts);
+    notifyFollowers(s.id, opened, ts);
     if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
     else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {
@@ -8480,6 +8486,7 @@ __COREGSM_EOF__
  */
 import type { Express, RequestHandler } from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
@@ -8504,6 +8511,8 @@ export interface Sample {
   botState: string;
   queueLen: number;
   diskFree: number | null;
+  /** 1-minute load average per core, percent (absent: not measured) */
+  loadPct?: number | null;
 }
 
 export interface Flag {
@@ -8546,6 +8555,9 @@ export function botStateNow(now = Date.now()): string {
 }
 const botBad = (s: string) => s === 'offline' || s === 'error';
 
+/** the processor load: 1-minute load average divided by the cores (0 where the system has no load average) */
+export const loadPctNow = (): number => Math.round((os.loadavg()[0] / Math.max(1, os.cpus().length)) * 1000) / 10;
+
 export function sampleNow(now = Date.now()): Sample {
   const p = lastPollStats();
   return {
@@ -8557,14 +8569,15 @@ export function sampleNow(now = Date.now()): Sample {
     botState: botStateNow(now),
     queueLen: queueLen(),
     diskFree: diskFree(),
+    loadPct: loadPctNow(),
   };
 }
 
 export function recordSample(now = Date.now()): Sample {
   const s = sampleNow(now);
   db.prepare(
-    'INSERT OR REPLACE INTO health_samples (ts, db_bytes, rss_mb, poll_ms, poll_failures, bot_state, queue_len, disk_free) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(s.ts, s.dbBytes, s.rssMb, s.pollMs, s.pollFailures, s.botState, s.queueLen, s.diskFree);
+    'INSERT OR REPLACE INTO health_samples (ts, db_bytes, rss_mb, poll_ms, poll_failures, bot_state, queue_len, disk_free, load_pct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(s.ts, s.dbBytes, s.rssMb, s.pollMs, s.pollFailures, s.botState, s.queueLen, s.diskFree, s.loadPct ?? null);
   db.prepare('DELETE FROM health_samples WHERE ts < ?').run(now - KEEP_MS);
   return s;
 }
@@ -8578,6 +8591,7 @@ interface Row {
   bot_state: string;
   queue_len: number;
   disk_free: number | null;
+  load_pct: number | null;
 }
 const toSample = (r: Row): Sample => ({
   ts: r.ts,
@@ -8588,6 +8602,7 @@ const toSample = (r: Row): Sample => ({
   botState: r.bot_state,
   queueLen: r.queue_len,
   diskFree: r.disk_free,
+  loadPct: r.load_pct,
 });
 
 export function samplesSince(since: number): Sample[] {
@@ -8855,6 +8870,7 @@ import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverDa
 import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from './shutdown.js';
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
+import { registerPlayerFollows } from './playerFollows.js';
 import { router as accountRouter } from './routes/account.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
@@ -8974,6 +8990,7 @@ registerSecurity({
 });
 registerDeliveries({ app, admin, internal });
 registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => bot.status.state === 'online' });
+registerPlayerFollows({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerGames(app);
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
@@ -9844,6 +9861,12 @@ CREATE TABLE IF NOT EXISTS smart_state (
     name: 'status.state_since',
     // when the server entered its current state (online / offline); NULL = not known yet
     up: (db) => addColumn(db, 'status', 'state_since', 'INTEGER'),
+  },
+  {
+    version: 11,
+    name: 'health_samples.load_pct',
+    // the load of the processor (1-minute load average per core, in percent); NULL = not measured (older samples, Windows)
+    up: (db) => addColumn(db, 'health_samples', 'load_pct', 'REAL'),
   },
 ];
 
@@ -11734,6 +11757,121 @@ export function registerOverview({ app, viewer }: { app: Express; viewer: Reques
     const n = Number(req.query.limit ?? 8);
     const limit = Math.min(50, Math.max(1, Number.isFinite(n) ? Math.floor(n) : 8));
     res.json(recentEvents(limit));
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/playerFollows.ts" << '__COREGSM_EOF__'
+/**
+ * Following a player: a signed-in user asks to be told when a game nick joins any server.
+ * The notification goes to the in-panel inbox, to Discord (a DM, when the account is linked and the bot is online)
+ * and to the devices with Web Push, like the server subscriptions. One notification per (user, nick) per 30 minutes,
+ * so a player who reconnects over and over is not announced over and over.
+ *
+ *   GET    /api/me/follows            the nicks I follow
+ *   PUT    /api/players/:nick/follow  follow (at most 30 nicks)
+ *   DELETE /api/players/:nick/follow  stop following
+ *
+ * gsm.ts calls notifyFollowers() with the sessions a poll has just opened.
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { db, EFFECTIVE_NAME } from './db.js';
+import { enqueueDelivery } from './deliveries.js';
+import { dmAvailable, pushToUser } from './subscriptions.js';
+import { log } from './logger.js';
+
+export const MAX_FOLLOWS = 30;
+/** minimum gap between two notifications about the same nick for the same user */
+export const FOLLOW_GAP_MS = 30 * 60_000;
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS player_follows (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nick_key TEXT NOT NULL,
+  nick TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_notified_at INTEGER,
+  PRIMARY KEY (user_id, nick_key)
+);
+CREATE INDEX IF NOT EXISTS idx_follows_nick ON player_follows(nick_key);
+`);
+
+/** the key a nick is compared by: case does not matter */
+export const nickKey = (nick: string): string => nick.trim().toLowerCase();
+
+/** a usable nick: 1..64 characters after trimming */
+export const validNick = (nick: unknown): nick is string => typeof nick === 'string' && nick.trim().length >= 1 && nick.trim().length <= 64;
+
+export const mayNotifyFollow = (last: number | null, now: number): boolean => last === null || now - last >= FOLLOW_GAP_MS;
+
+export const followText = (nick: string, serverName: string, address: string): string =>
+  `🎮 ${nick} зашёл на «${serverName}».${address ? ` Адрес: ${address}` : ''}`;
+
+/** Poller hook: sessions that were just opened. Never throws into the poller. */
+export function notifyFollowers(serverId: number, names: string[], now = Date.now()): number {
+  try {
+    if (!names.length) return 0;
+    const keys = [...new Set(names.map(nickKey))];
+    const found = db
+      .prepare(
+        `SELECT f.user_id, f.nick_key, f.last_notified_at, u.discord_id FROM player_follows f
+           JOIN users u ON u.id = f.user_id AND u.status = 'active'
+         WHERE f.nick_key IN (${keys.map(() => '?').join(',')})`,
+      )
+      .all(...keys) as { user_id: number; nick_key: string; last_notified_at: number | null; discord_id: string | null }[];
+    if (!found.length) return 0;
+    const info = db
+      .prepare(`SELECT ${EFFECTIVE_NAME} AS n, s.display_address, s.host, s.port FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`)
+      .get(serverId) as { n: string; display_address: string; host: string; port: number } | undefined;
+    if (!info) return 0;
+    const address = info.display_address || `${info.host}:${info.port}`;
+    const shown = new Map(names.map((n) => [nickKey(n), n]));
+    const insert = db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, ?, ?)');
+    const touch = db.prepare('UPDATE player_follows SET last_notified_at = ? WHERE user_id = ? AND nick_key = ?');
+    let n = 0;
+    for (const f of found) {
+      if (!mayNotifyFollow(f.last_notified_at, now)) continue;
+      const text = followText(shown.get(f.nick_key) ?? f.nick_key, info.n, address);
+      insert.run(f.user_id, now, 'player_online', serverId, text);
+      touch.run(now, f.user_id, f.nick_key);
+      if (f.discord_id && dmAvailable()) enqueueDelivery({ kind: 'dm', refId: null, target: f.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+      pushToUser(f.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `follow-${f.nick_key}` });
+      n++;
+    }
+    return n;
+  } catch (e) {
+    log.error('player follows failed', (e as Error).message);
+    return 0;
+  }
+}
+
+export function registerPlayerFollows(deps: { app: Express; auth: RequestHandler; userId: (req: Request) => number }): void {
+  const { app, auth, userId } = deps;
+
+  app.get('/api/me/follows', auth, (req, res) => {
+    const rows = db.prepare('SELECT nick, created_at FROM player_follows WHERE user_id = ? ORDER BY created_at DESC').all(userId(req)) as { nick: string; created_at: number }[];
+    res.json(rows.map((r) => ({ nick: r.nick, createdAt: r.created_at })));
+  });
+
+  app.put('/api/players/:nick/follow', auth, (req, res) => {
+    const nick = String(req.params.nick ?? '');
+    if (!validNick(nick)) return res.status(400).json({ error: 'Укажите ник игрока' });
+    const uid = userId(req);
+    const key = nickKey(nick);
+    const have = db.prepare('SELECT 1 FROM player_follows WHERE user_id = ? AND nick_key = ?').get(uid, key);
+    if (!have) {
+      const n = (db.prepare('SELECT COUNT(*) AS n FROM player_follows WHERE user_id = ?').get(uid) as { n: number }).n;
+      if (n >= MAX_FOLLOWS) return res.status(400).json({ error: `Можно следить не больше чем за ${MAX_FOLLOWS} игроками` });
+      db.prepare('INSERT INTO player_follows (user_id, nick_key, nick, created_at) VALUES (?, ?, ?, ?)').run(uid, key, nick.trim(), Date.now());
+    }
+    res.json({ nick: nick.trim(), following: true });
+  });
+
+  app.delete('/api/players/:nick/follow', auth, (req, res) => {
+    const nick = String(req.params.nick ?? '');
+    if (!validNick(nick)) return res.status(400).json({ error: 'Укажите ник игрока' });
+    db.prepare('DELETE FROM player_follows WHERE user_id = ? AND nick_key = ?').run(userId(req), nickKey(nick));
+    res.json({ nick: nick.trim(), following: false });
   });
 }
 __COREGSM_EOF__
@@ -17228,6 +17366,8 @@ import { enqueueDelivery } from './deliveries.js';
 type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
 let pushLater: PushHook = () => undefined;
 export const setPushHook = (fn: PushHook) => { pushLater = fn; };
+/** for the other notifiers (player follows): a push to the devices of one user */
+export const pushToUser: PushHook = (userId, m) => pushLater(userId, m);
 
 export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
 export type SubKind = (typeof SUB_KINDS)[number];
@@ -49288,7 +49428,7 @@ import { api } from '../api';
 import { buildSparkline, downsample } from '../sparkline';
 import { Section, fmtTime } from '../ui';
 
-export interface HealthSample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null }
+export interface HealthSample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null; loadPct?: number | null }
 export interface HealthFlag { kind: 'bot_offline' | 'poll_slow' | 'disk_low' | 'db_growing' | string; since: number; text: string }
 interface HistoryResponse { samples: HealthSample[]; flags: HealthFlag[] }
 
@@ -49303,6 +49443,7 @@ const msText = (ms: number) => (ms >= 10_000 ? `${Math.round(ms / 1000)} с` : m
 
 const METRICS: { id: string; title: string; pick: (s: HealthSample) => number | null; fmt: (n: number) => string }[] = [
   { id: 'poll', title: 'Длительность опроса', pick: (s) => s.pollMs, fmt: msText },
+  { id: 'cpu', title: 'Нагрузка процессора', pick: (s) => s.loadPct ?? null, fmt: (n) => `${Math.round(n)} %` },
   { id: 'mem', title: 'Память панели', pick: (s) => s.rssMb, fmt: (n) => `${Math.round(n)} МБ` },
   { id: 'db', title: 'Размер базы', pick: (s) => s.dbBytes, fmt: mbText },
   { id: 'queue', title: 'Очередь доставки', pick: (s) => s.queueLen, fmt: (n) => String(Math.round(n)) },
@@ -54820,6 +54961,78 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       <ErrorLine text={error} />
       {hasBanner && (
         <button type="button" className="btn btn-danger btn-sm" onClick={() => void remove()} disabled={busy}>{t('pf.banner.remove')}</button>
+      )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/Follows.tsx" << '__COREGSM_EOF__'
+/** Following players: the button on a player's page and the list in the profile. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { Button, ErrorLine, Section, ago, toast } from '../../ui';
+
+interface Follow { nick: string; createdAt: number }
+
+const keyOf = (nick: string) => nick.trim().toLowerCase();
+
+/** «Следить» on /player/<nick>: a notification when the nick joins a server. Nothing for guests. */
+export function FollowButton({ nick }: { nick: string }) {
+  const { me } = useAuth();
+  const [on, setOn] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!me) return;
+    let alive = true;
+    api<Follow[]>('/me/follows').then((l) => { if (alive) setOn(l.some((f) => keyOf(f.nick) === keyOf(nick))); }).catch(() => { if (alive) setOn(false); });
+    return () => { alive = false; };
+  }, [me, nick]);
+  if (!me || on === null) return null;
+  const flip = async () => {
+    setBusy(true);
+    try {
+      await api(`/players/${encodeURIComponent(nick)}/follow`, on ? 'DELETE' : 'PUT');
+      setOn(!on);
+      toast(on ? `Больше не следим за ${nick}` : `Сообщим, когда ${nick} зайдёт на сервер`);
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    }
+    setBusy(false);
+  };
+  return (
+    <Button type="button" size="sm" variant={on ? 'outline' : 'soft'} loading={busy} aria-pressed={on} onClick={() => void flip()}>
+      {on ? '★ Вы следите' : '☆ Следить'}
+    </Button>
+  );
+}
+
+/** Profile: the nicks I follow, each with a way to stop */
+export function FollowsCard() {
+  const [list, setList] = useState<Follow[] | null>(null);
+  const [error, setError] = useState('');
+  const load = () => api<Follow[]>('/me/follows').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+  const stop = async (nick: string) => {
+    await api(`/players/${encodeURIComponent(nick)}/follow`, 'DELETE').catch((e: Error) => setError(e.message));
+    void load();
+  };
+  return (
+    <Section title="Слежу за игроками" description="Сообщим в панели, в Discord и на устройстве, когда эти игроки заходят на сервер. Не чаще раза в 30 минут на игрока.">
+      <ErrorLine text={error} />
+      {list === null ? <div className="skeleton h-12 rounded-2xl" /> : list.length === 0 ? (
+        <p className="font-semibold text-mute">Пока никого. Откройте страницу игрока и нажмите «Следить».</p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {list.map((f) => (
+            <li key={f.nick} className="flex flex-wrap items-center gap-2 py-2">
+              <a href={`/player/${encodeURIComponent(f.nick)}`} className="min-w-0 flex-1 truncate font-extrabold hover:text-link">{f.nick}</a>
+              <span className="text-xs font-semibold text-mute">с {ago(f.createdAt)}</span>
+              <button type="button" className="btn btn-soft btn-xs" onClick={() => void stop(f.nick)}>Перестать</button>
+            </li>
+          ))}
+        </ul>
       )}
     </Section>
   );
@@ -65244,6 +65457,8 @@ const errorsEn: Record<string, string> = {
   review_reply_long: 'The reply is limited to 600 characters',
   notice_long: 'The notice is limited to 500 characters',
   sub_test_wait: 'Wait a few seconds before the next check',
+  follow_nick_missing: 'Enter the player\'s nick',
+  follow_limit: 'You can follow at most {n} players',
   maintenance_not_found: 'Maintenance window not found',
   bad_date: 'Invalid date',
   title_required: 'Enter a title',
@@ -72257,6 +72472,7 @@ import { ActivityStrip } from '../components/profile/Stats';
 import NickPic from '../components/NickPic';
 import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
+import { FollowButton } from '../components/profile/Follows';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
 import '../styles/community.css';
@@ -72331,6 +72547,7 @@ export default function PlayerPage({ name }: { name: string }) {
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>впервые {fmtDateTime(p.firstSeen)}</span>
           </p>
+          <div className="mt-2"><FollowButton nick={p.name} /></div>
         </div>
         {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (
           <div className="pl-places basis-full" aria-label="Места среди игроков">
@@ -72436,6 +72653,7 @@ import { RankCard, RankHeaderBadge, VrAchievementsGrid, useMyRank } from '../com
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
+import { FollowsCard } from '../components/profile/Follows';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
@@ -72608,6 +72826,7 @@ function SecurityTab() {
         <TwoFactorCard />
         <DiscordCard onChanged={reload} />
         <PushCard />
+        <FollowsCard />
         <SessionsCard key={rev} />
       </div>
       <JournalCard onRevoked={() => setRev((x) => x + 1)} />

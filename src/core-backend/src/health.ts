@@ -4,6 +4,7 @@
  */
 import type { Express, RequestHandler } from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
@@ -28,6 +29,8 @@ export interface Sample {
   botState: string;
   queueLen: number;
   diskFree: number | null;
+  /** 1-minute load average per core, percent (absent: not measured) */
+  loadPct?: number | null;
 }
 
 export interface Flag {
@@ -70,6 +73,9 @@ export function botStateNow(now = Date.now()): string {
 }
 const botBad = (s: string) => s === 'offline' || s === 'error';
 
+/** the processor load: 1-minute load average divided by the cores (0 where the system has no load average) */
+export const loadPctNow = (): number => Math.round((os.loadavg()[0] / Math.max(1, os.cpus().length)) * 1000) / 10;
+
 export function sampleNow(now = Date.now()): Sample {
   const p = lastPollStats();
   return {
@@ -81,14 +87,15 @@ export function sampleNow(now = Date.now()): Sample {
     botState: botStateNow(now),
     queueLen: queueLen(),
     diskFree: diskFree(),
+    loadPct: loadPctNow(),
   };
 }
 
 export function recordSample(now = Date.now()): Sample {
   const s = sampleNow(now);
   db.prepare(
-    'INSERT OR REPLACE INTO health_samples (ts, db_bytes, rss_mb, poll_ms, poll_failures, bot_state, queue_len, disk_free) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(s.ts, s.dbBytes, s.rssMb, s.pollMs, s.pollFailures, s.botState, s.queueLen, s.diskFree);
+    'INSERT OR REPLACE INTO health_samples (ts, db_bytes, rss_mb, poll_ms, poll_failures, bot_state, queue_len, disk_free, load_pct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(s.ts, s.dbBytes, s.rssMb, s.pollMs, s.pollFailures, s.botState, s.queueLen, s.diskFree, s.loadPct ?? null);
   db.prepare('DELETE FROM health_samples WHERE ts < ?').run(now - KEEP_MS);
   return s;
 }
@@ -102,6 +109,7 @@ interface Row {
   bot_state: string;
   queue_len: number;
   disk_free: number | null;
+  load_pct: number | null;
 }
 const toSample = (r: Row): Sample => ({
   ts: r.ts,
@@ -112,6 +120,7 @@ const toSample = (r: Row): Sample => ({
   botState: r.bot_state,
   queueLen: r.queue_len,
   diskFree: r.disk_free,
+  loadPct: r.load_pct,
 });
 
 export function samplesSince(since: number): Sample[] {

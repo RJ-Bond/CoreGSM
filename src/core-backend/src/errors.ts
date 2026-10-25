@@ -134,6 +134,10 @@ export const ERRORS = {
   notice_long: 'Текст объявления — до 500 символов',
   sub_test_wait: 'Подождите несколько секунд перед следующей проверкой',
 
+  // ---- following a player ----
+  follow_nick_missing: 'Укажите ник игрока',
+  follow_limit: 'Можно следить не больше чем за {n} игроками',
+
   // ---- maintenance windows ----
   maintenance_not_found: 'Окно обслуживания не найдено',
   bad_date: 'Неверная дата',
