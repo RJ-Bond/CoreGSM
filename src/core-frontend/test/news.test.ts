@@ -3,7 +3,7 @@ import {
   categoryOf, countByCategory, countdownText, coverGame, coverGradient, filterByCategory, galleryUrls, groupByMonth, groupChanges,
   extractHeadings, isFresh, isGeneratedCover, normCategory, orderFeed, pickHero, relatedNews, toggleReaction, unreadCount, validActions, visibleRubrics, wasEdited,
 } from '../src/components/news/newsLogic';
-import { blank, fromPayload, toPayload } from '../src/components/news/model';
+import { blank, fromPayload, linkProblems, runChecks, toPayload } from '../src/components/news/model';
 import type { PublicNews } from '../src/api';
 
 const item = (id: number, sentAt: number | null, extra: Partial<PublicNews> = {}): PublicNews => ({
@@ -165,5 +165,27 @@ describe('news: fresh, hero, edited', () => {
     expect(wasEdited(1000, 1000 + 60_000)).toBe(false);
     expect(wasEdited(1000, 1000 + 3_600_000)).toBe(true);
     expect(wasEdited(null, 5)).toBe(false);
+  });
+});
+
+describe('pre-publish link checks', () => {
+  it('counts empty, insecure and bare links', () => {
+    expect(linkProblems('[тут]() и http://a.ru/x и www.b.ru и https://ok.ru [ok](https://ok.ru)')).toEqual({ empty: 1, insecure: 1, bare: 1 });
+    expect(linkProblems('ничего такого')).toEqual({ empty: 0, insecure: 0, bare: 0 });
+  });
+  it('warns about them in the checklist', () => {
+    const d = blank('');
+    d.content = 'см. [тут]() и http://a.ru';
+    const texts = runChecks(d).filter((c) => c.level === 'warn').map((c) => c.text);
+    expect(texts.some((t) => t.includes('без адреса'))).toBe(true);
+    expect(texts.some((t) => t.includes('без https://'))).toBe(true);
+  });
+  it('warns about an external picture and a missing title', () => {
+    const d = blank('');
+    d.embeds[0].description = 'Текст';
+    d.embeds[0].imageUrl = 'https://other.example/a.png';
+    const texts = runChecks(d).map((c) => c.text);
+    expect(texts.some((t) => t.includes('внешней ссылке'))).toBe(true);
+    expect(texts.some((t) => t.includes('нет заголовка'))).toBe(true);
   });
 });

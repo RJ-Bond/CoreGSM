@@ -10,6 +10,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { commentCount } from './newsComments.js';
+import { viewsOf } from './newsViews.js';
+import { notifyNewsPublished } from './newsSubs.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
@@ -631,6 +634,8 @@ export function registerNews(deps: {
       pinned: full.pinned,
       authorRole: full.authorRole,
       reactions: full.reactions,
+      comments: commentCount(full.id),
+      views: viewsOf(full.id),
     };
   };
   const isPublished = (r: { status: string }) => r.status === 'sent' || r.status === 'edit_queued';
@@ -652,6 +657,11 @@ export function registerNews(deps: {
     return list.slice(offset, offset + Math.min(100, limit));
   };
   const PUBLISHED_SQL = "status IN ('sent','edit_queued')";
+  const totals = (sql: string) => new Map((db.prepare(sql).all() as { id: number; n: number }[]).map((r) => [r.id, r.n]));
+  const reactionTotals = () => totals('SELECT news_id AS id, COUNT(*) AS n FROM news_reactions GROUP BY news_id');
+  const commentTotals = () => totals("SELECT news_id AS id, COUNT(*) AS n FROM news_comments WHERE status = 'visible' GROUP BY news_id");
+  const viewTotals = () => totals('SELECT news_id AS id, SUM(n) AS n FROM news_views GROUP BY news_id');
+
   app.get('/api/news', viewer, (req, res) => {
     const uid = uidOf(req);
     if (isAdmin(req)) {
@@ -660,8 +670,13 @@ export function registerNews(deps: {
     }
     // only the published rows are read, and only the requested page is turned into the public shape (reactions are a query each)
     const cat = typeof req.query.category === 'string' && (NEWS_CATEGORIES as readonly string[]).includes(req.query.category) ? req.query.category : '';
-    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}`).all(...(cat ? [cat] : [])) as NewsRow[];
-    const pub = rows.sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
+    const author = Number(req.query.author);
+    const byAuthor = Number.isInteger(author) && author > 0;
+    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}${byAuthor ? ' AND created_by = ?' : ''}`).all(...(cat ? [cat] : []), ...(byAuthor ? [author] : [])) as NewsRow[];
+    // ?sort=top (most reactions) / discussed (most comments) / viewed (most views): by that number, then the newest; without it: pinned first, then the newest
+    const sort = req.query.sort;
+    const score = sort === 'top' ? reactionTotals() : sort === 'discussed' ? commentTotals() : sort === 'viewed' ? viewTotals() : null;
+    const pub = rows.sort((a, b) => (score ? (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) : Number(pinnedOf(b)) - Number(pinnedOf(a))) || byTime(a, b));
     res.json(pageOf(pub, req).map((r) => publicNews(r, uid)));
   });
 
@@ -703,7 +718,9 @@ export function registerNews(deps: {
     const ed = r.sent_at
       ? (db.prepare("SELECT MAX(ts) AS ts, COUNT(*) AS n FROM news_versions WHERE news_id = ? AND ts > ? AND note NOT IN ('Закреплено', 'Откреплено')").get(r.id, r.sent_at) as { ts: number | null; n: number })
       : { ts: null, n: 0 };
-    res.json({ ...base, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
+    // «Кто писал»: how many items the author has published, and the id for the filter ?author=
+    const authorCount = r.created_by == null ? 0 : (db.prepare(`SELECT COUNT(*) AS n FROM news WHERE test = 0 AND created_by = ? AND ${PUBLISHED_SQL}`).get(r.created_by) as { n: number }).n;
+    res.json({ ...base, authorId: r.created_by ?? null, authorCount, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
   });
 
   // ---------- a link that looks good when pasted into Discord/Telegram: /n/<id> (redirects to the news page) ----------
@@ -1079,6 +1096,13 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
         now,
         id,
       );
+      // the first post of an item (not a repeat of the edit): the subscribers of its rubric are told
+      if (prev && !prev.sent_at && prev.repeat === 'none') {
+        try {
+          const p = JSON.parse(prev.payload) as NewsPayload;
+          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+        } catch { /* the post itself is done */ }
+      }
     } else {
       const err = b.data.error ?? 'Ошибка отправки';
       const plan = planFailure(before?.attempts ?? 0, now, { retryAfterMs: b.data.retryAfterMs });

@@ -41,8 +41,9 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
       if (down > 0) out.servers = { n: down, tone: 'bad', label: t('adm.badge.problems', { k: down }) };
     }
     if (isAdmin || perms.includes('moderation')) {
-      const rep = await api<{ open: number }>('/reports/count').catch(() => null);
-      if (rep && rep.open > 0) out.community = { n: rep.open, tone: 'warn', label: `Жалоб на игроков: ${rep.open}` };
+      const [rep, com] = await Promise.all([api<{ open: number }>('/reports/count').catch(() => null), api<{ open: number }>('/news/comments/count').catch(() => null)]);
+      const n = (rep?.open ?? 0) + (com?.open ?? 0);
+      if (n > 0) out.community = { n, tone: 'warn', label: `Ждут модерации: жалоб на игроков ${rep?.open ?? 0}, комментариев ${com?.open ?? 0}` };
     }
     if (isAdmin) {
       const [bot, sys] = await Promise.all([

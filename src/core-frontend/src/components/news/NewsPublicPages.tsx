@@ -13,6 +13,26 @@ import { markSeen, readSeen } from './newsSeen';
 import { CATEGORY_HEX, isRubricFilter, orderFeed, pickHero, plainExcerpt, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
+const SORT_STORE = 'news_sort';
+const VIEW_STORE = 'news_view';
+type FeedSort = 'new' | 'top' | 'discussed' | 'viewed';
+const SORTS: FeedSort[] = ['new', 'top', 'discussed', 'viewed'];
+const loadSort = (): FeedSort => {
+  try {
+    const v = localStorage.getItem(SORT_STORE);
+    return SORTS.includes(v as FeedSort) ? (v as FeedSort) : 'new';
+  } catch {
+    return 'new';
+  }
+};
+const loadDense = (): boolean => {
+  try { return localStorage.getItem(VIEW_STORE) === 'dense'; } catch { return false; }
+};
+/** ?author=<id> of the address: the feed of one author */
+const authorFromUrl = (): number | null => {
+  const n = Number(new URLSearchParams(window.location.search).get('author'));
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
 /** how many news a page of the feed shows */
 const PAGE = 20;
 const ZERO_COUNTS: Record<RubricFilter, number> = { all: 0, announcement: 0, wipe: 0, update: 0, event: 0, maintenance: 0, other: 0 };
@@ -94,6 +114,9 @@ export function NewsListPage() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [rubric, setRubricState] = useState<RubricFilter>(loadRubric);
+  const [sort, setSortState] = useState<FeedSort>(loadSort);
+  const [dense, setDenseState] = useState(loadDense);
+  const [author, setAuthor] = useState<number | null>(authorFromUrl);
   // the feed comes in pages: one more than shown tells whether there is a next page
   const [limit, setLimit] = useState(PAGE);
   const [hasMore, setHasMore] = useState(false);
@@ -105,10 +128,12 @@ export function NewsListPage() {
   useEffect(() => { markSeen(); }, []);
   const servers = useNewsServers();
   const works = useWorks();
+  const [hot, setHot] = useState<{ id: number; title: string; comments: number }[]>([]);
+  useEffect(() => { api<typeof hot>('/news/discussed').then((l) => setHot(Array.isArray(l) ? l : [])).catch(() => undefined); }, []);
 
   const filter: RubricFilter = rubric;
   const load = () => Promise.all([
-    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}`),
+    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}${sort === 'new' ? '' : `&sort=${sort}`}${author ? `&author=${author}` : ''}`),
     api<Record<RubricFilter, number>>('/news/counts').catch(() => null),
   ])
     .then(([n, c]) => {
@@ -127,18 +152,33 @@ export function NewsListPage() {
     if (first.current) { first.current = false; return; }
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [limit, filter]);
+  }, [limit, filter, sort, author]);
 
   const setRubric = (r: RubricFilter) => {
     setRubricState(r);
     setLimit(PAGE);
     try { localStorage.setItem(STORE, r); } catch { /* not remembered */ }
   };
+  const setSort = (s: FeedSort) => {
+    setSortState(s);
+    setLimit(PAGE);
+    try { localStorage.setItem(SORT_STORE, s); } catch { /* not remembered */ }
+  };
+  const setDense = (v: boolean) => {
+    setDenseState(v);
+    try { localStorage.setItem(VIEW_STORE, v ? 'dense' : 'cards'); } catch { /* not remembered */ }
+  };
+  const clearAuthor = () => {
+    setAuthor(null);
+    setLimit(PAGE);
+    window.history.replaceState(null, '', window.location.pathname);
+  };
   const showMore = () => { setLoadingMore(true); setLimit((l) => l + PAGE); };
 
-  const ordered = useMemo(() => orderFeed(items), [items]);
+  // sorted by something else than the date: the order comes from the server as it is
+  const ordered = useMemo(() => (sort === 'new' ? orderFeed(items) : items), [items, sort]);
   // the big block on top: only on the first page of «Все», the rest of the feed goes below it
-  const hero = filter === 'all' ? pickHero(ordered) : null;
+  const hero = filter === 'all' && sort === 'new' && !dense && !author ? pickHero(ordered) : null;
   const shown = hero ? ordered.filter((n) => n.id !== hero.id) : ordered;
   const heroCard = hero ? cardOf(hero) : null;
 
@@ -171,7 +211,7 @@ export function NewsListPage() {
     </button>
   );
 
-  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
+  const hasSide = pinned.length > 0 || hot.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
 
   return (
     <div className="nw-page">
@@ -183,6 +223,18 @@ export function NewsListPage() {
             <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
               {chip('all')}
               {rubrics.map((r) => chip(r))}
+            </div>
+          )}
+          {loaded && counts.all > 1 && (
+            <div className="nw-tools">
+              <div className="seg" role="group" aria-label={t('nw.sort')}>
+                {SORTS.map((s) => <button key={s} type="button" className="seg-item" aria-current={sort === s ? 'true' : undefined} onClick={() => setSort(s)}>{t(`nw.sort.${s}` as const)}</button>)}
+              </div>
+              <div className="seg" role="group" aria-label={t('nw.view')}>
+                <button type="button" className="seg-item" aria-current={!dense ? 'true' : undefined} onClick={() => setDense(false)}>{t('nw.view.cards')}</button>
+                <button type="button" className="seg-item" aria-current={dense ? 'true' : undefined} onClick={() => setDense(true)}>{t('nw.view.dense')}</button>
+              </div>
+              {author && <button type="button" className="nw-rub" onClick={clearAuthor}>{t('nw.author.filter')} <span aria-hidden>✕</span></button>}
             </div>
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
@@ -225,7 +277,7 @@ export function NewsListPage() {
               </div>
             </article>
           )}
-          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} /></div>}
+          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
           {hasMore && (
             <div className="ne-more" ref={more}>
               <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
@@ -243,6 +295,17 @@ export function NewsListPage() {
                   {pinned.map((n) => (
                     <li key={n.id}>
                       <a href={`/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
+                    </li>
+                  ))}
+                </ul>
+              </AsideSection>
+            )}
+            {hot.length > 0 && (
+              <AsideSection id="hot" title={t('nw.cm.discussed')} wide={wide}>
+                <ul className="nw-side-list">
+                  {hot.map((n) => (
+                    <li key={n.id}>
+                      <a href={`/news/${n.id}#comments`}><span>{n.title}</span><span className="nw-live-n tabular-nums">💬 {n.comments}</span></a>
                     </li>
                   ))}
                 </ul>

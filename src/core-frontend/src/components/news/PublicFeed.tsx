@@ -13,6 +13,8 @@ export { PANEL_THEME } from './NewsParts';
 
 export interface Card {
   id: number;
+  comments: number;
+  views: number;
   title: string;
   text: string;
   author: { name: string; icon?: string } | null;
@@ -73,6 +75,8 @@ export function cardOf(n: PublicNews): Card {
     statusIds: Array.isArray(p.statusServerIds) ? p.statusServerIds : [],
     game: typeof p.game === 'string' ? p.game : '',
     reactions: Array.isArray(n.reactions) ? n.reactions : [],
+    comments: typeof n.comments === 'number' ? n.comments : 0,
+    views: typeof n.views === 'number' ? n.views : 0,
   };
 }
 
@@ -153,6 +157,8 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
           {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
           <span className="nb-tools">
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
+            {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
             <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
             {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
             <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
@@ -181,6 +187,8 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
         <div className="nf-actions">
           {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          {c.views > 0 && <span className="nw-cmcount" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
+          {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>
@@ -192,26 +200,32 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
  * The feed: an editorial list, pinned items first and then the rest grouped by month.
  * `items` must already be ordered (pinned first, newest first) and filtered.
  */
-export function PublicFeed({ items, servers, flat = false, seen = null }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null }) {
+export function PublicFeed({ items, servers, flat = false, seen = null, dense = false, plain = false }: {
+  items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null;
+  /** a compact list (a small picture and the headline) instead of full articles */
+  dense?: boolean;
+  /** exactly the given order: no «Закреплено» section and no month groups (the feed is sorted by something else than the date) */
+  plain?: boolean;
+}) {
   const { lang } = useI18n();
   if (items.length === 0) return null;
   const cards = items.map(cardOf);
-  const pinned = cards.filter((c) => c.pinned);
-  const normal = cards.filter((c) => !c.pinned);
-  const groups = flat ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
+  const pinned = plain ? [] : cards.filter((c) => c.pinned);
+  const normal = plain ? cards : cards.filter((c) => !c.pinned);
+  const groups = flat || plain ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
 
   return (
-    <div className="nw-feed ne-list">
+    <div className={`nw-feed ne-list ${dense ? 'is-dense' : ''}`}>
       {pinned.length > 0 && (
         <section className="nw-group">
           <h2 className="ne-h">{t('nw.pinned')}</h2>
-          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
+          {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
           {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
-          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
+          {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       ))}
     </div>
