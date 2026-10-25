@@ -41,6 +41,8 @@ export function serialize(r: ServerJoin) {
     playerNames: r.player_names ? (JSON.parse(r.player_names) as string[]) : [],
     error: r.error ?? null,
     updatedAt: r.updated_at ?? null,
+    // since when the server is in its current state (online / offline); null = not known yet
+    stateSince: r.state_since ?? null,
     // running maintenance window for this server (alerts are muted, downtime is not counted) or null
     maintenance: maintenanceFor(r.id),
   };
@@ -48,7 +50,7 @@ export function serialize(r: ServerJoin) {
 
 export const SELECT_SERVERS = `
 SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, st.player_names, st.error,
-       st.updated_at, st.server_id AS has_status, st.name AS query_name
+       st.updated_at, st.state_since, st.server_id AS has_status, st.name AS query_name
 FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
 
 export function getServer(id: number) {

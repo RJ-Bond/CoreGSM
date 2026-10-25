@@ -24,6 +24,19 @@ export interface TableActions {
 }
 
 const FILTERS: [ServerFilter, TKey][] = [['all', 'adm.tbl.all'], ['online', 'adm.tbl.online'], ['problems', 'adm.tbl.problems']];
+/** «2 ч», «15 мин»: how long a state has lasted */
+export function spanText(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return 'меньше минуты';
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} ч`;
+  return `${Math.floor(h / 24)} дн`;
+}
+const stateLine = (s: Server): string | null => {
+  if (s.maintenance || !s.hasStatus || !s.stateSince) return null;
+  return `${s.online ? 'работает' : 'не отвечает'} · ${spanText(Date.now() - s.stateSince)}`;
+};
 const pct = (v: number | undefined) => (v == null ? '–' : `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`);
 
 export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableActions }) {
@@ -33,6 +46,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
+  const [view, setView] = useState<'table' | 'cards'>(() => { try { return localStorage.getItem('coregsm_admin_srv_view') === 'cards' ? 'cards' : 'table'; } catch { return 'table'; } });
+  const pickView = (v: 'table' | 'cards') => { setView(v); try { localStorage.setItem('coregsm_admin_srv_view', v); } catch { /* not remembered */ } };
   const counts = useMemo(() => countServers(servers), [servers]);
   const rows = useMemo(() => filterServers(servers, filter, query), [servers, filter, query]);
   const shownIds = rows.map((s) => s.id);
@@ -65,6 +80,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
             </button>
           ))}
         </nav>
+        <div className="seg hidden w-fit md:flex" role="group" aria-label="Вид списка">
+          <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>Таблица</button>
+          <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>Карточки</button>
+        </div>
         <label className="adm-search ml-auto">
           <span aria-hidden>⌕</span>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('adm.tbl.search')} aria-label={t('adm.tbl.search')} />
@@ -72,7 +91,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       </div>
 
       {picked.length > 0 && (
-        <div className="adm-bulk" role="region" aria-label={t('adm.tbl.selected')}>
+        <div className="adm-bulk adm-bulk-float" role="region" aria-label={t('adm.tbl.selected')}>
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
@@ -87,7 +106,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       ) : (
         <>
           {/* wide screens: a table */}
-          <div className="tile adm-tablewrap hidden p-1.5 md:block">
+          <div className={`tile adm-tablewrap hidden p-1.5 ${view === 'table' ? 'md:block' : ''}`}>
             <table className="adm-table">
               <thead>
                 <tr>
@@ -118,7 +137,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                         </div>
                       </div>
                     </td>
-                    <td><StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} /></td>
+                    <td>
+                      <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
+                      {stateLine(s) && <div className="mt-0.5 text-xs font-semibold text-mute">{stateLine(s)}</div>}
+                    </td>
                     <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</td>
                     <td className="tabular-nums text-mute">{s.online && s.ping != null ? t('adm.tbl.ms', { n: s.ping }) : '—'}</td>
                     <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
@@ -159,9 +181,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
           </div>
 
           {/* a phone: a card per server */}
-          <div className="space-y-2.5 md:hidden">
+          <div className={`adm-cards ${view === 'table' ? 'md:hidden' : ''}`}>
             {rows.map((s) => (
-              <div key={s.id} className="tile flex flex-wrap items-center gap-x-3 gap-y-2 p-3.5" data-selected={sel.includes(s.id) ? 'true' : undefined}>
+              <div key={s.id} className="tile adm-card flex flex-wrap items-center gap-x-3 gap-y-2 p-3.5" data-state={s.maintenance ? 'maint' : !s.online && s.hasStatus ? 'off' : isLag(s) ? 'lag' : 'on'} data-selected={sel.includes(s.id) ? 'true' : undefined}>
                 <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`${t('adm.tbl.select')}: ${s.name}`} />
                 <GameAvatar game={s.game} size={40} />
                 <div className="min-w-0 flex-1 basis-40">
@@ -169,6 +191,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   <div className="truncate text-xs font-semibold text-mute">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
                 </div>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
+                {stateLine(s) && <div className="w-full text-xs font-semibold text-mute">{stateLine(s)}</div>}
                 <div className="flex w-full items-center gap-2 text-sm font-semibold text-mute">
                   <span className="tabular-nums">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</span>
                   <span>· {ago(s.updatedAt)}</span>

@@ -12,12 +12,13 @@ import { queryServer, type QueryResult } from './query.js';
 import { log } from './logger.js';
 
 const upsert = db.prepare(`
-INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures)
-VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts, @failures)
+INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures, state_since)
+VALUES (@id, @online, @name, @players, @max, @map, @version, @ping, @names, @error, @ts, @failures, @ts)
 ON CONFLICT(server_id) DO UPDATE SET
   online=excluded.online, name=COALESCE(excluded.name, status.name), players=excluded.players, max_players=excluded.max_players,
   map=excluded.map, version=excluded.version, ping=excluded.ping, player_names=excluded.player_names,
-  error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures
+  error=excluded.error, updated_at=excluded.updated_at, consecutive_failures=excluded.consecutive_failures,
+  state_since=CASE WHEN status.online = excluded.online AND status.state_since IS NOT NULL THEN status.state_since ELSE excluded.updated_at END
 `);
 const addHistory = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?, ?, ?, ?, ?, ?, ?)');
 // compiled once: these run for every server on every poll
