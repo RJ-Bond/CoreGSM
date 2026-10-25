@@ -19,7 +19,7 @@ export const panelDomId = (id: TabId) => `srv-panel-${id || 'overview'}`;
  * Tab strip of the server page: a sliding `.seg` capsule, sticky under the glass header, scrolls sideways on phones
  * (the active tab is centred). Tabs are links, so the address bar and the back button work.
  */
-export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode }) {
+export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode; mini?: ReactNode }) {
   const seg = useRef<HTMLElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -103,6 +103,8 @@ export default function ServerTabs({ id, tab, counts, toc }: { id: number; tab: 
           })}
         </nav>
         {toc}
+        {/* once the banner is scrolled away, the name and the players stay in sight (wide screens) */}
+        {stuck && mini && <div className="srv-mini-wrap">{mini}</div>}
       </div>
     </>
   );

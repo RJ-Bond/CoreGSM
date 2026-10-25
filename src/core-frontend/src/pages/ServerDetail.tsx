@@ -1,7 +1,8 @@
 import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { t, useI18n } from '../i18n';
+import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
@@ -24,7 +25,8 @@ import Metrics from '../components/server/Metrics';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
-import ServerTabs, { panelDomId, tabDomId } from '../components/server/ServerTabs';
+import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
+import { AddrCopy } from '../components/servers/serverUi';
 import { SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
 import { BannerSkeleton, TabBarSkeleton, TabSkeleton } from '../components/server/Skeletons';
 import {
@@ -109,8 +111,40 @@ function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) =
   );
 }
 
+/** on a phone a swipe along the page moves to the next / previous tab; charts, scrollable blocks and the screen edges are left alone */
+function useTabSwipe(tab: TabId, id: number) {
+  const start = useRef<{ x: number; y: number; at: number } | null>(null);
+  const scrollsX = (el: HTMLElement | null) => {
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      if (n.scrollWidth > n.clientWidth + 2 && /(auto|scroll)/.test(getComputedStyle(n).overflowX)) return true;
+    }
+    return false;
+  };
+  return {
+    onTouchStart: (e: TouchEvent<HTMLElement>) => {
+      const p = e.touches[0];
+      const el = e.target as HTMLElement;
+      const edge = p.clientX < 24 || p.clientX > window.innerWidth - 24;
+      start.current = edge || el.closest('svg, canvas, input, select, textarea, [role="slider"], [data-noswipe]') || scrollsX(el) ? null : { x: p.clientX, y: p.clientY, at: Date.now() };
+    },
+    onTouchEnd: (e: TouchEvent<HTMLElement>) => {
+      const s = start.current;
+      start.current = null;
+      if (!s) return;
+      const p = e.changedTouches[0];
+      const dx = p.clientX - s.x;
+      const dy = p.clientY - s.y;
+      if (Math.abs(dx) < 80 || Math.abs(dy) > Math.abs(dx) * 0.5 || Date.now() - s.at > 600) return;
+      const i = TAB_LIST.findIndex((x) => x.id === tab);
+      const n = dx < 0 ? i + 1 : i - 1;
+      if (n >= 0 && n < TAB_LIST.length) navigate(tabHref(id, TAB_LIST[n].id));
+    },
+  };
+}
+
 function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   useI18n();
+  const swipe = useTabSwipe(tab, id);
   const { me, isAdmin } = useAuth();
   // editing a server: administrators and moderators given «Серверы»
   const canEdit = isAdmin || !!me?.perms?.includes('servers');
@@ -215,7 +249,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (missing) return <NotFound kind="server" />;
 
-  const back = <a href="/servers" className="ml-1 inline-flex min-h-[44px] items-center gap-1 font-extrabold text-link hover:underline md:min-h-0">← Все серверы</a>;
+  const back = <Crumbs items={[['/servers', t('nav.servers')], [`/servers/${id}`, data?.server.name ?? '…']]} />;
 
   if (!data) {
     return (
@@ -502,9 +536,17 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         id={id}
         tab={tab}
         counts={{ events: events.length, players: s.online ? s.players : 0 }}
+        mini={(
+          <span className="srv-mini">
+            <i className={`srv-mini-dot ${s.online ? 'on' : 'off'}`} aria-hidden />
+            <b className="truncate">{s.name}</b>
+            <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : 'не в сети'}</span>
+            <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
+          </span>
+        )}
       />
 
-      <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)}>
+      <div key={tab || 'overview'} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         {panel}
       </div>
 
