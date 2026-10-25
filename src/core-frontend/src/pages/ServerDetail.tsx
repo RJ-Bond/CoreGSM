@@ -22,6 +22,7 @@ import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
 import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
+import PinnedNotice, { type ServerNotice } from '../components/server/Notice';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
@@ -42,6 +43,7 @@ export { SERVER_TABS } from '../components/server/helpers';
 /** details + the additive fields: when the server was added and (admins only) its Discord message */
 type ServerDetails = BaseDetails & {
   createdAt?: number | null;
+  notice?: ServerNotice | null;
   discord?: { channelId: string; channelName: string | null; guildName: string | null; guildId: string | null; messageId: string | null; enabled: boolean }[];
 };
 
@@ -481,6 +483,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else {
     panel = (
       <div className="space-y-3.5">
+        <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
         <SectionCard id="ov-stats" state={sections} style={stagger(0)} title="Показатели">
           {metrics(false)}
         </SectionCard>

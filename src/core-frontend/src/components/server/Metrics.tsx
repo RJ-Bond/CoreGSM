@@ -57,7 +57,7 @@ export const uptimeLevel = (pct: number | null): 'good' | 'warm' | 'hot' | undef
 export default function Metrics({ d, withSamples = false }: { d: MetricsData; withSamples?: boolean }) {
   useI18n();
   return (
-    <div className={`srv-metrics ${withSamples ? 'has-4' : ''}`}>
+    <div className={`srv-metrics no-scrollbar ${withSamples ? 'has-4' : ''}`}>
       <Cell
         k="Пик"
         v={d.peak == null ? '–' : String(d.peak)}

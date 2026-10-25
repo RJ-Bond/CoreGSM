@@ -57,6 +57,33 @@ describe('api: reviews and gallery', () => {
     assert.equal(r.body.items.length, 1);
   });
 
+  it('reviews: useful votes, the staff answer; a pinned note on the server', async () => {
+    const rid = (await api.call('GET', `/api/servers/${srv}/reviews`, { token: p2 })).body.items[0].id as number;
+    assert.equal((await api.call('PUT', `/api/reviews/${rid}/vote`, { token: p1 })).status, 400); // one's own review
+    let r = await api.call('PUT', `/api/reviews/${rid}/vote`, { token: p2 });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.votes, 1);
+    r = await api.call('GET', `/api/servers/${srv}/reviews`, { token: p2 });
+    assert.equal(r.body.items[0].votes, 1);
+    assert.equal(r.body.items[0].voted, true);
+    r = await api.call('GET', `/api/servers/${srv}/reviews`);
+    assert.equal(r.body.items[0].voted, false);
+    assert.equal((await api.call('DELETE', `/api/reviews/${rid}/vote`, { token: p2 })).body.votes, 0);
+
+    assert.equal((await api.call('PUT', `/api/reviews/${rid}/reply`, { token: p1, body: { text: 'Спасибо' } })).status, 403);
+    assert.equal((await api.call('PUT', `/api/reviews/${rid}/reply`, { token: admin, body: { text: 'Спасибо за отзыв!' } })).status, 200);
+    assert.equal((await api.call('GET', `/api/servers/${srv}/reviews`)).body.items[0].reply, 'Спасибо за отзыв!');
+
+    assert.equal((await api.call('PUT', `/api/servers/${srv}/notice`, { token: p1, body: { text: 'Вайп в пятницу' } })).status, 403);
+    assert.equal((await api.call('PUT', `/api/servers/${srv}/notice`, { token: admin, body: { text: 'Вайп в пятницу', tone: 'warn' } })).status, 200);
+    let d = await api.call('GET', `/api/servers/${srv}/details`);
+    assert.equal(d.body.notice.text, 'Вайп в пятницу');
+    assert.equal(d.body.notice.tone, 'warn');
+    await api.call('PUT', `/api/servers/${srv}/notice`, { token: admin, body: { text: '' } });
+    d = await api.call('GET', `/api/servers/${srv}/details`);
+    assert.equal(d.body.notice, null);
+  });
+
   it('gallery: a player upload waits for the staff and is private until approved', async () => {
     let r = await api.call('POST', `/api/gallery?serverId=${srv}&caption=${encodeURIComponent('Закат')}`, { token: p1, raw: await png(2400, 1200), headers: { 'content-type': 'image/png' } });
     assert.equal(r.status, 200, JSON.stringify(r.body));

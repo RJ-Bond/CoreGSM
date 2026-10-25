@@ -15,6 +15,7 @@ import { avatarFor } from './avatars.js';
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
+import { addColumn } from './schema.js';
 import { param } from './http.js';
 
 export const router = express.Router();
@@ -32,13 +33,26 @@ CREATE TABLE IF NOT EXISTS server_reviews (
   UNIQUE (server_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_server ON server_reviews(server_id, hidden);
+-- «useful»: one vote of a user for a review of somebody else
+CREATE TABLE IF NOT EXISTS review_votes (
+  review_id INTEGER NOT NULL REFERENCES server_reviews(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (review_id, user_id)
+);
 `);
+// the answer of the server's staff under a review
+addColumn(db, 'server_reviews', 'reply', "TEXT NOT NULL DEFAULT ''");
+addColumn(db, 'server_reviews', 'reply_at', 'INTEGER');
 
-interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; username: string; discord_id: string | null; discord_avatar: string | null }
+interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; reply?: string; reply_at?: number | null; votes?: number; voted?: number; username: string; discord_id: string | null; discord_avatar: string | null }
 
-const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar FROM server_reviews r JOIN users u ON u.id = r.user_id`;
+/** `?` in the first slot is the viewer's id (0 for a guest): `voted` says whether they found the review useful */
+const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar,
+  (SELECT COUNT(*) FROM review_votes v WHERE v.review_id = r.id) AS votes,
+  (SELECT COUNT(*) FROM review_votes v WHERE v.review_id = r.id AND v.user_id = ?) AS voted
+  FROM server_reviews r JOIN users u ON u.id = r.user_id`;
 const avatar = (r: Row) => avatarFor({ id: r.user_id, discord_id: r.discord_id, discord_avatar: r.discord_avatar });
-const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at });
+const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at, votes: r.votes ?? 0, voted: !!r.voted, reply: r.reply || null, replyAt: r.reply ? r.reply_at ?? null : null });
 
 /** the score of a server: the average of the shown reviews and how many gave each number of stars */
 export function scoreOf(serverId: number): { avg: number | null; count: number; dist: number[] } {
@@ -55,8 +69,9 @@ const serverExists = (id: number) => Number.isInteger(id) && !!db.prepare('SELEC
 router.get('/api/servers/:id/reviews', param('id'), viewer, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (!serverExists(id)) return res.status(404).json({ error: 'Сервер не найден' });
-  const items = (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.hidden = 0 ORDER BY r.updated_at DESC LIMIT 50`).all(id) as Row[]).map(out);
-  const mine = req.user ? (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user.id) as Row | undefined) : undefined;
+  const uid = req.user?.id ?? 0;
+  const items = (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.hidden = 0 ORDER BY r.updated_at DESC LIMIT 50`).all(uid, id) as Row[]).map(out);
+  const mine = req.user ? (db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(uid, id, req.user.id) as Row | undefined) : undefined;
   res.json({ ...scoreOf(id), items, mine: mine ? out(mine) : null });
 });
 
@@ -71,7 +86,7 @@ router.put('/api/servers/:id/reviews', param('id'), auth, rateLimit(20), (req: A
     `INSERT INTO server_reviews (server_id, user_id, stars, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(server_id, user_id) DO UPDATE SET stars = excluded.stars, text = excluded.text, updated_at = excluded.updated_at`,
   ).run(id, req.user!.id, b.data.stars, b.data.text, now, now);
-  const mine = db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(id, req.user!.id) as Row;
+  const mine = db.prepare(`${SELECT} WHERE r.server_id = ? AND r.user_id = ?`).get(req.user!.id, id, req.user!.id) as Row;
   res.json({ ...scoreOf(id), mine: out(mine) });
 });
 
@@ -82,7 +97,7 @@ router.delete('/api/servers/:id/reviews/mine', param('id'), auth, (req: AuthedRe
 
 router.get('/api/reviews', staff, (_req, res) => {
   const rows = db
-    .prepare(`SELECT r.*, u.username, u.discord_id, u.discord_avatar, ${EFFECTIVE_NAME} AS server_name FROM server_reviews r JOIN users u ON u.id = r.user_id JOIN servers s ON s.id = r.server_id LEFT JOIN status st ON st.server_id = s.id ORDER BY r.updated_at DESC LIMIT 200`)
+    .prepare(`SELECT r.*, 0 AS votes, 0 AS voted, u.username, u.discord_id, u.discord_avatar, ${EFFECTIVE_NAME} AS server_name FROM server_reviews r JOIN users u ON u.id = r.user_id JOIN servers s ON s.id = r.server_id LEFT JOIN status st ON st.server_id = s.id ORDER BY r.updated_at DESC LIMIT 200`)
     .all() as (Row & { server_name: string })[];
   res.json(rows.map((r) => ({ ...out(r), serverName: r.server_name })));
 });
@@ -98,4 +113,30 @@ router.patch('/api/reviews/:id', param('id'), staff, (req, res) => {
 router.delete('/api/reviews/:id', param('id'), staff, (req, res) => {
   db.prepare('DELETE FROM server_reviews WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
+});
+
+// useful: one vote per user, not for one's own review
+router.put('/api/reviews/:id/vote', param('id'), auth, rateLimit(60), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT user_id, hidden FROM server_reviews WHERE id = ?').get(id) as { user_id: number; hidden: number } | undefined;
+  if (!r || r.hidden) return res.status(404).json({ error: 'Отзыв не найден' });
+  if (r.user_id === req.user!.id) return res.status(400).json({ error: 'Свой отзыв отмечать нельзя' });
+  db.prepare('INSERT OR IGNORE INTO review_votes (review_id, user_id) VALUES (?, ?)').run(id, req.user!.id);
+  res.json({ votes: (db.prepare('SELECT COUNT(*) AS n FROM review_votes WHERE review_id = ?').get(id) as { n: number }).n, voted: true });
+});
+
+router.delete('/api/reviews/:id/vote', param('id'), auth, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  db.prepare('DELETE FROM review_votes WHERE review_id = ? AND user_id = ?').run(id, req.user!.id);
+  res.json({ votes: (db.prepare('SELECT COUNT(*) AS n FROM review_votes WHERE review_id = ?').get(id) as { n: number }).n, voted: false });
+});
+
+// the answer of the staff who manage servers
+const replyStaff = allow('servers');
+router.put('/api/reviews/:id/reply', param('id'), replyStaff, (req, res) => {
+  const b = z.object({ text: z.string().trim().max(600) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Ответ — до 600 символов' });
+  const r = db.prepare('UPDATE server_reviews SET reply = ?, reply_at = ? WHERE id = ?').run(b.data.text, b.data.text ? Date.now() : null, Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+  res.json({ reply: b.data.text || null });
 });
