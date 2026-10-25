@@ -4,6 +4,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
+import { ActivityStrip } from '../components/profile/Stats';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
@@ -21,10 +22,25 @@ interface PlayerCard {
   streak: number;
   usualHour: number | null;
   byHour: number[];
+  /** the last 90 days, oldest first */
+  byDay: { date: string; seconds: number }[];
+  ranks: { week: number | null; weekBefore: number | null; month: number | null; all: number | null };
   servers: { id: number; name: string; game: string; hours: number; visits: number; last: number }[];
   recent: { serverId: number; serverName: string; from: number; to: number | null }[];
   rankId?: string;
   achievements?: Achievement[];
+}
+
+/** «№ 7 за неделю ▲2»: the place among all players, with the move against the week before */
+function RankChip({ place, before, label }: { place: number | null; before?: number | null; label: string }) {
+  if (place == null) return null;
+  const d = before === undefined ? null : before == null ? 'new' : before - place;
+  return (
+    <span className="pl-place">
+      <b>№ {place}</b> {label}
+      {d === 'new' ? <i className="pl-move new">новый</i> : typeof d === 'number' && d !== 0 ? <i className={`pl-move ${d > 0 ? 'up' : 'down'}`}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</i> : null}
+    </span>
+  );
 }
 
 const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
@@ -56,11 +72,22 @@ export default function PlayerPage({ name }: { name: string }) {
         <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-black leading-tight">{p.name}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-2 font-bold text-mute">
-            {p.online ? <span className="cm-live">сейчас в игре</span> : p.lastSeen ? <span>был {ago(p.lastSeen)}</span> : null}
+            {p.online ? (
+              <span className="cm-live">
+                сейчас в игре{(() => { const v = p.recent.find((r) => r.to == null); return v ? <> · <a href={`/servers/${v.serverId}`} className="underline decoration-dotted underline-offset-2">{v.serverName}</a></> : null; })()}
+              </span>
+            ) : p.lastSeen ? <span>был {ago(p.lastSeen)}</span> : null}
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>впервые {fmtDateTime(p.firstSeen)}</span>
           </p>
         </div>
+        {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (
+          <div className="pl-places basis-full" aria-label="Места среди игроков">
+            <RankChip place={p.ranks.week} before={p.ranks.weekBefore} label="за неделю" />
+            <RankChip place={p.ranks.month} label="за месяц" />
+            <RankChip place={p.ranks.all} label="за всё время" />
+          </div>
+        )}
         <dl className="pl-stats">
           <div><dt>Часов</dt><dd>{num(p.hours)}</dd></div>
           <div><dt>Визитов</dt><dd>{p.visits}</dd></div>
@@ -104,6 +131,11 @@ export default function PlayerPage({ name }: { name: string }) {
           </ul>
         </section>
       </div>
+
+      <section className="tile p-4 sm:p-5">
+        <h2 className="mb-3 text-lg font-extrabold">Активность за 90 дней</h2>
+        <ActivityStrip byDay={p.byDay} />
+      </section>
 
       {p.achievements && p.achievements.length > 0 && (
         <section className="tile p-4 sm:p-5">
