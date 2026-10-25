@@ -116,6 +116,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 
 /* avatars of players */
 .cm-ava { position: relative; display: inline-grid; place-items: center; flex: none; border-radius: 30%; font-weight: 800; color: #fff; background: linear-gradient(135deg, hsl(var(--h) 62% 48%), hsl(calc(var(--h) + 40) 62% 38%)); }
+.cm-ava-img { position: absolute; inset: 0; border-radius: inherit; }
 .cm-ava-on { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 2px rgb(var(--card)); }
 .cm-ava-game { position: absolute; right: -5px; top: -5px; line-height: 0; border-radius: 50%; box-shadow: 0 0 0 2px rgb(var(--card)); overflow: hidden; }
 
@@ -175,3 +176,5 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
   .cm-gal { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .cm-gal li.is-big { grid-column: span 2; grid-row: span 2; aspect-ratio: auto; }
 }
+.pl-ava { overflow: hidden; }
+.pl-ava-img { width: 100% !important; height: 100% !important; border-radius: inherit; }

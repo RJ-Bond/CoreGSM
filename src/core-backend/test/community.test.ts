@@ -84,6 +84,19 @@ describe('api: community and player cards', () => {
     assert.equal(live.body.lastSeen, null);
   });
 
+  it('avatars by nick: the Discord picture of the account that linked the nick, any case', async () => {
+    const db = new Database(api.dbPath);
+    const uid = Number(
+      db.prepare("INSERT INTO users (username, password_hash, role, created_at, status, discord_id, discord_name, discord_avatar) VALUES ('viktor-user', 'x', 'player', ?, 'active', '123456789', 'Viktor', 'abcdef')").run(now).lastInsertRowid,
+    );
+    db.prepare("INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, 'Viktor', '', 0)").run(uid);
+    db.close();
+    const r = await api.call('GET', '/api/avatars-by-nick?n=VIKTOR&n=Nobody');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.viktor, 'https://cdn.discordapp.com/avatars/123456789/abcdef.png?size=64');
+    assert.equal(r.body.nobody, undefined);
+  });
+
   it('an unknown player is a 404 with a code', async () => {
     const r = await api.call('GET', '/api/players/Nobody');
     assert.equal(r.status, 404);

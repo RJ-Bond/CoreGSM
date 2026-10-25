@@ -3,6 +3,7 @@ import { AnimatedNumber } from '../../ui';
 import { IconBell } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar } from '../servers/serverUi';
+import NickPic from '../NickPic';
 import { nickHue, nickInitial } from './helpers';
 
 export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
@@ -50,7 +51,11 @@ export default function Hero({
         <a className="srv-who" href={whoHref} aria-label={`${t('srv.hero.players')}: ${players}`}>
           <span className="srv-who-stack" aria-hidden>
             {who.slice(0, 7).map((n) => (
-              <i key={n} className="avatar-hue" style={{ ['--h' as string]: nickHue(n) }}>{nickInitial(n)}</i>
+              <b key={n} className="srv-who-av">
+                <NickPic name={n} size={28} className="rounded-full">
+                  <i className="avatar-hue" style={{ ['--h' as string]: nickHue(n) }}>{nickInitial(n)}</i>
+                </NickPic>
+              </b>
             ))}
           </span>
           <span className="srv-who-more">

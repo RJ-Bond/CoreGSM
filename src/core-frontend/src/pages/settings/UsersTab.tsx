@@ -211,7 +211,7 @@ function UsersTabInner() {
             {pendingUsers.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
                 <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={`Выбрать: ${u.username}`} />
-                <UserAvatar name={u.username} size={32} tone="brand" />
+                <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
                 <span className="flex min-w-0 flex-1 items-center gap-2 font-bold">
                   <span className="truncate">{u.username}</span>
                   {u.discordName && <DiscordBadge name={u.discordName} />}
@@ -239,7 +239,7 @@ function UsersTabInner() {
         <ul className="divide-y divide-line">
           {listed.map((u) => (
             <li key={u.id} className="flex flex-wrap items-center gap-2 py-2.5">
-              <UserAvatar name={u.username} size={32} tone="brand" />
+              <UserAvatar name={u.username} url={u.avatarUrl} size={32} tone="brand" />
               <span className="min-w-0 flex-1 truncate font-bold">
                 {u.username}{u.username === me?.username ? ' (вы)' : ''}
                 {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}

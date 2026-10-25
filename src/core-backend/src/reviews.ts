@@ -11,6 +11,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { allow, auth, type AuthedRequest, rateLimit, viewer } from './auth.js';
+import { avatarFor } from './avatars.js';
 
 const staff = allow('moderation');
 import { db, EFFECTIVE_NAME } from './db.js';
@@ -36,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_reviews_server ON server_reviews(server_id, hidde
 interface Row { id: number; server_id: number; user_id: number; stars: number; text: string; hidden: number; created_at: number; updated_at: number; username: string; discord_id: string | null; discord_avatar: string | null }
 
 const SELECT = `SELECT r.*, u.username, u.discord_id, u.discord_avatar FROM server_reviews r JOIN users u ON u.id = r.user_id`;
-const avatar = (r: Row) => (r.discord_id && r.discord_avatar ? `https://cdn.discordapp.com/avatars/${r.discord_id}/${r.discord_avatar}.png?size=64` : null);
+const avatar = (r: Row) => avatarFor({ id: r.user_id, discord_id: r.discord_id, discord_avatar: r.discord_avatar });
 const out = (r: Row) => ({ id: r.id, serverId: r.server_id, author: r.username, avatarUrl: avatar(r), stars: r.stars, text: r.text, hidden: !!r.hidden, createdAt: r.created_at, updatedAt: r.updated_at });
 
 /** the score of a server: the average of the shown reviews and how many gave each number of stars */

@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
 import { ActivityStrip } from '../components/profile/Stats';
+import NickPic from '../components/NickPic';
 import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
 import { rankById } from '../vrisingRanks';
@@ -69,7 +70,7 @@ export default function PlayerPage({ name }: { name: string }) {
     <div className="space-y-5">
       <Crumbs items={[['/community', 'Сообщество'], [`/player/${encodeURIComponent(p.name)}`, p.name]]} />
       <section className="tile pl-hero fade-in">
-        <span className="pl-ava" aria-hidden>{p.name.slice(0, 1).toUpperCase()}</span>
+        <span className="pl-ava" aria-hidden><NickPic name={p.name} size={72} className="pl-ava-img">{p.name.slice(0, 1).toUpperCase()}</NickPic></span>
         <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-black leading-tight">{p.name}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-2 font-bold text-mute">
