@@ -87,3 +87,23 @@ export const isFullNow = (online: boolean, players: number, max: number) => onli
 
 /** width (0..100) of the small static indicator of a metric */
 export const metricFill = (value: number | null | undefined, max: number): number => (value == null || !(max > 0) ? 0 : capacityPct(value, max));
+
+// ---------- trend ----------
+/** change of the mean between the first and the last third of a series, in per cent (null: too little data or no base) */
+export function trendPct(values: number[]): number | null {
+  if (values.length < 6) return null;
+  const k = Math.floor(values.length / 3);
+  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+  const a = mean(values.slice(0, k));
+  const b = mean(values.slice(values.length - k));
+  if (a < 0.5) return null;
+  return Math.round(((b - a) / a) * 100);
+}
+
+/** at most `n` evenly spread values of a series (for a tiny sparkline) */
+export function downsample(values: number[], n: number): number[] {
+  if (values.length <= n) return values;
+  const out: number[] = [];
+  for (let i = 0; i < n; i += 1) out.push(values[Math.round((i * (values.length - 1)) / (n - 1))]);
+  return out;
+}

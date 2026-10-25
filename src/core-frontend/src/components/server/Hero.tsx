@@ -3,6 +3,7 @@ import { AnimatedNumber } from '../../ui';
 import { IconBell } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { CapacityBar } from '../servers/serverUi';
+import { nickHue, nickInitial } from './helpers';
 
 export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
 
@@ -11,7 +12,7 @@ export type FreeSlotState = 'guest' | 'ready' | 'subscribed' | 'hidden';
  * the maintenance chip, and, when the server is full, «Сообщить, когда будет место».
  */
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -20,6 +21,9 @@ export default function Hero({
   maintenance?: { name: string; until: number | null } | null;
   freeSlot: FreeSlotState;
   onNotify: () => void;
+  /** nicks of the players now on the server (a stack of avatars under the counter) */
+  who?: string[];
+  whoHref?: string;
 }) {
   useI18n();
   return (
@@ -42,6 +46,18 @@ export default function Hero({
         {maintenance && <MaintenanceChip m={maintenance} glass />}
       </div>
       {online && max > 0 && <CapacityBar className="srv-hero-bar mt-2.5" players={players} max={max} color="#fff" onDark big />}
+      {online && who.length > 0 && (
+        <a className="srv-who" href={whoHref} aria-label={`${t('srv.hero.players')}: ${players}`}>
+          <span className="srv-who-stack" aria-hidden>
+            {who.slice(0, 7).map((n) => (
+              <i key={n} className="avatar-hue" style={{ ['--h' as string]: nickHue(n) }}>{nickInitial(n)}</i>
+            ))}
+          </span>
+          <span className="srv-who-more">
+            {who.slice(0, 3).join(', ')}{players > Math.min(3, who.length) ? ` и ещё ${players - Math.min(3, who.length)}` : ''}
+          </span>
+        </a>
+      )}
       {freeSlot !== 'hidden' && (
         <div className="srv-hero-free mt-3">
           {freeSlot === 'subscribed' ? (

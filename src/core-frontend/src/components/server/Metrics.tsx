@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useI18n } from '../../i18n';
 import { fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
-import { metricFill } from './serverLogic';
+import { downsample, metricFill, trendPct } from './serverLogic';
 
 export interface MetricsData {
   online: boolean;
@@ -16,13 +16,32 @@ export interface MetricsData {
   samples: number;
   /** «за 24 часа» */
   windowLabel: string;
+  /** player counts over the window: a sparkline and a trend arrow */
+  series?: number[];
 }
 
-function Cell({ k, v, hint, fill, level }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot' }) {
+function Spark({ values }: { values: number[] }) {
+  const v = downsample(values, 28);
+  const hi = Math.max(...v, 1);
+  const pts = v.map((y, i) => `${((i / (v.length - 1)) * 100).toFixed(1)},${(22 - (y / hi) * 20).toFixed(1)}`).join(' ');
+  return (
+    <svg className="srv-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden>
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function Trend({ pct }: { pct: number }) {
+  if (Math.abs(pct) < 3) return <span className="srv-trend is-flat" title="Без заметных изменений">→ ровно</span>;
+  return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title="Конец периода к его началу">{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
+}
+
+function Cell({ k, v, hint, fill, level, spark, trend }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
   return (
     <div className="srv-metric">
       <div className="stat-k">{k}</div>
-      <div className="srv-metric-v">{v}</div>
+      <div className="srv-metric-v">{v}{trend != null && <Trend pct={trend} />}</div>
+      {spark && spark.length > 3 && <Spark values={spark} />}
       <div className="srv-metric-bar" aria-hidden><i className={level ? `is-${level}` : undefined} style={{ width: `${fill}%` }} /></div>
       {hint != null && <div className="srv-metric-h">{hint}</div>}
     </div>
@@ -55,6 +74,8 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
       />
       <Cell
         k="В среднем"
+        spark={d.series}
+        trend={d.series ? trendPct(d.series) : null}
         v={d.avg == null ? '–' : num(d.avg)}
         hint="пока онлайн"
         fill={metricFill(d.avg, d.maxPlayers)}
