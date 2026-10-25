@@ -700,6 +700,8 @@ export interface PublicNews {
   pinned?: boolean;
   authorRole?: 'admin' | 'moderator' | 'player' | null;
   reactions?: NewsReaction[];
+  /** visible comments under it */
+  comments?: number;
 }
 
 export interface NewsReaction { emoji: string; count: number; mine: boolean }

@@ -105,6 +105,8 @@ export function NewsListPage() {
   useEffect(() => { markSeen(); }, []);
   const servers = useNewsServers();
   const works = useWorks();
+  const [hot, setHot] = useState<{ id: number; title: string; comments: number }[]>([]);
+  useEffect(() => { api<typeof hot>('/news/discussed').then((l) => setHot(Array.isArray(l) ? l : [])).catch(() => undefined); }, []);
 
   const filter: RubricFilter = rubric;
   const load = () => Promise.all([
@@ -171,7 +173,7 @@ export function NewsListPage() {
     </button>
   );
 
-  const hasSide = pinned.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
+  const hasSide = pinned.length > 0 || hot.length > 0 || upcoming.length > 0 || liveServers.length > 0 || !!soon;
 
   return (
     <div className="nw-page">
@@ -243,6 +245,17 @@ export function NewsListPage() {
                   {pinned.map((n) => (
                     <li key={n.id}>
                       <a href={`/news/${n.id}`}><PinIcon size={14} /><span>{n.payload?.embed?.title || n.title || t('nw.untitled')}</span></a>
+                    </li>
+                  ))}
+                </ul>
+              </AsideSection>
+            )}
+            {hot.length > 0 && (
+              <AsideSection id="hot" title={t('nw.cm.discussed')} wide={wide}>
+                <ul className="nw-side-list">
+                  {hot.map((n) => (
+                    <li key={n.id}>
+                      <a href={`/news/${n.id}#comments`}><span>{n.title}</span><span className="nw-live-n tabular-nums">💬 {n.comments}</span></a>
                     </li>
                   ))}
                 </ul>
