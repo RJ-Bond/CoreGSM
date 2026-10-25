@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
 import NickPic from '../NickPic';
 import { t, useI18n } from '../../i18n';
 import { fmtDateTime, plural, toast } from '../../ui';
-import { useCommunity } from '../servers/CommunityBento';
+import { useKnownNicks } from './useKnownNicks';
 import { sortPlayers, type PlayerSort } from './serverLogic';
 import { rankById } from '../../vrisingRanks';
 import { RankEmblem, rankName } from '../profile/VrRank';
@@ -53,11 +53,11 @@ function useLongPress(name: string) {
   };
 }
 
-function NickButton({ name, className, onClick, expanded, children }: { name: string; className: string; onClick: () => void; expanded?: boolean; children: ReactNode }) {
+function NickButton({ name, className, style, onClick, expanded, children }: { name: string; className: string; style?: CSSProperties; onClick: () => void; expanded?: boolean; children: ReactNode }) {
   const lp = useLongPress(name);
   const { swallow, ...handlers } = lp;
   return (
-    <button type="button" className={className} aria-expanded={expanded} {...handlers} onClick={() => { if (!swallow()) onClick(); }}>
+    <button type="button" className={className} style={style} aria-expanded={expanded} {...handlers} onClick={() => { if (!swallow()) onClick(); }}>
       {children}
     </button>
   );
@@ -78,8 +78,8 @@ const joinedAt = (ts: number, now: number) => {
  * Full mode: a count header, search, sort, and every row expands into a small card.
  */
 export default function PlayersList({
-  online, players, names, list, fresh, limit, moreHref,
-}: { online: boolean; players: number; names: string[]; list: PlayerNow[]; fresh: Set<string>; limit?: number; moreHref?: string }) {
+  online, players, names, list, fresh, limit, moreHref, onSubscribe,
+}: { online: boolean; players: number; names: string[]; list: PlayerNow[]; fresh: Set<string>; limit?: number; moreHref?: string; onSubscribe?: () => void }) {
   const now = useNow(30_000);
   useI18n();
   const stickyTop = useStickyTop();
@@ -88,15 +88,7 @@ export default function PlayersList({
   const [open, setOpen] = useState<string | null>(null);
   const [view, setView] = useState<'list' | 'tiles'>(readView);
   const setViewSaved = (v: 'list' | 'tiles') => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode */ } };
-  const community = useCommunity();
-  // nicks known to the community ratings: they get a place chip and a link to the profile
-  const known = useMemo(() => {
-    const m = new Map<string, number>();
-    if (!community) return m;
-    community.top.week.forEach((p, i) => m.set(p.name.toLowerCase(), i + 1));
-    for (const k of ['month', 'all', 'day'] as const) community.top[k].forEach((p) => { if (!m.has(p.name.toLowerCase())) m.set(p.name.toLowerCase(), 0); });
-    return m;
-  }, [community]);
+  const known = useKnownNicks();
 
   const total = list.length || names.length;
   const hiddenCount = Math.max(0, players - total);
@@ -133,6 +125,23 @@ export default function PlayersList({
 
   if (!online) {
     return <StateView kind="offline" bare compact title={t('srv.pl.offline')} text={t('srv.pl.offlineText')} />;
+  }
+  if (total === 0 && players === 0) {
+    return (
+      <div className="pl-empty">
+        <svg width="132" height="96" viewBox="0 0 132 96" fill="none" aria-hidden>
+          <circle cx="66" cy="54" r="34" fill="currentColor" opacity=".08" />
+          <path d="M84 40a24 24 0 1 1-26-26 18 18 0 0 0 26 26z" fill="currentColor" opacity=".35" />
+          <circle cx="30" cy="22" r="2.500" fill="currentColor" opacity=".5" />
+          <circle cx="104" cy="30" r="2" fill="currentColor" opacity=".4" />
+          <circle cx="98" cy="72" r="3" fill="currentColor" opacity=".3" />
+          <circle cx="24" cy="66" r="2" fill="currentColor" opacity=".4" />
+        </svg>
+        <p className="pl-empty-t">{t('srv.pl.none')}</p>
+        <p className="pl-empty-x">{t('srv.pl.noneText')}</p>
+        {onSubscribe && !limit && <button type="button" className="btn btn-soft btn-sm" onClick={onSubscribe}>Подписаться на уведомления</button>}
+      </div>
+    );
   }
   if (total === 0) {
     return (
@@ -233,7 +242,7 @@ export default function PlayersList({
                       {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok px-2! py-0! text-xs">новичок</span>}
                       {rank && (
                         <span className="inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
-                          <RankEmblem rank={rank} size={20} />
+                          <RankEmblem rank={rank} size={26} />
                           {rankName(rank)}
                         </span>
                       )}
@@ -255,9 +264,9 @@ export default function PlayersList({
             return (
               <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 {expandable ? (
-                  <NickButton name={p.name} className="pl-row" expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
+                  <NickButton name={p.name} className={`pl-row ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined} expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
                 ) : (
-                  <div className="flex min-w-0 items-center gap-3 rounded-xl py-2">{inner}</div>
+                  <div className={`flex min-w-0 items-center gap-3 rounded-xl py-2 ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined}>{inner}</div>
                 )}
                 {isOpen && (
                   <dl className="pl-more">
@@ -346,6 +355,33 @@ export function PlayerFacts({ peak, peakAt, avg, windowLabel, list }: { peak: nu
           <span className="pl-fact-h truncate" title={longest.name}>{longest.name}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+/** how long the players on the server have been in the game: a small bar chart in six steps */
+export function SessionSpread({ list, now }: { list: PlayerNow[]; now: number }) {
+  const withTime = list.filter((p) => p.since != null);
+  if (withTime.length < 3) return null;
+  const steps: [string, number][] = [['<10 м', 10], ['10–30 м', 30], ['30–60 м', 60], ['1–2 ч', 120], ['2–4 ч', 240], ['4 ч+', Infinity]];
+  const counts = steps.map(() => 0);
+  for (const p of withTime) {
+    const min = (now - (p.since as number)) / 60_000;
+    counts[steps.findIndex(([, hi]) => min < hi)] += 1;
+  }
+  const top = Math.max(...counts, 1);
+  return (
+    <div className="pl-spread" role="img" aria-label={`Время в игре: ${steps.map(([l], i) => `${l} ${counts[i]}`).join(', ')}`}>
+      <span className="pl-spread-k">Сколько уже играют</span>
+      <div className="pl-spread-bars">
+        {steps.map(([label], i) => (
+          <span key={label} className="pl-spread-c" title={`${label}: ${counts[i]}`}>
+            <i style={{ height: `${Math.max(counts[i] ? 12 : 3, Math.round((counts[i] / top) * 100))}%` }} data-on={counts[i] ? '1' : undefined} />
+            <small>{label}</small>
+            <b>{counts[i] || ''}</b>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
