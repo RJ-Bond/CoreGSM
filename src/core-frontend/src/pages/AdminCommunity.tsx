@@ -84,6 +84,7 @@ function SeasonsAdmin() {
 
       <Section title={t('adm.com.seasons')} description={!s ? undefined : rows.length ? t('adm.com.count', { n: rows.length }) : t('adm.com.none')}>
         {!s && !error && <SkeletonRows n={2} />}
+        {rows.length > 1 && <SeasonLine rows={rows} />}
         <ul className="grid gap-2">
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
@@ -101,6 +102,22 @@ function SeasonsAdmin() {
         </ul>
       </Section>
     </>
+  );
+}
+
+/** the seasons on one line, the width of a piece = how long the season lasted (oldest at the left) */
+function SeasonLine({ rows }: { rows: { id: number; name: string; startsAt: number; endsAt: number | null; isCurrent: boolean }[] }) {
+  const list = [...rows].sort((a, b) => a.startsAt - b.startsAt);
+  const now = Date.now();
+  const span = (r: (typeof list)[number]) => Math.max(86_400_000, (r.endsAt ?? now) - r.startsAt);
+  return (
+    <ol className="se-line" aria-label="Сезоны по порядку">
+      {list.map((r) => (
+        <li key={r.id} className={r.isCurrent ? 'is-now' : ''} style={{ flexGrow: span(r) }} title={`${r.name}: ${fmtDate(r.startsAt)}${r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}`}>
+          <span className="truncate">{r.name}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -155,10 +172,42 @@ function GalleryAdmin() {
     if (!(await confirmDialog({ title: t('adm.com.shotDelQ'), text: t('adm.com.shotDelText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
     await api(`/gallery/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
-  const waiting = list?.filter((s) => s.status === 'pending').length ?? 0;
+  const pendingList = list?.filter((s) => s.status === 'pending') ?? [];
+  const waiting = pendingList.length;
+  const head = pendingList[0];
+  const [skipped, setSkipped] = useState<number[]>([]);
+  const next = pendingList.find((x) => !skipped.includes(x.id)) ?? head;
+  // A — publish, X — reject, → — later (not while typing)
+  useEffect(() => {
+    if (!next) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]') || open !== null) return;
+      const k = e.key.toLowerCase();
+      if (k === 'a' || k === 'ф') void patch(next.id, { status: 'approved' }, t('adm.com.published'));
+      else if (k === 'x' || k === 'ч') void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'));
+      else if (e.key === 'ArrowRight') setSkipped((l) => [...l, next.id]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
   return (
     <Section title={t('adm.com.gallery')} description={waiting ? t('adm.com.waiting', { n: waiting }) : t('adm.com.noWaiting')}>
       <ErrorLine text={error} />
+      {next && (
+        <div className="mq">
+          <img src={next.thumb} alt="" className="mq-img" />
+          <div className="mq-body">
+            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">На проверке · {waiting}</p>
+            <p className="font-extrabold">{next.caption || t('adm.com.noCaption')}</p>
+            <p className="text-sm font-semibold text-mute">{[next.author, next.serverName, ago(next.createdAt)].filter(Boolean).join(' · ')}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>Опубликовать <kbd>A</kbd></button>
+              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>Отклонить <kbd>X</kbd></button>
+              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>Позже <kbd>→</kbd></button>}
+            </div>
+          </div>
+        </div>
+      )}
       {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title={t('adm.com.shotsNone')} text={t('adm.com.shotsNoneText')}><a href="/gallery" className="btn btn-soft mt-2">{t('adm.com.openGallery')}</a></Empty> : (
         <ul className="ga-grid">
           {list.map((s, i) => (

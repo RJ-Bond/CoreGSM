@@ -14,7 +14,8 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar, (SELECT MAX(last_seen) FROM sessions WHERE user_id = users.id) AS last_seen FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+    last_seen: number | null;
     id: number;
     username: string;
     role: Role;
@@ -25,7 +26,7 @@ router.get('/api/users', admin, (_req, res) => {
     discord_id: string | null;
     discord_avatar: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u) })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u), lastSeen: u.last_seen ?? null })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {

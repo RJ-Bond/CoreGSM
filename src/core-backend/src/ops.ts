@@ -5,6 +5,7 @@
 import { allow } from './auth.js';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import tls from 'node:tls';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
@@ -240,6 +241,9 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
       diskFree: space.free,
       diskTotal: space.total,
       memoryMb: Math.round(process.memoryUsage().rss / 1048576),
+      // the load average of the last minute and the number of cores (the load is 0 on Windows)
+      load1: Math.round(os.loadavg()[0] * 100) / 100,
+      cpuCount: Math.max(1, os.cpus().length),
       counts: {
         servers: count('SELECT COUNT(*) AS c FROM servers'),
         online: count('SELECT COUNT(*) AS c FROM status WHERE online = 1'),

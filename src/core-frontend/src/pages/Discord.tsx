@@ -138,6 +138,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       <Strip>
         <div className="flex items-center gap-3">
+          <span className={`dc-ring is-${bot?.state ?? 'idle'}`} aria-hidden title={bot?.tag ?? undefined} />
           <span className="font-black">Бот</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
@@ -241,6 +242,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                 </div>
                 {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
               </div>
+
+              <ol className="dc-flow" aria-label="Схема привязки">
+                <li className="is-ok"><b>Сервер</b><span className="truncate">{s?.online ? 'онлайн' : s ? 'недоступен' : 'удалён'}</span></li>
+                <li className={bot?.state === 'online' ? 'is-ok' : 'is-bad'}><b>Канал</b><span className="truncate">{b.channelName ? `# ${b.channelName}` : 'не найден'}</span></li>
+                <li className={!b.enabled ? 'is-mute' : b.lastError ? 'is-bad' : b.lastUpdate ? 'is-ok' : 'is-warn'}><b>Сообщение</b><span className="truncate">{!b.enabled ? 'пауза' : b.lastError ? 'ошибка' : b.lastUpdate ? ago(b.lastUpdate) : 'ждёт'}</span></li>
+              </ol>
 
               {(b.serverIds ?? []).length > 1 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">

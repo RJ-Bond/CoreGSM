@@ -34,6 +34,36 @@ const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
   { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
 ];
 
+/** what each kind of message looks like in the channel */
+const SAMPLES: { kind: keyof typeof KIND; icon: string; text: string; on: (i: AlertsInfo) => boolean }[] = [
+  { kind: 'down', icon: '🔴', text: 'Сервер «Survival» не отвечает уже 3 минуты', on: (i) => i.enabled },
+  { kind: 'up', icon: '🟢', text: 'Сервер «Survival» снова в сети, простой 12 минут', on: (i) => i.enabled },
+  { kind: 'low', icon: '📉', text: 'На «Survival» необычно мало игроков для этого часа', on: (i) => i.enabled && !!i.smart?.low },
+  { kind: 'ping', icon: '📶', text: 'На «Survival» вырос пинг: 240 мс при обычных 60', on: (i) => i.enabled && !!i.smart?.ping },
+  { kind: 'full', icon: '👥', text: '«Survival» заполнен на 94%', on: (i) => i.enabled && !!i.smart?.full },
+];
+
+/** the cards of the message kinds: a sample line and whether the kind is on */
+function KindCards({ info }: { info: AlertsInfo }) {
+  const where = info.channelId ? (info.channelName ? `# ${info.channelName}` : `канал ${info.channelId}`) : 'канал не выбран';
+  return (
+    <Section title="Какие сообщения приходят" description="Так они выглядят в канале; серые карточки выключены.">
+      <div className="al-kinds">
+        {SAMPLES.map((x) => {
+          const on = x.on(info);
+          return (
+            <div key={x.kind} className={`al-kind ${on ? '' : 'is-off'}`}>
+              <div className="flex items-center gap-2"><span className={`pill ${KIND[x.kind].cls}`}>{KIND[x.kind].label}</span><span className="ml-auto text-xs font-bold text-mute">{on ? 'включено' : 'выключено'}</span></div>
+              <p className="al-msg"><span aria-hidden>{x.icon}</span> {x.text}</p>
+              <p className="text-xs font-semibold text-mute">{where}</p>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
@@ -73,6 +103,22 @@ function QuietHours({ info, save }: { info: AlertsInfo; save: (p: { quiet: { ena
         </div>
       )}
     </Section>
+  );
+}
+
+/** the delivery queue in one line: how many left, are waiting, failed */
+function Queue({ recent }: { recent: AlertsInfo['recent'] }) {
+  const sent = recent.filter((r) => r.status === 'sent').length;
+  const wait = recent.filter((r) => r.status === 'queued' || r.status === 'sending').length;
+  const bad = recent.filter((r) => r.status === 'error').length;
+  const pct = (n: number) => `${(n / recent.length) * 100}%`;
+  return (
+    <div className="space-y-1.5">
+      <div className="al-queue" role="img" aria-label={`Отправлено ${sent}, ждёт ${wait}, ошибок ${bad}`}>
+        <i className="is-ok" style={{ width: pct(sent) }} /><i className="is-warn" style={{ width: pct(wait) }} /><i className="is-bad" style={{ width: pct(bad) }} />
+      </div>
+      <p className="text-xs font-bold text-mute">Отправлено: {sent} · ждёт: {wait} · с ошибкой: {bad}{bad > 0 ? ' (они выше остальных)' : ''}</p>
+    </div>
   );
 }
 
@@ -179,6 +225,8 @@ export default function AlertsPage() {
         </Section>
       )}
 
+      {info && <KindCards info={info} />}
+
       {info && <QuietHours info={info} save={save} />}
 
       <DigestSection alertsChannel={info?.channelId ?? ''} />
@@ -195,8 +243,9 @@ export default function AlertsPage() {
             {!info.channelId && <button className="btn mt-2" onClick={() => setChanging(true)}>Выбрать канал</button>}
           </div>
         )}
+        {info && info.recent.length > 0 && <Queue recent={info.recent} />}
         <ul className="divide-y divide-line">
-          {info?.recent.map((r) => (
+          {info && [...info.recent].sort((a, b) => Number(b.status === 'error') - Number(a.status === 'error')).map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
               <span className={`pill ${KIND[r.kind].cls}`}>{KIND[r.kind].label}</span>
               <span className="min-w-0 flex-1 truncate font-bold">{r.serverName}</span>
