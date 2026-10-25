@@ -13,6 +13,7 @@ export { PANEL_THEME } from './NewsParts';
 
 export interface Card {
   id: number;
+  comments: number;
   title: string;
   text: string;
   author: { name: string; icon?: string } | null;
@@ -73,6 +74,7 @@ export function cardOf(n: PublicNews): Card {
     statusIds: Array.isArray(p.statusServerIds) ? p.statusServerIds : [],
     game: typeof p.game === 'string' ? p.game : '',
     reactions: Array.isArray(n.reactions) ? n.reactions : [],
+    comments: typeof n.comments === 'number' ? n.comments : 0,
   };
 }
 
@@ -181,6 +183,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
         <div className="nf-actions">
           {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
       </div>

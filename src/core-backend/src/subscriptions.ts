@@ -13,6 +13,7 @@
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from './db.js';
+import { addColumn } from './schema.js';
 import { enqueueDelivery } from './deliveries.js';
 
 /** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
@@ -51,6 +52,8 @@ CREATE TABLE IF NOT EXISTS user_notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notif_user ON user_notifications(user_id, read, ts);
 `);
+// where the notification leads when it is not a server page (a comment under a news item)
+addColumn(db, 'user_notifications', 'url', "TEXT NOT NULL DEFAULT ''");
 
 // ---------- transition logic (pure) ----------
 
@@ -207,11 +210,11 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     const unreadOnly = req.query.unread === '1' || req.query.unread === 'true';
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
     const rows = db
-      .prepare(`SELECT id, ts, kind, server_id, text, read FROM user_notifications WHERE user_id = ? ${unreadOnly ? 'AND read = 0' : ''} ORDER BY ts DESC, id DESC LIMIT ?`)
-      .all(uid, limit) as { id: number; ts: number; kind: string; server_id: number | null; text: string; read: number }[];
+      .prepare(`SELECT id, ts, kind, server_id, text, read, url FROM user_notifications WHERE user_id = ? ${unreadOnly ? 'AND read = 0' : ''} ORDER BY ts DESC, id DESC LIMIT ?`)
+      .all(uid, limit) as { id: number; ts: number; kind: string; server_id: number | null; text: string; read: number; url: string }[];
     res.json({
       unread: unreadNotifications(uid),
-      items: rows.map((r) => ({ id: r.id, ts: r.ts, kind: r.kind, serverId: r.server_id, text: r.text, read: !!r.read })),
+      items: rows.map((r) => ({ id: r.id, ts: r.ts, kind: r.kind, serverId: r.server_id, text: r.text, read: !!r.read, url: r.url || null })),
     });
   });
 
