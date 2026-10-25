@@ -128,6 +128,8 @@ const errorsEn: Record<string, string> = {
   review_reply_long: 'The reply is limited to 600 characters',
   notice_long: 'The notice is limited to 500 characters',
   sub_test_wait: 'Wait a few seconds before the next check',
+  follow_nick_missing: 'Enter the player\'s nick',
+  follow_limit: 'You can follow at most {n} players',
   maintenance_not_found: 'Maintenance window not found',
   bad_date: 'Invalid date',
   title_required: 'Enter a title',
