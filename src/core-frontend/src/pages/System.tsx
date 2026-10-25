@@ -13,6 +13,8 @@ interface Health {
   diskFree: number | null;
   diskTotal: number | null;
   memoryMb: number;
+  load1?: number;
+  cpuCount?: number;
   counts: { servers: number; online: number; bindings: number; users: number; history: number };
   bot: { state: string; tag: string | null; error: string | null; updatedAt: number };
   guilds: number;
@@ -65,6 +67,7 @@ export default function SystemPage() {
 
   const diskUsed = h && h.diskTotal && h.diskFree != null ? 1 - h.diskFree / h.diskTotal : null;
   const memFrac = h ? h.memoryMb / MEM_REF_MB : null;
+  const cpuFrac = h && h.load1 != null && h.cpuCount ? h.load1 / h.cpuCount : null;
   const dbFrac = h && h.dbBytes != null ? h.dbBytes / DB_REF_BYTES : null;
 
   const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
@@ -109,7 +112,7 @@ export default function SystemPage() {
 
       {h ? (
         <>
-          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-3" role="group" aria-label="Ресурсы">
+          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-2 xl:grid-cols-4" role="group" aria-label="Ресурсы">
             <div className="panel p-5 text-center">
               <Gauge
                 value={diskUsed}
@@ -122,6 +125,11 @@ export default function SystemPage() {
               <div className="text-sm font-semibold text-mute">{h.diskTotal ? `всего ${mb(h.diskTotal)}` : 'размер неизвестен'}</div>
             </div>
             <div className="panel p-5 text-center">
+              <Gauge value={cpuFrac} tone={usageTone(cpuFrac)} label="Нагрузка процессора" display={cpuFrac == null ? '–' : `${Math.round(cpuFrac * 100)} %`} caption={h.load1 != null ? `load ${h.load1}` : undefined} icon={<IconSystem size={18} />} />
+              <div className="mt-2 font-extrabold">Процессор</div>
+              <div className="text-sm font-semibold text-mute">{h.cpuCount ? `ядер: ${h.cpuCount}, средняя за минуту` : 'нет данных'}</div>
+            </div>
+            <div className="panel p-5 text-center">
               <Gauge value={memFrac} tone={usageTone(memFrac)} label="Память панели" display={`${h.memoryMb} МБ`} caption={`из ${MEM_REF_MB} МБ`} icon={<IconMemory size={18} />} />
               <div className="mt-2 font-extrabold">Память</div>
               <div className="text-sm font-semibold text-mute">процесс панели, ориентир {MEM_REF_MB} МБ</div>
@@ -132,6 +140,18 @@ export default function SystemPage() {
               <div className="text-sm font-semibold text-mute">{h.counts.history.toLocaleString('ru-RU')} точек истории</div>
             </div>
           </div>
+
+          {h.cert && h.cert.daysLeft != null && (
+            <Section title="Сертификат HTTPS" description={h.cert.notAfter ? `Действует до ${fmtDateTime(h.cert.notAfter)}` : undefined}>
+              <div className="cert-bar" role="img" aria-label={`Осталось дней: ${h.cert.daysLeft}`}>
+                <i className={`is-${certTone(h.cert)}`} style={{ width: `${Math.max(2, Math.min(100, (h.cert.daysLeft / 90) * 100))}%` }} />
+              </div>
+              <p className="text-sm font-semibold text-mute">
+                {certText(h.cert)} из 90{h.cert.selfSigned ? ' · самоподписанный: браузеры покажут предупреждение' : h.cert.issuer ? ` · выдал ${h.cert.issuer}` : ''}.
+                {h.cert.daysLeft <= 14 ? ' Пора продлевать: обычно это делает ваш обратный прокси (Caddy, Nginx Proxy Manager, certbot).' : ''}
+              </p>
+            </Section>
+          )}
 
           <Section title="Состояние">
             <ul className="divide-y divide-line">
