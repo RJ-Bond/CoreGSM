@@ -300,3 +300,22 @@ export function toggleReaction(
     }),
   };
 }
+
+// ---------- «Новое»: what was published since the person last opened the news ----------
+
+/** a published item is fresh when it came after the last visit (no stored visit yet: nothing is fresh) */
+export const isFresh = (sentAt: number | null | undefined, seen: number | null): boolean => seen != null && sentAt != null && sentAt > seen;
+
+export const unreadCount = (items: { sentAt: number | null }[], seen: number | null): number => items.filter((n) => isFresh(n.sentAt, seen)).length;
+
+/** the item for the big block at the top of the feed: the newest pinned one, else the newest one; null for a short feed */
+export function pickHero<T extends Pick<PublicNews, 'id' | 'sentAt' | 'pinned' | 'payload'>>(items: T[], min = 3): T | null {
+  if (items.length < min) return null;
+  const ordered = orderFeed(items);
+  return ordered[0] ?? null;
+}
+
+/** «Обновлено» is shown only when the edit came well after the publication (not for a fix made a minute later) */
+export const EDIT_GRACE_MS = 10 * 60_000;
+export const wasEdited = (sentAt: number | null | undefined, editedAt: number | null | undefined): boolean =>
+  sentAt != null && editedAt != null && editedAt - sentAt > EDIT_GRACE_MS;

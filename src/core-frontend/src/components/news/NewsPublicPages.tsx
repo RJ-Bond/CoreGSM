@@ -8,8 +8,9 @@ import { IconNews, LoadError, PageHead, StateView, fmtDateTime, usePoll } from '
 import { NewsArticle } from './NewsArticle';
 import { CategoryIcon, PinIcon } from './NewsIcons';
 import { Countdown, categoryLabel, useNewsServers } from './NewsParts';
-import { cardOf, hasGeneratedCover, PublicFeed } from './PublicFeed';
-import { CATEGORY_HEX, isRubricFilter, orderFeed, visibleRubrics, type RubricFilter } from './newsLogic';
+import { cardOf, hasGeneratedCover, NewsCover, PublicFeed } from './PublicFeed';
+import { markSeen, readSeen } from './newsSeen';
+import { CATEGORY_HEX, isRubricFilter, orderFeed, pickHero, plainExcerpt, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
 /** how many news a page of the feed shows */
@@ -99,6 +100,9 @@ export function NewsListPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [counts, setCounts] = useState<Record<RubricFilter, number>>(ZERO_COUNTS);
   const wide = useMedia('(min-width: 1100px)');
+  // the time of the previous visit, taken once: the «Новое» marks stay while the page is open
+  const [seen] = useState(readSeen);
+  useEffect(() => { markSeen(); }, []);
   const servers = useNewsServers();
   const works = useWorks();
 
@@ -133,7 +137,20 @@ export function NewsListPage() {
   const showMore = () => { setLoadingMore(true); setLimit((l) => l + PAGE); };
 
   const ordered = useMemo(() => orderFeed(items), [items]);
-  const shown = ordered;
+  // the big block on top: only on the first page of «Все», the rest of the feed goes below it
+  const hero = filter === 'all' ? pickHero(ordered) : null;
+  const shown = hero ? ordered.filter((n) => n.id !== hero.id) : ordered;
+  const heroCard = hero ? cardOf(hero) : null;
+
+  // the next page loads by itself when the end of the feed comes into view (the button stays as a fallback)
+  const more = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = more.current;
+    if (!el || !hasMore || loadingMore || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver((e) => { if (e[0]?.isIntersecting) { setLoadingMore(true); setLimit((l) => l + PAGE); } }, { rootMargin: '400px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loadingMore, items.length]);
   const pinned = ordered.filter((n) => (n.pinned ?? n.payload?.pinned)).slice(0, 5);
   const now = Date.now();
   // the nearest event with a timer among the loaded news
@@ -190,7 +207,7 @@ export function NewsListPage() {
             </ul>
             </>
           )}
-          {loaded && ordered.length > 0 && shown.length === 0 && (
+          {loaded && ordered.length > 0 && shown.length === 0 && !hero && (
             <StateView
               kind="empty"
               art={<NewsArt />}
@@ -199,9 +216,18 @@ export function NewsListPage() {
               action={<button type="button" className="btn btn-soft" onClick={() => setRubric('all')}>{t('nw.showAll')}</button>}
             />
           )}
-          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} /></div>}
+          {heroCard && (
+            <article className="nw-hero fade-in">
+              <NewsCover c={heroCard} servers={servers} href={`/news/${heroCard.id}`} tall />
+              <div className="nw-hero-in">
+                {heroCard.text && <p>{plainExcerpt(heroCard.text, 260)}</p>}
+                <a className="btn" href={`/news/${heroCard.id}`}>{t('nw.readShort')}<span aria-hidden> →</span></a>
+              </div>
+            </article>
+          )}
+          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} /></div>}
           {hasMore && (
-            <div className="ne-more">
+            <div className="ne-more" ref={more}>
               <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
                 {loadingMore ? t('nw.loadingMore') : t('nw.more')}
               </button>

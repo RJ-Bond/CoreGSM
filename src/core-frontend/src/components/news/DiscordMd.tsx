@@ -8,6 +8,18 @@ import { toast } from '../../ui';
  * > quotes, lists, @everyone/@here, <@&role>, <@user>, <#channel>, <t:unix:R> and custom emoji.
  */
 
+/** the «#» that appears beside a heading on hover and copies the link to that part of the page */
+function HeadingAnchor({ id }: { id: string }) {
+  // in the editor preview the link would point at the editor: no anchor there
+  if (typeof window === 'undefined' || !/^\/news\/\d+/.test(window.location.pathname)) return null;
+  const copy = async () => {
+    const url = `${window.location.origin}${window.location.pathname}#${id}`;
+    try { await navigator.clipboard.writeText(url); toast('Ссылка на раздел скопирована'); } catch { /* no clipboard */ }
+    window.history.replaceState(null, '', `#${id}`);
+  };
+  return <button type="button" className="nw-anchor" onClick={() => void copy()} aria-label="Скопировать ссылку на раздел" title="Скопировать ссылку на раздел">#</button>;
+}
+
 export interface DTheme {
   name: 'dark' | 'light';
   outer: string;
@@ -214,7 +226,12 @@ export function DiscordMd({ text }: { text: string }) {
     if (h) {
       const size = h[1].length === 1 ? 'text-[1.5em]' : h[1].length === 2 ? 'text-[1.25em]' : 'text-[1.1em]';
       // the id lets the table of contents of the news page jump here (extractHeadings builds the same ids)
-      out.push(<div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>{inlineMd(h[2])}</div>);
+      out.push(
+        <div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} nw-h mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>
+          {inlineMd(h[2])}
+          <HeadingAnchor id={`nw-h-${i}`} />
+        </div>,
+      );
       continue;
     }
     const small = /^-#\s+(.*)$/.exec(line);

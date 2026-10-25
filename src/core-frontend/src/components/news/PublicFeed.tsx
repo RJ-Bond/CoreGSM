@@ -6,7 +6,7 @@ import { useAuth } from '../../auth';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
 import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
 import {
-  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
+  CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isFresh, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
 } from './newsLogic';
 
 export { PANEL_THEME } from './NewsParts';
@@ -122,7 +122,7 @@ function monthFormatter(lang: 'ru' | 'en') {
  * One news as a small article: a banner (the picture, or a cover drawn by the panel) with the rubric, the date and the
  * headline on it, and the whole text below (a list stays a list), the author and a link.
  */
-function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en' }) {
+function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en'; seen: number | null }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
   const { me } = useAuth();
@@ -138,6 +138,7 @@ function Entry({ c, servers }: { c: Card; servers: Server[] | null | undefined; 
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
+            {isFresh(c.at, seen) && <span className="nw-new">Новое</span>}
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
             {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
@@ -191,7 +192,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
  * The feed: an editorial list, pinned items first and then the rest grouped by month.
  * `items` must already be ordered (pinned first, newest first) and filtered.
  */
-export function PublicFeed({ items, servers, flat = false }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean }) {
+export function PublicFeed({ items, servers, flat = false, seen = null }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null }) {
   const { lang } = useI18n();
   if (items.length === 0) return null;
   const cards = items.map(cardOf);
@@ -204,13 +205,13 @@ export function PublicFeed({ items, servers, flat = false }: { items: PublicNews
       {pinned.length > 0 && (
         <section className="nw-group">
           <h2 className="ne-h">{t('nw.pinned')}</h2>
-          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
+          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
           {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
-          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} />)}
+          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
         </section>
       ))}
     </div>
