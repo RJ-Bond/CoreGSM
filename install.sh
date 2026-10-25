@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5da247ad31ea"
+COREGSM_BUILD="c5ac2166fdc3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -11480,12 +11480,10 @@ import { enqueueDelivery } from './deliveries.js';
 import { param } from './http.js';
 import { log } from './logger.js';
 import { viewsByDay, viewsOf } from './newsViews.js';
+import { NEWS_RUBRICS, newsNoticeText, normRubric } from './newsSubsLogic.js';
 import { dmAvailable, pushToUser } from './subscriptions.js';
 
 export const router = express.Router();
-
-export const NEWS_RUBRICS = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
-export type Rubric = (typeof NEWS_RUBRICS)[number];
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS news_subscriptions (
@@ -11495,13 +11493,6 @@ CREATE TABLE IF NOT EXISTS news_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_news_subs_cat ON news_subscriptions(category);
 `);
-
-export const RUBRIC_EMOJI: Record<Rubric, string> = { announcement: '📣', wipe: '🧹', update: '🛠️', event: '🎉', maintenance: '🔧', other: '📰' };
-
-/** «🧹 Новая новость: …» for the bell and the DM */
-export const newsNoticeText = (category: string, title: string): string => `${RUBRIC_EMOJI[category as Rubric] ?? '📰'} Новая новость: «${title.slice(0, 120)}»`;
-
-export const normRubric = (c: unknown): Rubric => ((NEWS_RUBRICS as readonly string[]).includes(String(c)) ? (c as Rubric) : 'announcement');
 
 /** Tells the subscribers of the rubric about a published item (never throws into the news flow). Returns how many were told. */
 export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null }, base = ''): number {
@@ -11556,6 +11547,20 @@ router.get('/api/news/:id/stats', param('id'), allow('news'), (req, res) => {
   const comments = (db.prepare("SELECT COUNT(*) AS n FROM news_comments WHERE news_id = ? AND status = 'visible'").get(id) as { n: number }).n;
   res.json({ sentAt: r.sent_at, views: viewsOf(id), byDay: viewsByDay(id, 30), reactions, comments });
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsSubsLogic.ts" << '__COREGSM_EOF__'
+/** Texts and names of the news subscriptions (pure, no database). */
+
+export const NEWS_RUBRICS = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
+export type Rubric = (typeof NEWS_RUBRICS)[number];
+
+export const RUBRIC_EMOJI: Record<Rubric, string> = { announcement: '📣', wipe: '🧹', update: '🛠️', event: '🎉', maintenance: '🔧', other: '📰' };
+
+/** «🧹 Новая новость: …» for the bell and the DM */
+export const newsNoticeText = (category: string, title: string): string => `${RUBRIC_EMOJI[category as Rubric] ?? '📰'} Новая новость: «${title.slice(0, 120)}»`;
+
+export const normRubric = (c: unknown): Rubric => ((NEWS_RUBRICS as readonly string[]).includes(String(c)) ? (c as Rubric) : 'announcement');
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/newsViews.ts" << '__COREGSM_EOF__'
