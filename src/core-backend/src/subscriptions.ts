@@ -19,6 +19,8 @@ import { enqueueDelivery } from './deliveries.js';
 type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
 let pushLater: PushHook = () => undefined;
 export const setPushHook = (fn: PushHook) => { pushLater = fn; };
+/** for the other notifiers (player follows): a push to the devices of one user */
+export const pushToUser: PushHook = (userId, m) => pushLater(userId, m);
 
 export const SUB_KINDS = ['free_slot', 'back_online', 'went_down'] as const;
 export type SubKind = (typeof SUB_KINDS)[number];

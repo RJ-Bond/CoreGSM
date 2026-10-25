@@ -8,6 +8,7 @@ import { ActivityStrip } from '../components/profile/Stats';
 import NickPic from '../components/NickPic';
 import { Crumbs } from '../components/ShellExtras';
 import { AchievementCard } from '../components/profile/Achievements';
+import { FollowButton } from '../components/profile/Follows';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
 import '../styles/community.css';
@@ -82,6 +83,7 @@ export default function PlayerPage({ name }: { name: string }) {
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>впервые {fmtDateTime(p.firstSeen)}</span>
           </p>
+          <div className="mt-2"><FollowButton nick={p.name} /></div>
         </div>
         {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (
           <div className="pl-places basis-full" aria-label="Места среди игроков">

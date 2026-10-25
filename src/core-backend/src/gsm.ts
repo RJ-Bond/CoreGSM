@@ -2,6 +2,7 @@ import { trackAlerts } from './alerts.js';
 import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
 import { onSessionsOpened } from './nickOnboarding.js';
+import { notifyFollowers } from './playerFollows.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
 import { db, getSetting, type ServerRow } from './db.js';
 import { inMaintenance, pruneMaintenance } from './maintenance.js';
@@ -161,6 +162,7 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
     syncPlayersNow(s.id, r.playerNames, d.online, ts);
     const opened = syncPlayerSessions(s.id, r.playerNames, d.online, ts);
     onSessionsOpened(s.id, opened, ts);
+    notifyFollowers(s.id, opened, ts);
     if (maint) recordUptime(s.id, d.online, r.players, ts, { peakOnly: true });
     else recordUptime(s.id, d.online, r.players, ts, { count: d.becameOffline ? d.failures : 1 });
   } catch (e) {

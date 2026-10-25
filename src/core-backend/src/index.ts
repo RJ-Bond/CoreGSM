@@ -29,6 +29,7 @@ import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverDa
 import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from './shutdown.js';
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
+import { registerPlayerFollows } from './playerFollows.js';
 import { router as accountRouter } from './routes/account.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
@@ -148,6 +149,7 @@ registerSecurity({
 });
 registerDeliveries({ app, admin, internal });
 registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => bot.status.state === 'online' });
+registerPlayerFollows({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerGames(app);
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
