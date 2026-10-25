@@ -15,6 +15,7 @@ import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
 import { FollowsCard } from '../components/profile/Follows';
+import { NewsSubsCard } from '../components/profile/NewsSubs';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
@@ -188,6 +189,7 @@ function SecurityTab() {
         <DiscordCard onChanged={reload} />
         <PushCard />
         <FollowsCard />
+        <NewsSubsCard />
         <SessionsCard key={rev} />
       </div>
       <JournalCard onRevoked={() => setRev((x) => x + 1)} />
