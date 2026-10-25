@@ -4,6 +4,7 @@ import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInf
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
+import { AppFooter, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -105,12 +106,6 @@ const IconSearch = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="11" cy="11" r="7" />
     <path d="M21 21l-4.3-4.3" />
-  </svg>
-);
-
-const IconLogout = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
   </svg>
 );
 
@@ -304,16 +299,22 @@ export default function App() {
         : page === 'admin'
           ? (ADMIN_TITLES[adminSection] ? `${t('nav.admin')} · ${ADMIN_TITLES[adminSection]}` : t('nav.admin'))
           : (() => { const d = PAGES.find((p) => p.id === page); return d ? t(d.label) : ''; })();
+  // players now in the tab title and a dot on the icon (only where the panel is shown)
+  const livePlayers = usePanelPulse(shellOk.current && access.publicPanel !== false);
   useEffect(() => {
-    document.title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
-  }, [boot.ready, sectionTitle, access.brand.name]);
+    const title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
+    document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
+  }, [boot.ready, sectionTitle, access.brand.name, livePlayers]);
+  useScrollMemory();
+  const navHidden = useHideOnScroll();
 
   const routeKey = `${page}/${page === 'servers' || page === 'admin' ? adminSection : ''}`;
   const firstRoute = useRef(true);
   useEffect(() => {
     if (!boot.ready) return;
     if (firstRoute.current) { firstRoute.current = false; return; }
-    window.scrollTo(0, 0);
+    // «Back» returns to where the page was left, any other step starts at the top
+    if (!restoreScroll()) window.scrollTo(0, 0);
     // a dialog (the tour, a confirmation) keeps the focus it has
     if (document.querySelector('[aria-modal="true"]')) return;
     mainRef.current?.focus({ preventScroll: true });
@@ -406,6 +407,8 @@ export default function App() {
       >
         {t('nav.skip')}
       </a>
+      <RouteProgress routeKey={routeKey} />
+      <Tooltips />
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
@@ -438,24 +441,7 @@ export default function App() {
             <ThemeToggle />
             {me ? (
               <>
-                <a
-                  href="/profile"
-                  aria-current={page === 'profile' ? 'page' : undefined}
-                  className={`flex items-center justify-center gap-2 rounded-full font-extrabold transition max-sm:h-11 max-sm:w-11 sm:max-w-44 sm:py-1 sm:pl-1 sm:pr-3.5 ${page === 'profile' ? 'bg-soft text-link' : 'text-ink hover:bg-soft'}`}
-                  title={t('hdr.profileOf', { name: me.username })}
-                  aria-label={t('hdr.profileOf', { name: me.username })}
-                >
-                  <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-                  <span className="hidden truncate sm:inline">{me.username}</span>
-                </a>
-                <button
-                  onClick={() => void logout()}
-                  className="btn-icon-ghost max-sm:hidden!"
-                  aria-label={t('hdr.logout')}
-                  title={t('hdr.logout')}
-                >
-                  <IconLogout />
-                </button>
+                <ProfileMenu me={me} isStaff={isStaff} logout={() => void logout()} active={page === 'profile'} />
               </>
             ) : (
               <>
@@ -489,8 +475,10 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
+        <AppFooter brand={access.brand.name} />
+
         <nav
-          className="glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden"
+          className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden ${navHidden ? 'is-hidden' : ''}`}
           style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
           aria-label={t('nav.sections')}
         >

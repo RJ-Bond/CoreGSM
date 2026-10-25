@@ -1,0 +1,56 @@
+/* the app shell: progress strip, footer, crumbs, profile menu, tooltips, bottom bar, print */
+.route-progress { position: fixed; top: 0; left: 0; right: 0; z-index: 80; height: 3px; pointer-events: none; }
+.route-progress > span { display: block; height: 100%; width: 0; border-radius: 0 3px 3px 0; background: linear-gradient(90deg, rgb(var(--brand)), rgb(var(--link))); box-shadow: 0 0 10px rgb(var(--brand) / .6); }
+.route-progress.is-run > span { width: 82%; transition: width 2.2s cubic-bezier(.1, .7, .2, 1); }
+.route-progress.is-done > span { width: 100%; transition: width .2s ease, opacity .3s ease .15s; opacity: 0; }
+
+.app-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; margin-top: 36px; padding: 18px 0 4px; border-top: 1px solid rgb(var(--line)); font-size: 13px; font-weight: 700; color: rgb(var(--mute)); }
+.app-foot nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.app-foot a:hover { color: rgb(var(--link)); }
+
+.crumbs { margin-left: 4px; font-size: 14px; font-weight: 800; }
+.crumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; }
+.crumbs li { display: inline-flex; align-items: center; min-width: 0; }
+.crumbs li + li::before { content: '›'; margin: 0 8px; color: rgb(var(--mute)); font-weight: 600; }
+.crumbs a { color: rgb(var(--link)); }
+.crumbs a:hover { text-decoration: underline; }
+.crumbs [aria-current] { color: rgb(var(--ink)); max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pm { position: relative; }
+.pm-btn { display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-pill); font-weight: 800; transition: background-color .15s ease; height: 44px; width: 44px; }
+@media (min-width: 640px) { .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; } }
+.pm-btn:hover, .pm-btn[aria-expanded='true'] { background: rgb(var(--soft)); }
+.pm-btn.is-active { background: rgb(var(--brand) / .14); color: rgb(var(--link)); }
+.pm-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; width: 14rem; padding: 6px; display: grid; gap: 2px; }
+.pm-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px; margin-bottom: 4px; border-bottom: 1px solid rgb(var(--line)); }
+.pm-item { display: block; width: 100%; padding: 9px 12px; border-radius: var(--r-md); text-align: left; font-size: 14px; font-weight: 700; }
+.pm-item:hover, .pm-item:focus-visible { background: rgb(var(--soft)); }
+.pm-item.is-danger { color: rgb(var(--bad)); }
+
+.nav-bottom { transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
+.nav-bottom.is-hidden { transform: translateY(160%); opacity: 0; pointer-events: none; }
+html[data-motion='reduce'] .nav-bottom { transition: none; }
+
+.tip-bubble { position: fixed; z-index: 120; transform: translate(-50%, -100%); max-width: min(18rem, calc(100vw - 24px)); padding: 5px 10px; border-radius: var(--r-md); background: rgb(var(--ink)); color: rgb(var(--page)); font-size: 12.5px; font-weight: 700; line-height: 1.3; pointer-events: none; box-shadow: var(--shadow-2); animation: tip-in .12s ease-out both; }
+.tip-bubble.is-below { transform: translate(-50%, 0); }
+@keyframes tip-in { from { opacity: 0; } }
+
+.bell-ring svg { transform-origin: 50% 3px; animation: bell-ring 1.1s ease-in-out both; }
+@keyframes bell-ring { 0%, 100% { transform: rotate(0); } 12% { transform: rotate(16deg); } 28% { transform: rotate(-14deg); } 44% { transform: rotate(10deg); } 60% { transform: rotate(-7deg); } 76% { transform: rotate(3deg); } }
+@media (prefers-reduced-motion: reduce) { .bell-ring svg, .route-progress > span { animation: none; transition: none; } }
+html[data-motion='reduce'] .bell-ring svg { animation: none; }
+
+/* a system that asks for less transparency gets solid surfaces */
+@media (prefers-reduced-transparency: reduce) {
+  .glass { background-image: none; background: rgb(var(--card)); }
+  .pill-glass, .chip-glass { background: rgb(12 14 26); }
+}
+
+/* print: the content only, on white */
+@media print {
+  header.glass, nav.glass, .toaster, .route-progress, .tip-bubble, .app-foot, .srv-top, .skip-link, .cm-nav, .srv-pull { display: none !important; }
+  html, body { background: #fff !important; color: #000 !important; }
+  .tile, .panel { box-shadow: none !important; border: 1px solid #ccc; break-inside: avoid; background: #fff !important; }
+  a { color: inherit; text-decoration: none; }
+  * { animation: none !important; transition: none !important; }
+}
