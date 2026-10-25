@@ -140,6 +140,7 @@ export function playerCard(nick: string, now = Date.now()) {
   const hours = (v: { joined_at: number; left_at: number }) => (v.left_at - v.joined_at) / 3600_000;
   const per = new Map<number, { hours: number; visits: number; last: number }>();
   const byHour = Array<number>(24).fill(0);
+  const perDay = new Map<string, number>();
   const days = new Set<string>();
   for (const v of visits) {
     const p = per.get(v.server_id) ?? { hours: 0, visits: 0, last: 0 };
@@ -148,7 +149,11 @@ export function playerCard(nick: string, now = Date.now()) {
     p.last = Math.max(p.last, v.left_at);
     per.set(v.server_id, p);
     // the hours of the day the player is on, counted in quarter-hour steps
-    for (let t = v.joined_at; t < v.left_at; t += 900_000) byHour[localParts(t, zone).hour] += 0.25;
+    for (let t = v.joined_at; t < v.left_at; t += 900_000) {
+      const lp = localParts(t, zone);
+      byHour[lp.hour] += 0.25;
+      perDay.set(lp.day, (perDay.get(lp.day) ?? 0) + 0.25);
+    }
     days.add(localParts(v.joined_at, zone).day);
   }
   // the streak: days in a row with a visit, up to today (or yesterday)
@@ -158,7 +163,23 @@ export function playerCard(nick: string, now = Date.now()) {
     if (days.has(d)) streak++;
     else if (k > 0) break;
   }
+  // the last 90 days one by one (oldest first), for the activity calendar
+  const byDay = Array.from({ length: 90 }, (_, k) => {
+    const date = localParts(now - (89 - k) * DAY, zone).day;
+    return { date, seconds: Math.round((perDay.get(date) ?? 0) * 3600) };
+  });
   const name = visits[visits.length - 1].name;
+  // the place among all players for a week, a month and all the kept history, and the place a week ago
+  const placeIn = (list: { name: string }[]) => {
+    const i = list.findIndex((p) => p.name.toLowerCase() === name.toLowerCase());
+    return i < 0 ? null : i + 1;
+  };
+  const ranks = {
+    week: placeIn(topPlayers(now - 7 * DAY, now, 500)),
+    weekBefore: placeIn(topPlayers(now - 14 * DAY, now - 7 * DAY, 500)),
+    month: placeIn(topPlayers(now - 30 * DAY, now, 500)),
+    all: placeIn(topPlayers(0, now, 500)),
+  };
   const game = [...per.keys()].map((id) => names.get(id)?.game).find((g) => g === 'vrising');
   const total = visits.reduce((n, v) => n + hours(v), 0);
   return {
@@ -172,6 +193,8 @@ export function playerCard(nick: string, now = Date.now()) {
     streak,
     usualHour: byHour.some((v) => v > 0) ? byHour.indexOf(Math.max(...byHour)) : null,
     byHour: byHour.map((v) => Math.round(v * 10) / 10),
+    byDay,
+    ranks,
     servers: [...per]
       .filter(([id]) => names.has(id))
       .map(([id, p]) => ({ id, name: names.get(id)!.name, game: names.get(id)!.game, hours: Math.round(p.hours * 10) / 10, visits: p.visits, last: p.last }))
