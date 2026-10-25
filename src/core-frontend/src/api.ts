@@ -106,6 +106,8 @@ export interface Server {
   playerNames: string[];
   error: string | null;
   updatedAt: number | null;
+  /** since when the server is in its current state (online / offline); null = not known yet */
+  stateSince?: number | null;
   /** an active maintenance window for this server (null = none) */
   maintenance?: { name: string; until: number | null } | null;
 }
