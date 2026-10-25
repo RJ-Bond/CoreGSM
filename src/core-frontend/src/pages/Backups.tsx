@@ -3,8 +3,33 @@ import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
-import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast } from '../ui';
 import { errorText } from '../apiErrors';
+
+/** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
+function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; schedule: BackupInfo['schedule'] }) {
+  const list = [...items].sort((a, b) => a.createdAt - b.createdAt).slice(-30);
+  const max = Math.max(1, ...list.map((b) => b.size));
+  const total = items.reduce((n, b) => n + b.size, 0);
+  const last = list[list.length - 1];
+  const ageH = (Date.now() - last.createdAt) / 3_600_000;
+  // an automatic schedule that has not produced a copy for twice its period is worth a warning
+  const late = schedule !== 'off' && ageH > (schedule === 'daily' ? 48 : 24 * 14);
+  return (
+    <div className="mb-3 space-y-2 rounded-ui-lg bg-soft p-3.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm font-bold text-mute">
+        <span><b className="text-ink">{items.length}</b> {items.length === 1 ? 'копия' : items.length < 5 ? 'копии' : 'копий'}, всего {fmtSize(total)}</span>
+        <span className={late ? 'text-warn' : ''}>последняя: {ago(last.createdAt)}{late ? '. Расписание давно не срабатывало' : ''}</span>
+      </div>
+      <div className="bk-line" role="img" aria-label={`Копий: ${items.length}`}>
+        {list.map((b) => (
+          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? 'авто' : 'вручную'}`} />
+        ))}
+      </div>
+      <div className="flex justify-between text-xs font-bold text-mute"><span>{fmtDateTime(list[0].createdAt)}</span><span>{fmtDateTime(last.createdAt)}</span></div>
+    </div>
+  );
+}
 
 export const fmtSize = (n: number) =>
   n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
@@ -292,6 +317,7 @@ export default function BackupsCard() {
 
       <div>
         <h3 className="mb-2 font-black">Копии на сервере</h3>
+        {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
