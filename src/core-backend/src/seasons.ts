@@ -92,15 +92,19 @@ router.get('/api/seasons', viewer, (_req, res) => res.json(seasonsView()));
 
 const nameSchema = z.string().trim().min(1).max(60);
 
+/** a new season starts at `at`; the open one ends there */
+export function startSeason(name: string, at: number): number {
+  return db.transaction(() => {
+    db.prepare('UPDATE seasons SET ends_at = ? WHERE ends_at IS NULL AND starts_at < ?').run(at, at);
+    return Number(db.prepare('INSERT INTO seasons (name, starts_at) VALUES (?, ?)').run(name, at).lastInsertRowid);
+  })();
+}
+
 router.post('/api/seasons', admin, (req, res) => {
   const b = z.object({ name: nameSchema, startsAt: z.number().int().positive().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   const at = Math.min(b.data.startsAt ?? Date.now(), Date.now() + 365 * 86_400_000);
-  const id = db.transaction(() => {
-    // the open season ends where the new one starts
-    db.prepare('UPDATE seasons SET ends_at = ? WHERE ends_at IS NULL AND starts_at < ?').run(at, at);
-    return Number(db.prepare('INSERT INTO seasons (name, starts_at) VALUES (?, ?)').run(b.data.name, at).lastInsertRowid);
-  })();
+  const id = startSeason(b.data.name, at);
   res.json({ id, ...seasonsView() });
 });
 
