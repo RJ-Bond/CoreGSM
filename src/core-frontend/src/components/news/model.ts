@@ -307,6 +307,15 @@ export interface Check { level: 'ok' | 'warn' | 'error'; text: string }
 
 const TEMPLATE_WORDS = /(^|[^А-ЯЁа-яёA-Za-z0-9_])(ДАТА|ВРЕМЯ|НАЗВАНИЕ|ПРИЗ)(?![А-ЯЁа-яёA-Za-z0-9_])/g;
 
+/** links in a Discord-markdown text: http:// ones, an empty [text]() and a bare «www.» that is not a link in Discord */
+export function linkProblems(text: string): { insecure: number; empty: number; bare: number } {
+  return {
+    empty: (text.match(/\[[^\]]*\]\(\s*\)/g) ?? []).length,
+    insecure: (text.match(/\bhttp:\/\/[^\s)>\]]+/gi) ?? []).length,
+    bare: (text.match(/(^|[\s(])www\.[^\s)]+/gi) ?? []).length,
+  };
+}
+
 export function runChecks(d: Draft): Check[] {
   const out: Check[] = [];
   const noChannel = !/^\d{15,25}$/.test(d.channelId);
@@ -340,6 +349,18 @@ export function runChecks(d: Draft): Check[] {
 
   const half = d.embeds.reduce((n, e) => n + e.fields.filter((f) => !!f.name.trim() !== !!f.value.trim()).length, 0);
   if (half) out.push({ level: 'warn', text: `Полей с пустым названием или значением: ${half}. Они не будут показаны.` });
+
+  const allText = [d.content, ...d.embeds.flatMap((e) => [e.description, ...e.fields.map((f) => f.value)])].join('\n');
+  const lp = linkProblems(allText);
+  if (lp.empty) out.push({ level: 'warn', text: `Ссылок без адреса: ${lp.empty}. Текст в скобках пустой, ссылка не откроется.` });
+  if (lp.insecure) out.push({ level: 'warn', text: `Ссылок без https://: ${lp.insecure}. Браузер предупредит об опасном соединении.` });
+  if (lp.bare) out.push({ level: 'warn', text: `Адресов, начинающихся с www., без http(s)://: ${lp.bare}. Discord не сделает их ссылкой.` });
+
+  const first = d.embeds[0];
+  if (first && embedHasContent(first) && !first.title.trim()) out.push({ level: 'warn', text: 'У новости нет заголовка: на сайте она будет без названия.' });
+  const external = d.embeds.filter((e) => e.imageUrl.trim() && !e.imageUpload).length + d.gallery.filter((g) => g.url.trim() && !g.upload).length;
+  if (external) out.push({ level: 'warn', text: `Картинок по внешней ссылке: ${external}. Чужой сайт может убрать или не открыть файл: надёжнее загрузить картинку в редактор.` });
+  if (first && embedHasContent(first) && !first.imageUrl.trim() && !first.imageUpload && d.gallery.length === 0) out.push({ level: 'ok', text: 'Обложки нет: на сайте её нарисует панель.' });
 
   const texts = [d.content, ...d.embeds.flatMap((e) => [e.title, e.description, e.footer, e.authorName, ...e.fields.flatMap((f) => [f.name, f.value])])];
   const words = new Set<string>();

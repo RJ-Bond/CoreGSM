@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="20b5fec3992c"
+COREGSM_BUILD="c5ac2166fdc3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8905,6 +8905,7 @@ import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as newsCommentsRouter } from './newsComments.js';
 import { router as newsViewsRouter } from './newsViews.js';
+import { router as newsSubsRouter } from './newsSubs.js';
 import { router as probesRouter } from './probes.js';
 import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
@@ -8976,6 +8977,7 @@ app.use(internalRouter);
 // before the news routes: /api/news/discussed and /api/news/comments/* must not be taken for /api/news/:id
 app.use(newsCommentsRouter);
 app.use(newsViewsRouter);
+app.use(newsSubsRouter);
 
 registerNews({
   app,
@@ -9985,6 +9987,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { commentCount } from './newsComments.js';
 import { viewsOf } from './newsViews.js';
+import { notifyNewsPublished } from './newsSubs.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
@@ -11068,6 +11071,13 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
         now,
         id,
       );
+      // the first post of an item (not a repeat of the edit): the subscribers of its rubric are told
+      if (prev && !prev.sent_at && prev.repeat === 'none') {
+        try {
+          const p = JSON.parse(prev.payload) as NewsPayload;
+          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+        } catch { /* the post itself is done */ }
+      }
     } else {
       const err = b.data.error ?? 'Ошибка отправки';
       const plan = planFailure(before?.attempts ?? 0, now, { retryAfterMs: b.data.retryAfterMs });
@@ -11446,6 +11456,111 @@ router.post('/api/news/comments/:cid/pin', param('cid'), moderator, (req: Authed
   })();
   res.json({ ok: true });
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsSubs.ts" << '__COREGSM_EOF__'
+/**
+ * Subscriptions to the rubrics of the news: a signed-in user picks the rubrics he wants to hear about; when an item
+ * of such a rubric is published for the first time, the notification goes to the bell of the panel (with a link to
+ * the item), to the devices with Web Push and, when the account is linked, to Discord as a DM — the same three ways
+ * as the server subscriptions and the player follows.
+ *
+ *   GET /api/me/news-subscriptions   { categories: [...] }
+ *   PUT /api/me/news-subscriptions   { categories: [...] } (replaces the list; an empty list unsubscribes)
+ *
+ * news.ts calls notifyNewsPublished() once, when the bot has posted an item for the first time.
+ * Statistics of one item for the editors:
+ *   GET /api/news/:id/stats          views by day, reactions, comments (permission «Новости»)
+ */
+import express from 'express';
+import { z } from 'zod';
+import { allow, auth, type AuthedRequest } from './auth.js';
+import { db } from './db.js';
+import { enqueueDelivery } from './deliveries.js';
+import { param } from './http.js';
+import { log } from './logger.js';
+import { viewsByDay, viewsOf } from './newsViews.js';
+import { NEWS_RUBRICS, newsNoticeText, normRubric } from './newsSubsLogic.js';
+import { dmAvailable, pushToUser } from './subscriptions.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_subscriptions (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category TEXT NOT NULL,
+  PRIMARY KEY (user_id, category)
+);
+CREATE INDEX IF NOT EXISTS idx_news_subs_cat ON news_subscriptions(category);
+`);
+
+/** Tells the subscribers of the rubric about a published item (never throws into the news flow). Returns how many were told. */
+export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null }, base = ''): number {
+  try {
+    const category = normRubric(item.category);
+    const subs = db
+      .prepare(`SELECT s.user_id, u.discord_id FROM news_subscriptions s JOIN users u ON u.id = s.user_id AND u.status = 'active' WHERE s.category = ? AND s.user_id IS NOT ?`)
+      .all(category, item.authorId) as { user_id: number; discord_id: string | null }[];
+    if (!subs.length) return 0;
+    const now = Date.now();
+    const text = newsNoticeText(category, item.title);
+    const url = `/news/${item.id}`;
+    const insert = db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)');
+    for (const s of subs) {
+      insert.run(s.user_id, now, 'news', text, url);
+      if (s.discord_id && dmAvailable()) {
+        const content = base ? `${text}\n${base}${url}` : text;
+        enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content, summary: text.slice(0, 120) } });
+      }
+      pushToUser(s.user_id, { title: 'Новости', body: text, url, tag: `news-${item.id}` });
+    }
+    return subs.length;
+  } catch (e) {
+    log.error('news subscriptions failed', (e as Error).message);
+    return 0;
+  }
+}
+
+router.get('/api/me/news-subscriptions', auth, (req: AuthedRequest, res) => {
+  const rows = db.prepare('SELECT category FROM news_subscriptions WHERE user_id = ?').all(req.user!.id) as { category: string }[];
+  res.json({ categories: NEWS_RUBRICS.filter((c) => rows.some((r) => r.category === c)) });
+});
+
+router.put('/api/me/news-subscriptions', auth, (req: AuthedRequest, res) => {
+  const b = z.object({ categories: z.array(z.enum(NEWS_RUBRICS)).max(NEWS_RUBRICS.length) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  const uid = req.user!.id;
+  const list = [...new Set(b.data.categories)];
+  db.transaction(() => {
+    db.prepare('DELETE FROM news_subscriptions WHERE user_id = ?').run(uid);
+    const ins = db.prepare('INSERT INTO news_subscriptions (user_id, category) VALUES (?, ?)');
+    for (const c of list) ins.run(uid, c);
+  })();
+  res.json({ categories: NEWS_RUBRICS.filter((c) => list.includes(c)) });
+});
+
+router.get('/api/news/:id/stats', param('id'), allow('news'), (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT sent_at FROM news WHERE id = ? AND test = 0').get(id) as { sent_at: number | null } | undefined;
+  if (!r) return res.status(404).json({ error: 'Новость не найдена' });
+  const reactions = db.prepare('SELECT emoji, COUNT(*) AS count FROM news_reactions WHERE news_id = ? GROUP BY emoji ORDER BY count DESC').all(id) as { emoji: string; count: number }[];
+  const comments = (db.prepare("SELECT COUNT(*) AS n FROM news_comments WHERE news_id = ? AND status = 'visible'").get(id) as { n: number }).n;
+  res.json({ sentAt: r.sent_at, views: viewsOf(id), byDay: viewsByDay(id, 30), reactions, comments });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsSubsLogic.ts" << '__COREGSM_EOF__'
+/** Texts and names of the news subscriptions (pure, no database). */
+
+export const NEWS_RUBRICS = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
+export type Rubric = (typeof NEWS_RUBRICS)[number];
+
+export const RUBRIC_EMOJI: Record<Rubric, string> = { announcement: '📣', wipe: '🧹', update: '🛠️', event: '🎉', maintenance: '🔧', other: '📰' };
+
+/** «🧹 Новая новость: …» for the bell and the DM */
+export const newsNoticeText = (category: string, title: string): string => `${RUBRIC_EMOJI[category as Rubric] ?? '📰'} Новая новость: «${title.slice(0, 120)}»`;
+
+export const normRubric = (c: unknown): Rubric => ((NEWS_RUBRICS as readonly string[]).includes(String(c)) ? (c as Rubric) : 'announcement');
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/newsViews.ts" << '__COREGSM_EOF__'
@@ -54331,6 +54446,70 @@ export function NewsArticlePage({ id }: { id: number }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
+  cat > "$APP_DIR/core-frontend/src/components/news/NewsStats.tsx" << '__COREGSM_EOF__'
+/** Admin: the statistics of one published news item: views by day, reactions, comments. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { ErrorLine, Modal, fmtDateTime } from '../../ui';
+
+interface Stats { sentAt: number | null; views: number; byDay: { day: string; n: number }[]; reactions: { emoji: string; count: number }[]; comments: number }
+
+/** bars for the views of every day (a plain SVG; the tallest bar is the whole height) */
+export function ViewsChart({ days }: { days: { day: string; n: number }[] }) {
+  const max = Math.max(1, ...days.map((d) => d.n));
+  const w = 6;
+  const gap = 2;
+  return (
+    <svg viewBox={`0 0 ${days.length * (w + gap)} 60`} className="h-28 w-full" role="img" aria-label={`Просмотры за ${days.length} дней`} preserveAspectRatio="none">
+      {days.map((d, i) => {
+        const h = d.n === 0 ? 1 : Math.max(3, (d.n / max) * 56);
+        return (
+          <rect key={d.day} x={i * (w + gap)} y={58 - h} width={w} height={h} rx={1.5} className={d.n ? 'fill-brand' : 'fill-line'}>
+            <title>{`${d.day}: ${d.n}`}</title>
+          </rect>
+        );
+      })}
+    </svg>
+  );
+}
+
+export function NewsStatsModal({ id, title, onClose }: { id: number; title: string; onClose: () => void }) {
+  const [s, setS] = useState<Stats | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api<Stats>(`/news/${id}/stats`).then(setS).catch((e: Error) => setError(e.message));
+  }, [id]);
+  const week = s ? s.byDay.slice(-7).reduce((a, d) => a + d.n, 0) : 0;
+  return (
+    <Modal title={`Статистика: ${title}`} onClose={onClose}>
+      <div className="space-y-4">
+        <ErrorLine text={error} />
+        {!s && !error && <div className="skeleton h-40 rounded-2xl" />}
+        {s && (
+          <>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.views}</div><div className="text-xs font-bold text-mute">просмотров</div></div>
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{week}</div><div className="text-xs font-bold text-mute">за 7 дней</div></div>
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.comments}</div><div className="text-xs font-bold text-mute">комментариев</div></div>
+            </div>
+            <div>
+              <div className="label">Просмотры по дням (30 дней)</div>
+              <ViewsChart days={s.byDay} />
+              <div className="flex justify-between text-xs font-bold text-mute"><span>{s.byDay[0]?.day}</span><span>{s.byDay[s.byDay.length - 1]?.day}</span></div>
+            </div>
+            <p className="font-bold">
+              Реакции:{' '}
+              {s.reactions.length ? s.reactions.map((r) => <span key={r.emoji} className="mr-3">{r.emoji} {r.count}</span>) : <span className="text-mute">пока нет</span>}
+            </p>
+            {s.sentAt && <p className="text-sm font-semibold text-mute">Опубликовано {fmtDateTime(s.sentAt)}</p>}
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/Preview.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState } from 'react';
 import type { Server } from '../../api';
@@ -55169,6 +55348,15 @@ export interface Check { level: 'ok' | 'warn' | 'error'; text: string }
 
 const TEMPLATE_WORDS = /(^|[^А-ЯЁа-яёA-Za-z0-9_])(ДАТА|ВРЕМЯ|НАЗВАНИЕ|ПРИЗ)(?![А-ЯЁа-яёA-Za-z0-9_])/g;
 
+/** links in a Discord-markdown text: http:// ones, an empty [text]() and a bare «www.» that is not a link in Discord */
+export function linkProblems(text: string): { insecure: number; empty: number; bare: number } {
+  return {
+    empty: (text.match(/\[[^\]]*\]\(\s*\)/g) ?? []).length,
+    insecure: (text.match(/\bhttp:\/\/[^\s)>\]]+/gi) ?? []).length,
+    bare: (text.match(/(^|[\s(])www\.[^\s)]+/gi) ?? []).length,
+  };
+}
+
 export function runChecks(d: Draft): Check[] {
   const out: Check[] = [];
   const noChannel = !/^\d{15,25}$/.test(d.channelId);
@@ -55202,6 +55390,18 @@ export function runChecks(d: Draft): Check[] {
 
   const half = d.embeds.reduce((n, e) => n + e.fields.filter((f) => !!f.name.trim() !== !!f.value.trim()).length, 0);
   if (half) out.push({ level: 'warn', text: `Полей с пустым названием или значением: ${half}. Они не будут показаны.` });
+
+  const allText = [d.content, ...d.embeds.flatMap((e) => [e.description, ...e.fields.map((f) => f.value)])].join('\n');
+  const lp = linkProblems(allText);
+  if (lp.empty) out.push({ level: 'warn', text: `Ссылок без адреса: ${lp.empty}. Текст в скобках пустой, ссылка не откроется.` });
+  if (lp.insecure) out.push({ level: 'warn', text: `Ссылок без https://: ${lp.insecure}. Браузер предупредит об опасном соединении.` });
+  if (lp.bare) out.push({ level: 'warn', text: `Адресов, начинающихся с www., без http(s)://: ${lp.bare}. Discord не сделает их ссылкой.` });
+
+  const first = d.embeds[0];
+  if (first && embedHasContent(first) && !first.title.trim()) out.push({ level: 'warn', text: 'У новости нет заголовка: на сайте она будет без названия.' });
+  const external = d.embeds.filter((e) => e.imageUrl.trim() && !e.imageUpload).length + d.gallery.filter((g) => g.url.trim() && !g.upload).length;
+  if (external) out.push({ level: 'warn', text: `Картинок по внешней ссылке: ${external}. Чужой сайт может убрать или не открыть файл: надёжнее загрузить картинку в редактор.` });
+  if (first && embedHasContent(first) && !first.imageUrl.trim() && !first.imageUpload && d.gallery.length === 0) out.push({ level: 'ok', text: 'Обложки нет: на сайте её нарисует панель.' });
 
   const texts = [d.content, ...d.embeds.flatMap((e) => [e.title, e.description, e.footer, e.authorName, ...e.fields.flatMap((f) => [f.name, f.value])])];
   const words = new Set<string>();
@@ -56394,6 +56594,60 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
       </div>
       <ErrorLine text={error} />
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/NewsSubs.tsx" << '__COREGSM_EOF__'
+/** Profile: which rubrics of the news the account wants to hear about (the bell, the devices and Discord). */
+import { useEffect, useState } from 'react';
+import { api, type NewsCategory } from '../../api';
+import { ErrorLine, Section, toast } from '../../ui';
+import { categoryLabel } from '../news/NewsParts';
+
+const RUBRICS: NewsCategory[] = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'];
+
+export function NewsSubsCard() {
+  const [picked, setPicked] = useState<NewsCategory[] | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api<{ categories: NewsCategory[] }>('/me/news-subscriptions').then((r) => setPicked(r.categories)).catch((e: Error) => setError(e.message));
+  }, []);
+  const save = async (next: NewsCategory[]) => {
+    const before = picked;
+    setPicked(next);
+    setError('');
+    try {
+      const r = await api<{ categories: NewsCategory[] }>('/me/news-subscriptions', 'PUT', { categories: next });
+      setPicked(r.categories);
+      toast(r.categories.length ? 'Подписка на новости сохранена' : 'Подписка на новости выключена');
+    } catch (e) {
+      setPicked(before);
+      setError((e as Error).message);
+    }
+  };
+  const flip = (c: NewsCategory) => void save(picked?.includes(c) ? picked.filter((x) => x !== c) : [...(picked ?? []), c]);
+  const all = picked?.length === RUBRICS.length;
+  return (
+    <Section title="Новости" description="О каких новостях сообщать: уведомление придёт в колокольчик, на устройства с включёнными уведомлениями и в личные сообщения Discord (если привязан).">
+      <ErrorLine text={error} />
+      {picked === null ? <div className="skeleton h-20 rounded-2xl" /> : (
+        <div className="grid gap-2">
+          <label className="flex cursor-pointer items-center gap-2.5 font-extrabold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={all} onChange={() => void save(all ? [] : [...RUBRICS])} />
+            Все рубрики
+          </label>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {RUBRICS.map((c) => (
+              <label key={c} className="flex cursor-pointer items-center gap-2.5 font-bold">
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(c)} onChange={() => flip(c)} />
+                {categoryLabel(c)}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -72817,6 +73071,7 @@ import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
+import { NewsStatsModal } from '../components/news/NewsStats';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
@@ -72853,6 +73108,7 @@ function NewsList() {
   const list = items.filter((n) => !hidden.includes(n.id));
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [stats, setStats] = useState<{ id: number; title: string } | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
@@ -73086,6 +73342,7 @@ function NewsList() {
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
                 <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? 'Открепить' : 'Закрепить'}</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
+                {['sent', 'edit_queued'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => setStats({ id: n.id, title: n.title })}>Статистика</button>}
                 {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
                 <span className="ml-auto flex items-center gap-1.5">
                   <button type="button" className="row-act" title="Дублировать" aria-label="Дублировать" onClick={() => void copy(n)}><IconCopyPlus /></button>
@@ -73096,6 +73353,7 @@ function NewsList() {
           );
         })}
       </div>
+      {stats && <NewsStatsModal id={stats.id} title={stats.title} onClose={() => setStats(null)} />}
     </AdminPage>
   );
 }
@@ -74001,6 +74259,7 @@ import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
 import { FollowsCard } from '../components/profile/Follows';
+import { NewsSubsCard } from '../components/profile/NewsSubs';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
 import { PlayerCard } from '../components/profile/PlayerCard';
@@ -74174,6 +74433,7 @@ function SecurityTab() {
         <DiscordCard onChanged={reload} />
         <PushCard />
         <FollowsCard />
+        <NewsSubsCard />
         <SessionsCard key={rev} />
       </div>
       <JournalCard onRevoked={() => setRev((x) => x + 1)} />
