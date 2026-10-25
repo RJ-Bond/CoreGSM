@@ -69,6 +69,12 @@ describe('api: games, subscriptions, notifications, deliveries', () => {
     assert.equal((await api.call('GET', '/api/deliveries')).status, 401);
     await api.call('PUT', '/api/alerts', { token, body: { channelId: '123456789012345678' } });
     assert.equal((await api.call('POST', '/api/alerts/test', { token })).status, 200);
+    // quiet hours are stored; the window that covers the whole day is «now»
+    const q = await api.call('PUT', '/api/alerts', { token, body: { quiet: { enabled: true, from: 0, to: 23 } } });
+    assert.equal(q.status, 200);
+    assert.deepEqual({ ...q.body.quiet, now: undefined }, { enabled: true, from: 0, to: 23, now: undefined });
+    assert.equal((await api.call('PUT', '/api/alerts', { token, body: { quiet: { enabled: true, from: 25, to: 1 } } })).status, 400);
+    await api.call('PUT', '/api/alerts', { token, body: { quiet: { enabled: false, from: 23, to: 8 } } });
     const list = await api.call('GET', '/api/deliveries?kind=alert&status=pending', { token });
     assert.equal(list.body.items.length, 1);
     const id = list.body.items[0].id as number;

@@ -13,6 +13,7 @@ interface AlertsInfo {
   afterMin: number;
   mention: 'none' | 'here' | 'everyone';
   smart?: { low: boolean; ping: boolean; full: boolean };
+  quiet?: { enabled: boolean; from: number; to: number; now: boolean };
   recent: { id: number; kind: keyof typeof KIND; serverName: string; status: string; error: string | null; createdAt: number; sentAt: number | null }[];
 }
 
@@ -33,6 +34,48 @@ const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
   { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
 ];
 
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
+
+/** quiet hours: the messages keep coming, only without @here / @everyone */
+function QuietHours({ info, save }: { info: AlertsInfo; save: (p: { quiet: { enabled: boolean; from: number; to: number } }, done?: string) => Promise<void> }) {
+  const q = info.quiet ?? { enabled: false, from: 23, to: 8, now: false };
+  const set = (patch: Partial<{ enabled: boolean; from: number; to: number }>) => void save({ quiet: { enabled: q.enabled, from: q.from, to: q.to, ...patch } });
+  const span = q.from === q.to ? 0 : (q.to - q.from + 24) % 24;
+  return (
+    <Section title="Тихие часы" description="В эти часы сообщения о серверах всё равно приходят, но без @here и @everyone: никого не будят ночью.">
+      <label className="flex cursor-pointer items-center gap-3">
+        <Switch checked={q.enabled} onChange={(on) => set({ enabled: on })} />
+        <span className="font-extrabold">Не упоминать в тихие часы</span>
+        {q.enabled && <span className={`pill ml-auto ${q.now ? 'pill-warn' : 'pill-mute'}`}>{q.now ? 'сейчас тихие часы' : 'сейчас обычный режим'}</span>}
+      </label>
+      {q.enabled && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor="quiet-from" className="label">С</label>
+              <select id="quiet-from" className="input" value={q.from} onChange={(e) => set({ from: Number(e.target.value) })}>{HOURS.map((h) => <option key={h} value={h}>{hh(h)}</option>)}</select>
+            </div>
+            <div>
+              <label htmlFor="quiet-to" className="label">До</label>
+              <select id="quiet-to" className="input" value={q.to} onChange={(e) => set({ to: Number(e.target.value) })}>{HOURS.map((h) => <option key={h} value={h}>{hh(h)}</option>)}</select>
+            </div>
+            <p className="pb-2 text-sm font-semibold text-mute">{span === 0 ? 'Начало и конец совпадают: тихих часов нет.' : `Тихих часов в сутки: ${span}. По времени панели.`}</p>
+          </div>
+          {/* the day at a glance: shaded cells are quiet */}
+          <div className="qh-day" role="img" aria-label={`Тихие часы: с ${hh(q.from)} до ${hh(q.to)}`}>
+            {HOURS.map((h) => {
+              const quiet = span > 0 && (q.from < q.to ? h >= q.from && h < q.to : h >= q.from || h < q.to);
+              return <span key={h} className={quiet ? 'is-quiet' : ''} title={`${hh(h)}${quiet ? ': тихо' : ''}`} />;
+            })}
+          </div>
+          <div className="qh-ticks" aria-hidden><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 /** Messages to a Discord channel when a game server stops answering and when it is back. */
 export default function AlertsPage() {
   const [info, setInfo] = useState<AlertsInfo | null>(null);
@@ -46,7 +89,7 @@ export default function AlertsPage() {
   };
   usePoll(load, 10_000);
 
-  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>>, done?: string) => {
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>> & { quiet?: { enabled: boolean; from: number; to: number } }, done?: string) => {
     await api<AlertsInfo>('/alerts', 'PUT', patch)
       .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
@@ -135,6 +178,8 @@ export default function AlertsPage() {
           {!info.enabled && <p className="text-sm font-semibold text-mute">Сначала включите оповещения выше.</p>}
         </Section>
       )}
+
+      {info && <QuietHours info={info} save={save} />}
 
       <DigestSection alertsChannel={info?.channelId ?? ''} />
 
