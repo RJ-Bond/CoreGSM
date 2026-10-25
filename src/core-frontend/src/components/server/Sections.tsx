@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Component, useCallback, useEffect, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from 'react';
 import { IconChevronDown } from '../../icons';
 
 /**
@@ -39,6 +39,27 @@ export interface SectionDef {
   label: string;
   /** folded by default on phones */
   secondary?: boolean;
+}
+
+/** a failure inside one block shows a small notice with «Повторить» in that block; the rest of the page keeps working */
+export class BlockBoundary extends Component<{ children: ReactNode; label?: string }, { error: Error | null; n: number }> {
+  state: { error: Error | null; n: number } = { error: null, n: 0 };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[coregsm] block error', this.props.label ?? '', error, info.componentStack);
+  }
+  render() {
+    if (!this.state.error) return <div key={this.state.n} className="contents">{this.props.children}</div>;
+    return (
+      <div className="srv-block-err" role="alert">
+        <p className="font-extrabold">Не удалось показать этот блок</p>
+        <p className="text-sm font-semibold text-mute">Остальная страница работает как обычно.</p>
+        <button type="button" className="btn btn-soft btn-sm" onClick={() => this.setState((s) => ({ error: null, n: s.n + 1 }))}>Повторить</button>
+      </div>
+    );
+  }
 }
 
 export const sectionDomId = (id: string) => `srv-s-${id}`;
@@ -97,7 +118,7 @@ export function SectionCard({
         </h2>
         {!closed && actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
-      <div id={bodyId} hidden={closed} className="srv-sec-body">{children}</div>
+      <div id={bodyId} hidden={closed} className="srv-sec-body"><BlockBoundary label={id}>{children}</BlockBoundary></div>
     </Tag>
   );
 }
