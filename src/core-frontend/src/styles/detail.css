@@ -292,3 +292,13 @@ html[data-motion='reduce'] :is(.srv-more-item, .pp-more-btn) { transition: none 
 @media (max-width: 639px) { .srv-addr-btn { min-width: 0; max-width: 100%; } }
 /* reviews: an empty block is one line */
 .rv-none { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
+
+/* the name and the players in the sticky tab bar (wide screens, once the banner is scrolled away) */
+.srv-mini-wrap { display: none; }
+@media (min-width: 1100px) {
+  .srv-mini-wrap { display: block; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); max-width: 38%; }
+}
+.srv-mini { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 4px 10px 4px 12px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: 13px; font-weight: 700; }
+.srv-mini b { font-weight: 800; }
+.srv-mini-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--bad)); }
+.srv-mini-dot.on { background: rgb(var(--ok)); }
