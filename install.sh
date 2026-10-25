@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d835d814da4d"
+COREGSM_BUILD="20b5fec3992c"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8904,6 +8904,7 @@ import { router as reportsRouter } from './reports.js';
 import { router as galleryRouter } from './gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './restarts.js';
 import { router as newsCommentsRouter } from './newsComments.js';
+import { router as newsViewsRouter } from './newsViews.js';
 import { router as probesRouter } from './probes.js';
 import { router as configRouter } from './configExport.js';
 import { router as pushRouter } from './push.js';
@@ -8974,6 +8975,7 @@ app.use(internalRouter);
 
 // before the news routes: /api/news/discussed and /api/news/comments/* must not be taken for /api/news/:id
 app.use(newsCommentsRouter);
+app.use(newsViewsRouter);
 
 registerNews({
   app,
@@ -9982,6 +9984,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { commentCount } from './newsComments.js';
+import { viewsOf } from './newsViews.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
 import { gameProfile } from './games.js';
@@ -10604,6 +10607,7 @@ export function registerNews(deps: {
       authorRole: full.authorRole,
       reactions: full.reactions,
       comments: commentCount(full.id),
+      views: viewsOf(full.id),
     };
   };
   const isPublished = (r: { status: string }) => r.status === 'sent' || r.status === 'edit_queued';
@@ -10625,6 +10629,11 @@ export function registerNews(deps: {
     return list.slice(offset, offset + Math.min(100, limit));
   };
   const PUBLISHED_SQL = "status IN ('sent','edit_queued')";
+  const totals = (sql: string) => new Map((db.prepare(sql).all() as { id: number; n: number }[]).map((r) => [r.id, r.n]));
+  const reactionTotals = () => totals('SELECT news_id AS id, COUNT(*) AS n FROM news_reactions GROUP BY news_id');
+  const commentTotals = () => totals("SELECT news_id AS id, COUNT(*) AS n FROM news_comments WHERE status = 'visible' GROUP BY news_id");
+  const viewTotals = () => totals('SELECT news_id AS id, SUM(n) AS n FROM news_views GROUP BY news_id');
+
   app.get('/api/news', viewer, (req, res) => {
     const uid = uidOf(req);
     if (isAdmin(req)) {
@@ -10633,8 +10642,13 @@ export function registerNews(deps: {
     }
     // only the published rows are read, and only the requested page is turned into the public shape (reactions are a query each)
     const cat = typeof req.query.category === 'string' && (NEWS_CATEGORIES as readonly string[]).includes(req.query.category) ? req.query.category : '';
-    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}`).all(...(cat ? [cat] : [])) as NewsRow[];
-    const pub = rows.sort((a, b) => Number(pinnedOf(b)) - Number(pinnedOf(a)) || byTime(a, b));
+    const author = Number(req.query.author);
+    const byAuthor = Number.isInteger(author) && author > 0;
+    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}${byAuthor ? ' AND created_by = ?' : ''}`).all(...(cat ? [cat] : []), ...(byAuthor ? [author] : [])) as NewsRow[];
+    // ?sort=top (most reactions) / discussed (most comments) / viewed (most views): by that number, then the newest; without it: pinned first, then the newest
+    const sort = req.query.sort;
+    const score = sort === 'top' ? reactionTotals() : sort === 'discussed' ? commentTotals() : sort === 'viewed' ? viewTotals() : null;
+    const pub = rows.sort((a, b) => (score ? (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) : Number(pinnedOf(b)) - Number(pinnedOf(a))) || byTime(a, b));
     res.json(pageOf(pub, req).map((r) => publicNews(r, uid)));
   });
 
@@ -10676,7 +10690,9 @@ export function registerNews(deps: {
     const ed = r.sent_at
       ? (db.prepare("SELECT MAX(ts) AS ts, COUNT(*) AS n FROM news_versions WHERE news_id = ? AND ts > ? AND note NOT IN ('Закреплено', 'Откреплено')").get(r.id, r.sent_at) as { ts: number | null; n: number })
       : { ts: null, n: 0 };
-    res.json({ ...base, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
+    // «Кто писал»: how many items the author has published, and the id for the filter ?author=
+    const authorCount = r.created_by == null ? 0 : (db.prepare(`SELECT COUNT(*) AS n FROM news WHERE test = 0 AND created_by = ? AND ${PUBLISHED_SQL}`).get(r.created_by) as { n: number }).n;
+    res.json({ ...base, authorId: r.created_by ?? null, authorCount, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
   });
 
   // ---------- a link that looks good when pasted into Discord/Telegram: /n/<id> (redirects to the news page) ----------
@@ -11429,6 +11445,50 @@ router.post('/api/news/comments/:cid/pin', param('cid'), moderator, (req: Authed
     db.prepare('UPDATE news_comments SET pinned = ? WHERE id = ?').run(b.data.pinned ? 1 : 0, row.id);
   })();
   res.json({ ok: true });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsViews.ts" << '__COREGSM_EOF__'
+/**
+ * Views of a news item: the page counts one view per visitor session (the browser asks once per tab session).
+ *   POST /api/news/:id/view   { } → { views }  (published news only, 120 requests a minute per address)
+ * The totals sit next to a per-day count (the chart in the statistics of a news item).
+ */
+import express from 'express';
+import { rateLimit, viewer } from './auth.js';
+import { db } from './db.js';
+import { param } from './http.js';
+
+export const router = express.Router();
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_views (
+  news_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  n INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (news_id, day)
+);
+`);
+
+export const viewsOf = (newsId: number): number => (db.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM news_views WHERE news_id = ?').get(newsId) as { n: number }).n;
+
+/** views per day for the last `days` days, oldest first (days without a view are 0) */
+export function viewsByDay(newsId: number, days = 30, now = Date.now()): { day: string; n: number }[] {
+  const rows = new Map((db.prepare('SELECT day, n FROM news_views WHERE news_id = ? AND day >= ?').all(newsId, dayKey(now - (days - 1) * 86_400_000)) as { day: string; n: number }[]).map((r) => [r.day, r.n]));
+  return Array.from({ length: days }, (_, i) => {
+    const day = dayKey(now - (days - 1 - i) * 86_400_000);
+    return { day, n: rows.get(day) ?? 0 };
+  });
+}
+
+export const dayKey = (ts: number): string => new Date(ts).toISOString().slice(0, 10);
+
+router.post('/api/news/:id/view', param('id'), rateLimit(120), viewer, (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT status FROM news WHERE id = ? AND test = 0').get(id) as { status: string } | undefined;
+  if (!r || (r.status !== 'sent' && r.status !== 'edit_queued')) return res.status(404).json({ error: 'Новость не найдена' });
+  db.prepare('INSERT INTO news_views (news_id, day, n) VALUES (?, ?, 1) ON CONFLICT(news_id, day) DO UPDATE SET n = n + 1').run(id, dayKey(Date.now()));
+  res.json({ views: viewsOf(id) });
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -48073,6 +48133,8 @@ export interface PublicNews {
   reactions?: NewsReaction[];
   /** visible comments under it */
   comments?: number;
+  /** how many times the page was opened */
+  views?: number;
 }
 
 export interface NewsReaction { emoji: string; count: number; mine: boolean }
@@ -48082,6 +48144,9 @@ export interface PublicNewsFull extends PublicNews {
   /** the last edit made well after the publication, and how many there were (absent: not edited) */
   editedAt?: number | null;
   edits?: number;
+  /** who wrote it (the account) and how many items that account has published */
+  authorId?: number | null;
+  authorCount?: number;
   prev?: { id: number; title: string } | null;
   next?: { id: number; title: string } | null;
   /** up to three other news to read next (the same rubric first) */
@@ -53251,7 +53316,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/NewsArticle.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
-import type { NewsReaction, PublicNews, PublicNewsFull, Server } from '../../api';
+import { api, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { t } from '../../i18n';
 import { ago, fmtDateTime, toast } from '../../ui';
 import { cardOf, NewsCover, Row } from './PublicFeed';
@@ -53319,6 +53384,16 @@ export function NewsArticle({
   const edited = !preview && wasEdited(item.sentAt, item.editedAt);
   const root = useRef<HTMLElement>(null);
   const headings = extractHeadings(c.text);
+  // one view per tab session
+  useEffect(() => {
+    if (preview) return;
+    const key = `nw_viewed_${item.id}`;
+    try {
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+    } catch { /* counted again, no harm */ }
+    void api(`/news/${item.id}/view`, 'POST').catch(() => undefined);
+  }, [item.id, preview]);
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
 
   // a link to a part of the page (#nw-h-3): the text is drawn after the load, so jump once it is there
@@ -53361,10 +53436,11 @@ export function NewsArticle({
         {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
       </div>
       <div className="nw-article-in">
-        {(c.author || c.countdownAt || minutes > 0) && (
+        {(c.author || c.countdownAt || minutes > 0 || (c.views > 0 && !preview)) && (
           <div className="nf-meta">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {!preview && c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
             {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
@@ -53405,6 +53481,15 @@ export function NewsArticle({
           </>
         )}
       </div>
+      {!preview && c.author && (
+        <div className="nw-article-in">
+          <aside className="nw-authorbox" aria-label={t('nw.author.title')}>
+            <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />
+            <span className="nw-authorbox-n">{t('nw.author.count', { n: item.authorCount ?? 0 })}</span>
+            {item.authorId != null && (item.authorCount ?? 0) > 1 && <a className="btn btn-soft btn-sm" href={`/news?author=${item.authorId}`}>{t('nw.author.all')}</a>}
+          </aside>
+        </div>
+      )}
       {!preview && <div className="nw-article-in"><Comments newsId={item.id} /></div>}
       {!preview && related.length > 0 && (
         <section className="nw-related" aria-label={t('nw.related')}>
@@ -53849,6 +53934,26 @@ import { markSeen, readSeen } from './newsSeen';
 import { CATEGORY_HEX, isRubricFilter, orderFeed, pickHero, plainExcerpt, visibleRubrics, type RubricFilter } from './newsLogic';
 
 const STORE = 'news_rubric';
+const SORT_STORE = 'news_sort';
+const VIEW_STORE = 'news_view';
+type FeedSort = 'new' | 'top' | 'discussed' | 'viewed';
+const SORTS: FeedSort[] = ['new', 'top', 'discussed', 'viewed'];
+const loadSort = (): FeedSort => {
+  try {
+    const v = localStorage.getItem(SORT_STORE);
+    return SORTS.includes(v as FeedSort) ? (v as FeedSort) : 'new';
+  } catch {
+    return 'new';
+  }
+};
+const loadDense = (): boolean => {
+  try { return localStorage.getItem(VIEW_STORE) === 'dense'; } catch { return false; }
+};
+/** ?author=<id> of the address: the feed of one author */
+const authorFromUrl = (): number | null => {
+  const n = Number(new URLSearchParams(window.location.search).get('author'));
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
 /** how many news a page of the feed shows */
 const PAGE = 20;
 const ZERO_COUNTS: Record<RubricFilter, number> = { all: 0, announcement: 0, wipe: 0, update: 0, event: 0, maintenance: 0, other: 0 };
@@ -53930,6 +54035,9 @@ export function NewsListPage() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [rubric, setRubricState] = useState<RubricFilter>(loadRubric);
+  const [sort, setSortState] = useState<FeedSort>(loadSort);
+  const [dense, setDenseState] = useState(loadDense);
+  const [author, setAuthor] = useState<number | null>(authorFromUrl);
   // the feed comes in pages: one more than shown tells whether there is a next page
   const [limit, setLimit] = useState(PAGE);
   const [hasMore, setHasMore] = useState(false);
@@ -53946,7 +54054,7 @@ export function NewsListPage() {
 
   const filter: RubricFilter = rubric;
   const load = () => Promise.all([
-    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}`),
+    api<PublicNews[]>(`/news?limit=${limit + 1}${filter === 'all' ? '' : `&category=${filter}`}${sort === 'new' ? '' : `&sort=${sort}`}${author ? `&author=${author}` : ''}`),
     api<Record<RubricFilter, number>>('/news/counts').catch(() => null),
   ])
     .then(([n, c]) => {
@@ -53965,18 +54073,33 @@ export function NewsListPage() {
     if (first.current) { first.current = false; return; }
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [limit, filter]);
+  }, [limit, filter, sort, author]);
 
   const setRubric = (r: RubricFilter) => {
     setRubricState(r);
     setLimit(PAGE);
     try { localStorage.setItem(STORE, r); } catch { /* not remembered */ }
   };
+  const setSort = (s: FeedSort) => {
+    setSortState(s);
+    setLimit(PAGE);
+    try { localStorage.setItem(SORT_STORE, s); } catch { /* not remembered */ }
+  };
+  const setDense = (v: boolean) => {
+    setDenseState(v);
+    try { localStorage.setItem(VIEW_STORE, v ? 'dense' : 'cards'); } catch { /* not remembered */ }
+  };
+  const clearAuthor = () => {
+    setAuthor(null);
+    setLimit(PAGE);
+    window.history.replaceState(null, '', window.location.pathname);
+  };
   const showMore = () => { setLoadingMore(true); setLimit((l) => l + PAGE); };
 
-  const ordered = useMemo(() => orderFeed(items), [items]);
+  // sorted by something else than the date: the order comes from the server as it is
+  const ordered = useMemo(() => (sort === 'new' ? orderFeed(items) : items), [items, sort]);
   // the big block on top: only on the first page of «Все», the rest of the feed goes below it
-  const hero = filter === 'all' ? pickHero(ordered) : null;
+  const hero = filter === 'all' && sort === 'new' && !dense && !author ? pickHero(ordered) : null;
   const shown = hero ? ordered.filter((n) => n.id !== hero.id) : ordered;
   const heroCard = hero ? cardOf(hero) : null;
 
@@ -54023,6 +54146,18 @@ export function NewsListPage() {
               {rubrics.map((r) => chip(r))}
             </div>
           )}
+          {loaded && counts.all > 1 && (
+            <div className="nw-tools">
+              <div className="seg" role="group" aria-label={t('nw.sort')}>
+                {SORTS.map((s) => <button key={s} type="button" className="seg-item" aria-current={sort === s ? 'true' : undefined} onClick={() => setSort(s)}>{t(`nw.sort.${s}` as const)}</button>)}
+              </div>
+              <div className="seg" role="group" aria-label={t('nw.view')}>
+                <button type="button" className="seg-item" aria-current={!dense ? 'true' : undefined} onClick={() => setDense(false)}>{t('nw.view.cards')}</button>
+                <button type="button" className="seg-item" aria-current={dense ? 'true' : undefined} onClick={() => setDense(true)}>{t('nw.view.dense')}</button>
+              </div>
+              {author && <button type="button" className="nw-rub" onClick={clearAuthor}>{t('nw.author.filter')} <span aria-hidden>✕</span></button>}
+            </div>
+          )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
           {!loaded && <FeedSkeleton />}
           {loaded && !error && ordered.length === 0 && (
@@ -54063,7 +54198,7 @@ export function NewsListPage() {
               </div>
             </article>
           )}
-          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} /></div>}
+          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
           {hasMore && (
             <div className="ne-more" ref={more}>
               <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
@@ -54339,6 +54474,7 @@ export { PANEL_THEME } from './NewsParts';
 export interface Card {
   id: number;
   comments: number;
+  views: number;
   title: string;
   text: string;
   author: { name: string; icon?: string } | null;
@@ -54400,6 +54536,7 @@ export function cardOf(n: PublicNews): Card {
     game: typeof p.game === 'string' ? p.game : '',
     reactions: Array.isArray(n.reactions) ? n.reactions : [],
     comments: typeof n.comments === 'number' ? n.comments : 0,
+    views: typeof n.views === 'number' ? n.views : 0,
   };
 }
 
@@ -54480,6 +54617,8 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
           {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
           <span className="nb-tools">
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
+            {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
             <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
             {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
             <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
@@ -54508,6 +54647,7 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
         <div className="nf-actions">
           {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          {c.views > 0 && <span className="nw-cmcount" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
           {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
         </div>
@@ -54520,26 +54660,32 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
  * The feed: an editorial list, pinned items first and then the rest grouped by month.
  * `items` must already be ordered (pinned first, newest first) and filtered.
  */
-export function PublicFeed({ items, servers, flat = false, seen = null }: { items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null }) {
+export function PublicFeed({ items, servers, flat = false, seen = null, dense = false, plain = false }: {
+  items: PublicNews[]; servers?: Server[] | null; flat?: boolean; seen?: number | null;
+  /** a compact list (a small picture and the headline) instead of full articles */
+  dense?: boolean;
+  /** exactly the given order: no «Закреплено» section and no month groups (the feed is sorted by something else than the date) */
+  plain?: boolean;
+}) {
   const { lang } = useI18n();
   if (items.length === 0) return null;
   const cards = items.map(cardOf);
-  const pinned = cards.filter((c) => c.pinned);
-  const normal = cards.filter((c) => !c.pinned);
-  const groups = flat ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
+  const pinned = plain ? [] : cards.filter((c) => c.pinned);
+  const normal = plain ? cards : cards.filter((c) => !c.pinned);
+  const groups = flat || plain ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
 
   return (
-    <div className="nw-feed ne-list">
+    <div className={`nw-feed ne-list ${dense ? 'is-dense' : ''}`}>
       {pinned.length > 0 && (
         <section className="nw-group">
           <h2 className="ne-h">{t('nw.pinned')}</h2>
-          {pinned.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
+          {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
           {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
-          {g.items.map((c) => <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />)}
+          {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       ))}
     </div>
@@ -66174,6 +66320,19 @@ const en: Record<keyof typeof ru, string> = {
   'nw.hints.maintenance.t': 'When a server will be down and why',
   'nw.codeCopy': 'Copy',
   'nw.codeCopied': 'Code copied',
+  'nw.sort': 'Feed order',
+  'nw.sort.new': 'Newest',
+  'nw.sort.top': 'Best',
+  'nw.sort.discussed': 'Discussed',
+  'nw.sort.viewed': 'Most read',
+  'nw.view': 'Feed view',
+  'nw.view.cards': 'Cards',
+  'nw.view.dense': 'List',
+  'nw.views': '{n} views',
+  'nw.author.title': 'Author',
+  'nw.author.count': 'News published: {n}',
+  'nw.author.all': 'All news by this author',
+  'nw.author.filter': 'One author only',
   'nw.cm.title': 'Comments',
   'nw.cm.count': '{n} comments',
   'nw.cm.write': 'Your comment',
@@ -67500,6 +67659,19 @@ const ru = {
   'nw.hints.maintenance.t': 'Когда сервер будет недоступен и почему',
   'nw.codeCopy': 'Копировать',
   'nw.codeCopied': 'Код скопирован',
+  'nw.sort': 'Порядок ленты',
+  'nw.sort.new': 'Новые',
+  'nw.sort.top': 'Лучшие',
+  'nw.sort.discussed': 'Обсуждаемые',
+  'nw.sort.viewed': 'Читаемые',
+  'nw.view': 'Вид ленты',
+  'nw.view.cards': 'Карточки',
+  'nw.view.dense': 'Список',
+  'nw.views': 'Просмотров: {n}',
+  'nw.author.title': 'Автор',
+  'nw.author.count': 'Опубликовано новостей: {n}',
+  'nw.author.all': 'Все новости автора',
+  'nw.author.filter': 'Только один автор',
   'nw.cm.title': 'Комментарии',
   'nw.cm.count': 'Комментариев: {n}',
   'nw.cm.write': 'Ваш комментарий',
@@ -80949,6 +81121,15 @@ a.cm-time:hover { color: rgb(var(--link)); }
 .nw-cmcount { font-size: .85rem; font-weight: 800; color: rgb(var(--mute)); text-decoration: none; }
 .nw-cmcount:hover { color: rgb(var(--link)); }
 @media (max-width: 640px) { .cm-replies { margin-left: .5rem; padding-left: .6rem; } }
+
+/* ---------- feed tools, compact list, author box ---------- */
+.nw-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; margin: .25rem 0 .5rem; }
+.nw-tools .seg { max-width: 100%; overflow-x: auto; }
+.nw-feed.is-dense .nf-item { padding-block: .5rem; }
+.nw-feed.is-dense .nf-text { display: none; }
+.nw-feed.is-dense .nf-thumb { width: 3.5rem; min-width: 3.5rem; aspect-ratio: 1; }
+.nw-authorbox { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-top: 2rem; padding: .85rem 1rem; border-radius: var(--r-lg, 16px); background: rgb(var(--soft)); }
+.nw-authorbox-n { flex: 1 1 8rem; font-size: .85rem; font-weight: 700; color: rgb(var(--mute)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'
