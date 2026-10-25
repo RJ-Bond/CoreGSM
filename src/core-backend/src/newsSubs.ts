@@ -19,12 +19,10 @@ import { enqueueDelivery } from './deliveries.js';
 import { param } from './http.js';
 import { log } from './logger.js';
 import { viewsByDay, viewsOf } from './newsViews.js';
+import { NEWS_RUBRICS, newsNoticeText, normRubric } from './newsSubsLogic.js';
 import { dmAvailable, pushToUser } from './subscriptions.js';
 
 export const router = express.Router();
-
-export const NEWS_RUBRICS = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
-export type Rubric = (typeof NEWS_RUBRICS)[number];
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS news_subscriptions (
@@ -34,13 +32,6 @@ CREATE TABLE IF NOT EXISTS news_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_news_subs_cat ON news_subscriptions(category);
 `);
-
-export const RUBRIC_EMOJI: Record<Rubric, string> = { announcement: '📣', wipe: '🧹', update: '🛠️', event: '🎉', maintenance: '🔧', other: '📰' };
-
-/** «🧹 Новая новость: …» for the bell and the DM */
-export const newsNoticeText = (category: string, title: string): string => `${RUBRIC_EMOJI[category as Rubric] ?? '📰'} Новая новость: «${title.slice(0, 120)}»`;
-
-export const normRubric = (c: unknown): Rubric => ((NEWS_RUBRICS as readonly string[]).includes(String(c)) ? (c as Rubric) : 'announcement');
 
 /** Tells the subscribers of the rubric about a published item (never throws into the news flow). Returns how many were told. */
 export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null }, base = ''): number {
