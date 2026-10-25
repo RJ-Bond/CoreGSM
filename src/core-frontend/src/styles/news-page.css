@@ -285,3 +285,24 @@
 .nw-skel-entry { border-radius: 16px; overflow: hidden; border: 1px solid rgb(var(--line)); margin-bottom: 14px; }
 .nw-skel-banner { height: 120px; border-radius: 0; }
 .nw-skel-entry .nw-skel-lines { display: grid; gap: 10px; padding: 16px; }
+
+/* ---------- «Новое», the hero, anchors, up, zoom, unread counter ---------- */
+.nw-new { display: inline-flex; align-items: center; padding: .2rem .6rem; border-radius: var(--r-pill); font-size: .75rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); }
+.nw-hero { display: grid; gap: .75rem; }
+.nw-hero .nw-cover { border-radius: var(--r-xl); }
+.nw-hero-in { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; }
+.nw-hero-in p { flex: 1 1 18rem; min-width: 0; margin: 0; font-weight: 600; color: rgb(var(--mute)); }
+.nw-h { position: relative; }
+.nw-anchor { margin-left: .4em; padding: 0 .2em; font: inherit; font-size: .8em; font-weight: 700; color: rgb(var(--mute)); opacity: 0; transition: opacity .15s ease; }
+.nw-h:hover .nw-anchor, .nw-anchor:focus-visible { opacity: 1; }
+.nw-anchor:hover { color: rgb(var(--link)); }
+@media (hover: none) { .nw-anchor { opacity: .5; } }
+.nw-top { position: fixed; right: 1rem; bottom: 6rem; z-index: 40; display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 50%; font-size: 1.25rem; font-weight: 800; color: #fff; background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: var(--shadow-3); animation: nw-top-in .2s ease; }
+@media (min-width: 768px) { .nw-top { bottom: 1.5rem; right: 1.5rem; } }
+@keyframes nw-top-in { from { opacity: 0; transform: translateY(8px); } }
+.nw-cover-zoomable { position: relative; }
+.nw-zoom { position: absolute; top: .75rem; right: .75rem; z-index: 2; display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: 50%; font-size: 1.1rem; color: #fff; background: rgb(0 0 0 / .45); backdrop-filter: blur(6px); opacity: .85; transition: opacity .15s ease, background-color .15s ease; }
+.nw-zoom:hover, .nw-zoom:focus-visible { opacity: 1; background: rgb(0 0 0 / .65); }
+.nw-unread { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; margin-left: .4rem; border-radius: var(--r-pill); font-size: .7rem; font-weight: 800; line-height: 1; color: #fff; background: rgb(var(--bad)); font-variant-numeric: tabular-nums; }
+.nw-unread-abs { position: absolute; top: .35rem; right: 24%; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .nw-top { animation: none; } }

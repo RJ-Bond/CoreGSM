@@ -699,7 +699,11 @@ export function registerNews(deps: {
     const others = order.filter((x) => x.id !== r.id);
     const suggested = [...others.filter((x) => x.cat === mine), ...others.filter((x) => x.cat !== mine)].slice(0, 3);
     const related = suggested.map((x) => byId.get(x.id) as NewsRow | undefined).filter((x): x is NewsRow => !!x).map((x) => publicNews(x, uid));
-    res.json({ ...base, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
+    // the last edit made after the publication (pinning does not count): «Обновлено …» under the headline
+    const ed = r.sent_at
+      ? (db.prepare("SELECT MAX(ts) AS ts, COUNT(*) AS n FROM news_versions WHERE news_id = ? AND ts > ? AND note NOT IN ('Закреплено', 'Откреплено')").get(r.id, r.sent_at) as { ts: number | null; n: number })
+      : { ts: null, n: 0 };
+    res.json({ ...base, editedAt: ed.ts, edits: ed.n, prev: i > 0 ? ref(order[i - 1]) : null, next: i >= 0 ? ref(order[i + 1]) : null, related });
   });
 
   // ---------- a link that looks good when pasted into Discord/Telegram: /n/<id> (redirects to the news page) ----------
