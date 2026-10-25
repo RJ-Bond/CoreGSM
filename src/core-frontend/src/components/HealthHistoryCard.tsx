@@ -3,7 +3,7 @@ import { api } from '../api';
 import { buildSparkline, downsample } from '../sparkline';
 import { Section, fmtTime } from '../ui';
 
-export interface HealthSample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null }
+export interface HealthSample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null; loadPct?: number | null }
 export interface HealthFlag { kind: 'bot_offline' | 'poll_slow' | 'disk_low' | 'db_growing' | string; since: number; text: string }
 interface HistoryResponse { samples: HealthSample[]; flags: HealthFlag[] }
 
@@ -18,6 +18,7 @@ const msText = (ms: number) => (ms >= 10_000 ? `${Math.round(ms / 1000)} с` : m
 
 const METRICS: { id: string; title: string; pick: (s: HealthSample) => number | null; fmt: (n: number) => string }[] = [
   { id: 'poll', title: 'Длительность опроса', pick: (s) => s.pollMs, fmt: msText },
+  { id: 'cpu', title: 'Нагрузка процессора', pick: (s) => s.loadPct ?? null, fmt: (n) => `${Math.round(n)} %` },
   { id: 'mem', title: 'Память панели', pick: (s) => s.rssMb, fmt: (n) => `${Math.round(n)} МБ` },
   { id: 'db', title: 'Размер базы', pick: (s) => s.dbBytes, fmt: mbText },
   { id: 'queue', title: 'Очередь доставки', pick: (s) => s.queueLen, fmt: (n) => String(Math.round(n)) },

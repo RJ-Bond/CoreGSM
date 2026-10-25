@@ -124,6 +124,12 @@ CREATE TABLE IF NOT EXISTS smart_state (
     // when the server entered its current state (online / offline); NULL = not known yet
     up: (db) => addColumn(db, 'status', 'state_since', 'INTEGER'),
   },
+  {
+    version: 11,
+    name: 'health_samples.load_pct',
+    // the load of the processor (1-minute load average per core, in percent); NULL = not measured (older samples, Windows)
+    up: (db) => addColumn(db, 'health_samples', 'load_pct', 'REAL'),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
