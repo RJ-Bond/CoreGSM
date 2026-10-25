@@ -882,6 +882,7 @@ const en: Record<keyof typeof ru, string> = {
   'start.quick': 'Quick actions',
   'start.map': 'Where things are',
   'start.mapText': 'The menu on the left is split into four groups. Expand for a description of each section.',
+  'adm.com.reports': 'Reports',
   'adm.com.seasons': 'Seasons',
   'adm.com.reviews': 'Reviews',
   'adm.com.gallery': 'Gallery',
