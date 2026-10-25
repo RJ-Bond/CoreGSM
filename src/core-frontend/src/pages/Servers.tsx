@@ -8,8 +8,8 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
-import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, StatusFlash, TilesSkeleton, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
-import { ServersList, readView, saveView, type SelectProps, type ServersView } from '../components/servers/ServerViews';
+import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
@@ -31,6 +31,74 @@ export default function ServersPage({ sub }: { sub: string }) {
 }
 
 /** a greeting for the signed-in user: «Доброе утро, Иван» */
+const SIZE_KEY = 'coregsm_srv_size';
+const PULL_AT = 70;
+
+/** the sort of the list view: a column and a direction */
+function sortServers(list: Server[], sort: ListSort, uptime: Map<number, number>): Server[] {
+  const dir = sort.dir === 'asc' ? 1 : -1;
+  const val = (s: Server): number | string => (sort.key === 'name' ? s.name.toLowerCase() : sort.key === 'players' ? (s.online ? s.players : -1) : sort.key === 'ping' ? (s.online && s.ping != null ? s.ping : Infinity) : uptime.get(s.id) ?? -1);
+  return [...list].sort((a, b) => {
+    const x = val(a), y = val(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+}
+
+/** pull down from the very top of the page (touch): returns the current pull in px, calls `onPull` after a long enough pull */
+function usePullToRefresh(onPull: () => void): number {
+  const [pull, setPull] = useState(0);
+  useEffect(() => {
+    let y0: number | null = null;
+    let cur = 0;
+    const start = (e: TouchEvent) => { y0 = window.scrollY <= 0 ? e.touches[0].clientY : null; cur = 0; };
+    const move = (e: TouchEvent) => {
+      if (y0 == null) return;
+      cur = Math.max(0, Math.min(110, (e.touches[0].clientY - y0) * 0.5));
+      setPull(cur);
+    };
+    const end = () => {
+      if (y0 != null && cur >= PULL_AT) onPull();
+      y0 = null;
+      cur = 0;
+      setPull(0);
+    };
+    window.addEventListener('touchstart', start, { passive: true });
+    window.addEventListener('touchmove', move, { passive: true });
+    window.addEventListener('touchend', end);
+    window.addEventListener('touchcancel', end);
+    return () => {
+      window.removeEventListener('touchstart', start);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', end);
+      window.removeEventListener('touchcancel', end);
+    };
+  }, [onPull]);
+  return pull;
+}
+
+const ViewIcon = ({ id }: { id: ServersView }) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    {id === 'tiles' ? <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></> : id === 'list' ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : <path d="M3 3v18h18M7 15l4-5 3 3 5-7" />}
+  </svg>
+);
+
+/** a round «наверх» button once the page is scrolled a screen or two */
+function ScrollTop() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const f = () => setOn(window.scrollY > 700);
+    f();
+    window.addEventListener('scroll', f, { passive: true });
+    return () => window.removeEventListener('scroll', f);
+  }, []);
+  if (!on) return null;
+  return (
+    <button type="button" className="srv-top" aria-label={t('srv.top')} title={t('srv.top')} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m18 15-6-6-6 6" /></svg>
+    </button>
+  );
+}
+
 function greeting(name: string): string {
   const h = new Date().getHours();
   const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
@@ -64,7 +132,7 @@ const FILTER_KEY = 'coregsm_server_filter';
 const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
-function LiveBadge({ at }: { at: number }) {
+function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void; busy: boolean }) {
   const [, tick] = useState(0);
   useEffect(() => {
     const t = window.setInterval(() => tick((n) => n + 1), 5000);
@@ -72,10 +140,10 @@ function LiveBadge({ at }: { at: number }) {
   }, []);
   if (!at) return null;
   return (
-    <span className="inline-flex items-center gap-2 rounded-full bg-soft px-3 py-1 text-xs font-extrabold text-mute" title="Страница обновляется сама">
+    <button type="button" className="srv-live" title="Страница обновляется сама. Нажмите, чтобы обновить сейчас" onClick={onRefresh} aria-busy={busy || undefined}>
       <span className="live-dot" aria-hidden />
-      обновлено {ago(at)}
-    </span>
+      {busy ? 'обновляю…' : `обновлено ${ago(at)}`}
+    </button>
   );
 }
 
@@ -95,6 +163,8 @@ function ServerList() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [uptime, setUptime] = useState<Map<number, number>>(new Map());
+  // when the running outage of a server began (the public status endpoint knows it, the poll time does not)
+  const [downSince, setDownSince] = useState<Map<number, number>>(new Map());
   const [updatedAt, setUpdatedAt] = useState(0);
   const [filter, setFilterState] = useState<Filter>(() => {
     try {
@@ -125,13 +195,28 @@ function ServerList() {
       .finally(() => setLoaded(true));
   // the TV mode refreshes twice as often
   usePoll(load, 10_000);
+  // a tap on «обновлено …» or a pull down from the top of the page refreshes at once
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshNow = async () => {
+    setRefreshing(true);
+    await load();
+    setTimeout(() => setRefreshing(false), 400);
+  };
+  const pull = usePullToRefresh(() => refreshNow());
+  // tile size and the sort of the list view
+  const [size, setSizeState] = useState<'s' | 'm' | 'l'>(() => { try { const v = localStorage.getItem(SIZE_KEY); return v === 's' || v === 'l' ? v : 'm'; } catch { return 'm'; } });
+  const setSize = (v: 's' | 'm' | 'l') => { setSizeState(v); try { localStorage.setItem(SIZE_KEY, v); } catch { /* not remembered */ } };
+  const [listSort, setListSort] = useState<ListSort | null>(null);
   const rx = useServerReactions(servers, loaded);
   // 30-day availability comes from the public status endpoint; the tile is simply hidden when it has no data
   usePoll(
     () => api<StatusInfo>('/status')
-      .then((r) => setUptime(new Map(r.servers.filter((x) => x.uptime30 != null).map((x) => [x.id, x.uptime30 as number]))))
+      .then((r) => {
+        setUptime(new Map(r.servers.filter((x) => x.uptime30 != null).map((x) => [x.id, x.uptime30 as number])));
+        setDownSince(new Map((r.incidents ?? []).filter((i) => i.end == null && !i.planned).map((i) => [i.serverId, i.start])));
+      })
       .catch(() => undefined),
-    5 * 60_000,
+    60_000,
   );
 
   // total players over the last 24 h (the pulse strip) and planned maintenance (the news block)
@@ -167,7 +252,8 @@ function ServerList() {
   const filtered = effFilter === 'all' ? [] : sorted.filter((s) => (effFilter === 'online' ? s.online : effFilter === 'offline' ? !s.online : favs.includes(s.id)));
 
   const effView: ServersView = servers.length === 0 ? 'tiles' : view;
-  const visible = effFilter === 'all' ? sorted : filtered;
+  const visible0 = effFilter === 'all' ? sorted : filtered;
+  const visible = effView === 'list' && listSort ? sortServers(visible0, listSort, uptime) : visible0;
   const resetFilter = () => setFilter('all');
 
   // ---- bulk selection (administrators; not in the TV mode) ----
@@ -200,6 +286,8 @@ function ServerList() {
     onFav: () => void toggleFav(s.id),
     onOpen: () => open(s),
     select,
+    uptime: uptime.get(s.id),
+    downSince: downSince.get(s.id),
   });
 
   return (
@@ -210,7 +298,7 @@ function ServerList() {
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
-          <LiveBadge at={updatedAt} />
+          <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>Управление серверами</a>}
         </span>
       </PageHead>
@@ -243,9 +331,18 @@ function ServerList() {
                 {selOn ? 'Отменить выбор' : 'Выбрать'}
               </button>
             )}
+            {effView === 'tiles' && (
+              <div className="seg max-sm:hidden" role="group" aria-label="Размер плиток">
+                {([['s', 'S', 'Компактные'], ['m', 'M', 'Обычные'], ['l', 'L', 'Крупные']] as const).map(([id, mark, label]) => (
+                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={label} aria-label={label} onClick={() => setSize(id)}>{mark}</button>
+                ))}
+              </div>
+            )}
             <div className="seg" role="group" aria-label="Вид списка">
               {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item" aria-pressed={effView === id} onClick={() => setView(id)}>{label}</button>
+                <button key={id} type="button" className="seg-item srv-view-btn" aria-pressed={effView === id} title={label} onClick={() => setView(id)}>
+                  <ViewIcon id={id} /><span className="max-sm:sr-only">{label}</span>
+                </button>
               ))}
             </div>
           </div>
@@ -272,6 +369,8 @@ function ServerList() {
               <ServersList
                 servers={visible}
                 uptime={uptime}
+                sort={listSort}
+                onSort={(k) => setListSort((cur) => (cur?.key === k ? (cur.dir === 'asc' ? { key: k, dir: 'desc' } : null) : { key: k, dir: k === 'name' || k === 'ping' ? 'asc' : 'desc' }))}
                 rx={rx}
                 favOf={(id) => (me ? favs.includes(id) : null)}
                 onOpen={open}
@@ -283,14 +382,14 @@ function ServerList() {
             {effView === 'chart' && visible.length > 0 && <CompareChart servers={visible} />}
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
-              <div className="fade-in srv-grid">
+              <div className="fade-in srv-grid" data-size={size}>
                 {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
               </div>
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
-              <div className="fade-in srv-grid">
-                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} uptime={uptime.get(hero.id)} />}
+              <div className="fade-in srv-grid" data-size={size}>
+                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
                 {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
               </div>
             )}
@@ -307,6 +406,9 @@ function ServerList() {
           <a href="/news">{t('nav.news')}</a>
         </footer>
       )}
+
+      <ScrollTop />
+      {pull > 0 && <div className="srv-pull" style={{ height: pull }} aria-hidden>{pull >= PULL_AT ? 'Отпустите, чтобы обновить' : 'Потяните вниз'}</div>}
 
       {selOn && (
         <BulkBar
@@ -347,7 +449,7 @@ const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElemen
   }
 };
 
-function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
+function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; downSince?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
   const sparkSpan = useSparkSpanMin(s.id);
   useI18n();
   const [c1, c2] = gameGradient(s.game);
@@ -382,7 +484,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
             <span>{gameLabel(s.game)}</span>
             <span aria-hidden>·</span>
-            <code className="truncate font-mono text-xs font-semibold" title={s.address}>{s.address}</code>
+            <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
           </div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
           {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
@@ -398,9 +500,11 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
-            {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />пинг {s.ping} мс</span>}
+            <TrendChip serverId={s.id} onDark />
+            {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
           </div>
           <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
+          <PlayerNames className="relative" names={s.playerNames ?? []} onDark />
           <div className="sh-chart relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
@@ -411,7 +515,7 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
           {s.hasStatus ? (
             <div className="rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
               <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-              <p className="mt-1 text-sm font-semibold text-white/85">Последний ответ: {ago(s.updatedAt)}</p>
+              <p className="mt-1 text-sm font-semibold text-white/85">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}Последний ответ: {ago(s.updatedAt)}</p>
             </div>
           ) : (
             <div className="rounded-2xl bg-white/20 px-4 py-3 text-base font-extrabold">Ожидаем первый ответ</div>
@@ -420,16 +524,19 @@ function HeroTile({ s, idx, uptime, fav, onFav, onOpen, rx, reason, select }: { 
         </div>
       )}
 
-      <div className="sh-foot relative mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] font-bold text-white/90">
-        <span>{spanCaption(sparkSpan)}</span>
-        {uptime != null && <span>аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-        <span className="truncate">{s.online && s.map ? `карта ${s.map}` : `обновлено ${ago(s.updatedAt)}`}</span>
+      <div className="sh-foot relative mt-auto flex flex-wrap items-center gap-1.5 text-[13px] font-bold text-white/90">
+        <span className="sh-chip">{spanCaption(sparkSpan)}</span>
+        {uptime != null && <span className="sh-chip">аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+        {s.online && s.map && <span className="sh-chip">карта {s.map}</span>}
+        {s.version && <span className="sh-chip">v{s.version}</span>}
+        {!s.online && <span className="sh-chip">обновлено {ago(s.updatedAt)}</span>}
       </div>
     </article>
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  const [who, setWho] = useState(false);
   const [c1, c2] = gameGradient(s.game);
   // the accent is taken from the cover picture, so two games of the same colour family still look different
   const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
@@ -457,18 +564,21 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
         <h3 className="line-clamp-2 wrap-break-word text-[16.5px] font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="mt-0.5 truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+        <div className="srv-chips"><span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
       {s.online ? (
         <>
-          <div className="flex items-baseline gap-1.5 px-1.5">
+          <div className={`flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-[13px] font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><i aria-hidden className={`ping-dot ${pingTone(s.ping).tone}`} />{`${s.ping} мс`}</>}</span>
+            <TrendChip serverId={s.id} />
+            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-[13px] font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
+          {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
             : <div className="px-1.5"><Spark serverId={s.id} color={accent} /></div>}
@@ -477,7 +587,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
         s.hasStatus ? (
           <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
             <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-            <p className="truncate text-[13px] font-bold leading-snug text-bad">Не отвечает · {ago(s.updatedAt)}</p>
+            <p className="truncate text-[13px] font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : `Не отвечает · ${ago(s.updatedAt)}`}</p>
           </div>
         ) : (
           <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-[13px] font-bold text-mute">Ожидаем первый ответ</div>
@@ -486,7 +596,10 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select }: { rx: Reactions; 
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="truncate font-mono" />
-        <span className="shrink-0">{s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          {uptime != null && <span className="srv-up" title="Аптайм за 30 дней">{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
+        </span>
       </div>
     </article>
   );
