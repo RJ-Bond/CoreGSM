@@ -2,7 +2,7 @@
 import { useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
-import { Button, ErrorLine, Field, Modal, toast } from '../../ui';
+import { Button, ErrorLine, Field, Modal, toast, errText } from '../../ui';
 
 export const REASONS = [
   { id: 'cheating', label: 'Читы или нечестная игра' },
@@ -30,7 +30,7 @@ export function ReportButton({ nick }: { nick: string }) {
       setOpen(false);
       setText('');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
     setBusy(false);
   };

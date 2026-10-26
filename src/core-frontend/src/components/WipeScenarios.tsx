@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, GameAvatar, Modal, Section, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GameAvatar, Modal, Section, fmtDateTime, toast, errText } from '../ui';
 import { ChannelPicker } from './ChannelPicker';
 import '../styles/admin.css';
 
@@ -181,7 +181,7 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
       toast('Сценарий сохранён');
       onSaved();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     }
     setBusy(false);
   };

@@ -3,7 +3,7 @@ import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
-import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
 import { errorText } from '../apiErrors';
 
 /** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
@@ -95,7 +95,7 @@ export default function BackupsCard() {
   const guard = async (key: string, fn: () => Promise<void>) => {
     setBusy(key);
     setError('');
-    try { await fn(); } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
+    try { await fn(); } catch (e) { setError(errText(e)); } finally { setBusy(null); }
   };
 
   const downloadFull = () => guard('full', async () => {
@@ -149,7 +149,7 @@ export default function BackupsCard() {
       const r = await api<{ unreadableSecrets?: string[] }>('/backups/' + encodeURIComponent(b.name) + '/restore', 'POST', pass ? { passphrase: pass } : {});
       await afterRestore(r?.unreadableSecrets);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
       setRestoring(false);
     }
   };
@@ -176,7 +176,7 @@ export default function BackupsCard() {
       if (!r.ok) throw new Error(errorText(j, 'Не удалось восстановить копию'));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
       setRestoring(false);
     }
   };
@@ -202,7 +202,7 @@ export default function BackupsCard() {
       toast('Настройки копий сохранены');
       await load();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setSaving(false);
     }

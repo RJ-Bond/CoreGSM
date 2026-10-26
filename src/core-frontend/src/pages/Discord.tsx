@@ -7,7 +7,7 @@ import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate } from '../ui';
+import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate, errText } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -76,7 +76,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           if (ids.length === 1) await api(`/bindings/${ids[0]}`, 'DELETE');
           else await api('/bindings/bulk', 'POST', { ids, action: 'delete' });
         } catch (e) {
-          setError((e as Error).message);
+          setError(errText(e));
           toast(t('dc.delFail'), 'err');
         }
         setHidden((h) => h.filter((x) => !ids.includes(x)));
@@ -368,7 +368,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
       const picked = !manual && guild?.channels.some((c) => c.id === f.channelId);
       onSaved(picked && guild ? `https://discord.com/channels/${guild.id}/${f.channelId}` : undefined);
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
     }
   };

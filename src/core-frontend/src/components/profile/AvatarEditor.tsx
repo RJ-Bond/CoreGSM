@@ -2,7 +2,7 @@ import { useRef, useState, type DragEvent } from 'react';
 import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { toast, UserAvatar } from '../../ui';
+import { toast, UserAvatar, errText } from '../../ui';
 import { errorText } from '../../apiErrors';
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
@@ -54,7 +54,7 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
       toast(t('pf.avatar.updated'));
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

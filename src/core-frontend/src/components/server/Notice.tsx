@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../api';
-import { ago, toast } from '../../ui';
+import { ago, toast, fail } from '../../ui';
 
 export interface ServerNotice { text: string; tone: string; updatedAt: number }
 
@@ -26,7 +26,7 @@ export default function PinnedNotice({ serverId, notice, canEdit, onChange }: { 
       setEditing(false);
       toast(r.notice ? 'Объявление закреплено' : 'Объявление снято');
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }

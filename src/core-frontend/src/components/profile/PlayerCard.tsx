@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type NickStatus, type PlayerProfile } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast } from '../../ui';
+import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast, errText } from '../../ui';
 import { isObject, useFetched } from './useFetched';
 
 const NICK_MAX = 32;
@@ -43,7 +43,7 @@ export function PlayerCard() {
       reload();
       status.reload();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
-import { Button, ErrorLine, Section, ago, toast } from '../../ui';
+import { Button, ErrorLine, Section, ago, toast, fail } from '../../ui';
 
 interface Follow { nick: string; createdAt: number }
 
@@ -27,7 +27,7 @@ export function FollowButton({ nick }: { nick: string }) {
       setOn(!on);
       toast(on ? `Больше не следим за ${nick}` : `Сообщим, когда ${nick} зайдёт на сервер`);
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     }
     setBusy(false);
   };

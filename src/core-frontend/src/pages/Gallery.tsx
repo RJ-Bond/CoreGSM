@@ -8,7 +8,7 @@ import { api, getToken, type Server } from '../api';
 import { errorText } from '../apiErrors';
 import { useAuth } from '../auth';
 import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
-import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast } from '../ui';
+import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast, errText } from '../ui';
 import '../styles/gallery.css';
 
 export interface Shot {
@@ -161,7 +161,7 @@ function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; 
       if (!r.ok || !j) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)'));
       onDone(j);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

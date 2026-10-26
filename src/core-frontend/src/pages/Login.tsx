@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
 import { t } from '../i18n';
-import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake, errText } from '../ui';
 
 const NAME_KEY = 'coregsm_login_name';
 const readName = () => {
@@ -102,7 +102,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         passRef.current?.focus();
         passRef.current?.select();
       } else {
-        setError((err as Error).message);
+        setError(errText(err));
       }
       shake();
     } finally {

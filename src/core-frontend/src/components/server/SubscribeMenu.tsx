@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { t, type TKey } from '../../i18n';
-import { Button, ErrorLine, IconBell, Modal, toast } from '../../ui';
+import { Button, ErrorLine, IconBell, Modal, toast, fail, errText } from '../../ui';
 import { SUB_KINDS, normalizeKinds, toggleKind, useSubscriptions, type SubKind, type Subscription } from '../../notifications';
 
 const KIND_KEY: Record<SubKind, TKey> = { free_slot: 'sub.free_slot', back_online: 'sub.back_online', went_down: 'sub.went_down' };
@@ -86,7 +86,7 @@ export default function SubscribeMenu({
       const r = await api<{ dm: boolean; discordLinked: boolean }>(`/servers/${serverId}/subscription/test`, 'POST');
       toast(r.dm ? 'Тест отправлен: смотрите колокольчик и личные сообщения Discord' : r.discordLinked ? 'Тест в колокольчике. Бот сейчас не в сети, в Discord не отправлено' : 'Тест в колокольчике. Привяжите Discord, чтобы получать и в личные сообщения');
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setTesting(false);
     }
@@ -102,7 +102,7 @@ export default function SubscribeMenu({
       toast(kinds.length ? t('sub.saved') : t('sub.off'));
       setOpen(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

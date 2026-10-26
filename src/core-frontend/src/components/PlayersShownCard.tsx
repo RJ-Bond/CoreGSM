@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Section, toast } from '../ui';
+import { Section, toast, fail } from '../ui';
 
 const OPTIONS = [0, 3, 5, 8, 10, 15, 20];
 
@@ -29,7 +29,7 @@ export default function PlayersShownCard() {
       toast('Сохранено. Сообщения обновятся при следующем опросе');
     } catch (e) {
       setValue(prev);
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }

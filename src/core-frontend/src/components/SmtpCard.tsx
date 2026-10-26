@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type SmtpInfo } from '../api';
-import { ErrorLine, Section, TextField, toast } from '../ui';
+import { ErrorLine, Section, TextField, toast, errText } from '../ui';
 
 /** Settings → security: outgoing e-mail (password reset, address confirmation, new-device letters). Administrators only. */
 export default function SmtpCard() {
@@ -28,7 +28,7 @@ export default function SmtpCard() {
   };
 
   useEffect(() => {
-    api<SmtpInfo>('/settings/smtp').then(apply).catch((e) => setError((e as Error).message));
+    api<SmtpInfo>('/settings/smtp').then(apply).catch((e) => setError(errText(e)));
   }, []);
 
   const portNum = Number(port);
@@ -47,7 +47,7 @@ export default function SmtpCard() {
       apply(await api<SmtpInfo>('/settings/smtp', 'PUT', body));
       toast('Настройки почты сохранены');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -58,7 +58,7 @@ export default function SmtpCard() {
     try {
       apply(await api<SmtpInfo>('/settings/smtp', 'PUT', { password: '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 
@@ -70,7 +70,7 @@ export default function SmtpCard() {
       await api('/settings/smtp/test', 'POST', { to: to.trim() });
       setNote(`Пробное письмо отправлено на ${to.trim()}`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setTesting(false);
     }

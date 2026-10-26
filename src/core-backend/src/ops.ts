@@ -174,7 +174,7 @@ export function checkCert(force = false): Promise<CertInfo> {
       try {
         sock.destroy();
       } catch {
-        /* ignore */
+        /* the socket is already gone */
       }
       resolve(info);
     };

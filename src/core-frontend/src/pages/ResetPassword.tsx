@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import AuthFlow from '../components/AuthFlow';
 import { api, ApiError } from '../api';
 import { t } from '../i18n';
-import { Button, ErrorLine, PasswordField, PasswordStrength, useShake } from '../ui';
+import { Button, ErrorLine, PasswordField, PasswordStrength, useShake, errText } from '../ui';
 
 /** /reset/<token>: the link from the letter; sets a new password (valid 30 minutes, once) */
 export default function ResetPassword({ token }: { token: string }) {
@@ -32,7 +32,7 @@ export default function ResetPassword({ token }: { token: string }) {
     } catch (err) {
       // 400 with a password message is a form problem; any other 400 means the link is dead
       if (err instanceof ApiError && err.status === 400 && !/парол/i.test(err.message)) setBad(true);
-      else setError((err as Error).message);
+      else setError(errText(err));
       shake();
     } finally {
       setBusy(false);

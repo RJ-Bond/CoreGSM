@@ -3,7 +3,7 @@ import { confirmDialog } from '../confirm';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES, gameLabel } from '../games';
 import GamePicker from '../components/GamePicker';
-import { ErrorLine, Field, GameAvatar, Modal } from '../ui';
+import { ErrorLine, Field, GameAvatar, Modal, errText } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
@@ -38,7 +38,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
       setCover(j?.coverUrl ?? null);
       onCoverChanged?.();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setCoverBusy(false);
     }
@@ -51,7 +51,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
       setCover(null);
       onCoverChanged?.();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setCoverBusy(false);
     }
@@ -119,7 +119,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     try {
       setTest(await api<TestResult>('/servers/test', 'POST', { game: f.game, host: f.host, port: f.port, queryPort: f.queryPort }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setTesting(false);
     }
@@ -133,7 +133,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
       await api(id ? `/servers/${id}` : '/servers', id ? 'PUT' : 'POST', f);
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
     }
   };
