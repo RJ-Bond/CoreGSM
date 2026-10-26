@@ -1831,6 +1831,8 @@ const en: Record<keyof typeof ru, string> = {
   'ne.testGoes': 'The test goes to {where}.',
   'ne.channelN': 'channel {id}',
   'ne.saveTpl': 'Save as a template',
+  'news.crosspost': 'Publish to the followers of an announcement channel',
+  'news.crosspostHint': 'If the news goes to an Announcement channel, the bot publishes it at once to the servers that follow that channel.',
   'bk3.title': 'S3 storage',
   'bk3.hint': 'After it is created a copy is sent to an S3-compatible storage (AWS, Backblaze B2, Cloudflare R2, Wasabi, MinIO, Yandex Object Storage). The keys are stored encrypted and are never shown again. For WebDAV and Nextcloud use the address above.',
   'bk3.endpoint': 'Storage address',

@@ -326,7 +326,7 @@ async function processNews(): Promise<void> {
         log(`news ${it.id}: message edited`);
       } else {
         const nonce = stableNonce('nw', it.id);
-        const sent = await retrySocket(() => channel.send({ ...msg, nonce, enforceNonce: true }));
+        const sent = await retrySocket(async () => await channel.send({ ...msg, nonce, enforceNonce: true }));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
         // an announcement channel: publish to the servers that follow it (a failure here must not undo the post)
         if (it.crosspost && channel.type === ChannelType.GuildAnnouncement) {
