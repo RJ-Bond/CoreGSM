@@ -1,6 +1,7 @@
 import { trackAlerts } from './alerts.js';
 import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
+import { onFavoritePoll } from './favoritePush.js';
 import { onSessionsOpened } from './nickOnboarding.js';
 import { notifyFollowers } from './playerFollows.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
@@ -181,6 +182,8 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   } catch (e) {
     log.error('subscriptions failed', (e as Error).message);
   }
+  // push to the players who have this server in favourites (fire and forget, never throws)
+  onFavoritePoll(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers }, { muteDown: !d.online && !!maintenanceNow(s.id), now: ts });
   return outcome;
 }
 

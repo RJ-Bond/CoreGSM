@@ -39,6 +39,10 @@ import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
 import { registerPlayerFollows } from './playerFollows.js';
+import { registerApiKeys } from './apiKeys.js';
+import { registerPublicApi } from './publicApi.js';
+import { registerWidgets } from './widgets.js';
+import { registerFavoritePush } from './favoritePush.js';
 import { router as accountRouter } from './routes/account.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
@@ -174,6 +178,10 @@ registerDeliveries({ app, admin, internal });
 registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => bot.status.state === 'online' });
 registerPlayerFollows({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerGames(app);
+registerApiKeys({ app, admin });
+registerPublicApi(app);
+registerWidgets(app);
+registerFavoritePush({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCustomGames({ app, admin });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({

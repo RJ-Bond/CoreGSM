@@ -36,7 +36,7 @@ export const GUEST_PAGES = [
 /** pages of a signed-in administrator */
 export const ADMIN_PAGES = [
   { id: 'admin-start', path: '/admin' },
-  ...['servers', 'discord', 'news', 'alerts', 'maintenance', 'cards', 'community', 'users', 'journal', 'system'].map((s) => ({ id: `admin-${s}`, path: `/admin/${s}` })),
+  ...['servers', 'discord', 'news', 'alerts', 'maintenance', 'cards', 'community', 'users', 'journal', 'system', 'integrations'].map((s) => ({ id: `admin-${s}`, path: `/admin/${s}` })),
   ...['bot', 'brand', 'security', 'updates'].map((s) => ({ id: `admin-settings-${s}`, path: `/admin/settings/${s}` })),
   { id: 'profile', path: '/profile' },
 ];
