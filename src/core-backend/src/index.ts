@@ -12,6 +12,7 @@ import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
 import { registerDigest, startDigestTimer } from './digest.js';
+import { registerServerChart } from './serverChart.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -149,6 +150,7 @@ registerNews({
 });
 registerAlerts({ app, admin, internal, channelInfo });
 registerDigest({ app, admin });
+registerServerChart(app);
 registerSecurity({
   app,
   admin,
