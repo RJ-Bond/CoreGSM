@@ -2,6 +2,7 @@
  * Cover pictures of servers. The uploaded picture is centre-cropped to 16:9 and stored as a 1280x720 JPEG
  * (<data dir>/covers/<server id>.jpg) plus a 640x360 variant (<server id>@s.jpg) for small tiles.
  */
+import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,12 +85,12 @@ export function registerCovers(deps: { app: Express; admin: RequestHandler }): v
     res.json({ ok: true, coverUrl: null });
   });
 
-  app.get('/api/covers/:file', (req, res) => {
+  app.get('/api/covers/:file', (req, res, next) => {
     const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
     if (!m) return res.status(404).end();
     let f = fileOf(Number(m[1]), req.query.s === '1');
     if (!fs.existsSync(f)) f = fileOf(Number(m[1]));
     if (!fs.existsSync(f)) return res.status(404).end();
-    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+    sendImage(req, res, f, 'image/jpeg', 'public, max-age=86400').catch(next);
   });
 }
