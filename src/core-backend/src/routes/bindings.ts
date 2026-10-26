@@ -3,7 +3,7 @@ import express from 'express';
 import { z } from 'zod';
 import { admin, staff } from '../auth.js';
 import { bot } from '../botState.js';
-import { type BindingRow, db, setSetting } from '../db.js';
+import { type BindingRow, db, getSetting, setSetting } from '../db.js';
 import { cleanExtra, embedFor, extraIds, intervalParam, playersShown, serializeBinding } from '../serverData.js';
 
 export const router = express.Router();
@@ -24,14 +24,17 @@ router.get('/api/discord/channels', staff, (_req, res) => {
   res.json(bot.guilds);
 });
 
+const embedSettings = () => ({ playersShown: playersShown(), chart: getSetting('embed_chart') !== '0', iconTile: getSetting('embed_icon_tile') === '1' });
 router.get('/api/settings/embed', admin, (_req, res) => {
-  res.json({ playersShown: playersShown() });
+  res.json(embedSettings());
 });
 router.put('/api/settings/embed', admin, (req, res) => {
-  const b = z.object({ playersShown: z.number().int().min(0).max(20) }).safeParse(req.body);
+  const b = z.object({ playersShown: z.number().int().min(0).max(20).optional(), chart: z.boolean().optional(), iconTile: z.boolean().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Число ников: от 0 до 20' });
-  setSetting('embed_players_shown', String(b.data.playersShown));
-  res.json({ playersShown: b.data.playersShown });
+  if (b.data.playersShown !== undefined) setSetting('embed_players_shown', String(b.data.playersShown));
+  if (b.data.chart !== undefined) setSetting('embed_chart', b.data.chart ? '1' : '0');
+  if (b.data.iconTile !== undefined) setSetting('embed_icon_tile', b.data.iconTile ? '1' : '0');
+  res.json(embedSettings());
 });
 
 router.get('/api/servers/:id/embed', admin, (req, res) => {

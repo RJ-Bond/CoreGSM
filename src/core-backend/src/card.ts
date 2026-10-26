@@ -5,6 +5,7 @@ import { gameIconPath } from './gameIcons.js';
 import { GAME_IMAGES } from './gameImages.js';
 import { chartTop, drawOnlineChart } from './chartDraw.js';
 import { avatarColor, initialOf, stateBand, whoInGame } from './cardLogic.js';
+import { monogramColor, monogramOf } from './ogLogic.js';
 import { coverFile } from './covers.js';
 import { getSetting } from './db.js';
 import { maintenanceFor } from './maintenance.js';
@@ -129,7 +130,8 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const players = st?.players ?? 0;
   const max = st?.max_players ?? 0;
   const names: string[] = st ? JSON.parse(st.player_names) : [];
-  const [abbr, accent] = GAME_COLORS[s.game] ?? [s.game.slice(0, 2).toUpperCase(), C.brand];
+  // a game without a colour of its own gets a monogram and a colour made from its name
+  const [abbr, accent] = GAME_COLORS[s.game] ?? [monogramOf(gameLabel(s.game)), monogramColor(s.game)];
   const laggy = online && st?.ping != null && st.ping > 100;
   const maint = maintenanceFor(serverId, now);
   const status = maint ? '#7b8cff' : !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
@@ -423,36 +425,50 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
 const iconCache = new Map<string, Buffer>();
 
 /** 256px game pictogram (white on the game colour), used as the embed thumbnail */
-export async function renderGameIcon(game: string): Promise<Buffer> {
-  const hit = iconCache.get(game);
+export async function renderGameIcon(game: string, tile = false): Promise<Buffer> {
+  const cacheKey = tile ? `${game}:tile` : game;
+  const hit = iconCache.get(cacheKey);
   if (hit) return hit;
-  // transparent PNG without a background tile: the game artwork itself, or its pictogram in the game colour
-  const color = GAME_COLORS[game]?.[1] ?? C.brand;
+  // transparent PNG without a background tile: the game artwork itself, or its pictogram in the game colour.
+  // `tile`: the same on a rounded tile of the game colour, so the icon reads on a light Discord theme as well as on a dark one
+  const color = GAME_COLORS[game]?.[1] ?? monogramColor(game);
   const canvas = new Canvas(256, 256);
   const ctx = canvas.getContext('2d') as any;
   const p = gameIconPath(game);
   const art = await gameImage(game);
+  if (tile) {
+    const g = ctx.createLinearGradient(0, 0, 256, 256);
+    g.addColorStop(0, mixToBlack(color, art ? 0.45 : 0.05));
+    g.addColorStop(1, mixToBlack(color, art ? 0.75 : 0.35));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.roundRect(8, 8, 240, 240, 56);
+    ctx.fill();
+  }
+  const pad = tile ? 150 : 240;
   if (art) {
-    const k = Math.min(240 / art.width, 240 / art.height);
+    const k = Math.min(pad / art.width, pad / art.height);
     const w = art.width * k, h = art.height * k;
     ctx.drawImage(art, (256 - w) / 2, (256 - h) / 2, w, h);
   } else if (p) {
-    ctx.translate(128 - 12 * 9, 128 - 12 * 9);
-    ctx.scale(9, 9);
-    ctx.strokeStyle = color;
+    const sc = tile ? 6.2 : 9;
+    ctx.translate(128 - 12 * sc, 128 - 12 * sc);
+    ctx.scale(sc, sc);
+    ctx.strokeStyle = tile ? '#ffffff' : color;
     ctx.lineWidth = 1.9;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke(new Path2D(p));
   } else {
-    ctx.fillStyle = color;
+    // a game with neither artwork nor pictogram: a monogram
+    ctx.fillStyle = tile ? '#ffffff' : color;
     ctx.font = `700 96px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(GAME_COLORS[game]?.[0] ?? (game.slice(0, 2).toUpperCase() || '?'), 128, 134);
+    ctx.fillText(GAME_COLORS[game]?.[0] ?? monogramOf(gameLabel(game)), 128, 134);
   }
   const buf = await canvas.toBuffer('png');
   if (iconCache.size >= 100) iconCache.delete(iconCache.keys().next().value as string);
-  iconCache.set(game, buf);
+  iconCache.set(cacheKey, buf);
   return buf;
 }
