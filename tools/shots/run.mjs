@@ -9,7 +9,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ADMIN_PAGES, BAD_TEXT, GUEST_PAGES, HELP, VIEWPORTS, buildMatrix, formatReport, isExpectedFailure, parseArgs } from './lib.mjs';
+import { ADMIN_PAGES, GUEST_PAGES, HELP, buildMatrix, formatReport, isExpectedFailure, parseArgs, viewportOf } from './lib.mjs';
 import { ADMIN, seed } from './seed.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -126,7 +126,7 @@ const HIDE_BARS = `(()=>{for(const el of document.querySelectorAll('body *')){co
 
 async function shoot(cdp, base, row, outDir) {
   const { page, viewport, theme } = row;
-  const vp = VIEWPORTS[viewport];
+  const vp = viewportOf(viewport);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: vp.mobile });
   await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }, { name: 'prefers-reduced-motion', value: 'reduce' }] });
   const script = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `try{localStorage.setItem('coregsm_theme','${theme}')}catch{}` });

@@ -496,6 +496,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
+            <span aria-hidden className="sh-br" />
             <TrendChip serverId={s.id} onDark />
             {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
           </div>

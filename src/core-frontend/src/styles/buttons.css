@@ -354,4 +354,5 @@ html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-d
 /* header search: a round icon button on phones, a pill with the label and the shortcut from md up */
 .hdr-search { --b-px: .9rem; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link)); height: 2.5rem; min-height: 2.5rem; white-space: nowrap; }
 .hdr-search > svg { flex: none; }
-@media (max-width: 767px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; } }
+/* the header: round icon buttons of one size; the labels («Поиск Ctrl K», «Бот в сети») only where there is room for them */
+@media (max-width: 1535px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; justify-content: center; } }

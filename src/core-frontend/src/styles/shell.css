@@ -18,7 +18,12 @@
 
 .pm { position: relative; }
 .pm-btn { display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-pill); font-weight: 800; transition: background-color .15s ease; height: 44px; width: 44px; }
-@media (min-width: 640px) { .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; } }
+@media (min-width: 640px) { .pm-btn { height: 2.5rem; width: 2.5rem; } }
+/* the name next to the avatar only on wide screens, otherwise the avatar is a round button like its neighbours */
+@media (min-width: 1536px) { .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; } }
+/* the sections of the header never shrink or fade out: the buttons on the right give way first */
+@media (min-width: 1100px) { .seg.hdr-nav { overflow: visible; max-width: none; flex-shrink: 0; } }
+@media (max-width: 1099px) { .hdr-word { display: none; } }
 .pm-btn:hover, .pm-btn[aria-expanded='true'] { background: rgb(var(--soft)); }
 .pm-btn.is-active { background: rgb(var(--brand) / .14); color: rgb(var(--link)); }
 .pm-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; width: 14rem; padding: 6px; display: grid; gap: 2px; }
