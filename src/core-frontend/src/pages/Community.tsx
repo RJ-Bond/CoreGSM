@@ -7,9 +7,10 @@
 import { useEffect, useMemo, useState, type PointerEvent } from 'react';
 import { api, type PlayerProfile, type Server } from '../api';
 import { useAuth } from '../auth';
+import { getPrefs, t, useI18n } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { busiestText, DOW_SHORT, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
-import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, plural, num } from '../ui';
+import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
+import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
@@ -59,8 +60,8 @@ function Delta({ now, prev }: { now: number; prev: number }) {
   if (now === 0 && prev === 0) return null;
   const up = now >= prev;
   const text = prev > 0 ? `${up ? '+' : '−'}${Math.abs(Math.round(((now - prev) / prev) * 100))}%` : `+${now}`;
-  if (now === prev) return <span className="cm-delta" title="Столько же, сколько в прошлом периоде">=</span>;
-  return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={`В прошлом периоде: ${prev}`}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
+  if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>=</span>;
+  return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
 }
 
 /** a little line chart with a cursor and a tooltip; `values` are equally spaced, null = no data */
@@ -122,15 +123,15 @@ function Greeting() {
   const midnight = new Date().setHours(0, 0, 0, 0);
   const today = card ? card.recent.reduce((n, v) => n + Math.max(0, (v.to ?? Date.now()) - Math.max(v.from, midnight)), 0) / 3_600_000 : 0;
   return (
-    <section className="tile cm-greet fade-in" aria-label="Ваша активность">
+    <section className="tile cm-greet fade-in" aria-label={t('cm.greet.aria')}>
       <PlayerAvatar name={nick || me.username} size={40} online={!!card?.online} />
       <div className="min-w-0 flex-1">
-        <div className="font-extrabold">Привет, {me.username}!</div>
+        <div className="font-extrabold">{t('cm.greet.hi', { name: me.username })}</div>
         <div className="text-sm font-semibold text-mute">
-          {!nick ? 'Укажите игровой ник в профиле, и здесь появятся ваши часы.' : card === null ? `Ник ${nick} пока не встречался на серверах.` : card === undefined ? 'Считаю ваши часы…' : today > 0.01 ? `Сегодня вы уже сыграли ${num(Math.round(today * 10) / 10)} ч${card.streak > 1 ? `, серия ${card.streak} ${plural(card.streak, ['день', 'дня', 'дней'])} подряд` : ''}.` : 'Сегодня вы ещё не играли.'}
+          {!nick ? t('cm.greet.nonick') : card === null ? t('cm.greet.unseen', { nick }) : card === undefined ? t('cm.greet.counting') : today > 0.01 ? t('cm.greet.today', { h: num(Math.round(today * 10) / 10), streak: card.streak > 1 ? t('cm.greet.streak', { n: card.streak, days: t('cm.word.days', { n: card.streak }) }) : '' }) : t('cm.greet.none')}
         </div>
       </div>
-      <a href={nick && card ? playerHref(nick) : '/profile'} className="btn btn-soft btn-sm">{nick && card ? 'Моя карточка' : 'Профиль'}</a>
+      <a href={nick && card ? playerHref(nick) : '/profile'} className="btn btn-soft btn-sm">{nick && card ? t('cm.greet.card') : t('cm.greet.profile')}</a>
     </section>
   );
 }
@@ -147,10 +148,10 @@ function SeasonBlocks({ s, mine }: { s: Seasons; mine: string }) {
         <section id="cm-season" className="tile cm-season fade-in p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-lg font-extrabold">🏁 {cur.name}</h2>
-            <span className="text-sm font-bold text-mute">идёт {days} {plural(days, ['день', 'дня', 'дней'])}, с {fmtDate(cur.startsAt)}</span>
+            <span className="text-sm font-bold text-mute">{t('cm.season.run', { n: days, days: t('cm.word.days', { n: days }), from: fmtDate(cur.startsAt) })}</span>
           </div>
-          {mine && <p className={`cm-me ${myIdx < 0 ? 'is-out' : ''}`}>{myIdx >= 0 ? `Вы на ${myIdx + 1} месте в сезоне: ${num(cur.top[myIdx].hours)} ч` : `Вас пока нет в десятке сезона, ник ${mine}`}</p>}
-          {cur.top.length === 0 ? <p className="cm-sub">В этом сезоне ещё никто не играл: станьте первым.</p> : (
+          {mine && <p className={`cm-me ${myIdx < 0 ? 'is-out' : ''}`}>{myIdx >= 0 ? t('cm.season.place', { n: myIdx + 1, h: num(cur.top[myIdx].hours) }) : t('cm.season.out', { nick: mine })}</p>}
+          {cur.top.length === 0 ? <p className="cm-sub">{t('cm.season.empty')}</p> : (
             <ol className="an-top">
               {cur.top.map((p, i) => (
                 <li key={p.name} className={i === myIdx ? 'is-me' : ''}>
@@ -160,17 +161,17 @@ function SeasonBlocks({ s, mine }: { s: Seasons; mine: string }) {
                     <a href={playerHref(p.name)} className="block truncate font-extrabold hover:text-link">{p.name}</a>
                     <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn-fill))' }} /></span>
                   </span>
-                  <span className="shrink-0 font-extrabold tabular-nums">{num(p.hours)} ч</span>
+                  <span className="shrink-0 font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
                 </li>
               ))}
             </ol>
           )}
-          {cur.first && <p className="cm-sub">Первым в сезоне зашёл <a href={playerHref(cur.first.name)} className="text-ink hover:text-link">{cur.first.name}</a>, {fmtDateTime(cur.first.at)}</p>}
+          {cur.first && <p className="cm-sub">{t('cm.season.first')} <a href={playerHref(cur.first.name)} className="text-ink hover:text-link">{cur.first.name}</a>, {fmtDateTime(cur.first.at)}</p>}
         </section>
       )}
       {s.past.length > 0 && (
         <section className="tile p-4 sm:p-5">
-          <h2 className="mb-3 text-lg font-extrabold">🏆 Зал славы</h2>
+          <h2 className="mb-3 text-lg font-extrabold">🏆 {t('cm.fame')}</h2>
           <ul className="cm-fame">
             {s.past.map((x) => (
               <li key={x.id} className="cm-fame-i">
@@ -179,13 +180,13 @@ function SeasonBlocks({ s, mine }: { s: Seasons; mine: string }) {
                 <ol className="mt-2 grid gap-1.5">
                   {x.podium.map((p, i) => (
                     <li key={p.name} className="flex items-center gap-2">
-                      <span aria-label={`${i + 1} место`}>{MEDALS[i]}</span>
+                      <span aria-label={t('cm.place', { n: i + 1 })}>{MEDALS[i]}</span>
                       <PlayerAvatar name={p.name} size={26} />
                       <a href={playerHref(p.name)} className="min-w-0 flex-1 truncate font-bold hover:text-link">{p.name}</a>
-                      <span className="text-sm font-extrabold tabular-nums text-mute">{num(p.hours)} ч</span>
+                      <span className="text-sm font-extrabold tabular-nums text-mute">{t('cm.h', { n: num(p.hours) })}</span>
                     </li>
                   ))}
-                  {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">Никто не играл</li>}
+                  {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">{t('cm.nobody')}</li>}
                 </ol>
               </li>
             ))}
@@ -210,20 +211,20 @@ function WhenBlock({ c }: { c: Community }) {
   const inPeak = !!best && dow === here.dow && here.hour >= best.h && here.hour <= best.h + 1;
   return (
     <section id="cm-when" className="tile p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
+      <h2 className="mb-3 text-lg font-extrabold">{t('cm.when')}</h2>
       {peak ? (
         <p className={`cm-best ${inPeak ? 'is-now' : ''}`}>
           <span aria-hidden>🕗</span>
-          {dow === here.dow ? <>Сегодня лучшее время зайти: <b>{peak}</b>{inPeak ? '. Сейчас как раз пик.' : ''}</> : <>В {DOW_SHORT[dow]} людей больше всего около <b>{peak}</b></>}
+          {dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}
         </p>
       ) : null}
       <MiniHeat cells={c.heatmap.cells} big now={here} />
       <HeatLegend />
-      <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам. Рамкой отмечен текущий час.</p>
-      <div className="cm-days" role="group" aria-label="Типичный день">
-        {DOW_SHORT.map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
+      <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')}</p>
+      <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
+        {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
       </div>
-      <TinyChart values={row} label={(i) => `${DOW_SHORT[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />
+      <TinyChart values={row} label={(i) => `${dowShort()[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />
       <div className="cm-chart-ticks" aria-hidden><span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
     </section>
   );
@@ -237,8 +238,8 @@ function GamesShare({ servers }: { servers: Community['servers'] }) {
   const total = list.reduce((n, [, v]) => n + v, 0);
   return (
     <section className="tile p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">Кто во что играет</h2>
-      {total === 0 ? <p className="cm-sub">Сейчас на серверах никого нет.</p> : (
+      <h2 className="mb-3 text-lg font-extrabold">{t('cm.who')}</h2>
+      {total === 0 ? <p className="cm-sub">{t('cm.who.none')}</p> : (
         <>
           <div className="cm-share" role="img" aria-label={list.map(([g, v]) => `${gameLabel(g)}: ${v}`).join(', ')}>
             {list.map(([g, v]) => <span key={g} style={{ width: `${(v / total) * 100}%`, background: gameColor(g) }} title={`${gameLabel(g)}: ${v}`} />)}
@@ -262,32 +263,32 @@ function HotServer({ servers }: { servers: Community['servers'] }) {
   const addr = hot ? all?.find((x) => x.id === hot.id)?.address : undefined;
   return (
     <section className="tile cm-hot p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">Самый людный сервер</h2>
-      {!hot ? <p className="cm-sub">Сейчас все серверы пусты.</p> : (
+      <h2 className="mb-3 text-lg font-extrabold">{t('cm.hot')}</h2>
+      {!hot ? <p className="cm-sub">{t('cm.hot.none')}</p> : (
         <div className="flex items-center gap-3">
           <GameAvatar game={hot.game} size={48} />
           <div className="min-w-0 flex-1">
             <a href={`/servers/${hot.id}`} className="block truncate text-lg font-extrabold hover:text-link">{hot.name}</a>
-            <div className="text-sm font-bold text-mute"><AnimatedNumber value={hot.players} />{hot.maxPlayers ? ` из ${hot.maxPlayers}, ${Math.round((hot.players / hot.maxPlayers) * 100)}%` : ''} · {gameLabel(hot.game)}</div>
+            <div className="text-sm font-bold text-mute"><AnimatedNumber value={hot.players} />{hot.maxPlayers ? t('cm.hot.of', { max: hot.maxPlayers, pct: Math.round((hot.players / hot.maxPlayers) * 100) }) : ''} · {gameLabel(hot.game)}</div>
             {addr && <code className="mt-0.5 block truncate font-mono text-xs font-semibold text-mute">{addr}</code>}
           </div>
-          {addr && <CopyButton text={addr} label="Скопировать адрес" />}
+          {addr && <CopyButton text={addr} label={t('cm.copyAddr')} />}
         </div>
       )}
     </section>
   );
 }
 
-const PERIODS = [['day', 'Сутки'], ['week', 'Неделя'], ['month', 'Месяц'], ['all', 'Всё время']] as const;
-type Period = (typeof PERIODS)[number][0];
+const PERIODS = ['day', 'week', 'month', 'all'] as const;
+type Period = (typeof PERIODS)[number];
 
 /** the change of the place against the period before */
 function Move({ p, i, period }: { p: TopPlayer; i: number; period: Period }) {
   if (period === 'all') return null;
-  if (p.prev == null) return <span className="cm-move new" title="Не было в топе прошлого периода">новый</span>;
+  if (p.prev == null) return <span className="cm-move new" title={t('cm.move.new')}>{t('cm.move.newText')}</span>;
   const d = p.prev - (i + 1);
-  if (d === 0) return <span className="cm-move" title="Место не изменилось">=</span>;
-  return <span className={`cm-move ${d > 0 ? 'up' : 'down'}`} title={`Раньше было ${p.prev} место`}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</span>;
+  if (d === 0) return <span className="cm-move" title={t('cm.move.same')}>=</span>;
+  return <span className={`cm-move ${d > 0 ? 'up' : 'down'}`} title={t('cm.move.was', { n: p.prev })}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</span>;
 }
 
 /** the most active players: a period switch, a podium, the rest as a list, «show more» and a search by nick */
@@ -311,26 +312,26 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
         <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
       </span>
       <span className="shrink-0 text-right">
-        <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
-        <span className="block text-xs font-bold text-mute">{p.servers} {plural(p.servers, ['сервер', 'сервера', 'серверов'])}</span>
+        <span className="block font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
+        <span className="block text-xs font-bold text-mute">{p.servers} {t('cm.word.servers', { n: p.servers })}</span>
       </span>
     </li>
   );
   return (
     <section id="cm-top" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Самые активные</h2>
-        <div className="seg" role="group" aria-label="Период">
-          {PERIODS.map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={period === id} onClick={() => { setPeriod(id); setMore(false); }}>{label}</button>)}
+        <h2 className="text-lg font-extrabold">{t('cm.top')}</h2>
+        <div className="seg" role="group" aria-label={t('cm.top.period')}>
+          {PERIODS.map((id) => <button key={id} type="button" className="seg-item" aria-pressed={period === id} onClick={() => { setPeriod(id); setMore(false); }}>{t(`cm.p.${id}` as const)}</button>)}
         </div>
       </div>
       <form className="cm-search" onSubmit={go} role="search">
-        <input className="input" type="search" list="cm-names" placeholder="Найти игрока по нику…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Найти игрока по нику" maxLength={64} />
+        <input className="input" type="search" list="cm-names" placeholder={t('cm.top.find')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('cm.top.findAria')} maxLength={64} />
         <datalist id="cm-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
-        <button type="submit" className="btn btn-soft" disabled={!q.trim()}>Открыть</button>
+        <button type="submit" className="btn btn-soft" disabled={!q.trim()}>{t('cm.top.open')}</button>
       </form>
       {items.length === 0 ? (
-        <Empty art={<PeopleArt />} title="Пока тихо" text={period === 'day' ? 'За сутки никто не играл. Загляните позже.' : 'Здесь появятся самые активные игроки.'} />
+        <Empty art={<PeopleArt />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
       ) : (
         <>
           {podium.length === 3 && (
@@ -342,7 +343,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
                     <span aria-hidden className="text-xl">{MEDALS[i]}</span>
                     <PlayerAvatar name={p.name} size={i === 0 ? 52 : 42} online={p.online} />
                     <span className="max-w-full truncate font-extrabold">{p.name}</span>
-                    <span className="text-sm font-extrabold tabular-nums text-mute">{num(p.hours)} ч</span>
+                    <span className="text-sm font-extrabold tabular-nums text-mute">{t('cm.h', { n: num(p.hours) })}</span>
                     <Move p={p} i={i} period={period} />
                   </a>
                 );
@@ -351,7 +352,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
           )}
           {rest.length > 0 && <ol className="an-top" start={podium.length + 1}>{rest.map((p, i) => row(p, i + podium.length))}</ol>}
           {items.length > 10 && (
-            <button type="button" className="btn btn-soft mt-3" onClick={() => setMore((v) => !v)}>{more ? 'Свернуть' : `Показать ещё ${items.length - 10}`}</button>
+            <button type="button" className="btn btn-soft mt-3" onClick={() => setMore((v) => !v)}>{more ? t('cm.top.less') : t('cm.top.more', { n: items.length - 10 })}</button>
           )}
         </>
       )}
@@ -367,20 +368,20 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
   const midnight = new Date().setHours(0, 0, 0, 0);
   const groups: [string, typeof list][] = [];
   for (const f of list) {
-    const label = Date.now() - f.at < 3_600_000 ? 'Последний час' : f.at >= midnight ? 'Сегодня' : 'Раньше';
+    const label = Date.now() - f.at < 3_600_000 ? t('cm.feedG.hour') : f.at >= midnight ? t('cm.feedG.today') : t('cm.feedG.earlier');
     const g = groups.find((x) => x[0] === label);
     if (g) g[1].push(f); else groups.push([label, [f]]);
   }
   return (
     <section id="cm-feed" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Живая лента</h2>
-        <div className="seg" role="group" aria-label="Фильтр ленты">
-          {([['all', 'Все'], ['online', 'В игре'], ['new', 'Новички']] as [FeedFilter, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
+        <h2 className="text-lg font-extrabold">{t('cm.feed')}</h2>
+        <div className="seg" role="group" aria-label={t('cm.feed.filter')}>
+          {([['all', t('cm.feed.all')], ['online', t('cm.feed.online')], ['new', t('cm.feed.new')]] as [FeedFilter, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
         </div>
       </div>
-      {c.feed.length === 0 ? <Empty art={<PeopleArt />} title="Пока никто не заходил" text="Заходы игроков появятся здесь сами." />
-        : list.length === 0 ? <p className="cm-sub">{filter === 'new' ? 'Новичков среди последних заходов нет.' : 'Из последних заходов никого нет в игре.'}</p>
+      {c.feed.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.feed.none')} text={t('cm.feed.noneText')} />
+        : list.length === 0 ? <p className="cm-sub">{filter === 'new' ? t('cm.feed.noNew') : t('cm.feed.noOnline')}</p>
         : groups.map(([label, items]) => (
           <div key={label} className="cm-feed-group">
             <h3 className="cm-feed-h">{label}</h3>
@@ -399,18 +400,18 @@ function GalleryStrip() {
   return (
     <section id="cm-gallery" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Галерея</h2>
-        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
+        <h2 className="text-lg font-extrabold">{t('cm.gal')}</h2>
+        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? t('cm.gal.all') : t('cm.gal.upload')}</a>
       </div>
       {list === null ? <div className="skeleton h-48 rounded-2xl" />
-        : list.length === 0 ? <Empty art={<PeopleArt />} title="Скриншотов пока нет" text="Поделитесь первым кадром из игры."><a href="/gallery" className="btn">Загрузить</a></Empty>
+        : list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
         : (
           <ul className={`cm-gal n${Math.min(list.length, 5)}`}>
             {list.slice(0, 5).map((s, i) => (
               <li key={s.id} className={i === 0 && list.length >= 3 ? 'is-big' : ''}>
-                <button type="button" className="gl-shot" onClick={() => setOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
+                <button type="button" className="gl-shot" onClick={() => setOpen(i)} aria-label={s.caption || t('cm.gal.shot', { n: i + 1 })}>
                   <img src={s.thumb} alt="" loading="lazy" />
-                  {s.featured && <span className="gl-star" title="Лучшее">★</span>}
+                  {s.featured && <span className="gl-star" title={t('cm.gal.best')}>★</span>}
                   {(s.caption || s.author) && (
                     <span className="gl-cap">
                       {s.caption && <span className="block truncate font-extrabold">{s.caption}</span>}
@@ -442,18 +443,18 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
   return (
     <section id="cm-servers" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Где играют сейчас</h2>
-        <div className="seg" role="group" aria-label="Сортировка">
-          {([['players', 'По игрокам'], ['fill', 'По заполнению'], ['name', 'По имени']] as [SrvSort, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={sort === id} onClick={() => setSort(id)}>{label}</button>)}
+        <h2 className="text-lg font-extrabold">{t('cm.srv')}</h2>
+        <div className="seg" role="group" aria-label={t('cm.srv.sort')}>
+          {([['players', t('cm.srv.byPlayers')], ['fill', t('cm.srv.byFill')], ['name', t('cm.srv.byName')]] as [SrvSort, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={sort === id} onClick={() => setSort(id)}>{label}</button>)}
         </div>
       </div>
       {games.length > 1 && (
-        <div className="cm-chips" role="group" aria-label="Игра">
-          <button type="button" className="cm-chip" aria-pressed={!game} onClick={() => setGame('')}>Все</button>
+        <div className="cm-chips" role="group" aria-label={t('cm.srv.game')}>
+          <button type="button" className="cm-chip" aria-pressed={!game} onClick={() => setGame('')}>{t('cm.srv.allGames')}</button>
           {games.map((g) => <button key={g} type="button" className="cm-chip" aria-pressed={game === g} onClick={() => setGame(g)}><i style={{ background: gameColor(g) }} aria-hidden />{gameLabel(g)}</button>)}
         </div>
       )}
-      {list.length === 0 ? <Empty art={<PeopleArt />} title="Серверов нет" text="Когда серверы добавят, они появятся здесь." /> : (
+      {list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
         <ul className="grid gap-2.5">
           {list.map((s) => (
             <li key={s.id}>
@@ -465,7 +466,7 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
                 </span>
                 <span className="cm-srv-spark max-sm:hidden">{s.online ? <MiniSpark serverId={s.id} color={gameColor(s.game)} /> : null}</span>
                 <span className="shrink-0 text-right font-extrabold tabular-nums">
-                  {s.online ? <>{s.players}{s.maxPlayers ? ` / ${s.maxPlayers}` : ''}{s.maxPlayers ? <span className="block text-xs font-bold text-mute">{Math.round(fill(s) * 100)}%</span> : null}</> : <span className="text-bad">не в сети</span>}
+                  {s.online ? <>{s.players}{s.maxPlayers ? ` / ${s.maxPlayers}` : ''}{s.maxPlayers ? <span className="block text-xs font-bold text-mute">{Math.round(fill(s) * 100)}%</span> : null}</> : <span className="text-bad">{t('cm.srv.off')}</span>}
                 </span>
               </a>
             </li>
@@ -499,7 +500,7 @@ function SectionNav({ items }: { items: [string, string][] }) {
     el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
   };
   return (
-    <nav className="cm-nav" aria-label="Разделы страницы">
+    <nav className="cm-nav" aria-label={t('cm.nav')}>
       {items.map(([id, label]) => <button key={id} type="button" className="cm-nav-i" aria-current={cur === id ? 'true' : undefined} onClick={() => go(id)}>{label}</button>)}
     </nav>
   );
@@ -507,8 +508,8 @@ function SectionNav({ items }: { items: [string, string][] }) {
 
 function CommunitySkeleton() {
   return (
-    <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
-      <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где" />
+    <div className="space-y-5" aria-busy="true" aria-label={t('cm.loading')}>
+      <PageHead icon={<IconPeople />} title={t('cm.title')} subtitle={t('cm.sub')} />
       <div className="tile skeleton h-40" />
       <div className="tile p-5"><div className="skeleton mb-3 h-6 w-56 rounded-lg" /><div className="skeleton h-40 rounded-2xl" /></div>
       <div className="grid gap-5 lg:grid-cols-2">
@@ -521,6 +522,7 @@ function CommunitySkeleton() {
 }
 
 export default function CommunityPage() {
+  useI18n();
   const { data: c, at, busy, refresh } = useCommunityLive();
   const [seasons, setSeasons] = useState<Seasons | null>(null);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>('all');
@@ -541,21 +543,21 @@ export default function CommunityPage() {
   const showFeed = (f: FeedFilter) => { setFeedFilter(f); document.getElementById('cm-feed')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 
   const nav: [string, string][] = [
-    ['cm-now', 'Сейчас'],
-    ...(hasSeason ? [['cm-season', 'Сезон'] as [string, string]] : []),
-    ['cm-when', 'Активность'],
-    ['cm-top', 'Топ'],
-    ['cm-feed', 'Лента'],
-    ['cm-gallery', 'Галерея'],
-    ['cm-servers', 'Серверы'],
+    ['cm-now', t('cm.nav.now')],
+    ...(hasSeason ? [['cm-season', t('cm.nav.season')] as [string, string]] : []),
+    ['cm-when', t('cm.nav.when')],
+    ['cm-top', t('cm.nav.top')],
+    ['cm-feed', t('cm.nav.feed')],
+    ['cm-gallery', t('cm.nav.gallery')],
+    ['cm-servers', t('cm.nav.servers')],
   ];
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где: живые цифры всех серверов">
-        <button type="button" className="cm-refresh" onClick={refresh} aria-busy={busy || undefined} title="Данные обновляются сами. Нажмите, чтобы обновить сейчас">
+      <PageHead icon={<IconPeople />} title={t('cm.title')} subtitle={t('cm.subLive')}>
+        <button type="button" className="cm-refresh" onClick={refresh} aria-busy={busy || undefined} title={t('cm.refresh.title')}>
           <span className="live-dot" aria-hidden />
-          {busy ? 'обновляю…' : `обновлено ${ago(at)}`}
+          {busy ? t('cm.refresh.busy') : t('cm.refresh.ago', { ago: ago(at) })}
         </button>
       </PageHead>
       <SectionNav items={nav} />
@@ -564,30 +566,30 @@ export default function CommunityPage() {
 
       <section id="cm-now" className="tile cm-hero fade-in">
         <div className="cm-hero-main">
-          <div className="cm-k">Сейчас в игре</div>
+          <div className="cm-k">{t('cm.now.k')}</div>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <AnimatedNumber value={c.now.players} className="cm-hero-n" pulse />
-            <span className="text-lg font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])} на {c.now.online} {plural(c.now.online, ['сервере', 'серверах', 'серверах'])}</span>
-            {trend != null && trend !== 0 && <span className={`cm-delta ${trend > 0 ? 'up' : 'down'}`} title="Против часа назад"><span aria-hidden>{trend > 0 ? '▲' : '▼'}</span> {trend > 0 ? '+' : '−'}{Math.abs(trend)} за час</span>}
+            <span className="text-lg font-extrabold text-mute">{t('cm.word.players', { n: c.now.players })} {t('cm.onServers', { n: c.now.online })}</span>
+            {trend != null && trend !== 0 && <span className={`cm-delta ${trend > 0 ? 'up' : 'down'}`} title={t('cm.now.vsHour')}><span aria-hidden>{trend > 0 ? '▲' : '▼'}</span> {trend > 0 ? '+' : '−'}{Math.abs(trend)}{t('cm.now.perHour')}</span>}
           </div>
           {rec && (
             <>
               <div className="cm-meter" aria-hidden><span style={{ width: `${toRecord * 100}%` }} /></div>
               <p className="cm-sub">
-                {isRecord ? '🎉 Это рекорд за 30 дней!' : <>До рекорда <b className="text-ink">{Math.max(0, rec.players - c.now.players)}</b> {plural(Math.max(0, rec.players - c.now.players), ['игрок', 'игрока', 'игроков'])}. Рекорд за 30 дней: <b className="text-ink">{rec.players}</b>, {fmtDateTime(rec.at)}</>}
+                {isRecord ? t('cm.rec.now') : <>{t('cm.rec.to')} <b className="text-ink">{Math.max(0, rec.players - c.now.players)}</b> {t('cm.word.players', { n: Math.max(0, rec.players - c.now.players) })}{t('cm.rec.is')} <b className="text-ink">{rec.players}</b>, {fmtDateTime(rec.at)}</>}
               </p>
             </>
           )}
-          {c.series.length > 2 && <TinyChart values={c.series.map((p) => p.players)} label={(i) => new Date(c.series[i].ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} mark={c.series.length - 1} className="cm-chart-hero" />}
-          {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>24 ч назад</span><span>сейчас</span></div>}
+          {c.series.length > 2 && <TinyChart values={c.series.map((p) => p.players)} label={(i) => new Date(c.series[i].ts).toLocaleTimeString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU', { hour: '2-digit', minute: '2-digit' })} mark={c.series.length - 1} className="cm-chart-hero" />}
+          {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>{t('cm.ticks.ago')}</span><span>{t('cm.ticks.now')}</span></div>}
         </div>
         <dl className="cm-hero-stats">
-          <div><dt>За сутки</dt><dd><AnimatedNumber value={c.players.day} /></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
-          <div><dt>За неделю</dt><dd><AnimatedNumber value={c.players.week} /></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
-          <div><dt>За месяц</dt><dd><AnimatedNumber value={c.players.month} /></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
+          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
+          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
+          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
           <div>
-            <dt>Новых за неделю</dt>
-            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title="Показать новичков в ленте"><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>
+            <dt>{t('cm.st.new')}</dt>
+            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>
             <Delta now={c.players.newWeek} prev={c.players.prev.newWeek} />
           </div>
         </dl>
