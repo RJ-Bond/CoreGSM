@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Achievement } from '../../api';
 import { t } from '../../i18n';
 import { fmtDate, Section } from '../../ui';
+import { isFresh, loadSeen, markSeen } from './achievementsLogic';
 import { AchievementArt } from './icons';
 import { IcoCheck, IcoLock } from './bits';
 import { isArray, useFetched } from './useFetched';
@@ -47,8 +48,11 @@ export function AchBrowser<T extends AchLike>({ list, render }: { list: T[]; ren
 }
 
 export function AchievementCard({ a }: { a: Achievement }) {
+  // an achievement earned in the last day plays a short shine once; it is marked as seen right after
+  const [fresh] = useState(() => isFresh(a, loadSeen()));
+  useEffect(() => { if (fresh) markSeen(a.id); }, [fresh, a.id]);
   return (
-    <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
+    <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'} ${fresh ? 'is-fresh' : ''}`}>
       <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /><AchFlag earned={a.earned} /></span>
       <div className="min-w-0 flex-1">
         <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{a.title}</div>
