@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="30a0c9ebdbeb"
+COREGSM_BUILD="f85b24ad33a7"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.14"
+COREGSM_VERSION="1.0.0.15"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5262,6 +5262,7 @@ import { gameIconPath } from './gameIcons.js';
 import { GAME_IMAGES } from './gameImages.js';
 import { chartTop, drawOnlineChart } from './chartDraw.js';
 import { avatarColor, initialOf, stateBand, whoInGame } from './cardLogic.js';
+import { monogramColor, monogramOf } from './ogLogic.js';
 import { coverFile } from './covers.js';
 import { getSetting } from './db.js';
 import { maintenanceFor } from './maintenance.js';
@@ -5386,7 +5387,8 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const players = st?.players ?? 0;
   const max = st?.max_players ?? 0;
   const names: string[] = st ? JSON.parse(st.player_names) : [];
-  const [abbr, accent] = GAME_COLORS[s.game] ?? [s.game.slice(0, 2).toUpperCase(), C.brand];
+  // a game without a colour of its own gets a monogram and a colour made from its name
+  const [abbr, accent] = GAME_COLORS[s.game] ?? [monogramOf(gameLabel(s.game)), monogramColor(s.game)];
   const laggy = online && st?.ping != null && st.ping > 100;
   const maint = maintenanceFor(serverId, now);
   const status = maint ? '#7b8cff' : !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
@@ -5680,37 +5682,51 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
 const iconCache = new Map<string, Buffer>();
 
 /** 256px game pictogram (white on the game colour), used as the embed thumbnail */
-export async function renderGameIcon(game: string): Promise<Buffer> {
-  const hit = iconCache.get(game);
+export async function renderGameIcon(game: string, tile = false): Promise<Buffer> {
+  const cacheKey = tile ? `${game}:tile` : game;
+  const hit = iconCache.get(cacheKey);
   if (hit) return hit;
-  // transparent PNG without a background tile: the game artwork itself, or its pictogram in the game colour
-  const color = GAME_COLORS[game]?.[1] ?? C.brand;
+  // transparent PNG without a background tile: the game artwork itself, or its pictogram in the game colour.
+  // `tile`: the same on a rounded tile of the game colour, so the icon reads on a light Discord theme as well as on a dark one
+  const color = GAME_COLORS[game]?.[1] ?? monogramColor(game);
   const canvas = new Canvas(256, 256);
   const ctx = canvas.getContext('2d') as any;
   const p = gameIconPath(game);
   const art = await gameImage(game);
+  if (tile) {
+    const g = ctx.createLinearGradient(0, 0, 256, 256);
+    g.addColorStop(0, mixToBlack(color, art ? 0.45 : 0.05));
+    g.addColorStop(1, mixToBlack(color, art ? 0.75 : 0.35));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.roundRect(8, 8, 240, 240, 56);
+    ctx.fill();
+  }
+  const pad = tile ? 150 : 240;
   if (art) {
-    const k = Math.min(240 / art.width, 240 / art.height);
+    const k = Math.min(pad / art.width, pad / art.height);
     const w = art.width * k, h = art.height * k;
     ctx.drawImage(art, (256 - w) / 2, (256 - h) / 2, w, h);
   } else if (p) {
-    ctx.translate(128 - 12 * 9, 128 - 12 * 9);
-    ctx.scale(9, 9);
-    ctx.strokeStyle = color;
+    const sc = tile ? 6.2 : 9;
+    ctx.translate(128 - 12 * sc, 128 - 12 * sc);
+    ctx.scale(sc, sc);
+    ctx.strokeStyle = tile ? '#ffffff' : color;
     ctx.lineWidth = 1.9;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke(new Path2D(p));
   } else {
-    ctx.fillStyle = color;
+    // a game with neither artwork nor pictogram: a monogram
+    ctx.fillStyle = tile ? '#ffffff' : color;
     ctx.font = `700 96px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(GAME_COLORS[game]?.[0] ?? (game.slice(0, 2).toUpperCase() || '?'), 128, 134);
+    ctx.fillText(GAME_COLORS[game]?.[0] ?? monogramOf(gameLabel(game)), 128, 134);
   }
   const buf = await canvas.toBuffer('png');
   if (iconCache.size >= 100) iconCache.delete(iconCache.keys().next().value as string);
-  iconCache.set(game, buf);
+  iconCache.set(cacheKey, buf);
   return buf;
 }
 __COREGSM_EOF__
@@ -9313,6 +9329,7 @@ import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
 import { registerDigest, startDigestTimer } from './digest.js';
+import { registerOg } from './ogImage.js';
 import { registerServerChart } from './serverChart.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
@@ -9452,6 +9469,7 @@ registerNews({
 registerAlerts({ app, admin, internal, channelInfo });
 registerDigest({ app, admin });
 registerServerChart(app);
+registerOg(app);
 registerSecurity({
   app,
   admin,
@@ -10897,7 +10915,7 @@ export function registerNews(deps: {
     const g = p.gallery?.find((x) => x.upload || (x.url && /^https:\/\//i.test(x.url)));
     if (g?.upload) return `${base}/api/news/images/${g.upload}`;
     if (g?.url) return g.url;
-    return `${base}/og-default.png`;
+    return `${base}/api/og/default.png`;
   };
   app.get('/n/:id', param('id'), (req, res) => {
     res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
@@ -12306,6 +12324,141 @@ export function nickStatusOf(userId: number): { nick: string; seen: boolean; las
 
 export function registerNickStatus(deps: { app: Express; auth: RequestHandler; userId: (req: Request) => number }): void {
   deps.app.get('/api/me/nick-status', deps.auth, (req, res) => res.json(nickStatusOf(deps.userId(req))));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/ogImage.ts" << '__COREGSM_EOF__'
+/** The picture a pasted link to the panel gets when nothing more specific exists: the brand and the numbers right now. */
+import type { Express } from 'express';
+import skia from 'skia-canvas';
+import { db } from './db.js';
+import { monogramColor, ogLine } from './ogLogic.js';
+import { brand, logoFile } from './site.js';
+
+const { Canvas, loadImage } = skia;
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
+
+let cache: { at: number; key: string; buf: Buffer } | null = null;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export async function renderOgDefault(): Promise<Buffer> {
+  const b = brand();
+  const row = db
+    .prepare('SELECT COUNT(*) AS servers, COALESCE(SUM(st.online), 0) AS online, COALESCE(SUM(CASE WHEN st.online = 1 THEN st.players ELSE 0 END), 0) AS players FROM servers s LEFT JOIN status st ON st.server_id = s.id')
+    .get() as { servers: number; online: number; players: number };
+  const line = ogLine(row);
+  const key = `${b.name}|${b.color}|${b.logoV}|${line}`;
+  if (cache && cache.key === key && Date.now() - cache.at < 10 * 60_000) return cache.buf;
+
+  const W = 1200;
+  const H = 630;
+  const accent = /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : monogramColor(b.name);
+  const canvas = new Canvas(W, H);
+  const ctx: any = canvas.getContext('2d');
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#15122b');
+  bg.addColorStop(1, '#0b0a16');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(240, 80, 10, 240, 80, 820);
+  glow.addColorStop(0, `${accent}99`);
+  glow.addColorStop(1, `${accent}00`);
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  // the logo (custom, when set) or a tile with the first letter of the name
+  const lx = 90, ly = 150, ls = 150;
+  let logo: any = null;
+  const file = logoFile();
+  if (file) {
+    try { logo = await loadImage(file); } catch { /* a broken file: the monogram */ }
+  }
+  if (logo) {
+    const k = Math.min(ls / logo.width, ls / logo.height);
+    ctx.drawImage(logo, lx + (ls - logo.width * k) / 2, ly + (ls - logo.height * k) / 2, logo.width * k, logo.height * k);
+  } else {
+    const g = ctx.createLinearGradient(lx, ly, lx + ls, ly + ls);
+    g.addColorStop(0, accent);
+    g.addColorStop(1, `${accent}99`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.roundRect(lx, ly, ls, ls, 40);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 88px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText((Array.from(b.name.trim())[0] ?? '?').toUpperCase(), lx + ls / 2, ly + ls / 2 + 31);
+    ctx.textAlign = 'left';
+  }
+
+  // the name (shrunk to fit), a line of what it is, and the live numbers
+  let size = 84;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `800 ${size}px ${SANS}`;
+  while (size > 44 && ctx.measureText(b.name).width > W - lx - 90) {
+    size -= 4;
+    ctx.font = `800 ${size}px ${SANS}`;
+  }
+  ctx.fillText(b.name, lx, 400);
+  ctx.fillStyle = 'rgba(255,255,255,.72)';
+  ctx.font = `600 34px ${SANS}`;
+  let shown = line;
+  while (shown.length > 8 && ctx.measureText(shown).width > W - lx - 90) shown = `${shown.slice(0, -2)}…`;
+  ctx.fillText(shown, lx, 462);
+  ctx.fillStyle = accent;
+  ctx.fillRect(lx, 500, 120, 6);
+  const buf = (await canvas.toBuffer('png')) as Buffer;
+  cache = { at: Date.now(), key, buf };
+  return buf;
+}
+
+export function registerOg(app: Express): void {
+  app.get('/api/og/default.png', async (_req, res, next) => {
+    try {
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=600' }).send(await renderOgDefault());
+    } catch (e) {
+      next(e);
+    }
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/ogLogic.ts" << '__COREGSM_EOF__'
+/** The default link-preview picture and monogram icons: the pure part. */
+
+/** «12 игроков онлайн · 3 сервера из 4» for the preview; an empty panel says only what it is */
+export function ogLine(i: { online: number; servers: number; players: number }): string {
+  if (i.servers === 0) return 'Мониторинг игровых серверов';
+  const word = (n: number, f: [string, string, string]) => (n % 10 === 1 && n % 100 !== 11 ? f[0] : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? f[1] : f[2]);
+  return `${i.players} ${word(i.players, ['игрок', 'игрока', 'игроков'])} онлайн · ${i.online} из ${i.servers} ${word(i.servers, ['сервера', 'серверов', 'серверов'])} в сети`;
+}
+
+/** hue 0..359 from a name: the same game always gets the same colour */
+export function hueOf(name: string): number {
+  let h = 7;
+  for (const c of name.toLowerCase()) h = (h * 33 + c.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+
+/** "#rrggbb" from hue (0..359), saturation and lightness (0..1) */
+export function hslHex(h: number, s: number, l: number): string {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** the colour of the monogram of a game that has no colour of its own */
+export const monogramColor = (name: string): string => hslHex(hueOf(name), 0.55, 0.5);
+
+/** one or two letters for a game name: the capitals of its words («Space Engineers» → «SE»), else its first two letters */
+export function monogramOf(label: string): string {
+  const words = label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
+  return (words[0] ?? '?').slice(0, 2).toUpperCase();
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -15814,7 +15967,7 @@ import express from 'express';
 import { z } from 'zod';
 import { admin, staff } from '../auth.js';
 import { bot } from '../botState.js';
-import { type BindingRow, db, setSetting } from '../db.js';
+import { type BindingRow, db, getSetting, setSetting } from '../db.js';
 import { cleanExtra, embedFor, extraIds, intervalParam, playersShown, serializeBinding } from '../serverData.js';
 
 export const router = express.Router();
@@ -15835,14 +15988,17 @@ router.get('/api/discord/channels', staff, (_req, res) => {
   res.json(bot.guilds);
 });
 
+const embedSettings = () => ({ playersShown: playersShown(), chart: getSetting('embed_chart') !== '0', iconTile: getSetting('embed_icon_tile') === '1' });
 router.get('/api/settings/embed', admin, (_req, res) => {
-  res.json({ playersShown: playersShown() });
+  res.json(embedSettings());
 });
 router.put('/api/settings/embed', admin, (req, res) => {
-  const b = z.object({ playersShown: z.number().int().min(0).max(20) }).safeParse(req.body);
+  const b = z.object({ playersShown: z.number().int().min(0).max(20).optional(), chart: z.boolean().optional(), iconTile: z.boolean().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Число ников: от 0 до 20' });
-  setSetting('embed_players_shown', String(b.data.playersShown));
-  res.json({ playersShown: b.data.playersShown });
+  if (b.data.playersShown !== undefined) setSetting('embed_players_shown', String(b.data.playersShown));
+  if (b.data.chart !== undefined) setSetting('embed_chart', b.data.chart ? '1' : '0');
+  if (b.data.iconTile !== undefined) setSetting('embed_icon_tile', b.data.iconTile ? '1' : '0');
+  res.json(embedSettings());
 });
 
 router.get('/api/servers/:id/embed', admin, (req, res) => {
@@ -16939,7 +17095,9 @@ router.get(
   '/api/game-icon/:game.png',
   wrap(async (req, res) => {
     const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(isKnownGame(game) ? game : ''));
+    // a game the panel does not know still gets its monogram when one of the servers uses it
+    const shown = isKnownGame(game) || db.prepare('SELECT 1 FROM servers WHERE game = ?').get(game) ? game : '';
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(shown, req.query.tile === '1'));
   }),
 );
 
@@ -18596,7 +18754,7 @@ export function getServer(id: number) {
 }
 
 /** bump when the game icon artwork changes: Discord caches embed images by URL */
-export const GAME_ICON_VERSION = 3;
+export const GAME_ICON_VERSION = 4;
 
 /** the extra servers of a binding (ids that still exist, without the main one and without duplicates) */
 export function extraIds(b: BindingRow): number[] {
@@ -18660,7 +18818,7 @@ export function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -52141,20 +52299,22 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/PlayersShownCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Section, toast, fail } from '../ui';
+import { Section, Switch, toast, fail } from '../ui';
 
 const OPTIONS = [0, 3, 5, 8, 10, 15, 20];
 
 /** «Ники в сообщении»: how many player names the Discord message lists; the rest is a link to the site. */
 export default function PlayersShownCard() {
   const [value, setValue] = useState<number | null>(null);
+  const [chart, setChart] = useState(true);
+  const [tile, setTile] = useState(false);
   const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    api<{ playersShown: number }>('/settings/embed')
-      .then((r) => { if (alive) setValue(r.playersShown); })
+    api<{ playersShown: number; chart: boolean; iconTile: boolean }>('/settings/embed')
+      .then((r) => { if (alive) { setValue(r.playersShown); setChart(r.chart); setTile(r.iconTile); } })
       .catch(() => { if (alive) setGone(true); });
     return () => { alive = false; };
   }, []);
@@ -52176,6 +52336,20 @@ export default function PlayersShownCard() {
     }
   };
 
+  const flag = async (patch: { chart?: boolean; iconTile?: boolean }) => {
+    setBusy(true);
+    try {
+      const r = await api<{ chart: boolean; iconTile: boolean }>('/settings/embed', 'PUT', patch);
+      setChart(r.chart);
+      setTile(r.iconTile);
+      toast('Сохранено. Сообщения обновятся при следующем опросе');
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const options = OPTIONS.includes(value) ? OPTIONS : [...OPTIONS, value].sort((a, b) => a - b);
 
   return (
@@ -52184,6 +52358,20 @@ export default function PlayersShownCard() {
       <select id="players-shown" className="input max-w-[16rem]" value={value} disabled={busy} onChange={(e) => void change(Number(e.target.value))}>
         {options.map((n) => <option key={n} value={n}>{n === 0 ? '0: только счётчик' : String(n)}</option>)}
       </select>
+      <label className="mt-4 flex cursor-pointer items-start gap-3">
+        <Switch className="mt-0.5" checked={chart} disabled={busy} onChange={(on) => void flag({ chart: on })} />
+        <span>
+          <span className="block font-extrabold">График онлайна за 24 часа</span>
+          <span className="block text-sm font-semibold text-mute">Картинка под сообщением сервера. В сообщении с несколькими серверами она не показывается.</span>
+        </span>
+      </label>
+      <label className="mt-3 flex cursor-pointer items-start gap-3">
+        <Switch className="mt-0.5" checked={tile} disabled={busy} onChange={(on) => void flag({ iconTile: on })} />
+        <span>
+          <span className="block font-extrabold">Значок игры на цветной плашке</span>
+          <span className="block text-sm font-semibold text-mute">Значок виден и в светлой, и в тёмной теме Discord. Без плашки это прозрачная картинка игры.</span>
+        </span>
+      </label>
     </Section>
   );
 }
@@ -65396,6 +65584,27 @@ export function paintGameTheme(id: string | undefined | null): void {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/games.monogram.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { gameAbbr, gameColor, monogramColor, monogramOf } from './games';
+
+describe('monogram of an unknown game', () => {
+  it('letters from the words', () => {
+    expect(monogramOf('space_engineers')).toBe('SE');
+    expect(monogramOf('barotrauma')).toBe('BA');
+  });
+  it('a stable valid colour per name, case-insensitive', () => {
+    expect(monogramColor('Barotrauma')).toBe(monogramColor('barotrauma'));
+    expect(monogramColor('x')).toMatch(/^#[0-9a-f]{6}$/);
+  });
+  it('known games keep their own', () => {
+    expect(gameColor('minecraft')).toBe('#62b543');
+    expect(gameAbbr('minecraft')).toBe('MC');
+    expect(gameAbbr('somegame')).toBe('SO');
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
 import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
@@ -65431,11 +65640,30 @@ export const GAMES: Game[] = [
   { id: 'teamspeak3', label: 'TeamSpeak 3', port: 9987, abbr: 'TS', color: '#3a7ad9' },
 ];
 
-const FALLBACK = '#5a4bd1';
+/** a game the panel has no colour for gets one made from its name (the same name, the same colour; the backend does the same) */
+export function monogramColor(name: string): string {
+  let h = 7;
+  for (const c of name.toLowerCase()) h = (h * 33 + c.charCodeAt(0)) >>> 0;
+  const hue = h % 360;
+  const a = 0.55 * Math.min(0.5, 0.5);
+  const f = (n: number) => {
+    const k = (n + hue / 30) % 12;
+    const c = 0.5 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+/** one or two letters: the capitals of the first two words, else the first two letters */
+export function monogramOf(label: string): string {
+  const words = label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
+  return (words[0] ?? '?').slice(0, 2).toUpperCase();
+}
+
 export const findGame = (id: string) => GAMES.find((g) => g.id === id);
 export const gameLabel = (id: string) => findGame(id)?.label ?? id;
-export const gameColor = (id: string) => findGame(id)?.color ?? FALLBACK;
-export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toUpperCase();
+export const gameColor = (id: string) => findGame(id)?.color ?? monogramColor(id);
+export const gameAbbr = (id: string) => findGame(id)?.abbr ?? monogramOf(id);
 
 /** artwork used instead of the line pictogram (files in public/games) */
 /** games with their own artwork: PNG logos, and the emblems drawn by tools/gen-game-emblems.cjs (public/games/<id>.svg) */
