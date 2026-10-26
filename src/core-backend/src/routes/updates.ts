@@ -7,9 +7,12 @@ import { APP_VERSION, APP_VERSION_NAME } from '../config.js';
 import { wrap } from '../http.js';
 import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
-import { alertSettings, enqueueAlert } from '../alerts.js';
+import { alertSettings, enqueueAlert, isQuietNow } from '../alerts.js';
+import { enqueueDelivery } from '../deliveries.js';
+import { publicBase } from '../site.js';
+import { dmAvailable } from '../subscriptions.js';
 import { listBackups } from '../backup.js';
-import { classifyCommit, isNoopJob, notesBetween, notesText, parseChangelog, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseNoticeTarget, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -127,6 +130,9 @@ function updatePayload() {
     channelLocked: CHANNEL_LOCKED,
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
+    notifyTo: parseNoticeTarget(getSetting('update_notify_to')),
+    notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
+    remindDays: parseRemindDays(getSetting('update_remind_days')),
   };
 }
 
@@ -184,22 +190,87 @@ function announce(title: string, description: string, color: number): void {
   }
 }
 
-/** the text of a notice plus what the versions from `from` to `to` brought (from CHANGELOG.md); the plain text when there are no notes */
-async function withNotes(base: string, from: string | null, to: string | null): Promise<string> {
+/** the Discord accounts of the administrators (the panel account has to be linked to Discord) */
+function adminDiscordIds(): string[] {
+  return (db.prepare("SELECT discord_id FROM users WHERE role = 'admin' AND status = 'active' AND discord_id IS NOT NULL AND discord_id != ''").all() as { discord_id: string }[]).map((r) => r.discord_id);
+}
+
+/** the page with the releases on GitHub (a fork or a custom source: no such page) */
+function releasesPage(): string | null {
+  const m = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/releases\//.exec(releaseBase());
+  return m ? `${m[1]}/releases` : null;
+}
+
+/**
+ * Sends a notice about the panel update. The channel message has no buttons (Discord cannot hide a button from part of
+ * a channel); the buttons go only to the administrators' direct messages, and every one of them opens the panel,
+ * which asks for an administrator's login anyway.
+ */
+function sendNotice(n: Notice, buttons: { label: string; url: string }[]): void {
+  if (getSetting('update_notify') === '0') return;
+  const to = parseNoticeTarget(getSetting('update_notify_to'));
+  const embed: Record<string, unknown> = {
+    title: n.title,
+    description: n.description,
+    color: n.color,
+    ...(n.fields.length ? { fields: n.fields } : {}),
+    ...(n.footer ? { footer: { text: n.footer } } : {}),
+    timestamp: new Date().toISOString(),
+  };
   try {
-    const text = notesText(notesBetween((await loadNotes()).releases, from, to), 1800);
-    return text ? `${base}\n\n${text}` : base;
-  } catch {
-    return base;
+    const s = alertSettings();
+    if (to !== 'dm' && s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
+    if (to !== 'channel' && dmAvailable()) {
+      for (const id of adminDiscordIds()) enqueueDelivery({ kind: 'dm', refId: null, target: id, payload: { content: '', embed, ...(buttons.length ? { actions: buttons } : {}), summary: n.title } });
+    }
+  } catch (e) {
+    log.warn('update notice failed:', (e as Error).message);
   }
 }
 
-function announceVersion(): void {
-  if (!shouldAnnounce({ notify: getSetting('update_notify') !== '0', available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build), latest: remote.build, announced: getSetting('update_announced'), skipped: getSetting('update_skip') })) return;
-  setSetting('update_announced', remote.build);
-  const label = remote.label ?? (remote.build ?? '').slice(0, 7);
-  void withNotes(`Версия \`${label}\`. Установить: Настройки → Обновления и копии.`, labelOf(APP_VERSION), remote.label).then((d) => announce('Доступно обновление панели', d, 0x5865f2));
+type UpdateNoticeKind = 'available' | 'reminder' | 'done';
+/** builds a notice from the version, CHANGELOG.md and the settings, and sends it */
+async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to: string | null, line: (lang: 'ru' | 'en') => string, rollback = false): Promise<void> {
+  let releases: ReturnType<typeof parseChangelog> = [];
+  try { releases = (await loadNotes()).releases; } catch { /* the plain notice */ }
+  const lang = parseNoticeLang(getSetting('update_notify_lang'));
+  const target = parseNoticeTarget(getSetting('update_notify_to'));
+  const n = buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now(), withButtons: target === 'dm' });
+  const base = publicBase();
+  const buttons: { label: string; url: string }[] = [];
+  if (base) {
+    const page = `${base}/admin/settings/updates`;
+    const en = lang === 'en';
+    if (kind !== 'done') buttons.push({ label: en ? '⬇️ Install' : '⬇️ Установить', url: page });
+    buttons.push({ label: en ? '📋 What is new' : '📋 Что нового', url: releasesPage() ?? page });
+    if (kind === 'done' && rollback) buttons.push({ label: en ? '↩️ Roll back' : '↩️ Откатить', url: page });
+  }
+  sendNotice(n, buttons);
 }
+
+function announceVersion(): void {
+  const available = !!(APP_VERSION && remote.build && APP_VERSION !== remote.build);
+  const notify = getSetting('update_notify') !== '0';
+  const skipped = getSetting('update_skip');
+  const label = remote.label ?? (remote.build ?? '').slice(0, 7);
+  if (shouldAnnounce({ notify, available, latest: remote.build, announced: getSetting('update_announced'), skipped })) {
+    // at night (quiet hours) it waits: the next check after the quiet hours sends it
+    if (isQuietNow()) return;
+    setSetting('update_announced', remote.build);
+    setSetting('update_announced_at', String(Date.now()));
+    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is ready to install.` : `Версия \`${label}\` готова к установке.`));
+    return;
+  }
+  const announcedAt = Number(getSetting('update_announced_at')) || null;
+  if (shouldRemind({ notify, remindDays: parseRemindDays(getSetting('update_remind_days')), available, latest: remote.build, announced: getSetting('update_announced'), announcedAt, reminded: getSetting('update_reminded'), skipped, now: Date.now() }) && !isQuietNow()) {
+    setSetting('update_reminded', remote.build);
+    const cur = labelOf(APP_VERSION) ?? 'current';
+    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`));
+  }
+}
+
+// the notices also have to go out when nobody has the panel open: check from time to time
+setInterval(() => { void checkRemote().catch(() => undefined); }, 10 * 60_000).unref();
 
 /** writes a finished job into the history once; the first run on an old database only fills it in silently */
 export function recordJob(): void {
@@ -216,7 +287,14 @@ export function recordJob(): void {
   if (first || now - job.time > 6 * 3600_000) return;
   if (job.state === 'error') announce('Обновление панели не удалось', job.message, 0xf23f42);
   else if (kind === 'rollback') announce('Откат панели выполнен', job.message, 0xf0b232);
-  else void withNotes(job.message, labelOf(before), labelOf(APP_VERSION)).then((d) => announce('Панель обновлена', d, 0x23a55a));
+  else {
+    const rb = (job as { rollback_available?: boolean }).rollback_available === true;
+    const now = labelOf(APP_VERSION);
+    void sendUpdateNotice('done', labelOf(before), now, (l) => {
+      const keep = rb ? (l === 'en' ? '\n↩️ A rollback is possible: the previous version is kept together with the database.' : '\n↩️ Откат возможен: предыдущая версия сохранена вместе с базой.') : '';
+      return `${l === 'en' ? (now ? `Version \`${now}\` is installed.` : 'The update is installed.') : job.message}${keep}`;
+    }, rb);
+  }
 }
 
 setTimeout(() => { try { recordJob(); } catch { /* the table is not ready yet */ } }, 3000).unref();
@@ -236,7 +314,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyTo?: unknown; notifyLang?: unknown; remindDays?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
@@ -250,6 +328,9 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_skip', b.skip);
   }
   if (b.notify !== undefined) setSetting('update_notify', b.notify === false ? '0' : '1');
+  if (b.notifyTo !== undefined) setSetting('update_notify_to', parseNoticeTarget(String(b.notifyTo)));
+  if (b.notifyLang !== undefined) setSetting('update_notify_lang', parseNoticeLang(String(b.notifyLang)));
+  if (b.remindDays !== undefined) setSetting('update_remind_days', String(parseRemindDays(String(b.remindDays))));
   res.json(updatePayload());
 });
 

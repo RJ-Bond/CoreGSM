@@ -1903,6 +1903,15 @@ const en: Record<keyof typeof ru, string> = {
   'adm.col.version': 'Version',
   'adm.col.channels': 'Discord channels',
   'adm.col.updated': 'Updated',
+  'upd.o.to': 'Send to',
+  'upd.o.to.channel': 'The alerts channel (no buttons)',
+  'upd.o.to.dm': 'Administrators, in direct messages (with buttons)',
+  'upd.o.to.both': 'The channel and direct messages',
+  'upd.o.toHint': 'The Install, What is new and Roll back buttons arrive only in direct messages to administrators with a linked Discord account: Discord cannot hide buttons from the rest of a channel. Every button opens the panel, which asks for an administrator login.',
+  'upd.o.lang': 'Message language',
+  'upd.o.remind': 'Remind me if not installed',
+  'upd.o.remind.off': 'Do not remind',
+  'upd.o.remind.n': 'After {n} d',
 };
 
 export default en;
