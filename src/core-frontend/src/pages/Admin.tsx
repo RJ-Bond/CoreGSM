@@ -172,6 +172,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       const el = nav?.querySelector<HTMLElement>('.adm-link[aria-current="page"]');
       if (!nav || !el || home) { setInd(null); return; }
       setInd({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+      // a phone shows the sections as a row that scrolls: keep the current one in the middle of it
+      if (nav.scrollWidth > nav.clientWidth + 2 && nav.scrollHeight <= nav.clientHeight + 2) nav.scrollTo({ left: Math.max(0, el.offsetLeft - (nav.clientWidth - el.offsetWidth) / 2), behavior: 'auto' });
     };
     measure();
     window.addEventListener('resize', measure);

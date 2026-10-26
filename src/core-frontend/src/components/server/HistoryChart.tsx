@@ -387,7 +387,15 @@ export default function HistoryChart({
               {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · показать весь период
             </button>
           ) : (
-            <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+            <>
+              <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+              {/* touch screens cannot drag a selection: the last hour / 6 hours / day / week in one tap */}
+              <span className="hc-quick" role="group" aria-label="Приблизить">
+                {([[1, '1 ч'], [6, '6 ч'], [24, '24 ч'], [168, '7 д']] as [number, string][]).filter(([h]) => h < hours).map(([h, label]) => (
+                  <button key={h} type="button" className="hc-chip" onClick={() => { const n = Date.now(); setZoom([n - h * 3600_000, n]); setHover(null); }}>{label}</button>
+                ))}
+              </span>
+            </>
           )}
         </div>
       )}

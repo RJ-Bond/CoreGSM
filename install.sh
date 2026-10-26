@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cf5b5fe978fc"
+COREGSM_BUILD="1b43afc8b4b0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -59436,7 +59436,15 @@ export default function HistoryChart({
               {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · показать весь период
             </button>
           ) : (
-            <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+            <>
+              <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+              {/* touch screens cannot drag a selection: the last hour / 6 hours / day / week in one tap */}
+              <span className="hc-quick" role="group" aria-label="Приблизить">
+                {([[1, '1 ч'], [6, '6 ч'], [24, '24 ч'], [168, '7 д']] as [number, string][]).filter(([h]) => h < hours).map(([h, label]) => (
+                  <button key={h} type="button" className="hc-chip" onClick={() => { const n = Date.now(); setZoom([n - h * 3600_000, n]); setHover(null); }}>{label}</button>
+                ))}
+              </span>
+            </>
           )}
         </div>
       )}
@@ -68698,11 +68706,14 @@ import './styles/news-page.css';
 import './styles/profile.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
+// phone layout fixes: loaded after the others, so it wins at equal specificity
+import './styles/mobile.css';
 import App from './App';
 import { RootBoundary } from './RootBoundary';
 import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
+import { installViewport } from './ui/viewport';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
 // before the first paint: the accessibility options (less motion, large text, high contrast), the saved density, the magnetic call-to-action buttons and the sliding tab pill
@@ -68710,6 +68721,7 @@ initAppearance();
 initDensity();
 installMagnetic();
 installSegIndicator();
+installViewport();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -69176,6 +69188,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       const el = nav?.querySelector<HTMLElement>('.adm-link[aria-current="page"]');
       if (!nav || !el || home) { setInd(null); return; }
       setInd({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+      // a phone shows the sections as a row that scrolls: keep the current one in the middle of it
+      if (nav.scrollWidth > nav.clientWidth + 2 && nav.scrollHeight <= nav.clientHeight + 2) nav.scrollTo({ left: Math.max(0, el.offsetLeft - (nav.clientWidth - el.offsetWidth) / 2), behavior: 'auto' });
     };
     measure();
     window.addEventListener('resize', measure);
@@ -73407,6 +73421,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
           onChange={(e) => setUsername(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !password) { e.preventDefault(); passRef.current?.focus(); } }}
           autoComplete="username"
+          enterKeyHint="next"
           autoCapitalize="none"
           spellCheck={false}
           disabled={locked}
@@ -81644,6 +81659,120 @@ __COREGSM_EOF__
 .gl-dropzone > span { padding: 12px 22px; border-radius: var(--r-pill); background: rgb(var(--brand)); color: #fff; font-size: 18px; font-weight: 800; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
+/* ==========================================================================
+   Phones. Everything here is about a 360–430 px wide screen: nothing may stick out past the edge, controls stay
+   reachable with a thumb, and a row that cannot fit scrolls instead of widening the page.
+   Loaded after the other sheets (see main.tsx).
+   ========================================================================== */
+
+/* 1. a page never wider than the screen: the root clips what sticks out sideways (the sticky bars and tooltips are inside it) */
+html, body { overflow-x: clip; }
+#main-content { min-width: 0; max-width: 100%; }
+/* grid and flex children may shrink below their content */
+:is(.tile, .panel, .cm-bento, .cm-hero, .cm-hero-main, .nw-page, .srv-page) { min-width: 0; }
+.nw-page { overflow-x: clip; }
+
+/* 2. a segmented control wider than its row scrolls inside itself (hidden scroll bar), and the active pill stays in sight */
+.seg { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.seg::-webkit-scrollbar { display: none; }
+.seg > .seg-item { flex: none; }
+/* the sliding pill is positioned in the scroller's own space: it must be able to move with it */
+.seg[data-ind] { position: relative; }
+
+/* 3. weekday chips and other chip rows: one line, scrolling, not a ragged wrap */
+@media (max-width: 639px) {
+  .cm-days { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -2px; padding: 2px; }
+  .cm-days::-webkit-scrollbar { display: none; }
+  .cm-days > * { flex: none; }
+  .rp-day { min-width: 2.5rem; padding: 8px 10px; }
+}
+
+/* 4. «Сообщество»: the strip of section chips keeps its edge, fades at both sides and does not push the page */
+.cm-nav { margin: 0; padding-inline: 0; max-width: 100%; scroll-snap-type: x proximity; overscroll-behavior-x: contain; }
+.cm-nav-i { scroll-snap-align: center; min-height: 36px; }
+@media (max-width: 639px) {
+  .cm-nav { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); padding-right: 28px; }
+  .cm-hero { padding: 16px; gap: 12px; }
+  .cm-hero-stats > div { min-width: 0; }
+  .cm-heat { grid-template-columns: 1.3rem repeat(24, minmax(0, 1fr)); gap: 1px; }
+  .cm-heat.is-big { grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; }
+  .cm-heat-h { font-size: 9px; letter-spacing: -.04em; }
+  .cm-search { flex-wrap: wrap; }
+  .cm-podium { gap: 6px; }
+  .cm-pod { padding-inline: 4px; }
+  .pl-hero { padding: 16px; }
+  .pl-stats > div { min-width: 0; }
+}
+
+/* 5. servers: tab strip, metrics and the featured card */
+@media (max-width: 639px) {
+  .srv-tabs { overflow-x: auto; scrollbar-width: none; margin-inline: -12px; padding-inline: 12px; width: auto; max-width: none; }
+  .srv-tabs::-webkit-scrollbar { display: none; }
+  .srv-hero { padding: 16px; border-radius: var(--r-xl); }
+  /* the metric cards: a two-column grid again instead of a sideways scroller that a screen reader cannot reach */
+  .srv-metrics { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; margin-inline: 0; padding: 0; scroll-snap-type: none; }
+  .srv-metrics > .srv-metric, .srv-metrics > .srv-metric:last-child:nth-child(odd) { flex: none; min-width: 0; }
+  .srv-metrics > .srv-metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+
+/* 6. long names and values break instead of widening the row */
+:is(.tile, .panel) :is(h1, h2, h3, h4, .truncate-safe, .adm-tile-v, .cm-srv, .pl-hero) { overflow-wrap: anywhere; }
+.truncate { min-width: 0; }
+
+/* 7. the chart: the mouse hint is useless on a touch screen; a row of quick windows replaces it. The tooltip stays inside the chart */
+.hc-quick { display: none; gap: 6px; }
+@media (pointer: coarse) {
+  .hc-tip { display: none; }
+  .hc-quick { display: inline-flex; flex-wrap: wrap; }
+}
+.cm-chart-tip { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 639px) {
+  .cm-chart-ticks { font-size: 10px; }
+  .hc-tools { flex-wrap: wrap; gap: 6px; }
+}
+
+/* 8. admin: lists and the horizontal section row */
+.adm-tablewrap { overflow-x: auto; overscroll-behavior-x: contain; }
+.adm-nav { scrollbar-width: none; scroll-snap-type: x proximity; }
+.adm-nav::-webkit-scrollbar { display: none; }
+.adm-nav .adm-link { scroll-snap-align: center; flex: none; }
+.adm-tiles { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); }
+@media (max-width: 639px) { .adm-bulk { padding: 8px; } }
+
+/* 9. dialogs as bottom sheets: a grip to drag, the sheet lifts above the on-screen keyboard */
+.sheet-grip { display: none; }
+@media (max-width: 639px) {
+  .sheet-grip { display: flex; justify-content: center; margin: -8px 0 6px; padding: 6px 0 8px; touch-action: none; }
+  .sheet-grip > i { width: 40px; height: 4px; border-radius: var(--r-pill); background: rgb(var(--field)); opacity: .6; }
+  .modal-ov { padding-bottom: var(--kb, 0px); }
+  .modal-ov > [role='dialog'] { max-height: calc(92dvh - var(--kb, 0px)); }
+}
+/* the floating bottom bar steps aside while the keyboard is open, so it does not sit on top of the field */
+html.has-kb .nav-bottom { display: none; }
+html.has-kb .save-bar { bottom: calc(.75rem + var(--kb, 0px)); }
+
+/* 10. the page does not end under the floating bottom bar */
+@media (max-width: 767px) {
+  #main-content { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px)); }
+  .save-bar { bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* 11. touch targets: at least 44 × 44 px of hit area, the picture itself stays as it was */
+@media (pointer: coarse) {
+  :is(.btn-icon, .hint-close, .cm-react, .cm-chip, .hc-chip, .nw-chip, .nw-rubric, .cm-move, .us-perm, .cm-nav-i, .rp-day) { position: relative; }
+  :is(.btn-icon, .hint-close, .cm-react, .cm-chip, .hc-chip, .nw-chip, .nw-rubric, .us-perm, .cm-nav-i, .rp-day)::after {
+    content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%);
+  }
+  .cm-react { min-height: 36px; }
+  .nw-rubrics, .cm-chips { gap: 8px; }
+}
+
+/* 12. login: the form sits at the top while the keyboard is open, not glued to the bottom */
+html.has-kb :is(.auth-shell, .auth-card) { align-self: start; }
+@media (max-width: 639px) { html.has-kb .auth-showcase { display: none; } }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
 /* news page (public): rubrics, two columns, cover, article. Colours / shadows / opacity only; no transforms, no infinite animation.
    The page sits on the same grid as every other page: the title on the left edge, no panel of its own behind it. */
@@ -83499,7 +83628,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/blocks.tsx" << '__COREGSM_EOF__'
 /** Building blocks shared by the pages: dialogs, fields, pills, avatars, notices, copy buttons, logo. */
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, type TouchEvent as ReactTouch, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { StateView } from '../components/StateView';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -83527,10 +83656,25 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
       : box.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box;
     target.focus();
   };
+  // phone: drag the grip (or the title) down to close the sheet
+  const drag = useRef<{ y: number; el: HTMLElement } | null>(null);
+  const onGripStart = (e: ReactTouch<HTMLElement>) => { const box = e.currentTarget.closest<HTMLElement>('[role="dialog"]'); if (box && box.scrollTop <= 0) drag.current = { y: e.touches[0].clientY, el: box }; };
+  const onGripMove = (e: ReactTouch<HTMLElement>) => {
+    const d = drag.current; if (!d) return;
+    const dy = Math.max(0, e.touches[0].clientY - d.y);
+    d.el.style.transition = 'none';
+    d.el.style.transform = `translateY(${dy}px)`;
+  };
+  const onGripEnd = (e: ReactTouch<HTMLElement>) => {
+    const d = drag.current; drag.current = null; if (!d) return;
+    const dy = Math.max(0, e.changedTouches[0].clientY - d.y);
+    d.el.style.transition = 'transform .2s ease';
+    if (dy > 90) { d.el.style.transform = 'translateY(100%)'; window.setTimeout(onClose, 160); } else d.el.style.transform = '';
+  };
   return (
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'}>
+        <Dialog.Overlay className={side ? 'modal-ov fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'modal-ov fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'}>
           <Dialog.Content
             aria-describedby={undefined}
             onOpenAutoFocus={focusFirst}
@@ -83538,7 +83682,8 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
               ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-l-ui-xl sm:p-6'
               : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6'}
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
+            {!side && <div className="sheet-grip" aria-hidden onTouchStart={onGripStart} onTouchMove={onGripMove} onTouchEnd={onGripEnd}><i /></div>}
+            <div className="mb-4 flex items-center justify-between gap-3" onTouchStart={side ? undefined : onGripStart} onTouchMove={side ? undefined : onGripMove} onTouchEnd={side ? undefined : onGripEnd}>
               <Dialog.Title className="min-w-0 text-xl font-black">{title}</Dialog.Title>
               <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
                 <IconClose />
@@ -84691,6 +84836,39 @@ export function Toaster() {
   );
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/viewport.ts" << '__COREGSM_EOF__'
+/**
+ * Phone viewport helpers.
+ *  - `--kb`: the height of the on-screen keyboard (0 without it). Dialogs and the bottom bar lift by it, so a field is never hidden under the keys.
+ *  - a focused field is scrolled into view once the keyboard has opened.
+ * Called once before the first paint.
+ */
+export function installViewport(): void {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.documentElement;
+  let last = -1;
+  const sync = () => {
+    // innerHeight stays the size of the layout viewport; the visual one shrinks under the keyboard
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    const v = kb > 80 ? kb : 0;
+    if (v === last) return;
+    last = v;
+    root.style.setProperty('--kb', v + 'px');
+    root.classList.toggle('has-kb', v > 0);
+  };
+  vv.addEventListener('resize', sync);
+  vv.addEventListener('scroll', sync);
+  sync();
+  document.addEventListener('focusin', (e) => {
+    const el = e.target as HTMLElement | null;
+    if (!el || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || !matchMedia('(pointer: coarse)').matches) return;
+    // wait for the keyboard to slide in
+    window.setTimeout(() => { try { el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); } catch { /* ignore */ } }, 320);
+  });
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/useMotion.ts" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
@@ -85028,7 +85206,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  server: { proxy: { '/api': 'http://localhost:3000' } },
+  server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   build: {
     rollupOptions: {
       output: {

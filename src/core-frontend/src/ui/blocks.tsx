@@ -1,5 +1,5 @@
 /** Building blocks shared by the pages: dialogs, fields, pills, avatars, notices, copy buttons, logo. */
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, type TouchEvent as ReactTouch, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { StateView } from '../components/StateView';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -27,10 +27,25 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
       : box.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])') ?? box;
     target.focus();
   };
+  // phone: drag the grip (or the title) down to close the sheet
+  const drag = useRef<{ y: number; el: HTMLElement } | null>(null);
+  const onGripStart = (e: ReactTouch<HTMLElement>) => { const box = e.currentTarget.closest<HTMLElement>('[role="dialog"]'); if (box && box.scrollTop <= 0) drag.current = { y: e.touches[0].clientY, el: box }; };
+  const onGripMove = (e: ReactTouch<HTMLElement>) => {
+    const d = drag.current; if (!d) return;
+    const dy = Math.max(0, e.touches[0].clientY - d.y);
+    d.el.style.transition = 'none';
+    d.el.style.transform = `translateY(${dy}px)`;
+  };
+  const onGripEnd = (e: ReactTouch<HTMLElement>) => {
+    const d = drag.current; drag.current = null; if (!d) return;
+    const dy = Math.max(0, e.changedTouches[0].clientY - d.y);
+    d.el.style.transition = 'transform .2s ease';
+    if (dy > 90) { d.el.style.transform = 'translateY(100%)'; window.setTimeout(onClose, 160); } else d.el.style.transform = '';
+  };
   return (
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className={side ? 'fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'}>
+        <Dialog.Overlay className={side ? 'modal-ov fixed inset-0 z-50 flex justify-end bg-black/45 p-0' : 'modal-ov fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-xs sm:items-center sm:p-4'}>
           <Dialog.Content
             aria-describedby={undefined}
             onOpenAutoFocus={focusFirst}
@@ -38,7 +53,8 @@ export function Modal({ title, onClose, children, side = false }: { title: strin
               ? 'drawer-in panel panel-raised h-full w-full max-w-md overflow-auto overscroll-contain rounded-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-l-ui-xl sm:p-6'
               : 'pop panel panel-raised max-h-[92dvh] w-full max-w-lg overflow-auto overscroll-contain rounded-b-none p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] outline-hidden sm:rounded-b-ui-xl sm:p-6'}
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
+            {!side && <div className="sheet-grip" aria-hidden onTouchStart={onGripStart} onTouchMove={onGripMove} onTouchEnd={onGripEnd}><i /></div>}
+            <div className="mb-4 flex items-center justify-between gap-3" onTouchStart={side ? undefined : onGripStart} onTouchMove={side ? undefined : onGripMove} onTouchEnd={side ? undefined : onGripEnd}>
               <Dialog.Title className="min-w-0 text-xl font-black">{title}</Dialog.Title>
               <button type="button" className="btn-icon" onClick={onClose} aria-label={t('common.close')}>
                 <IconClose />
