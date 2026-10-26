@@ -98,6 +98,11 @@ function updateFile(name: string): string {
   return path.join(UPDATE_DIR, name);
 }
 
+/** the label of a newer version when one is waiting, otherwise null (the «needs attention» list) */
+export function updateWaitingLabel(): string | null {
+  return APP_VERSION && remote.build && APP_VERSION !== remote.build ? (remote.label ?? remote.build.slice(0, 12)) : null;
+}
+
 function updatePayload() {
   // progress: 0..100 written by the manager/installer while an update runs (absent in older managers)
   let job: { state: string; message: string; time: number; rollback_available?: boolean; progress?: number } | null = null;
