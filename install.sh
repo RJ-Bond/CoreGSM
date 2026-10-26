@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8e320441fbde"
+COREGSM_BUILD="5af04a3b1bc9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.35"
+COREGSM_VERSION="1.0.0.36"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3862,6 +3862,8 @@ __COREGSM_EOF__
  * Alerts: a message to an administrators' Discord channel when a game server stops answering
  * (after a grace period) and another one when it is back. The bot delivers the queued messages.
  */
+import { currentStyle } from './discordStyleState.js';
+import { styleAlertEmbed } from './discordStyleLogic.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
@@ -3913,6 +3915,32 @@ export function isQuietNow(now = Date.now()): boolean {
 
 const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
 
+interface ServerAlert { name: string; address: string; game: string; downMs: number; now: number }
+/** «server is back»: also used by the message gallery in the admin */
+export const upEmbed = (a: ServerAlert) => ({
+  title: `🟢 ${a.name} снова в сети`,
+  description: `📍 \`${a.address}\`\nПростой: **${human(minutes(a.downMs))}**`,
+  color: COLOR.up,
+  author: { name: `🎮 ${gameLabel(a.game)}` },
+  footer: { text: 'CoreGSM · оповещение' },
+  timestamp: new Date(a.now).toISOString(),
+});
+export const downEmbed = (a: ServerAlert & { error?: string | null }) => ({
+  title: `🔴 ${a.name} недоступен`,
+  description: `📍 \`${a.address}\`\nСервер не отвечает уже **${human(minutes(a.downMs))}**${a.error ? `\n⚠️ ${a.error.slice(0, 300)}` : ''}`,
+  color: COLOR.down,
+  author: { name: `🎮 ${gameLabel(a.game)}` },
+  footer: { text: 'CoreGSM · оповещение' },
+  timestamp: new Date(a.now).toISOString(),
+});
+export const testEmbed = () => ({
+  title: '🔔 Проверка оповещений',
+  description: 'Если вы видите это сообщение, оповещения о недоступности серверов настроены верно.',
+  color: COLOR.test,
+  footer: { text: 'CoreGSM · оповещение' },
+  timestamp: new Date().toISOString(),
+});
+
 export interface Payload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
@@ -3933,9 +3961,11 @@ export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payl
     : payload0;
   const target = channelId || s.channelId;
   const now = Date.now();
+  // one look for everything: the footer with the brand, the accent colour
+  const styled: Payload = { ...payload, embed: styleAlertEmbed(payload.embed, kind, currentStyle()) };
   // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
-  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, target, JSON.stringify(payload), now, now);
-  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target, payload });
+  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, target, JSON.stringify(styled), now, now);
+  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target, payload: styled });
   db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
 }
 
@@ -3988,14 +4018,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
           enqueueAlert('up', i.n, {
             content: '',
             mention: 'none',
-            embed: {
-              title: `🟢 ${i.n} снова в сети`,
-              description: `📍 \`${i.display_address || `${i.host}:${i.port}`}\`\nПростой: **${human(minutes(now - st.down_since))}**`,
-              color: COLOR.up,
-              author: { name: `🎮 ${gameLabel(i.game)}` },
-              footer: { text: 'CoreGSM · оповещение' },
-              timestamp: new Date(now).toISOString(),
-            },
+            embed: upEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, now }),
           });
         }
       }
@@ -4014,14 +4037,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     enqueueAlert('down', i.n, {
       content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
       mention: s.mention,
-      embed: {
-        title: `🔴 ${i.n} недоступен`,
-        description: `📍 \`${i.display_address || `${i.host}:${i.port}`}\`\nСервер не отвечает уже **${human(minutes(now - st.down_since))}**${error ? `\n⚠️ ${error.slice(0, 300)}` : ''}`,
-        color: COLOR.down,
-        author: { name: `🎮 ${gameLabel(i.game)}` },
-        footer: { text: 'CoreGSM · оповещение' },
-        timestamp: new Date(now).toISOString(),
-      },
+      embed: downEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, error, now }),
     });
   }
 }
@@ -4092,13 +4108,7 @@ export function registerAlerts(deps: {
     enqueueAlert('test', 'Проверка', {
       content: '',
       mention: 'none',
-      embed: {
-        title: '🔔 Проверка оповещений',
-        description: 'Если вы видите это сообщение, оповещения о недоступности серверов настроены верно.',
-        color: COLOR.test,
-        footer: { text: 'CoreGSM · оповещение' },
-        timestamp: new Date().toISOString(),
-      },
+      embed: testEmbed(),
     });
     res.json(payload());
   });
@@ -4155,6 +4165,15 @@ function diskNow(): { free: number; total: number } | null {
 
 const gb = (b: number) => (b / 1024 ** 3).toFixed(1);
 
+/** the low-disk message: also used by the message gallery in the admin */
+export function diskEmbed(level: 'warn' | 'bad', free: number, total: number) {
+  return {
+    title: level === 'bad' ? '💾 Заканчивается место на диске' : '💾 Остаётся мало места на диске',
+    description: `Свободно **${gb(free)} ГБ** из ${gb(total)} ГБ (**${diskFreePct(free, total)}%**).\nБэкапы, база и картинки хранятся на этом диске — освободите место, пока панель не начала сбоить.`,
+    color: level === 'bad' ? 0xf23f42 : 0xf0b232,
+  };
+}
+
 /** sends the low-disk alert when the level got worse or the trouble lasts for a day; returns whether it was sent */
 export function checkDisk(now = Date.now()): boolean {
   const d = diskNow();
@@ -4170,15 +4189,10 @@ export function checkDisk(now = Date.now()): boolean {
   setSetting('disk_alert_at', String(now));
   const s = alertSettings();
   if (!s.enabled || !s.channelId) return false;
-  const pct = diskFreePct(d.free, d.total);
   enqueueAlert('disk', 'CoreGSM', {
     content: level === 'bad' ? (s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '') : '',
     mention: level === 'bad' ? s.mention : 'none',
-    embed: {
-      title: level === 'bad' ? '💾 Заканчивается место на диске' : '💾 Остаётся мало места на диске',
-      description: `Свободно **${gb(d.free)} ГБ** из ${gb(d.total)} ГБ (**${pct}%**).\nБэкапы, база и картинки хранятся на этом диске — освободите место, пока панель не начала сбоить.`,
-      color: level === 'bad' ? 0xf23f42 : 0xf0b232,
-    },
+    embed: diskEmbed(level, d.free, d.total),
   });
   return true;
 }
@@ -7774,6 +7788,74 @@ export function weekEvents(i: { peak: number; peakWhen: string; worst: { minutes
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/discordGallery.ts" << '__COREGSM_EOF__'
+/**
+ * The look of the bot's messages:
+ *   GET|PUT /api/settings/discord-style   { accent, logo, footer }  (admin)
+ *   GET     /api/admin/discord-gallery    every kind of message with sample data, built by the real builders (admin)
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { downEmbed, testEmbed, upEmbed } from './alerts.js';
+import { diskEmbed } from './attention.js';
+import { setSetting } from './db.js';
+import { buildEmbed, type EmbedServer } from './embed.js';
+import { applyLayout, type EmbedLayout } from './embedLayout.js';
+import { currentStyle, styleSettings } from './discordStyleState.js';
+import { styleAlertEmbed } from './discordStyleLogic.js';
+import { pollEmbed } from './polls.js';
+import { buildNotice } from './updateLogic.js';
+import { renderWelcome } from './welcomeLogic.js';
+import { tally } from './pollLogic.js';
+import { brand, publicBase } from './site.js';
+
+interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'updates'; title: string; content?: string; embed: Record<string, unknown>; buttons?: string[] }
+
+export function buildGallery(now = Date.now()): Sample[] {
+  const st = currentStyle();
+  const ss = styleSettings();
+  const base = publicBase();
+  const styled = (kind: string, e: Record<string, unknown>) => styleAlertEmbed(e, kind, st) as Record<string, unknown>;
+  const online: EmbedServer = { name: 'Мой сервер', game: 'counterstrike2', address: 'play.example.com:27015', hasStatus: true, online: true, players: 12, maxPlayers: 32, map: 'de_dust2', version: '1.40', ping: 34, playerNames: ['Alex', 'Bob', 'Cat', 'Dan', 'Eve', 'Fox'], error: null, updatedAt: now };
+  const offline: EmbedServer = { ...online, online: false, players: 0, map: null, ping: null, playerNames: [], error: 'Нет ответа' };
+  const extra = { serverId: 1, playersShown: 5, baseUrl: base, brandName: st.footer, showLogo: ss.logo, lastOnlineAt: now - 3_600_000, version: 'v1.0' };
+  const layouts: [EmbedLayout, string][] = [['detailed', 'Подробный'], ['compact', 'Компактный'], ['minimal', 'Минимальный']];
+  const out: Sample[] = [];
+  for (const [l, label] of layouts) out.push({ id: `server-${l}`, group: 'servers', title: `Сервер онлайн · ${label}`, embed: applyLayout(buildEmbed(online, 99.2, 60, extra), l) as unknown as Record<string, unknown>, buttons: ['👥 Все игроки на сайте'] });
+  out.push({ id: 'server-offline', group: 'servers', title: 'Сервер недоступен', embed: buildEmbed(offline, 97, 60, extra) as unknown as Record<string, unknown> });
+
+  const alert = { name: 'Мой сервер', address: 'play.example.com:27015', game: 'counterstrike2', downMs: 12 * 60_000, now };
+  out.push({ id: 'alert-down', group: 'alerts', title: 'Сервер не отвечает', content: '@here', embed: styled('down', downEmbed({ ...alert, error: 'Нет ответа' })) });
+  out.push({ id: 'alert-up', group: 'alerts', title: 'Сервер снова в сети', embed: styled('up', upEmbed(alert)) });
+  out.push({ id: 'alert-test', group: 'alerts', title: 'Проверка оповещений', embed: styled('test', testEmbed()) });
+  out.push({ id: 'alert-disk-warn', group: 'alerts', title: 'Мало места на диске', embed: styled('disk', diskEmbed('warn', 12 * 1024 ** 3, 100 * 1024 ** 3)) });
+  out.push({ id: 'alert-disk-bad', group: 'alerts', title: 'Заканчивается место', content: '@here', embed: styled('disk', diskEmbed('bad', 3 * 1024 ** 3, 100 * 1024 ** 3)) });
+
+  const t = tally([{ id: 1, text: 'Да' }, { id: 2, text: 'Нет' }, { id: 3, text: 'Не важно' }], new Map([[1, 7], [2, 2], [3, 1]]));
+  out.push({ id: 'poll-new', group: 'community', title: 'Новое голосование', embed: styled('poll', pollEmbed({ question: 'Нужна новая карта?', closesAt: now + 86_400_000, rows: t.rows, total: t.total, isNew: true, site: !!base })), buttons: t.rows.map((r) => r.text) });
+  out.push({ id: 'poll-result', group: 'community', title: 'Итоги голосования', embed: styled('poll', pollEmbed({ question: 'Нужна новая карта?', closesAt: null, rows: t.rows, total: t.total, isNew: false, site: !!base })) });
+  out.push({ id: 'welcome', group: 'community', title: 'Приветствие новичка', content: renderWelcome('', { userId: '123456789012345678', server: brand().name }), embed: {} });
+
+  const n = buildNotice({ kind: 'available', lang: 'ru', from: '1.0.0.20', to: '1.0.0.27', line: 'Доступна новая версия панели.', now, releases: [{ version: '1.0.0.27', date: '26.10.2026', groups: [{ title: 'Новое', titleEn: 'New', items: [{ text: 'Заметки о выпуске в сообщении', textEn: 'Release notes in the message', flags: [] }] }] }] });
+  out.push({ id: 'update', group: 'updates', title: 'Доступно обновление панели', embed: styled('update', { title: n.title, description: n.description, color: n.color, ...(n.fields.length ? { fields: n.fields } : {}), ...(n.footer ? { footer: { text: n.footer } } : {}) }) });
+  return out;
+}
+
+export function registerDiscordGallery({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const payload = () => ({ ...styleSettings(), brandAccent: brand().color });
+  app.get('/api/settings/discord-style', admin, (_req, res) => res.json(payload()));
+  app.put('/api/settings/discord-style', admin, (req, res) => {
+    const b = z.object({ accent: z.string().regex(/^(#[0-9a-fA-F]{6})?$/).optional(), logo: z.boolean().optional(), footer: z.string().max(40).optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Стиль сообщений: цвет вида #5a4bd1, подпись до 40 символов' });
+    if (b.data.accent !== undefined) setSetting('discord_accent', b.data.accent);
+    if (b.data.logo !== undefined) setSetting('discord_logo', b.data.logo ? '1' : '0');
+    if (b.data.footer !== undefined) setSetting('discord_footer', b.data.footer.trim());
+    res.json(payload());
+  });
+  app.get('/api/admin/discord-gallery', admin, (_req, res) => res.json({ items: buildGallery() }));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/discordNames.ts" << '__COREGSM_EOF__'
 /** Turns a Discord display name into a panel login (3-32 chars: letters, digits, _ . - and single spaces between words). */
 export const LOGIN_MIN = 3;
@@ -8022,6 +8104,67 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/discordStyleLogic.ts" << '__COREGSM_EOF__'
+/** One look for everything the bot posts: accent colour, brand line, logo. Pure, covered by tests. */
+export interface DiscordStyle {
+  brand: string;
+  /** colour of neutral messages (tests, polls, weekly digest); warnings and errors keep their own */
+  accent: number;
+  logoUrl: string | null;
+  /** the text of the footer before « · what it is » */
+  footer: string;
+}
+
+/** the grey-blue the messages used before the style was configurable: replaced by the accent */
+export const LEGACY_NEUTRAL = [0x5865f2, 0x5a4bd1];
+
+const hexToInt = (h: string): number | null => (/^#[0-9a-fA-F]{6}$/.test(h) ? parseInt(h.slice(1), 16) : null);
+
+export function resolveStyle(i: { brandName: string; brandColor: string; accent: string; logo: boolean; footer: string; baseUrl: string | null }): DiscordStyle {
+  return {
+    brand: i.brandName,
+    accent: hexToInt(i.accent.trim()) ?? hexToInt(i.brandColor) ?? 0x5865f2,
+    logoUrl: i.logo && i.baseUrl ? `${i.baseUrl}/logo-128.png` : null,
+    footer: i.footer.trim().slice(0, 40) || i.brandName,
+  };
+}
+
+const LABEL: Record<string, string> = { digest: 'итоги недели', poll: 'голосование' };
+export const footerLabel = (kind: string): string => LABEL[kind] ?? 'оповещение';
+
+type Embed = Record<string, unknown> & { color?: number; footer?: { text?: string; icon_url?: string } };
+
+/**
+ * The embed of an alert in the common style: the footer «<brand> · <what>» with the logo, the accent instead of the old
+ * neutral colour. A footer written for the message itself (the update notice says when the version was released) stays.
+ */
+export function styleAlertEmbed(e: Embed, kind: string, s: DiscordStyle): Embed {
+  const own = e.footer?.text && !/^CoreGSM\b/.test(e.footer.text);
+  const footer = own ? e.footer : { text: `${s.footer} · ${footerLabel(kind)}`, ...(s.logoUrl ? { icon_url: s.logoUrl } : {}) };
+  const color = typeof e.color === 'number' && LEGACY_NEUTRAL.includes(e.color) ? s.accent : e.color;
+  return { ...e, footer, ...(color !== undefined ? { color } : {}) };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/discordStyleState.ts" << '__COREGSM_EOF__'
+/** The current look of the bot's messages, read from the settings (see discordStyleLogic.ts). */
+import { getSetting } from './db.js';
+import { type DiscordStyle, resolveStyle } from './discordStyleLogic.js';
+import { brand, publicBase } from './site.js';
+
+export const styleSettings = () => ({
+  accent: getSetting('discord_accent') ?? '',
+  logo: getSetting('discord_logo') !== '0',
+  footer: getSetting('discord_footer') ?? '',
+});
+
+export function currentStyle(): DiscordStyle {
+  const b = brand();
+  const s = styleSettings();
+  return resolveStyle({ brandName: b.name, brandColor: b.color, accent: s.accent, logo: s.logo, footer: s.footer, baseUrl: publicBase() });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/embed.ts" << '__COREGSM_EOF__'
 /**
  * The Discord embed for a server: one definition used by the bot (what is posted in the channel)
@@ -8081,6 +8224,8 @@ export interface EmbedExtra {
   /** community name and custom logo from the branding settings */
   brandName?: string | null;
   logoUrl?: string | null;
+  /** false: no logo in the footer and the brand line (the style settings) */
+  showLogo?: boolean;
   /** "🇵🇱 Польша" */
   country?: string | null;
   /** IANA time zone for the "updated" time in the footer */
@@ -8134,7 +8279,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
   // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
   const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };
-  const logo = extra.baseUrl ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
+  const logo = extra.baseUrl && extra.showLogo !== false ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
   if (logo) footer.icon_url = logo;
   const author: NonNullable<DiscordEmbed['author']> = { name: `${brand} · Мониторинг игровых серверов` };
   if (extra.baseUrl) author.url = extra.baseUrl;
@@ -8381,6 +8526,7 @@ export const ERRORS = {
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
   game_file_invalid: 'Файл игры не прошёл проверку',
+  discord_style_invalid: 'Стиль сообщений: цвет вида #5a4bd1, подпись до 40 символов',
   poll_invalid: 'Проверьте голосование: вопрос от 3 символов, от 2 до 10 разных вариантов, время окончания в будущем',
   poll_not_found: 'Голосование не найдено',
   poll_option_invalid: 'Такого варианта нет',
@@ -9958,6 +10104,7 @@ import { registerAttention } from './attention.js';
 import { registerWelcome } from './welcome.js';
 import { registerRules } from './rules.js';
 import { registerPolls } from './polls.js';
+import { registerDiscordGallery } from './discordGallery.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
@@ -10126,6 +10273,7 @@ registerAttention({ app, admin });
 registerWelcome({ app, admin, internal });
 registerRules({ app, auth, admin });
 registerPolls({ app, auth, admin, internal });
+registerDiscordGallery({ app, admin });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
@@ -13745,7 +13893,7 @@ import { enqueueAlert } from './alerts.js';
 import { type AuthedRequest } from './auth.js';
 import { db } from './db.js';
 import { log } from './logger.js';
-import { pollIsOpen, resultsText, tally, validatePoll } from './pollLogic.js';
+import { pollIsOpen, resultsText, tally, validatePoll, type TallyRow } from './pollLogic.js';
 import { publicBase } from './site.js';
 
 db.exec(`
@@ -13786,6 +13934,17 @@ function view(p: PollRow, userId: number | null) {
 
 const COLOR = { open: 0x5865f2, closed: 0x23a55a };
 
+/** the message of a poll (new / results): also used by the message gallery in the admin */
+export function pollEmbed(o: { question: string; closesAt: number | null; rows: TallyRow[]; total: number; isNew: boolean; site: boolean }) {
+  return {
+    title: o.isNew ? `🗳️ Голосование: ${o.question}` : `📊 Итоги голосования: ${o.question}`,
+    description: o.isNew
+      ? `Выберите вариант кнопкой ниже${o.site ? ' или на сайте' : ''}. Нужен аккаунт, привязанный к Discord (команда /register).${o.closesAt ? `\nЗавершится <t:${Math.floor(o.closesAt / 1000)}:R>.` : ''}`
+      : resultsText(o.rows, o.total),
+    color: o.isNew ? COLOR.open : COLOR.closed,
+  };
+}
+
 function announce(p: PollRow, kind: 'new' | 'result'): void {
   if (!/^\d{15,25}$/.test(p.channel_id)) return;
   const t = tally(optionsOf(p.id), countsOf(p.id));
@@ -13797,13 +13956,7 @@ function announce(p: PollRow, kind: 'new' | 'result'): void {
     {
       content: '',
       mention: 'none',
-      embed: {
-        title: isNew ? `🗳️ Голосование: ${p.question}` : `📊 Итоги голосования: ${p.question}`,
-        description: isNew
-          ? `Выберите вариант кнопкой ниже${base ? ` или на сайте` : ''}. Нужен аккаунт, привязанный к Discord (команда /register).${p.closes_at ? `\nЗавершится <t:${Math.floor(p.closes_at / 1000)}:R>.` : ''}`
-          : resultsText(t.rows, t.total),
-        color: isNew ? COLOR.open : COLOR.closed,
-      },
+      embed: pollEmbed({ question: p.question, closesAt: p.closes_at, rows: t.rows, total: t.total, isNew, site: !!base }),
       ...(isNew ? { buttons: t.rows.map((r) => ({ customId: `poll:${p.id}:${r.id}`, label: r.text.slice(0, 80) })) } : {}),
       ...(base ? { actions: [{ label: isNew ? 'Голосовать на сайте' : 'Подробнее на сайте', url: `${base}/community` }] } : {}),
     },
@@ -17414,6 +17567,7 @@ import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
 import { addPing } from '../botLatencyLogic.js';
 import { buildPresence } from '../presence.js';
+import { currentStyle } from '../discordStyleState.js';
 import { welcomeSettings } from '../welcome.js';
 import { parseLayout } from '../embedLayout.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
@@ -17456,7 +17610,7 @@ router.post(
 );
 
 router.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled });
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl }; })() });
 });
 
 router.post('/internal/bot-guilds', internal, (req, res) => {
@@ -19625,6 +19779,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/serverData.ts" << '__COREGSM_EOF__'
 /** Servers as the API returns them, and the Discord embed built from a server and its history. */
+import { currentStyle, styleSettings } from './discordStyleState.js';
 import { channelInfo } from './botState.js';
 import { APP_VERSION, APP_VERSION_NAME } from './config.js';
 import { coverUrl } from './covers.js';
@@ -19755,7 +19910,7 @@ export function embedFor(serverId: number, intervalSec: number, layout: EmbedLay
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return applyLayout(buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null }), layout);
+  return applyLayout(buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: currentStyle().footer, showLogo: styleSettings().logo, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null }), layout);
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -22700,6 +22855,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import { setStyle } from './style.js';
 import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 import { backend, report } from './backend.js';
@@ -22723,6 +22879,7 @@ interface BotConfig {
   proxyUrl: string;
   /** the welcome message is on: needs the «Server Members» intent */
   welcome?: boolean;
+  style?: unknown;
 }
 
 type BotState = 'idle' | 'connecting' | 'online' | 'error';
@@ -22847,6 +23004,7 @@ async function applyConfig(): Promise<void> {
   const res = await backend('/internal/config');
   if (!res.ok) throw new Error(`config HTTP ${res.status}`);
   const cfg = (await res.json()) as BotConfig;
+  setStyle(cfg.style);
   const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}`;
   if (key === appliedKey) return;
   // after a failure wait before retrying the SAME config; a changed config is applied immediately
@@ -23514,6 +23672,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/info.ts" << '__COREGSM_EOF__'
 /** Public slash commands: /online, /status, /player and /top. The answers are seen by everybody in the channel. */
+import { footerOf, getStyle } from './style.js';
 import { AttachmentBuilder, EmbedBuilder, type AutocompleteInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
@@ -23579,7 +23738,7 @@ export function onlineEmbed(d: OnlineData): EmbedBuilder {
     .setTitle(`🎮 Сейчас играют: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}`)
     .setDescription((lines.join('\n') || 'Серверов пока нет.').slice(0, 3900))
     .setColor(up.length ? COLORS.ok : COLORS.bad)
-    .setFooter({ text: `Серверов в сети: ${up.length} из ${d.servers.length} · CoreGSM` });
+    .setFooter(footerOf(`Серверов в сети: ${up.length} из ${d.servers.length}`));
   if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
   return e;
 }
@@ -23591,13 +23750,13 @@ export function playerEmbed(p: PlayerData): EmbedBuilder {
   const e = new EmbedBuilder()
     .setTitle(`👤 ${p.name}`.slice(0, 250))
     .setDescription([status, p.usualHour != null ? `Обычно играет ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : ''].filter(Boolean).join('\n') || ' ')
-    .setColor(p.online ? COLORS.ok : COLORS.info)
+    .setColor(p.online ? COLORS.ok : getStyle().accent)
     .addFields(
       { name: 'Часов', value: hoursText(p.hours), inline: true },
       { name: 'Визитов', value: String(p.visits), inline: true },
       { name: 'Подряд', value: `${p.streak >= 3 ? '🔥 ' : ''}${p.streak} ${plural(p.streak, ['день', 'дня', 'дней'])}`, inline: true },
     )
-    .setFooter({ text: 'За последние 90 дней · CoreGSM' });
+    .setFooter(footerOf('За последние 90 дней'));
   if (p.servers.length) e.addFields({ name: 'Где играет', value: p.servers.slice(0, 5).map((s) => `${s.name} — ${hoursText(s.hours)} ч`).join('\n').slice(0, 1000) });
   if (p.url && /^https?:\/\//.test(p.url)) e.setURL(p.url);
   return e;
@@ -23610,7 +23769,7 @@ export function topEmbed(d: TopData): EmbedBuilder {
     .setTitle(d.period === 'month' ? '🏆 Самые активные за месяц' : '🏆 Самые активные за неделю')
     .setDescription((lines.join('\n') || 'Пока никто не играл.').slice(0, 3900))
     .setColor(COLORS.warn)
-    .setFooter({ text: 'CoreGSM' });
+    .setFooter(footerOf());
   if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
   return e;
 }
@@ -23686,6 +23845,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/messages.ts" << '__COREGSM_EOF__'
 /** What the bot posts: status messages of bindings and news written in the panel. */
+import { getStyle } from './style.js';
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import { backend } from './backend.js';
 
@@ -23768,7 +23928,7 @@ export async function buildPayload(b: Binding) {
     // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
     let raw: RawEmbed;
     if (style === 'card') {
-      raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() };
+      raw = { color: getStyle().accent, timestamp: new Date().toISOString() };
     } else {
       const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}&layout=${b.layout ?? 'detailed'}`);
       if (!r.ok) {
@@ -23994,6 +24154,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/replies.ts" << '__COREGSM_EOF__'
 /** Ephemeral replies to the slash commands: plain notices and the player's card. */
+import { footerOf, getStyle } from './style.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 
 export const COLORS = { ok: 0x2ecc71, warn: 0xf5b01e, bad: 0xe74c3c, info: 0x9b1c31 };
@@ -24016,7 +24177,7 @@ export const markOf = (color: number) => (color === COLORS.ok ? '✅' : color ==
 
 export function replyEmbed(title: string, description: string, color: number, url?: string) {
   const lead = /^\p{Extended_Pictographic}/u.test(title) ? '' : `${markOf(color)} `;
-  const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color).setFooter({ text: 'CoreGSM' });
+  const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color === COLORS.info ? getStyle().accent : color).setFooter(footerOf());
   if (url && /^https?:\/\//.test(url)) e.setURL(url);
   return { embeds: [e] };
 }
@@ -24041,7 +24202,7 @@ export function cardReply(
   const base = panelBase(p.profileUrl);
   const color = opts.color ?? (p.rank ? hexToInt(p.rank.color) : COLORS.info);
   const e = new EmbedBuilder()
-    .setColor(color)
+    .setColor(color === COLORS.info ? getStyle().accent : color)
     .setAuthor({ name: displayName.slice(0, 120), iconURL: user.displayAvatarURL({ size: 64 }) })
     .setTitle(opts.title.slice(0, 250));
   if (opts.description) e.setDescription(opts.description.slice(0, 3000));
@@ -24075,7 +24236,7 @@ export function cardReply(
     }
   }
   e.addFields(fields);
-  e.setFooter({ text: 'CoreGSM · статистика копится с первого входа на сервер' });
+  e.setFooter(footerOf('статистика копится с первого входа на сервер'));
 
   const components = [];
   if (base) {
@@ -24088,6 +24249,27 @@ export function cardReply(
     );
   }
   return { embeds: [e], components };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/style.ts" << '__COREGSM_EOF__'
+/** The look of the bot's own replies (footer, accent colour, logo): set in the panel and refreshed with the config. */
+export interface BotStyle { footer: string; accent: number; logoUrl: string | null }
+
+let current: BotStyle = { footer: 'CoreGSM', accent: 0x9b1c31, logoUrl: null };
+
+export const getStyle = (): BotStyle => current;
+
+export function setStyle(s: unknown): void {
+  const o = s as Partial<BotStyle> | null;
+  if (!o || typeof o.footer !== 'string' || typeof o.accent !== 'number') return;
+  current = { footer: o.footer.slice(0, 40) || 'CoreGSM', accent: o.accent, logoUrl: typeof o.logoUrl === 'string' && /^https?:\/\//.test(o.logoUrl) ? o.logoUrl : null };
+}
+
+/** footer for an embed: «<signature> · <what>» or just the signature, with the logo when there is one */
+export function footerOf(what?: string): { text: string; iconURL?: string } {
+  const s = current;
+  return { text: what ? `${what} · ${s.footer}` : s.footer, ...(s.logoUrl ? { iconURL: s.logoUrl } : {}) };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -52965,6 +53147,102 @@ function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' |
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DiscordStyleCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { t, useI18n } from '../i18n';
+import { EmbedView, type DiscordEmbed } from '../pages/EmbedPreview';
+import { Section, Switch, fail, toast } from '../ui';
+
+interface Style { accent: string; logo: boolean; footer: string; brandAccent: string }
+interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'updates'; title: string; content?: string; embed: DiscordEmbed; buttons?: string[] }
+
+const GROUPS = ['servers', 'alerts', 'community', 'updates'] as const;
+
+/** «Вид сообщений бота»: one accent, signature and logo for everything the bot posts, and a gallery of every kind of message. */
+export default function DiscordStyleCard() {
+  useI18n();
+  const [s, setS] = useState<Style | null>(null);
+  const [footer, setFooter] = useState('');
+  const [items, setItems] = useState<Sample[] | null>(null);
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [width, setWidth] = useState<'desktop' | 'phone'>('desktop');
+  const [group, setGroup] = useState<(typeof GROUPS)[number]>('servers');
+  const [busy, setBusy] = useState(false);
+
+  const loadGallery = () => api<{ items: Sample[] }>('/admin/discord-gallery').then((r) => setItems(r.items)).catch(() => setItems([]));
+  useEffect(() => {
+    let alive = true;
+    api<Style>('/settings/discord-style').then((r) => { if (alive) { setS(r); setFooter(r.footer); } }).catch(() => undefined);
+    void loadGallery();
+    return () => { alive = false; };
+  }, []);
+  if (!s) return null;
+
+  const save = async (patch: Partial<Pick<Style, 'accent' | 'logo' | 'footer'>>) => {
+    setBusy(true);
+    try {
+      const r = await api<Style>('/settings/discord-style', 'PUT', patch);
+      setS(r);
+      setFooter(r.footer);
+      toast(t('ds.saved'));
+      await loadGallery();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shown = (items ?? []).filter((x) => x.group === group);
+  return (
+    <Section title={t('ds.title')} description={t('ds.help')}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label htmlFor="ds-accent" className="label">{t('ds.accent')}</label>
+          <div className="flex items-center gap-2">
+            <input id="ds-accent" type="color" aria-label={t('ds.accent')} className="h-10 w-14 rounded-ui-lg border border-line bg-transparent" value={s.accent || s.brandAccent} disabled={busy} onChange={(e) => void save({ accent: e.target.value })} />
+            {s.accent && <button type="button" className="btn-link" onClick={() => void save({ accent: '' })}>{t('ds.accentBrand')}</button>}
+          </div>
+          <p className="mt-1 text-sm font-semibold text-mute">{s.accent ? t('ds.accentOwn') : t('ds.accentFromBrand')}</p>
+        </div>
+        <div>
+          <label htmlFor="ds-footer" className="label">{t('ds.footer')}</label>
+          <input id="ds-footer" className="input" value={footer} maxLength={40} placeholder={t('ds.footerHolder')} onChange={(e) => setFooter(e.target.value)} onBlur={() => { if (footer.trim() !== s.footer) void save({ footer }); }} />
+        </div>
+      </div>
+      <label className="mt-3 flex items-center gap-3 font-bold">
+        <Switch id="ds-logo" checked={s.logo} onChange={(on) => void save({ logo: on })} /> {t('ds.logo')}
+      </label>
+
+      <h3 className="mb-2 mt-5 text-base font-black">{t('ds.gallery')}</h3>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <nav className="seg" aria-label={t('ds.gallery')}>
+          {GROUPS.map((g) => <button key={g} type="button" className="seg-item" aria-current={group === g ? 'page' : undefined} onClick={() => setGroup(g)}>{t(`ds.g.${g}` as never)}</button>)}
+        </nav>
+        <button type="button" className="btn-link" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? t('ds.light') : t('ds.dark')}</button>
+        <button type="button" className="btn-link" onClick={() => setWidth(width === 'desktop' ? 'phone' : 'desktop')}>{width === 'desktop' ? t('ds.phone') : t('ds.desktop')}</button>
+      </div>
+      {items === null && <div className="skeleton h-40 rounded-2xl bg-soft" aria-hidden />}
+      <div className="space-y-5">
+        {shown.map((x) => (
+          <figure key={x.id}>
+            <figcaption className="mb-1 text-sm font-extrabold text-mute">{x.title}</figcaption>
+            <EmbedView embed={Object.keys(x.embed).length ? x.embed : null} content={x.content} theme={theme} width={width}>
+              {x.buttons && x.buttons.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2" aria-hidden>
+                  {x.buttons.map((b, i) => <span key={i} className="rounded-md bg-soft px-3 py-1 text-sm font-bold">{b}</span>)}
+                </div>
+              )}
+            </EmbedView>
+          </figure>
+        ))}
+      </div>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/DiscordWizard.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import type { Binding, BotStatus, DiscordGuild } from '../api';
@@ -71627,6 +71905,25 @@ const en: Record<keyof typeof ru, string> = {
   'wl.vars': 'You can use {user} — a mention of the newcomer — and {server} — the server name. Empty — the default text.',
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
+  'ds.title': 'Look of the bot messages',
+  'ds.help': 'One accent colour, signature and logo for everything the bot posts: alerts, polls, the weekly digest, command replies. Red, green and yellow stay with the state of the servers.',
+  'ds.accent': 'Accent colour',
+  'ds.accentBrand': 'Same as brand',
+  'ds.accentOwn': 'Own colour',
+  'ds.accentFromBrand': 'Taken from the brand colour of the community',
+  'ds.footer': 'Signature under the messages',
+  'ds.footerHolder': 'Community name',
+  'ds.logo': 'Logo in the signature',
+  'ds.saved': 'Saved',
+  'ds.gallery': 'What the messages look like',
+  'ds.g.servers': 'Servers',
+  'ds.g.alerts': 'Alerts',
+  'ds.g.community': 'Community',
+  'ds.g.updates': 'Updates',
+  'ds.light': 'Light Discord theme',
+  'ds.dark': 'Dark Discord theme',
+  'ds.phone': 'As on a phone',
+  'ds.desktop': 'As on a computer',
   'cg.title': 'Custom games',
   'cg.help': 'A game that is not in the list can be added with a file: its name, default port, a hint about the query port and how to connect. The game type (id) is the GameDig identifier.',
   'cg.file': 'Game file (JSON)',
@@ -72202,6 +72499,7 @@ const errorsEn: Record<string, string> = {
   update_version_invalid: 'Invalid version',
   update_notify_channel_invalid: 'Invalid channel',
   game_file_invalid: 'The game file did not pass the check',
+  discord_style_invalid: 'Message style: a colour like #5a4bd1, a signature up to 40 characters',
   poll_invalid: 'Check the poll: a question of 3+ characters, 2 to 10 different options, a closing time in the future',
   poll_not_found: 'Poll not found',
   poll_option_invalid: 'There is no such option',
@@ -73909,6 +74207,25 @@ const ru = {
   'wl.vars': 'Можно использовать {user} — упоминание новичка и {server} — название сервера. Пусто — стандартный текст.',
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
+  'ds.title': 'Вид сообщений бота',
+  'ds.help': 'Один акцентный цвет, подпись и логотип для всего, что публикует бот: оповещения, голосования, итоги недели, ответы на команды. Красный, зелёный и жёлтый остаются за состоянием серверов.',
+  'ds.accent': 'Акцентный цвет',
+  'ds.accentBrand': 'Как фирменный',
+  'ds.accentOwn': 'Свой цвет',
+  'ds.accentFromBrand': 'Берётся из фирменного цвета сообщества',
+  'ds.footer': 'Подпись внизу сообщений',
+  'ds.footerHolder': 'Название сообщества',
+  'ds.logo': 'Логотип в подписи',
+  'ds.saved': 'Сохранено',
+  'ds.gallery': 'Как выглядят сообщения',
+  'ds.g.servers': 'Серверы',
+  'ds.g.alerts': 'Оповещения',
+  'ds.g.community': 'Сообщество',
+  'ds.g.updates': 'Обновления',
+  'ds.light': 'Светлая тема Discord',
+  'ds.dark': 'Тёмная тема Discord',
+  'ds.phone': 'Как на телефоне',
+  'ds.desktop': 'Как на компьютере',
   'cg.title': 'Свои игры',
   'cg.help': 'Игры, которых нет в списке, можно добавить файлом: название, порт по умолчанию, подсказка про порт запроса и как подключиться. Тип игры (id) — это идентификатор GameDig.',
   'cg.file': 'Файл игры (JSON)',
@@ -77906,6 +78223,7 @@ import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
 import WelcomeCard from '../components/WelcomeCard';
+import DiscordStyleCard from '../components/DiscordStyleCard';
 
 type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
@@ -78195,6 +78513,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       <PlayersShownCard />
       <WelcomeCard />
+      <DiscordStyleCard />
       {loaded && <DiscordExtras servers={servers} />}
       <DeliveryList />
 

@@ -56,6 +56,8 @@ export interface EmbedExtra {
   /** community name and custom logo from the branding settings */
   brandName?: string | null;
   logoUrl?: string | null;
+  /** false: no logo in the footer and the brand line (the style settings) */
+  showLogo?: boolean;
   /** "🇵🇱 Польша" */
   country?: string | null;
   /** IANA time zone for the "updated" time in the footer */
@@ -109,7 +111,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
   // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
   const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };
-  const logo = extra.baseUrl ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
+  const logo = extra.baseUrl && extra.showLogo !== false ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
   if (logo) footer.icon_url = logo;
   const author: NonNullable<DiscordEmbed['author']> = { name: `${brand} · Мониторинг игровых серверов` };
   if (extra.baseUrl) author.url = extra.baseUrl;

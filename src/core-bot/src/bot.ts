@@ -1,4 +1,5 @@
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import { setStyle } from './style.js';
 import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 import { backend, report } from './backend.js';
@@ -22,6 +23,7 @@ interface BotConfig {
   proxyUrl: string;
   /** the welcome message is on: needs the «Server Members» intent */
   welcome?: boolean;
+  style?: unknown;
 }
 
 type BotState = 'idle' | 'connecting' | 'online' | 'error';
@@ -146,6 +148,7 @@ async function applyConfig(): Promise<void> {
   const res = await backend('/internal/config');
   if (!res.ok) throw new Error(`config HTTP ${res.status}`);
   const cfg = (await res.json()) as BotConfig;
+  setStyle(cfg.style);
   const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}`;
   if (key === appliedKey) return;
   // after a failure wait before retrying the SAME config; a changed config is applied immediately
