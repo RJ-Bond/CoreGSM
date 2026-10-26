@@ -72,6 +72,10 @@ describe('discord embed', () => {
     assert.equal(e.timestamp, '2026-10-12T14:00:00.000Z');
   });
 
+  it('shows a readable version whole in the footer', () => {
+    const r = buildEmbed(server(), 100, 60, { baseUrl: 'https://panel.example.ru', serverId: 7, version: '1.0.0.4' });
+    assert.match(r.footer!.text, /^CoreGSM · v1\.0\.0\.4$/);
+  });
 
   it('lists 5 names by default and as many as the setting says; 0 leaves only the counter', () => {
     const names = (x: ReturnType<typeof buildEmbed>) => x.fields!.find((f) => /Сейчас в игре/.test(f.name))!.value;
